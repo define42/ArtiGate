@@ -980,9 +980,17 @@ func (s *LowServer) fetchBundleContent(ctx context.Context, records []RequestRec
 	return mods, files, nil
 }
 
+// bundleSuffixes returns the three file suffixes that make up one transferable
+// bundle.
+func bundleSuffixes() []string {
+	return []string{".tar.gz", ".manifest.json", ".manifest.json.sig"}
+}
+
 // writeBundleArtifacts writes the archive, manifest, and signature for a bundle
-// into the export directory. baseDir is the root the manifest file paths are
-// relative to (the Go module cache for Go bundles, a staging dir for Python).
+// into the export directory, then retains a copy in the persistent bundle
+// archive so the exact signed bytes can be replayed on re-export. baseDir is the
+// root the manifest file paths are relative to (the Go module cache for Go
+// bundles, a staging dir for Python).
 func (s *LowServer) writeBundleArtifacts(bundleID, baseDir string, manifestBytes, sig []byte, files []ManifestFile) error {
 	if err := os.MkdirAll(s.cfg.ExportDir, 0o755); err != nil {
 		return err
@@ -997,7 +1005,79 @@ func (s *LowServer) writeBundleArtifacts(bundleID, baseDir string, manifestBytes
 	if err := writeBytesAtomic(manifestPath, manifestBytes, 0o644); err != nil {
 		return err
 	}
-	return writeBytesAtomic(sigPath, []byte(base64.StdEncoding.EncodeToString(sig)+"\n"), 0o644)
+	if err := writeBytesAtomic(sigPath, []byte(base64.StdEncoding.EncodeToString(sig)+"\n"), 0o644); err != nil {
+		return err
+	}
+	return s.archiveBundle(bundleID)
+}
+
+// bundleArchiveDir is where every produced bundle is retained so re-export can
+// replay the exact signed files regardless of ecosystem.
+func (s *LowServer) bundleArchiveDir() string {
+	return filepath.Join(s.cfg.Root, "bundles")
+}
+
+// archiveBundle copies a freshly written bundle's three files into the archive.
+func (s *LowServer) archiveBundle(bundleID string) error {
+	dir := s.bundleArchiveDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, suffix := range bundleSuffixes() {
+		src := filepath.Join(s.cfg.ExportDir, bundleID+suffix)
+		dst := filepath.Join(dir, bundleID+suffix)
+		if err := copyFileAtomic(src, dst, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// replayArchivedBundle copies a previously archived bundle back into the export
+// directory so it can be transferred again. It works for any ecosystem because
+// it replays the exact signed bytes. The bool reports whether an archived bundle
+// was found.
+func (s *LowServer) replayArchivedBundle(seq int64) (ExportResult, bool, error) {
+	bundleID := bundleIDForSequence(seq)
+	archive := s.bundleArchiveDir()
+	if !bundleCompleteInDir(archive, bundleID) {
+		return ExportResult{}, false, nil
+	}
+	if err := os.MkdirAll(s.cfg.ExportDir, 0o755); err != nil {
+		return ExportResult{}, false, err
+	}
+	for _, suffix := range bundleSuffixes() {
+		src := filepath.Join(archive, bundleID+suffix)
+		dst := filepath.Join(s.cfg.ExportDir, bundleID+suffix)
+		if err := copyFileAtomic(src, dst, 0o644); err != nil {
+			return ExportResult{}, false, err
+		}
+	}
+	res := ExportResult{
+		Sequence:        seq,
+		BundleID:        bundleID,
+		ExportedModules: archivedBundleUnitCount(filepath.Join(archive, bundleID+".manifest.json")),
+		Message:         "re-exported from archive",
+	}
+	return res, true, nil
+}
+
+// archivedBundleUnitCount reports how many Go modules plus Python projects a
+// bundle manifest contains, or 0 if it cannot be read.
+func archivedBundleUnitCount(manifestPath string) int {
+	b, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return 0
+	}
+	var m BundleManifest
+	if json.Unmarshal(b, &m) != nil {
+		return 0
+	}
+	n := len(m.Modules)
+	if m.Python != nil {
+		n += len(m.Python.Projects)
+	}
+	return n
 }
 
 func sortRequestRecords(records []RequestRecord) {
@@ -1071,6 +1151,18 @@ func (s *LowServer) ReexportSequences(ctx context.Context, ranges []SequenceRang
 }
 
 func (s *LowServer) ExportSequence(ctx context.Context, seq int64) (ExportResult, error) {
+	// Prefer replaying the exact archived bundle. This works for every ecosystem
+	// (Go proxy, Go collect, Python collect) and needs no re-signing.
+	res, ok, err := s.replayArchivedBundle(seq)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	if ok {
+		return res, nil
+	}
+
+	// Fallback for bundles produced before archiving existed: reconstruct a Go
+	// proxy bundle from the recorded module requests.
 	s.mu.Lock()
 	var records []RequestRecord
 	for _, rec := range s.state.Requests {
@@ -1080,7 +1172,7 @@ func (s *LowServer) ExportSequence(ctx context.Context, seq int64) (ExportResult
 	}
 	s.mu.Unlock()
 	if len(records) == 0 {
-		return ExportResult{}, fmt.Errorf("no recorded modules for sequence %d", seq)
+		return ExportResult{}, fmt.Errorf("no archived bundle or recorded modules for sequence %d", seq)
 	}
 	return s.writeBundle(ctx, seq, records)
 }

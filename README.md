@@ -156,7 +156,7 @@ curl -XPOST http://127.0.0.1:8080/admin/reexport \
   -d '{"sequences":"42,45-47"}'
 ```
 
-Re-exported bundles keep the original sequence number and `previous_sequence`. The manifest is signed again and the bundle files are rewritten in the export directory so they can be transferred through the diode again.
+Every produced bundle (Go pull-through, `/admin/go/collect`, or `/admin/python/collect`) is retained in a persistent archive under `<root>/bundles/`. Re-export replays the exact archived signed files back into the export directory, so it works uniformly for **both Go and Python** bundles — no re-signing and no dependency on the original recorded requests. (Bundles produced before archiving existed fall back to reconstructing the Go bundle from recorded module requests.)
 
 ### Web dashboard
 
@@ -371,4 +371,4 @@ dependencies. Source-distribution (sdist) mirroring is not implemented.
 - Low-side fetching depends on the installed Go toolchain and Git/VCS tools, and (for Python) on `pip`.
 - High side never invokes `go` or `pip` and has no upstream fetcher.
 - Python support mirrors wheels only; sdists and PyPI metadata (`requires-python`, yank status) beyond the manifest are not yet surfaced.
-- Re-export (`/admin/reexport`) only regenerates bundles produced by the pull-through proxy's recorded requests. Bundles produced by the `/admin/go/collect` and `/admin/python/collect` endpoints are not tracked for re-export; re-run the collect instead.
+- Re-export (`/admin/reexport`) replays any produced bundle — Go proxy, `/admin/go/collect`, or `/admin/python/collect` — from the persistent archive under `<root>/bundles/`. The archive grows over time; prune old sequences if disk is a concern (they can be re-collected).
