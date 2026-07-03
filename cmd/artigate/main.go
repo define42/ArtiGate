@@ -319,31 +319,7 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 }
 
 func (s *LowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch {
-	case r.URL.Path == "/healthz":
-		_, _ = w.Write([]byte("ok\n"))
-		return
-	case r.URL.Path == "/admin/export" && r.Method == http.MethodPost:
-		res, err := s.ExportPending(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, res)
-		return
-	case r.URL.Path == "/admin/reexport" && r.Method == http.MethodPost:
-		res, err := s.HandleReexportRequest(r.Context(), r)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, res)
-		return
-	case r.URL.Path == "/admin/bundles" && r.Method == http.MethodGet:
-		writeJSON(w, s.BundleStatus())
-		return
-	case strings.HasPrefix(r.URL.Path, "/admin/"):
-		http.Error(w, "not found", http.StatusNotFound)
+	if s.serveLowAdmin(w, r) {
 		return
 	}
 
@@ -365,9 +341,39 @@ func (s *LowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleLowLatest(w, r, req)
 	case proxyVersionFile:
 		s.handleLowVersionFile(w, r, req)
-	default:
+	case proxyUnknown:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+// serveLowAdmin handles the health check and /admin/* routes. It reports
+// whether it has written a response for the request.
+func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
+	switch {
+	case r.URL.Path == "/healthz":
+		_, _ = w.Write([]byte("ok\n"))
+	case r.URL.Path == "/admin/export" && r.Method == http.MethodPost:
+		res, err := s.ExportPending(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return true
+		}
+		writeJSON(w, res)
+	case r.URL.Path == "/admin/reexport" && r.Method == http.MethodPost:
+		res, err := s.HandleReexportRequest(r.Context(), r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return true
+		}
+		writeJSON(w, res)
+	case r.URL.Path == "/admin/bundles" && r.Method == http.MethodGet:
+		writeJSON(w, s.BundleStatus())
+	case strings.HasPrefix(r.URL.Path, "/admin/"):
+		http.Error(w, "not found", http.StatusNotFound)
+	default:
+		return false
+	}
+	return true
 }
 
 func (s *LowServer) handleLowList(w http.ResponseWriter, r *http.Request, req ProxyRequest) {
@@ -658,25 +664,9 @@ func (s *LowServer) writeBundle(ctx context.Context, seq int64, records []Reques
 	}
 	sortRequestRecords(records)
 
-	var mods []ManifestMod
-	var files []ManifestFile
-	seenFile := map[string]bool{}
-
-	for _, rec := range records {
-		if err := s.fetchVersion(ctx, rec.Module, rec.Version); err != nil {
-			return ExportResult{}, fmt.Errorf("fetch %s@%s: %w", rec.Module, rec.Version, err)
-		}
-		mf, err := s.manifestForModule(rec.Module, rec.Version)
-		if err != nil {
-			return ExportResult{}, err
-		}
-		mods = append(mods, mf)
-		for _, f := range mf.Files {
-			if !seenFile[f.Path] {
-				files = append(files, f)
-				seenFile[f.Path] = true
-			}
-		}
+	mods, files, err := s.fetchBundleContent(ctx, records)
+	if err != nil {
+		return ExportResult{}, err
 	}
 
 	bundleID := bundleIDForSequence(seq)
@@ -697,24 +687,55 @@ func (s *LowServer) writeBundle(ctx context.Context, seq int64, records []Reques
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
 
-	if err := os.MkdirAll(s.cfg.ExportDir, 0o755); err != nil {
+	if err := s.writeBundleArtifacts(bundleID, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
+	}
+
+	return ExportResult{Sequence: seq, ExportedModules: len(mods), BundleID: bundleID}, nil
+}
+
+// fetchBundleContent fetches every record's module and returns the module
+// manifests plus the de-duplicated set of files they reference.
+func (s *LowServer) fetchBundleContent(ctx context.Context, records []RequestRecord) ([]ManifestMod, []ManifestFile, error) {
+	var mods []ManifestMod
+	var files []ManifestFile
+	seenFile := map[string]bool{}
+	for _, rec := range records {
+		if err := s.fetchVersion(ctx, rec.Module, rec.Version); err != nil {
+			return nil, nil, fmt.Errorf("fetch %s@%s: %w", rec.Module, rec.Version, err)
+		}
+		mf, err := s.manifestForModule(rec.Module, rec.Version)
+		if err != nil {
+			return nil, nil, err
+		}
+		mods = append(mods, mf)
+		for _, f := range mf.Files {
+			if !seenFile[f.Path] {
+				files = append(files, f)
+				seenFile[f.Path] = true
+			}
+		}
+	}
+	return mods, files, nil
+}
+
+// writeBundleArtifacts writes the archive, manifest, and signature for a bundle
+// into the export directory.
+func (s *LowServer) writeBundleArtifacts(bundleID string, manifestBytes, sig []byte, files []ManifestFile) error {
+	if err := os.MkdirAll(s.cfg.ExportDir, 0o755); err != nil {
+		return err
 	}
 	archivePath := filepath.Join(s.cfg.ExportDir, bundleID+".tar.gz")
 	manifestPath := filepath.Join(s.cfg.ExportDir, bundleID+".manifest.json")
 	sigPath := filepath.Join(s.cfg.ExportDir, bundleID+".manifest.json.sig")
 
 	if err := createTarGzAtomic(archivePath, s.downloadDir, files); err != nil {
-		return ExportResult{}, err
+		return err
 	}
 	if err := writeBytesAtomic(manifestPath, manifestBytes, 0o644); err != nil {
-		return ExportResult{}, err
+		return err
 	}
-	if err := writeBytesAtomic(sigPath, []byte(base64.StdEncoding.EncodeToString(sig)+"\n"), 0o644); err != nil {
-		return ExportResult{}, err
-	}
-
-	return ExportResult{Sequence: seq, ExportedModules: len(mods), BundleID: bundleID}, nil
+	return writeBytesAtomic(sigPath, []byte(base64.StdEncoding.EncodeToString(sig)+"\n"), 0o644)
 }
 
 func sortRequestRecords(records []RequestRecord) {
@@ -738,22 +759,9 @@ type ReexportResult struct {
 }
 
 func (s *LowServer) HandleReexportRequest(ctx context.Context, r *http.Request) (ReexportResult, error) {
-	spec := strings.TrimSpace(r.URL.Query().Get("sequences"))
-	if spec == "" {
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			return ReexportResult{}, err
-		}
-		body = []byte(strings.TrimSpace(string(body)))
-		if len(body) > 0 && body[0] == '{' {
-			var req ReexportHTTPBody
-			if err := json.Unmarshal(body, &req); err != nil {
-				return ReexportResult{}, err
-			}
-			spec = strings.TrimSpace(req.Sequences)
-		} else {
-			spec = strings.TrimSpace(string(body))
-		}
+	spec, err := reexportSpecFromRequest(r)
+	if err != nil {
+		return ReexportResult{}, err
 	}
 	if spec == "" {
 		return ReexportResult{}, errors.New("missing sequence range; use ?sequences=42,45-47 or JSON {\"sequences\":\"42,45-47\"}")
@@ -763,6 +771,27 @@ func (s *LowServer) HandleReexportRequest(ctx context.Context, r *http.Request) 
 		return ReexportResult{}, err
 	}
 	return s.ReexportSequences(ctx, ranges), nil
+}
+
+// reexportSpecFromRequest extracts the sequence spec from either the
+// ?sequences= query parameter, a raw request body, or a JSON body.
+func reexportSpecFromRequest(r *http.Request) (string, error) {
+	if spec := strings.TrimSpace(r.URL.Query().Get("sequences")); spec != "" {
+		return spec, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	trimmed := strings.TrimSpace(string(body))
+	if strings.HasPrefix(trimmed, "{") {
+		var req ReexportHTTPBody
+		if err := json.Unmarshal([]byte(trimmed), &req); err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(req.Sequences), nil
+	}
+	return trimmed, nil
 }
 
 func (s *LowServer) ReexportSequences(ctx context.Context, ranges []SequenceRange) ReexportResult {
@@ -864,18 +893,18 @@ func (s *LowServer) manifestForModule(modulePath, version string) (ManifestMod, 
 // findVersionFiles searches the Go download cache for exactly one .info, .mod and .zip matching module@version.
 // It uses the .info content to disambiguate when path escaping is involved.
 func findVersionFiles(downloadDir, modulePath, version string) (map[string]string, error) {
-	matches := map[string]string{}
 	wantedSuffixes := map[string]string{
 		"info": ".info",
 		"mod":  ".mod",
 		"zip":  ".zip",
 	}
 
-	// Most fast path: derive escaped-ish path from URL request rules. This handles normal lowercase paths.
-	// Fall back to a scan if any file is missing.
+	// Fast path: derive an escaped-ish path from URL request rules. This handles
+	// normal lowercase paths. Fall back to a scan if any file is missing.
 	moduleEsc := escapePathApprox(modulePath)
 	versionEsc := escapeVersionApprox(version)
 	base := filepath.Join(downloadDir, filepath.FromSlash(moduleEsc), "@v")
+	matches := map[string]string{}
 	for kind, ext := range wantedSuffixes {
 		rel := path.Join(moduleEsc, "@v", versionEsc+ext)
 		if fileExists(filepath.Join(base, versionEsc+ext)) {
@@ -886,8 +915,37 @@ func findVersionFiles(downloadDir, modulePath, version string) (map[string]strin
 		return matches, nil
 	}
 
-	// Slower but robust enough for a daemon cache: find .info files for the version and verify JSON.
-	matches = map[string]string{}
+	return findVersionFilesByScan(downloadDir, modulePath, version, versionEsc, wantedSuffixes)
+}
+
+// findVersionFilesByScan locates the module's files by scanning the cache for
+// an .info whose content matches the requested version, then derives the .mod
+// and .zip siblings from it. This is robust to path-escaping edge cases.
+func findVersionFilesByScan(downloadDir, modulePath, version, versionEsc string, wantedSuffixes map[string]string) (map[string]string, error) {
+	foundInfoRel, err := scanForInfoRel(downloadDir, version, versionEsc)
+	if err != nil {
+		return nil, err
+	}
+	if foundInfoRel == "" {
+		return nil, fmt.Errorf("could not find %s@%s in %s", modulePath, version, downloadDir)
+	}
+	matches := map[string]string{}
+	prefix := strings.TrimSuffix(foundInfoRel, ".info")
+	for kind, ext := range wantedSuffixes {
+		rel := prefix + ext
+		if fileExists(filepath.Join(downloadDir, filepath.FromSlash(rel))) {
+			matches[kind] = rel
+		}
+	}
+	if len(matches) != 3 {
+		return nil, fmt.Errorf("incomplete cache files for %s@%s", modulePath, version)
+	}
+	return matches, nil
+}
+
+// scanForInfoRel walks the download cache and returns the slash-separated
+// relative path of the .info file whose JSON content matches version, or "".
+func scanForInfoRel(downloadDir, version, versionEsc string) (string, error) {
 	var foundInfoRel string
 	err := filepath.WalkDir(downloadDir, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -902,30 +960,13 @@ func findVersionFiles(downloadDir, modulePath, version string) (map[string]strin
 		}
 		var info ModuleInfo
 		if json.Unmarshal(b, &info) == nil && info.Version == version {
-			rel, err := filepath.Rel(downloadDir, p)
-			if err == nil {
+			if rel, err := filepath.Rel(downloadDir, p); err == nil {
 				foundInfoRel = filepath.ToSlash(rel)
 			}
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	if foundInfoRel == "" {
-		return nil, fmt.Errorf("could not find %s@%s in %s", modulePath, version, downloadDir)
-	}
-	prefix := strings.TrimSuffix(foundInfoRel, ".info")
-	for kind, ext := range wantedSuffixes {
-		rel := prefix + ext
-		if fileExists(filepath.Join(downloadDir, filepath.FromSlash(rel))) {
-			matches[kind] = rel
-		}
-	}
-	if len(matches) != 3 {
-		return nil, fmt.Errorf("incomplete cache files for %s@%s", modulePath, version)
-	}
-	return matches, nil
+	return foundInfoRel, err
 }
 
 // -----------------------------------------------------------------------------
@@ -1022,28 +1063,7 @@ func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
 }
 
 func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch {
-	case r.URL.Path == "/healthz":
-		_, _ = w.Write([]byte("ok\n"))
-		return
-	case r.URL.Path == "/admin/import" && r.Method == http.MethodPost:
-		res, err := s.ImportNext()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, res)
-		return
-	case (r.URL.Path == "/admin/status" || r.URL.Path == "/admin/missing") && r.Method == http.MethodGet:
-		status, err := s.ImportStatus()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, status)
-		return
-	case strings.HasPrefix(r.URL.Path, "/admin/"):
-		http.Error(w, "not found", http.StatusNotFound)
+	if s.serveHighAdmin(w, r) {
 		return
 	}
 
@@ -1065,12 +1085,40 @@ func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleHighLatest(w, r, req)
 	case proxyVersionFile:
 		s.handleHighVersionFile(w, r, req)
-	default:
+	case proxyUnknown:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
 }
 
-func (s *HighServer) handleHighList(w http.ResponseWriter, r *http.Request, req ProxyRequest) {
+// serveHighAdmin handles the health check and /admin/* routes. It reports
+// whether it has written a response for the request.
+func (s *HighServer) serveHighAdmin(w http.ResponseWriter, r *http.Request) bool {
+	switch {
+	case r.URL.Path == "/healthz":
+		_, _ = w.Write([]byte("ok\n"))
+	case r.URL.Path == "/admin/import" && r.Method == http.MethodPost:
+		res, err := s.ImportNext()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return true
+		}
+		writeJSON(w, res)
+	case (r.URL.Path == "/admin/status" || r.URL.Path == "/admin/missing") && r.Method == http.MethodGet:
+		status, err := s.ImportStatus()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return true
+		}
+		writeJSON(w, status)
+	case strings.HasPrefix(r.URL.Path, "/admin/"):
+		http.Error(w, "not found", http.StatusNotFound)
+	default:
+		return false
+	}
+	return true
+}
+
+func (s *HighServer) handleHighList(w http.ResponseWriter, _ *http.Request, req ProxyRequest) {
 	versions, err := s.completeVersions(req.ModuleEscaped)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -1084,7 +1132,7 @@ func (s *HighServer) handleHighList(w http.ResponseWriter, r *http.Request, req 
 	}
 }
 
-func (s *HighServer) handleHighLatest(w http.ResponseWriter, r *http.Request, req ProxyRequest) {
+func (s *HighServer) handleHighLatest(w http.ResponseWriter, _ *http.Request, req ProxyRequest) {
 	infos, err := s.completeInfos(req.ModuleEscaped)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -1291,39 +1339,8 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, bundleID string, expec
 		return BundleManifest{}, fmt.Errorf("bundle %s incomplete: need archive, manifest and signature", bundleID)
 	}
 
-	manifestBytes, err := os.ReadFile(manifestPath)
+	manifest, err := s.loadVerifiedManifest(manifestPath, sigPath, bundleID, expectedSeq)
 	if err != nil {
-		return BundleManifest{}, err
-	}
-	sigB64, err := os.ReadFile(sigPath)
-	if err != nil {
-		return BundleManifest{}, err
-	}
-	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigB64)))
-	if err != nil {
-		return BundleManifest{}, fmt.Errorf("decode signature: %w", err)
-	}
-	if !ed25519.Verify(s.publicKey, manifestBytes, sig) {
-		return BundleManifest{}, fmt.Errorf("signature verification failed for %s", bundleID)
-	}
-
-	var manifest BundleManifest
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		return BundleManifest{}, err
-	}
-	if manifest.Type != manifestType {
-		return BundleManifest{}, fmt.Errorf("wrong manifest type %q", manifest.Type)
-	}
-	if manifest.Sequence != expectedSeq {
-		return BundleManifest{}, fmt.Errorf("sequence mismatch: got %d, want %d", manifest.Sequence, expectedSeq)
-	}
-	if manifest.PreviousSequence != s.state.LastImportedSequence {
-		return BundleManifest{}, fmt.Errorf("previous sequence mismatch: got %d, want %d", manifest.PreviousSequence, s.state.LastImportedSequence)
-	}
-	if manifest.BundleID != bundleID {
-		return BundleManifest{}, fmt.Errorf("bundle_id mismatch: got %q, want %q", manifest.BundleID, bundleID)
-	}
-	if err := validateManifestCompleteness(manifest); err != nil {
 		return BundleManifest{}, err
 	}
 
@@ -1351,6 +1368,51 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, bundleID string, expec
 		log.Printf("move imported files: %v", err)
 	}
 	return manifest, nil
+}
+
+// loadVerifiedManifest reads the manifest and its detached signature, verifies
+// the signature, and checks the manifest's identifying fields.
+func (s *HighServer) loadVerifiedManifest(manifestPath, sigPath, bundleID string, expectedSeq int64) (BundleManifest, error) {
+	manifestBytes, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return BundleManifest{}, err
+	}
+	sigB64, err := os.ReadFile(sigPath)
+	if err != nil {
+		return BundleManifest{}, err
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigB64)))
+	if err != nil {
+		return BundleManifest{}, fmt.Errorf("decode signature: %w", err)
+	}
+	if !ed25519.Verify(s.publicKey, manifestBytes, sig) {
+		return BundleManifest{}, fmt.Errorf("signature verification failed for %s", bundleID)
+	}
+
+	var manifest BundleManifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		return BundleManifest{}, err
+	}
+	if err := s.checkManifestFields(manifest, bundleID, expectedSeq); err != nil {
+		return BundleManifest{}, err
+	}
+	return manifest, nil
+}
+
+// checkManifestFields validates the manifest's type, sequencing, and identity
+// against what the importer expects next.
+func (s *HighServer) checkManifestFields(manifest BundleManifest, bundleID string, expectedSeq int64) error {
+	switch {
+	case manifest.Type != manifestType:
+		return fmt.Errorf("wrong manifest type %q", manifest.Type)
+	case manifest.Sequence != expectedSeq:
+		return fmt.Errorf("sequence mismatch: got %d, want %d", manifest.Sequence, expectedSeq)
+	case manifest.PreviousSequence != s.state.LastImportedSequence:
+		return fmt.Errorf("previous sequence mismatch: got %d, want %d", manifest.PreviousSequence, s.state.LastImportedSequence)
+	case manifest.BundleID != bundleID:
+		return fmt.Errorf("bundle_id mismatch: got %q, want %q", manifest.BundleID, bundleID)
+	}
+	return validateManifestCompleteness(manifest)
 }
 
 func (s *HighServer) quarantineFutureBundlesLocked() error {
@@ -1401,22 +1463,8 @@ func (s *HighServer) importStatusLocked() (ImportStatus, error) {
 
 	present := map[int64]bool{}
 	maxSeen := s.state.LastImportedSequence
-	for _, seq := range landing {
-		if bundleCompleteInDir(s.cfg.Landing, bundleIDForSequence(seq)) {
-			present[seq] = true
-			if seq > maxSeen {
-				maxSeen = seq
-			}
-		}
-	}
-	for _, seq := range quarantined {
-		if bundleCompleteInDir(s.cfg.Quarantine, bundleIDForSequence(seq)) {
-			present[seq] = true
-			if seq > maxSeen {
-				maxSeen = seq
-			}
-		}
-	}
+	maxSeen = markPresentComplete(s.cfg.Landing, landing, present, maxSeen)
+	maxSeen = markPresentComplete(s.cfg.Quarantine, quarantined, present, maxSeen)
 
 	next := s.state.LastImportedSequence + 1
 	missing := missingRanges(next, maxSeen, present)
@@ -1435,21 +1483,51 @@ func (s *HighServer) importStatusLocked() (ImportStatus, error) {
 	return status, nil
 }
 
+// markPresentComplete marks every complete bundle in dir as present and returns
+// the updated highest-seen sequence.
+func markPresentComplete(dir string, seqs []int64, present map[int64]bool, maxSeen int64) int64 {
+	for _, seq := range seqs {
+		if bundleCompleteInDir(dir, bundleIDForSequence(seq)) {
+			present[seq] = true
+			if seq > maxSeen {
+				maxSeen = seq
+			}
+		}
+	}
+	return maxSeen
+}
+
 func validateManifestCompleteness(m BundleManifest) error {
 	if len(m.Modules) == 0 {
 		return errors.New("manifest contains no modules")
 	}
+	seen, err := validateManifestFiles(m.Files)
+	if err != nil {
+		return err
+	}
+	return validateManifestModules(m.Modules, seen)
+}
+
+// validateManifestFiles checks each listed file's path and hash, returning the
+// set of valid file paths.
+func validateManifestFiles(files []ManifestFile) (map[string]bool, error) {
 	seen := map[string]bool{}
-	for _, f := range m.Files {
+	for _, f := range files {
 		if err := validateRelPath(f.Path); err != nil {
-			return fmt.Errorf("invalid file path %q: %w", f.Path, err)
+			return nil, fmt.Errorf("invalid file path %q: %w", f.Path, err)
 		}
 		if f.SHA256 == "" || len(f.SHA256) != 64 {
-			return fmt.Errorf("invalid sha256 for %s", f.Path)
+			return nil, fmt.Errorf("invalid sha256 for %s", f.Path)
 		}
 		seen[f.Path] = true
 	}
-	for _, mod := range m.Modules {
+	return seen, nil
+}
+
+// validateManifestModules checks that every module lists the required file
+// kinds and that each references a file present in the manifest's file set.
+func validateManifestModules(mods []ManifestMod, seen map[string]bool) error {
+	for _, mod := range mods {
 		if mod.Module == "" || mod.Version == "" {
 			return errors.New("module entry missing module or version")
 		}
@@ -1467,9 +1545,18 @@ func validateManifestCompleteness(m BundleManifest) error {
 }
 
 func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManifest) error {
-	// Copy every verified file into the accumulated repository. Do not overwrite
-	// existing immutable files with different content.
-	for _, f := range manifest.Files {
+	if err := s.installVerifiedFiles(staging, manifest.Files); err != nil {
+		return err
+	}
+	// Complete markers are written only after all files are installed.
+	return s.writeCompleteMarkers(manifest.Modules)
+}
+
+// installVerifiedFiles copies every verified file into the accumulated
+// repository, refusing to overwrite an existing immutable file with different
+// content.
+func (s *HighServer) installVerifiedFiles(staging string, files []ManifestFile) error {
+	for _, f := range files {
 		src := filepath.Join(staging, filepath.FromSlash(f.Path))
 		dst := filepath.Join(s.downloadDir, filepath.FromSlash(f.Path))
 		if !safeJoin(s.downloadDir, dst) {
@@ -1492,18 +1579,18 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 			return err
 		}
 	}
+	return nil
+}
 
-	// Complete markers are written only after all files are installed.
-	for _, mod := range manifest.Modules {
+// writeCompleteMarkers writes a .complete marker for each module once all of
+// its files are installed.
+func (s *HighServer) writeCompleteMarkers(mods []ManifestMod) error {
+	for _, mod := range mods {
 		infoPath := mod.Files["info"].Path
 		versionEsc := strings.TrimSuffix(path.Base(infoPath), ".info")
-		moduleEsc := strings.TrimSuffix(strings.TrimSuffix(infoPath, "/@v/"+path.Base(infoPath)), "/@v")
-		if moduleEsc == infoPath { // fallback to split
-			idx := strings.LastIndex(infoPath, "/@v/")
-			if idx < 0 {
-				return fmt.Errorf("cannot derive module path from %s", infoPath)
-			}
-			moduleEsc = infoPath[:idx]
+		moduleEsc, err := moduleEscFromInfoPath(infoPath)
+		if err != nil {
+			return err
 		}
 		marker := filepath.Join(s.downloadDir, filepath.FromSlash(moduleEsc), "@v", versionEsc+completeExt)
 		if err := writeBytesAtomic(marker, []byte(time.Now().UTC().Format(time.RFC3339Nano)+"\n"), 0o644); err != nil {
@@ -1511,6 +1598,20 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 		}
 	}
 	return nil
+}
+
+// moduleEscFromInfoPath derives the escaped module path from the relative path
+// of its .info file (e.g. "m/@v/v1.0.0.info" -> "m").
+func moduleEscFromInfoPath(infoPath string) (string, error) {
+	moduleEsc := strings.TrimSuffix(strings.TrimSuffix(infoPath, "/@v/"+path.Base(infoPath)), "/@v")
+	if moduleEsc == infoPath { // fallback to split
+		idx := strings.LastIndex(infoPath, "/@v/")
+		if idx < 0 {
+			return "", fmt.Errorf("cannot derive module path from %s", infoPath)
+		}
+		moduleEsc = infoPath[:idx]
+	}
+	return moduleEsc, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -1586,8 +1687,10 @@ func parseProxyRequest(urlPath string) (ProxyRequest, error) {
 // Semver/latest helpers. These implement enough Go/SemVer ordering for proxy latest.
 // -----------------------------------------------------------------------------
 
-var semverRE = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?(?:\+incompatible)?$`)
-var pseudoTimeRE = regexp.MustCompile(`(?:^|[-.])([0-9]{14})-[0-9A-Fa-f]{7,}$`)
+var (
+	semverRE     = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?(?:\+incompatible)?$`)
+	pseudoTimeRE = regexp.MustCompile(`(?:^|[-.])([0-9]{14})-[0-9A-Fa-f]{7,}$`)
+)
 
 type parsedSemver struct {
 	ok                  bool
@@ -1601,9 +1704,9 @@ func parseSemver(v string) parsedSemver {
 		return parsedSemver{}
 	}
 	maj, _ := strconv.ParseInt(m[1], 10, 64)
-	min, _ := strconv.ParseInt(m[2], 10, 64)
+	minr, _ := strconv.ParseInt(m[2], 10, 64)
 	pat, _ := strconv.ParseInt(m[3], 10, 64)
-	return parsedSemver{ok: true, major: maj, minor: min, patch: pat, pre: m[4]}
+	return parsedSemver{ok: true, major: maj, minor: minr, patch: pat, pre: m[4]}
 }
 
 func isValidSemver(v string) bool { return parseSemver(v).ok }
@@ -1651,30 +1754,35 @@ func comparePrerelease(a, b string) int {
 		if i >= len(bs) {
 			return 1
 		}
-		ai, aErr := strconv.ParseInt(as[i], 10, 64)
-		bi, bErr := strconv.ParseInt(bs[i], 10, 64)
-		switch {
-		case aErr == nil && bErr == nil:
-			if ai < bi {
-				return -1
-			}
-			if ai > bi {
-				return 1
-			}
-		case aErr == nil && bErr != nil:
-			return -1 // numeric identifiers have lower precedence
-		case aErr != nil && bErr == nil:
-			return 1
-		default:
-			if as[i] < bs[i] {
-				return -1
-			}
-			if as[i] > bs[i] {
-				return 1
-			}
+		if c := comparePrereleaseIdent(as[i], bs[i]); c != 0 {
+			return c
 		}
 	}
 	return 0
+}
+
+// comparePrereleaseIdent orders a single dot-separated pre-release identifier.
+// Numeric identifiers compare numerically and rank below alphanumeric ones.
+func comparePrereleaseIdent(a, b string) int {
+	ai, aErr := strconv.ParseInt(a, 10, 64)
+	bi, bErr := strconv.ParseInt(b, 10, 64)
+	switch {
+	case aErr == nil && bErr == nil:
+		switch {
+		case ai < bi:
+			return -1
+		case ai > bi:
+			return 1
+		default:
+			return 0
+		}
+	case aErr == nil: // numeric identifiers have lower precedence
+		return -1
+	case bErr == nil:
+		return 1
+	default:
+		return strings.Compare(a, b)
+	}
 }
 
 func sortVersionsAsc(vs []string) {
@@ -1745,7 +1853,7 @@ func unescapeBang(s string) (string, error) {
 			continue
 		}
 		if i+1 >= len(s) {
-			return "", errors.New("invalid escaped path: trailing !")
+			return "", errors.New("invalid escaped path: trailing bang")
 		}
 		n := s[i+1]
 		if n < 'a' || n > 'z' {
@@ -1834,29 +1942,8 @@ func createTarGzAtomic(dst string, baseDir string, files []ManifestFile) error {
 	gz := gzip.NewWriter(f)
 	tw := tar.NewWriter(gz)
 	for _, mf := range files {
-		if err := validateRelPath(mf.Path); err != nil {
+		if err := addFileToTar(tw, baseDir, mf); err != nil {
 			return err
-		}
-		abs := filepath.Join(baseDir, filepath.FromSlash(mf.Path))
-		st, err := os.Stat(abs)
-		if err != nil {
-			return err
-		}
-		hdr := &tar.Header{Name: mf.Path, Mode: 0o644, Size: st.Size(), ModTime: time.Unix(0, 0).UTC()}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
-		}
-		in, err := os.Open(abs)
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(tw, in)
-		closeErr := in.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
 		}
 	}
 	if err := tw.Close(); err != nil {
@@ -1876,6 +1963,33 @@ func createTarGzAtomic(dst string, baseDir string, files []ManifestFile) error {
 	}
 	ok = true
 	return nil
+}
+
+// addFileToTar writes a single repository file into the tar stream with a
+// deterministic header.
+func addFileToTar(tw *tar.Writer, baseDir string, mf ManifestFile) error {
+	if err := validateRelPath(mf.Path); err != nil {
+		return err
+	}
+	abs := filepath.Join(baseDir, filepath.FromSlash(mf.Path))
+	st, err := os.Stat(abs)
+	if err != nil {
+		return err
+	}
+	hdr := &tar.Header{Name: mf.Path, Mode: 0o644, Size: st.Size(), ModTime: time.Unix(0, 0).UTC()}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	in, err := os.Open(abs)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(tw, in)
+	closeErr := in.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 func extractAndVerifyTarGz(archivePath, staging string, files []ManifestFile) error {
@@ -1907,39 +2021,8 @@ func extractAndVerifyTarGz(archivePath, staging string, files []ManifestFile) er
 		if err != nil {
 			return err
 		}
-		if hdr.Typeflag != tar.TypeReg {
-			return fmt.Errorf("archive contains non-regular file %s", hdr.Name)
-		}
-		mf, ok := expected[hdr.Name]
-		if !ok {
-			return fmt.Errorf("archive contains unexpected file %s", hdr.Name)
-		}
-		if hdr.Size != mf.Size {
-			return fmt.Errorf("size mismatch for %s: got %d want %d", hdr.Name, hdr.Size, mf.Size)
-		}
-		dst := filepath.Join(staging, filepath.FromSlash(hdr.Name))
-		if !safeJoin(staging, dst) {
-			return fmt.Errorf("unsafe archive path %s", hdr.Name)
-		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		if err := extractTarEntry(tr, hdr, staging, expected); err != nil {
 			return err
-		}
-		out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
-		}
-		h := sha256.New()
-		_, copyErr := io.Copy(io.MultiWriter(out, h), tr)
-		closeErr := out.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		got := hex.EncodeToString(h.Sum(nil))
-		if got != mf.SHA256 {
-			return fmt.Errorf("sha256 mismatch for %s: got %s want %s", hdr.Name, got, mf.SHA256)
 		}
 		seen[hdr.Name] = true
 	}
@@ -1947,6 +2030,45 @@ func extractAndVerifyTarGz(archivePath, staging string, files []ManifestFile) er
 		if !seen[p] {
 			return fmt.Errorf("archive missing file %s", p)
 		}
+	}
+	return nil
+}
+
+// extractTarEntry validates one tar entry against the manifest, then writes it
+// into staging while verifying its size and SHA-256.
+func extractTarEntry(tr *tar.Reader, hdr *tar.Header, staging string, expected map[string]ManifestFile) error {
+	if hdr.Typeflag != tar.TypeReg {
+		return fmt.Errorf("archive contains non-regular file %s", hdr.Name)
+	}
+	mf, ok := expected[hdr.Name]
+	if !ok {
+		return fmt.Errorf("archive contains unexpected file %s", hdr.Name)
+	}
+	if hdr.Size != mf.Size {
+		return fmt.Errorf("size mismatch for %s: got %d want %d", hdr.Name, hdr.Size, mf.Size)
+	}
+	dst := filepath.Join(staging, filepath.FromSlash(hdr.Name))
+	if !safeJoin(staging, dst) {
+		return fmt.Errorf("unsafe archive path %s", hdr.Name)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	h := sha256.New()
+	_, copyErr := io.Copy(io.MultiWriter(out, h), tr)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != mf.SHA256 {
+		return fmt.Errorf("sha256 mismatch for %s: got %s want %s", hdr.Name, got, mf.SHA256)
 	}
 	return nil
 }
@@ -2165,27 +2287,9 @@ func parseSequenceSpec(spec string) ([]SequenceRange, error) {
 		if part == "" {
 			continue
 		}
-		var r SequenceRange
-		if strings.Contains(part, "-") {
-			parts := strings.SplitN(part, "-", 2)
-			start, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid range start %q", parts[0])
-			}
-			end, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid range end %q", parts[1])
-			}
-			r = SequenceRange{Start: start, End: end}
-		} else {
-			n, err := strconv.ParseInt(part, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid sequence %q", part)
-			}
-			r = SequenceRange{Start: n, End: n}
-		}
-		if r.Start <= 0 || r.End <= 0 || r.End < r.Start {
-			return nil, fmt.Errorf("invalid sequence range %q", part)
+		r, err := parseSequenceRangePart(part)
+		if err != nil {
+			return nil, err
 		}
 		ranges = append(ranges, r)
 	}
@@ -2193,6 +2297,39 @@ func parseSequenceSpec(spec string) ([]SequenceRange, error) {
 		return nil, errors.New("empty sequence range")
 	}
 	return mergeSequenceRanges(ranges), nil
+}
+
+// parseSequenceRangePart parses a single "N" or "N-M" token into an inclusive,
+// positive, non-descending range.
+func parseSequenceRangePart(part string) (SequenceRange, error) {
+	r, err := parseRangeBounds(part)
+	if err != nil {
+		return SequenceRange{}, err
+	}
+	if r.Start <= 0 || r.End <= 0 || r.End < r.Start {
+		return SequenceRange{}, fmt.Errorf("invalid sequence range %q", part)
+	}
+	return r, nil
+}
+
+func parseRangeBounds(part string) (SequenceRange, error) {
+	if !strings.Contains(part, "-") {
+		n, err := strconv.ParseInt(part, 10, 64)
+		if err != nil {
+			return SequenceRange{}, fmt.Errorf("invalid sequence %q", part)
+		}
+		return SequenceRange{Start: n, End: n}, nil
+	}
+	parts := strings.SplitN(part, "-", 2)
+	start, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+	if err != nil {
+		return SequenceRange{}, fmt.Errorf("invalid range start %q", parts[0])
+	}
+	end, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+	if err != nil {
+		return SequenceRange{}, fmt.Errorf("invalid range end %q", parts[1])
+	}
+	return SequenceRange{Start: start, End: end}, nil
 }
 
 func mergeSequenceRanges(in []SequenceRange) []SequenceRange {
@@ -2219,11 +2356,11 @@ func mergeSequenceRanges(in []SequenceRange) []SequenceRange {
 	return out
 }
 
-func expandSequenceRanges(ranges []SequenceRange, max int) []int64 {
+func expandSequenceRanges(ranges []SequenceRange, limit int) []int64 {
 	var out []int64
 	for _, r := range ranges {
 		for n := r.Start; n <= r.End; n++ {
-			if max > 0 && len(out) >= max {
+			if limit > 0 && len(out) >= limit {
 				return out
 			}
 			out = append(out, n)
@@ -2264,43 +2401,4 @@ func missingRanges(start, end int64, present map[int64]bool) []SequenceRange {
 		out = append(out, *cur)
 	}
 	return out
-}
-
-func findFutureBundle(dir string, next int64) (int64, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0, err
-	}
-	re := regexp.MustCompile(`^go-bundle-([0-9]{6})\.manifest\.json$`)
-	var lowest int64
-	for _, e := range entries {
-		m := re.FindStringSubmatch(e.Name())
-		if m == nil {
-			continue
-		}
-		n, _ := strconv.ParseInt(m[1], 10, 64)
-		if n > next && (lowest == 0 || n < lowest) {
-			lowest = n
-		}
-	}
-	return lowest, nil
-}
-
-func moveImportedFiles(landing, bundleID string) error {
-	dstDir := filepath.Join(landing, "imported")
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
-		return err
-	}
-	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
-		src := filepath.Join(landing, bundleID+suffix)
-		if !fileExists(src) {
-			continue
-		}
-		dst := filepath.Join(dstDir, bundleID+suffix)
-		_ = os.Remove(dst)
-		if err := os.Rename(src, dst); err != nil {
-			return err
-		}
-	}
-	return nil
 }
