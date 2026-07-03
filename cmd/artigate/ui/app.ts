@@ -29,9 +29,23 @@ interface TreeResponse {
   nodes: TreeNode[];
 }
 
+interface DetailField {
+  label: string;
+  value: string;
+  mono?: boolean;
+}
+
+interface Detail {
+  title: string;
+  subtitle?: string;
+  fields: DetailField[];
+  go_mod?: string;
+}
+
 type View = "go" | "python";
 
 let currentView: View = "go";
+let selectedLeaf: HTMLElement | null = null;
 
 function esc(value: unknown): string {
   const map: Record<string, string> = {
@@ -120,7 +134,83 @@ function leafNode(node: TreeNode): HTMLElement {
   const div = document.createElement("div");
   div.className = "leaf";
   div.textContent = node.label;
+  div.tabIndex = 0;
+  div.setAttribute("role", "button");
+  div.addEventListener("click", () => void selectLeaf(div, node));
+  div.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      void selectLeaf(div, node);
+    }
+  });
   return div;
+}
+
+function renderDetail(detail: Detail): void {
+  const panel = byId("detail");
+  panel.textContent = "";
+
+  const title = document.createElement("h3");
+  title.textContent = detail.title;
+  panel.appendChild(title);
+
+  if (detail.subtitle) {
+    const sub = document.createElement("div");
+    sub.className = "subtitle";
+    sub.textContent = detail.subtitle;
+    panel.appendChild(sub);
+  }
+
+  const dl = document.createElement("dl");
+  for (const field of detail.fields ?? []) {
+    const dt = document.createElement("dt");
+    dt.textContent = field.label;
+    const dd = document.createElement("dd");
+    dd.textContent = field.value;
+    if (field.mono) {
+      dd.className = "mono";
+    }
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  }
+  panel.appendChild(dl);
+
+  if (detail.go_mod) {
+    const label = document.createElement("div");
+    label.className = "subtitle";
+    label.style.margin = ".9rem 0 .3rem";
+    label.textContent = "go.mod";
+    const pre = document.createElement("pre");
+    pre.textContent = detail.go_mod;
+    panel.appendChild(label);
+    panel.appendChild(pre);
+  }
+}
+
+async function selectLeaf(el: HTMLElement, node: TreeNode): Promise<void> {
+  if (selectedLeaf) {
+    selectedLeaf.classList.remove("selected");
+  }
+  selectedLeaf = el;
+  el.classList.add("selected");
+
+  const panel = byId("detail");
+  setMessage(panel, "loading…");
+  try {
+    const url = `/ui/api/detail?eco=${encodeURIComponent(currentView)}&path=${encodeURIComponent(node.path)}`;
+    const resp = await fetch(url, { cache: "no-store" });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    renderDetail((await resp.json()) as Detail);
+  } catch (err) {
+    setMessage(panel, `Failed to load details: ${(err as Error).message}`);
+  }
+}
+
+function clearDetail(): void {
+  selectedLeaf = null;
+  setMessage(byId("detail"), "Select a version to see its details.");
 }
 
 function expandableNode(node: TreeNode): HTMLElement {
@@ -166,6 +256,7 @@ function menuButtons(): NodeListOf<HTMLButtonElement> {
 async function loadTree(): Promise<void> {
   const tree = byId("tree");
   byId("treeTitle").textContent = currentView === "go" ? "Go modules" : "Python packages";
+  clearDetail();
   setMessage(tree, "loading…");
   try {
     const nodes = await fetchChildren(currentView, "");

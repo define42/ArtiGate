@@ -4,6 +4,7 @@
 // only that node's immediate children, so nothing large is transferred or
 // rendered up front. The top menu switches between the Go and Python trees.
 let currentView = "go";
+let selectedLeaf = null;
 function esc(value) {
     const map = {
         "&": "&amp;",
@@ -83,7 +84,76 @@ function leafNode(node) {
     const div = document.createElement("div");
     div.className = "leaf";
     div.textContent = node.label;
+    div.tabIndex = 0;
+    div.setAttribute("role", "button");
+    div.addEventListener("click", () => void selectLeaf(div, node));
+    div.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            void selectLeaf(div, node);
+        }
+    });
     return div;
+}
+function renderDetail(detail) {
+    const panel = byId("detail");
+    panel.textContent = "";
+    const title = document.createElement("h3");
+    title.textContent = detail.title;
+    panel.appendChild(title);
+    if (detail.subtitle) {
+        const sub = document.createElement("div");
+        sub.className = "subtitle";
+        sub.textContent = detail.subtitle;
+        panel.appendChild(sub);
+    }
+    const dl = document.createElement("dl");
+    for (const field of detail.fields ?? []) {
+        const dt = document.createElement("dt");
+        dt.textContent = field.label;
+        const dd = document.createElement("dd");
+        dd.textContent = field.value;
+        if (field.mono) {
+            dd.className = "mono";
+        }
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+    }
+    panel.appendChild(dl);
+    if (detail.go_mod) {
+        const label = document.createElement("div");
+        label.className = "subtitle";
+        label.style.margin = ".9rem 0 .3rem";
+        label.textContent = "go.mod";
+        const pre = document.createElement("pre");
+        pre.textContent = detail.go_mod;
+        panel.appendChild(label);
+        panel.appendChild(pre);
+    }
+}
+async function selectLeaf(el, node) {
+    if (selectedLeaf) {
+        selectedLeaf.classList.remove("selected");
+    }
+    selectedLeaf = el;
+    el.classList.add("selected");
+    const panel = byId("detail");
+    setMessage(panel, "loading…");
+    try {
+        const url = `/ui/api/detail?eco=${encodeURIComponent(currentView)}&path=${encodeURIComponent(node.path)}`;
+        const resp = await fetch(url, { cache: "no-store" });
+        if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+        }
+        renderDetail((await resp.json()));
+    }
+    catch (err) {
+        setMessage(panel, `Failed to load details: ${err.message}`);
+    }
+}
+function clearDetail() {
+    selectedLeaf = null;
+    setMessage(byId("detail"), "Select a version to see its details.");
 }
 function expandableNode(node) {
     const details = document.createElement("details");
@@ -122,6 +192,7 @@ function menuButtons() {
 async function loadTree() {
     const tree = byId("tree");
     byId("treeTitle").textContent = currentView === "go" ? "Go modules" : "Python packages";
+    clearDetail();
     setMessage(tree, "loading…");
     try {
         const nodes = await fetchChildren(currentView, "");

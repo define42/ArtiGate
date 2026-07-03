@@ -9,6 +9,9 @@ package main
 
 import (
 	_ "embed"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -95,6 +98,12 @@ func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		s.handleUITree(w, r)
+	case "/ui/api/detail":
+		if !isReadMethod(r) {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		s.handleUIDetail(w, r)
 	default:
 		return false
 	}
@@ -335,4 +344,129 @@ func (s *HighServer) listPythonProjects() ([]UIProject, error) {
 		projects = append(projects, UIProject{Project: name, Files: fs})
 	}
 	return projects, nil
+}
+
+// -----------------------------------------------------------------------------
+// Leaf detail panel
+// -----------------------------------------------------------------------------
+
+// UIDetailField is one label/value row in the detail panel.
+type UIDetailField struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+	Mono  bool   `json:"mono,omitempty"`
+}
+
+// UIDetail describes a selected leaf (a Go module version or a Python wheel).
+type UIDetail struct {
+	Title    string          `json:"title"`
+	Subtitle string          `json:"subtitle,omitempty"`
+	Fields   []UIDetailField `json:"fields"`
+	GoMod    string          `json:"go_mod,omitempty"`
+}
+
+// handleUIDetail returns details for a selected leaf. path is "module@version"
+// for Go and a wheel filename for Python.
+func (s *HighServer) handleUIDetail(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	var (
+		detail UIDetail
+		err    error
+	)
+	if r.URL.Query().Get("eco") == "python" {
+		detail, err = s.pythonDetail(path)
+	} else {
+		detail, err = s.goDetail(path)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, detail)
+}
+
+func (s *HighServer) goDetail(spec string) (UIDetail, error) {
+	i := strings.LastIndex(spec, "@")
+	if i <= 0 || i == len(spec)-1 {
+		return UIDetail{}, errors.New("invalid module@version")
+	}
+	module, version := spec[:i], spec[i+1:]
+	moduleEsc, versionEsc := escapePathApprox(module), escapeVersionApprox(version)
+	if !s.isComplete(moduleEsc, versionEsc) {
+		return UIDetail{}, errors.New("version not found")
+	}
+	base := filepath.Join(s.downloadDir, filepath.FromSlash(moduleEsc), "@v")
+
+	fields := []UIDetailField{
+		{Label: "Module", Value: module, Mono: true},
+		{Label: "Version", Value: version, Mono: true},
+	}
+	if t := goInfoTime(filepath.Join(base, versionEsc+".info")); t != "" {
+		fields = append(fields, UIDetailField{Label: "Published", Value: t})
+	}
+	if st, err := os.Stat(filepath.Join(base, versionEsc+".zip")); err == nil {
+		fields = append(fields, UIDetailField{Label: "Zip size", Value: formatBytes(st.Size())})
+	}
+	if sum, err := sha256File(filepath.Join(base, versionEsc+".zip")); err == nil {
+		fields = append(fields, UIDetailField{Label: "Zip SHA-256", Value: sum, Mono: true})
+	}
+	fields = append(fields, UIDetailField{Label: "Proxy path", Value: "/" + moduleEsc + "/@v/" + versionEsc + ".zip", Mono: true})
+
+	goMod, _ := os.ReadFile(filepath.Join(base, versionEsc+".mod"))
+	return UIDetail{Title: module, Subtitle: version, Fields: fields, GoMod: string(goMod)}, nil
+}
+
+func goInfoTime(infoPath string) string {
+	b, err := os.ReadFile(infoPath)
+	if err != nil {
+		return ""
+	}
+	var mi ModuleInfo
+	if json.Unmarshal(b, &mi) != nil || mi.Time.IsZero() {
+		return ""
+	}
+	return mi.Time.UTC().Format(time.RFC3339)
+}
+
+func (s *HighServer) pythonDetail(filename string) (UIDetail, error) {
+	if filename == "" || strings.ContainsRune(filename, '/') {
+		return UIDetail{}, errors.New("invalid filename")
+	}
+	abs := filepath.Join(s.pythonDir(), filename)
+	if !safeJoin(s.pythonDir(), abs) {
+		return UIDetail{}, errors.New("unsafe path")
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		return UIDetail{}, errors.New("wheel not found")
+	}
+	project, version, _ := parseWheelFilename(filename)
+	fields := []UIDetailField{
+		{Label: "Filename", Value: filename, Mono: true},
+		{Label: "Version", Value: version},
+		{Label: "Size", Value: formatBytes(st.Size())},
+		{Label: "Download", Value: "/packages/" + filename, Mono: true},
+	}
+	if sum, err := sha256File(abs); err == nil {
+		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
+	}
+	title := project
+	if title == "" {
+		title = filename
+	}
+	return UIDetail{Title: title, Subtitle: version, Fields: fields}, nil
+}
+
+// formatBytes renders a byte count in human-readable units.
+func formatBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for x := n / unit; x >= unit; x /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }

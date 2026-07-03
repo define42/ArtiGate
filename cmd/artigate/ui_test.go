@@ -124,6 +124,67 @@ func TestHighServerUITreePython(t *testing.T) {
 	}
 }
 
+func getDetail(t *testing.T, base, eco, path string) UIDetail {
+	t.Helper()
+	code, body := httpGet(t, base+"/ui/api/detail?eco="+eco+"&path="+url.QueryEscape(path))
+	if code != http.StatusOK {
+		t.Fatalf("detail(%s,%q) status = %d", eco, path, code)
+	}
+	var d UIDetail
+	if err := json.Unmarshal([]byte(body), &d); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	return d
+}
+
+func fieldValue(d UIDetail, label string) string {
+	for _, f := range d.Fields {
+		if f.Label == label {
+			return f.Value
+		}
+	}
+	return ""
+}
+
+func TestHighServerUIDetailGo(t *testing.T) {
+	srv := mixedHighServer(t)
+
+	d := getDetail(t, srv.URL, "go", "github.com/foo/bar@v1.0.0")
+	if d.Title != "github.com/foo/bar" || d.Subtitle != "v1.0.0" {
+		t.Errorf("detail title/subtitle = %q/%q", d.Title, d.Subtitle)
+	}
+	if fieldValue(d, "Version") != "v1.0.0" {
+		t.Errorf("Version field = %q", fieldValue(d, "Version"))
+	}
+	// The .mod file content is surfaced (the test fixture writes a stub go.mod).
+	if !strings.Contains(d.GoMod, "github.com/foo/bar") {
+		t.Errorf("go.mod not included: %q", d.GoMod)
+	}
+	if fieldValue(d, "Zip size") == "" || fieldValue(d, "Zip SHA-256") == "" {
+		t.Errorf("missing zip fields: %+v", d.Fields)
+	}
+
+	// Unknown version 404s.
+	if code, _ := httpGet(t, srv.URL+"/ui/api/detail?eco=go&path=github.com/foo/bar@v9.9.9"); code != http.StatusNotFound {
+		t.Errorf("unknown version status = %d, want 404", code)
+	}
+}
+
+func TestHighServerUIDetailPython(t *testing.T) {
+	srv := mixedHighServer(t)
+
+	d := getDetail(t, srv.URL, "python", "requests-2.32.4-py3-none-any.whl")
+	if d.Title != "requests" || d.Subtitle != "2.32.4" {
+		t.Errorf("detail title/subtitle = %q/%q", d.Title, d.Subtitle)
+	}
+	if fieldValue(d, "Download") != "/packages/requests-2.32.4-py3-none-any.whl" {
+		t.Errorf("Download field = %q", fieldValue(d, "Download"))
+	}
+	if fieldValue(d, "SHA-256") == "" || fieldValue(d, "Size") == "" {
+		t.Errorf("missing wheel fields: %+v", d.Fields)
+	}
+}
+
 func TestGoTreeChildren(t *testing.T) {
 	mods := []UIModule{
 		{Module: "github.com/foo/bar", Versions: []string{"v1.0.0"}},
@@ -196,8 +257,9 @@ func TestHighServerUIAppJS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The compiled bundle drives the lazy tree fetch and the view switch.
-	for _, want := range []string{"/ui/api/tree", "fetchChildren", "loadTree", "currentView"} {
+	// The compiled bundle drives the lazy tree fetch, the view switch, and the
+	// detail panel.
+	for _, want := range []string{"/ui/api/tree", "/ui/api/detail", "fetchChildren", "selectLeaf", "renderDetail"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("app.js missing %q", want)
 		}

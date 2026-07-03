@@ -20,13 +20,25 @@
   .meta { display: flex; flex-wrap: wrap; gap: 1.25rem; margin-bottom: 1.75rem; font-size: .9rem; color: #a9b2c3; }
   .meta b { color: #e6e6e6; }
   section h2 { font-size: 1rem; border-bottom: 1px solid #2a2f3a; padding-bottom: .4rem; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
   details { border-left: 1px solid #2a2f3a; margin: .1rem 0; padding: 0 0 0 .1rem; }
   #tree > details { border: 1px solid #2a2f3a; border-radius: 6px; background: #161a22; margin: .35rem 0; padding: .1rem .6rem; }
   summary { cursor: pointer; padding: .35rem .1rem; font-weight: 600; list-style-position: inside; }
   summary .count { color: #8b93a5; font-weight: 400; font-size: .85rem; margin-left: .4rem; }
   .children { margin-left: 1rem; }
-  .leaf { padding: .18rem 0 .18rem 1.2rem; font-family: ui-monospace, monospace; font-size: .85rem; color: #c7cedb; }
+  .leaf { padding: .18rem .4rem .18rem 1.2rem; font-family: ui-monospace, monospace; font-size: .85rem; color: #c7cedb; cursor: pointer; border-radius: 4px; }
+  .leaf:hover { background: #1c2230; }
+  .leaf.selected { background: #1f6f43; color: #eafff2; }
   .empty { color: #8b93a5; font-style: italic; padding: .2rem 0 .2rem 1.2rem; margin: 0; }
+  .detail { position: sticky; top: 1rem; background: #161a22; border: 1px solid #2a2f3a; border-radius: 8px; padding: 1rem 1.1rem; }
+  .detail h3 { margin: 0; font-size: 1rem; font-family: ui-monospace, monospace; word-break: break-all; }
+  .detail .subtitle { color: #8b93a5; font-size: .85rem; margin: .1rem 0 .8rem; }
+  .detail dl { display: grid; grid-template-columns: auto 1fr; gap: .35rem .8rem; margin: 0; font-size: .85rem; }
+  .detail dt { color: #8b93a5; }
+  .detail dd { margin: 0; word-break: break-all; }
+  .detail dd.mono { font-family: ui-monospace, monospace; }
+  .detail pre { background: #0f1115; border: 1px solid #2a2f3a; border-radius: 6px; padding: .6rem .7rem; overflow: auto; font-size: .8rem; max-height: 340px; }
 </style>
 <script type="module" src="/ui/app.js"></script>
 </head>
@@ -42,10 +54,15 @@
 <main>
   <div id="banner" class="banner">Loading&hellip;</div>
   <div id="meta" class="meta"></div>
-  <section>
-    <h2 id="treeTitle"></h2>
-    <div id="tree"></div>
-  </section>
+  <div class="layout">
+    <section>
+      <h2 id="treeTitle"></h2>
+      <div id="tree"></div>
+    </section>
+    <aside id="detail" class="detail">
+      <p class="empty">Select a version to see its details.</p>
+    </aside>
+  </div>
 </main>
 </body>
 </html>

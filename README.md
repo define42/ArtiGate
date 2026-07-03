@@ -316,6 +316,11 @@ mirrors stay navigable. Each level is fetched from `/ui/api/tree` only when you
 expand its parent, so the initial page transfers just the top-level nodes rather
 than the whole catalog. Python projects expand to their wheels the same way.
 
+Selecting a leaf (a Go module version or a Python wheel) opens a **detail panel**
+on the right. For a Go version it shows the published time, zip size, zip
+SHA-256, the GOPROXY path, and the module's `go.mod`; for a wheel it shows the
+size, SHA-256, and download URL. The details come from `/ui/api/detail`.
+
 The front-end is TypeScript ([cmd/artigate/ui/app.ts](cmd/artigate/ui/app.ts)); its
 compiled output (`app.js`) is embedded into the binary via `go:embed`, so the UI
 stays self-contained and air-gapped. After editing the TypeScript, recompile with
