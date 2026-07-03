@@ -1328,6 +1328,9 @@ func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.servePython(w, r) {
 		return
 	}
+	if s.serveUI(w, r) {
+		return
+	}
 
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

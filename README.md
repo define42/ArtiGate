@@ -234,6 +234,27 @@ Example response when bundle `42` is missing but `43`, `44`, and `47` are alread
 
 After bundle `42` is received, `/admin/import` imports `42` and then automatically processes quarantined `43` and `44`. It will stop again at `45` until `45-46` are received.
 
+### Web dashboard
+
+The high side serves a self-contained web UI at its root (no external assets, so
+it works fully air-gapped):
+
+```text
+http://high-proxy:8080/
+```
+
+The front page shows the import status — prominently flagging **missing bundles**
+(the ranges the repository is blocked on) alongside the last-imported, next-expected,
+highest-seen, and quarantined sequences. Below that is a collapsible tree of
+everything mirrored: Go modules (with their versions) and Python projects (with
+their wheels), for both ecosystems in one view.
+
+The same data is available as JSON for scripting:
+
+```bash
+curl http://127.0.0.1:8080/ui/api/overview
+```
+
 ## High-side latest/list behavior
 
 The high side never trusts a transferred `list` or `latest` file as truth. It calculates them dynamically from completed module versions in its local repository.
