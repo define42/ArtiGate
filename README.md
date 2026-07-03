@@ -1,5 +1,7 @@
 # ArtiGate
 
+[![codecov](https://codecov.io/gh/define42/ArtiGate/graph/badge.svg?token=RBKT8U26R8)](https://codecov.io/gh/define42/ArtiGate)
+
 `ArtiGate` is a Go dependency mirror for one-way data-diode environments.
 
 It contains two modes in one binary:
