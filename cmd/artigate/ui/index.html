@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ArtiGate</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }
+  header { padding: 1rem 1.5rem; background: #161a22; border-bottom: 1px solid #2a2f3a; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  header h1 { font-size: 1.25rem; margin: 0; }
+  nav { display: flex; gap: .4rem; }
+  nav button { background: #2a2f3a; color: #c7cedb; border: 1px solid #3a4150; border-radius: 6px; padding: .4rem .9rem; cursor: pointer; font: inherit; }
+  nav button.active { background: #1f6f43; color: #eafff2; border-color: #2b8f59; }
+  header .refresh { margin-left: auto; background: #2a2f3a; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .4rem .8rem; cursor: pointer; }
+  main { padding: 1.5rem; }
+  .banner { padding: .9rem 1.1rem; border-radius: 8px; margin-bottom: 1.5rem; font-weight: 600; }
+  .banner.ok { background: #10281a; border: 1px solid #1f6f43; color: #7ee2a8; }
+  .banner.warn { background: #2e1416; border: 1px solid #7f2a30; color: #ff9ea3; }
+  .meta { display: flex; flex-wrap: wrap; gap: 1.25rem; margin-bottom: 1.75rem; font-size: .9rem; color: #a9b2c3; }
+  .meta b { color: #e6e6e6; }
+  section h2 { font-size: 1rem; border-bottom: 1px solid #2a2f3a; padding-bottom: .4rem; }
+  details { border-left: 1px solid #2a2f3a; margin: .1rem 0; padding: 0 0 0 .1rem; }
+  #tree > details { border: 1px solid #2a2f3a; border-radius: 6px; background: #161a22; margin: .35rem 0; padding: .1rem .6rem; }
+  summary { cursor: pointer; padding: .35rem .1rem; font-weight: 600; list-style-position: inside; }
+  summary .count { color: #8b93a5; font-weight: 400; font-size: .85rem; margin-left: .4rem; }
+  .children { margin-left: 1rem; }
+  .leaf { padding: .18rem 0 .18rem 1.2rem; font-family: ui-monospace, monospace; font-size: .85rem; color: #c7cedb; }
+  .empty { color: #8b93a5; font-style: italic; padding: .2rem 0 .2rem 1.2rem; margin: 0; }
+</style>
+<script type="module" src="/ui/app.js"></script>
+</head>
+<body>
+<header>
+  <h1>ArtiGate <span style="color:#8b93a5;font-weight:400">high-side repository</span></h1>
+  <nav>
+    <button type="button" data-view="go" class="active">Go modules</button>
+    <button type="button" data-view="python">Python packages</button>
+  </nav>
+  <button type="button" class="refresh" id="refresh">Refresh</button>
+</header>
+<main>
+  <div id="banner" class="banner">Loading&hellip;</div>
+  <div id="meta" class="meta"></div>
+  <section>
+    <h2 id="treeTitle"></h2>
+    <div id="tree"></div>
+  </section>
+</main>
+</body>
+</html>

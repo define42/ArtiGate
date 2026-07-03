@@ -1359,6 +1359,7 @@ type HighServer struct {
 	statePath   string
 	mu          sync.Mutex
 	state       HighState
+	tree        treeCache
 }
 
 func runHigh(args []string) {

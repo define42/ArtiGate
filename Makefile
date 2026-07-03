@@ -34,6 +34,10 @@ vet: ## Run go vet
 fmt: ## Format the code (gofmt)
 	gofmt -w cmd
 
+.PHONY: ui
+ui: ## Compile the high-side TypeScript UI (cmd/artigate/ui/app.ts -> app.js)
+	cd cmd/artigate/ui && npx -y -p typescript tsc -p tsconfig.json
+
 .PHONY: run
 run: ## Build and start the low+high stack with docker compose
 	$(COMPOSE) up --build

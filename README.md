@@ -306,9 +306,20 @@ http://high-proxy:8080/
 
 The front page shows the import status — prominently flagging **missing bundles**
 (the ranges the repository is blocked on) alongside the last-imported, next-expected,
-highest-seen, and quarantined sequences. Below that is a collapsible tree of
-everything mirrored: Go modules (with their versions) and Python projects (with
-their wheels), for both ecosystems in one view.
+highest-seen, and quarantined sequences. A top menu switches between **Go modules**
+and **Python packages**.
+
+Below that is a **lazily loaded tree**. Go modules are grouped hierarchically by
+their import path — everything under `github.com` sits beneath a single
+`github.com` node, then the org, then the module, then its versions — so large
+mirrors stay navigable. Each level is fetched from `/ui/api/tree` only when you
+expand its parent, so the initial page transfers just the top-level nodes rather
+than the whole catalog. Python projects expand to their wheels the same way.
+
+The front-end is TypeScript ([cmd/artigate/ui/app.ts](cmd/artigate/ui/app.ts)); its
+compiled output (`app.js`) is embedded into the binary via `go:embed`, so the UI
+stays self-contained and air-gapped. After editing the TypeScript, recompile with
+`make ui` (uses `tsc` via `npx`).
 
 The same data is available as JSON for scripting:
 
