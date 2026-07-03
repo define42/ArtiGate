@@ -326,6 +326,9 @@ func (s *LowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.serveLowAdmin(w, r) {
 		return
 	}
+	if s.serveLowUI(w, r) {
+		return
+	}
 
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

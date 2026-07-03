@@ -158,7 +158,22 @@ curl -XPOST http://127.0.0.1:8080/admin/reexport \
 
 Re-exported bundles keep the original sequence number and `previous_sequence`. The manifest is signed again and the bundle files are rewritten in the export directory so they can be transferred through the diode again.
 
-Protect the admin endpoints with firewall rules, a local-only listener, or a reverse proxy with authentication.
+### Web dashboard
+
+The low side serves a self-contained web UI at its root:
+
+```text
+http://low-proxy:8080/
+```
+
+It provides a form to **re-transmit a bundle number or range** the high side is
+missing (e.g. `42`, `45-47`, or `42,45-47`) — the same operation as
+`/admin/reexport`, but point-and-click — and shows the current export status:
+the next sequence, pending modules, and a table of exported bundles indicating
+whether each bundle's files are still present in the export directory. The
+status is also available as JSON at `/ui/api/status`.
+
+Protect the admin endpoints (and the UI) with firewall rules, a local-only listener, or a reverse proxy with authentication.
 
 ## Data diode
 
