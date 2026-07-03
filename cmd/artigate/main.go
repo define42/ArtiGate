@@ -358,32 +358,34 @@ func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 		_, _ = w.Write([]byte("ok\n"))
 	case r.URL.Path == "/admin/export" && r.Method == http.MethodPost:
 		res, err := s.ExportPending(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return true
-		}
-		writeJSON(w, res)
+		return respondJSONOrError(w, http.StatusInternalServerError, res, err)
 	case r.URL.Path == "/admin/reexport" && r.Method == http.MethodPost:
 		res, err := s.HandleReexportRequest(r.Context(), r)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return true
-		}
-		writeJSON(w, res)
+		return respondJSONOrError(w, http.StatusBadRequest, res, err)
 	case r.URL.Path == "/admin/bundles" && r.Method == http.MethodGet:
 		writeJSON(w, s.BundleStatus())
+	case r.URL.Path == "/admin/go/collect" && r.Method == http.MethodPost:
+		res, err := s.HandleGoCollect(r.Context(), r)
+		return respondJSONOrError(w, http.StatusBadRequest, res, err)
 	case r.URL.Path == "/admin/python/collect" && r.Method == http.MethodPost:
 		res, err := s.HandlePythonCollect(r.Context(), r)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return true
-		}
-		writeJSON(w, res)
+		return respondJSONOrError(w, http.StatusBadRequest, res, err)
 	case strings.HasPrefix(r.URL.Path, "/admin/"):
 		http.Error(w, "not found", http.StatusNotFound)
 	default:
 		return false
 	}
+	return true
+}
+
+// respondJSONOrError writes err as an HTTP error with the given status, or res
+// as JSON on success. It always reports the request as handled.
+func respondJSONOrError(w http.ResponseWriter, errStatus int, res any, err error) bool {
+	if err != nil {
+		http.Error(w, err.Error(), errStatus)
+		return true
+	}
+	writeJSON(w, res)
 	return true
 }
 
@@ -666,6 +668,111 @@ func (s *LowServer) ExportPending(ctx context.Context) (ExportResult, error) {
 	return res, nil
 }
 
+// GoCollectRequest is the body of POST /admin/go/collect. Each entry is a
+// module spec: "module@version" for a concrete version, or "module" /
+// "module@latest" to resolve the latest version via the low-side toolchain.
+type GoCollectRequest struct {
+	Modules []string `json:"modules"`
+}
+
+// HandleGoCollect parses a JSON collect request and runs the collection.
+func (s *LowServer) HandleGoCollect(ctx context.Context, r *http.Request) (ExportResult, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return ExportResult{}, err
+	}
+	var req GoCollectRequest
+	if len(strings.TrimSpace(string(body))) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			return ExportResult{}, fmt.Errorf("parse go collect request: %w", err)
+		}
+	}
+	return s.CollectGo(ctx, req)
+}
+
+// CollectGo fetches an explicit list of Go modules on demand (resolving
+// "latest" where needed) and writes them into a signed bundle on the shared
+// ArtiGate sequence stream. This complements the pull-through proxy for cases
+// where the set of modules is known ahead of time, mirroring the Python
+// collector.
+func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (ExportResult, error) {
+	if len(req.Modules) == 0 {
+		return ExportResult{}, errors.New("no go modules provided")
+	}
+	records, err := s.resolveGoRequests(ctx, req.Modules)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	// Peek the sequence, fetch+write, and only commit on success so a failed
+	// fetch never burns a sequence number and leaves a gap the high side would
+	// block on.
+	seq := s.peekSequence()
+	res, err := s.writeBundle(ctx, seq, records)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	if err := s.commitSequence(seq); err != nil {
+		return ExportResult{}, err
+	}
+	return res, nil
+}
+
+func (s *LowServer) resolveGoRequests(ctx context.Context, specs []string) ([]RequestRecord, error) {
+	records := make([]RequestRecord, 0, len(specs))
+	for _, spec := range specs {
+		module, version, err := s.resolveGoSpec(ctx, spec)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, RequestRecord{Module: module, Version: version})
+	}
+	return records, nil
+}
+
+// resolveGoSpec splits a "module[@version]" spec, resolving an empty or
+// "latest" version to a concrete one via the low-side toolchain.
+func (s *LowServer) resolveGoSpec(ctx context.Context, spec string) (module, version string, err error) {
+	spec = strings.TrimSpace(spec)
+	module = spec
+	if i := strings.LastIndex(spec, "@"); i >= 0 {
+		module = spec[:i]
+		version = spec[i+1:]
+	}
+	if module == "" {
+		return "", "", fmt.Errorf("invalid module spec %q", spec)
+	}
+	if version == "" || version == "latest" {
+		info, err := s.goLatest(ctx, module)
+		if err != nil {
+			return "", "", err
+		}
+		version = info.Version
+	}
+	return module, version, nil
+}
+
+// peekSequence returns the next sequence number to write without advancing it.
+func (s *LowServer) peekSequence() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seq := s.state.NextSequence
+	if seq < 1 {
+		seq = 1
+	}
+	return seq
+}
+
+// commitSequence advances the stream past seq after a bundle for it has been
+// written successfully.
+func (s *LowServer) commitSequence(seq int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.NextSequence <= seq {
+		s.state.NextSequence = seq + 1
+	}
+	return s.saveStateLocked()
+}
+
 func (s *LowServer) writeBundle(ctx context.Context, seq int64, records []RequestRecord) (ExportResult, error) {
 	if seq <= 0 {
 		return ExportResult{}, fmt.Errorf("invalid sequence %d", seq)
@@ -688,6 +795,7 @@ func (s *LowServer) writeBundle(ctx context.Context, seq int64, records []Reques
 		Created:          time.Now().UTC(),
 		Generator:        hostnameOrDefault(),
 		BundleID:         bundleID,
+		Ecosystems:       []string{"go"},
 		Modules:          mods,
 		Files:            files,
 	}

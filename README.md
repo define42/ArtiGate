@@ -70,6 +70,31 @@ You can force an export immediately:
 curl -XPOST http://127.0.0.1:8080/admin/export
 ```
 
+### Collecting an explicit module list
+
+Besides the demand-driven pull-through cache (where a `go` client hitting the
+proxy is what triggers a fetch), the low side can fetch an explicit list of
+modules on demand and export them in one bundle — useful when you already know
+what an air-gapped project needs. Each entry is `module@version`, or `module` /
+`module@latest` to resolve the latest version:
+
+```bash
+curl -XPOST http://127.0.0.1:8080/admin/go/collect \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "modules": [
+          "golang.org/x/text@v0.14.0",
+          "rsc.io/quote@latest",
+          "github.com/your-org/internal-lib"
+        ]
+      }'
+```
+
+Each requested `module@version` is fetched with the low-side toolchain and
+written into a signed bundle on the shared sequence stream, exactly like the
+Python collector (`/admin/python/collect`). This is the Go equivalent of a
+`requirements.txt`-style manifest.
+
 You can list previously exported bundle sequences:
 
 ```bash
@@ -268,4 +293,5 @@ dependencies. Source-distribution (sdist) mirroring is not implemented.
 - High-side gaps and out-of-order future bundles are quarantined, not rejected. Check `/admin/missing` and re-export the requested range from the low side with `/admin/reexport`.
 - Low-side fetching depends on the installed Go toolchain and Git/VCS tools, and (for Python) on `pip`.
 - High side never invokes `go` or `pip` and has no upstream fetcher.
-- Python support mirrors wheels only; sdists and PyPI metadata (`requires-python`, yank status) beyond the manifest are not yet surfaced. Python bundle re-export is not tracked like Go module re-export.
+- Python support mirrors wheels only; sdists and PyPI metadata (`requires-python`, yank status) beyond the manifest are not yet surfaced.
+- Re-export (`/admin/reexport`) only regenerates bundles produced by the pull-through proxy's recorded requests. Bundles produced by the `/admin/go/collect` and `/admin/python/collect` endpoints are not tracked for re-export; re-run the collect instead.

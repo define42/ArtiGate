@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -175,6 +176,78 @@ func TestLowServerExportAndReexport(t *testing.T) {
 	}
 	if len(rr.Reexported) != 1 || len(rr.Failed) != 0 {
 		t.Errorf("reexport result: %+v", rr)
+	}
+}
+
+func TestLowServerGoCollect(t *testing.T) {
+	ls, priv := newFakeLowServer(t)
+	ctx := context.Background()
+
+	// One concrete version and one "@latest" that the fake go resolves to v1.1.0.
+	res, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{
+		"example.com/foo/bar@v1.0.0",
+		"example.com/foo/baz@latest",
+	}})
+	if err != nil {
+		t.Fatalf("CollectGo: %v", err)
+	}
+	if res.BundleID != "go-bundle-000001" || res.ExportedModules != 2 {
+		t.Fatalf("unexpected collect result: %+v", res)
+	}
+
+	// Deliver to a high server and confirm both modules are served.
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
+		name := res.BundleID + suffix
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, name), b)
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("high import of collected go bundle failed: %v", err)
+	}
+	if !hs.isComplete("example.com/foo/bar", "v1.0.0") || !hs.isComplete("example.com/foo/baz", "v1.1.0") {
+		t.Error("collected modules not complete on high side")
+	}
+
+	// A second collect advances the sequence rather than reusing it.
+	res2, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{"example.com/foo/bar@v1.0.0"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.BundleID != "go-bundle-000002" {
+		t.Errorf("second collect bundle = %s, want go-bundle-000002", res2.BundleID)
+	}
+
+	// An empty module list is rejected.
+	if _, err := ls.CollectGo(ctx, GoCollectRequest{}); err == nil {
+		t.Error("empty CollectGo should error")
+	}
+}
+
+func TestLowServerGoCollectAdmin(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	srv := httptest.NewServer(ls)
+	defer srv.Close()
+
+	body := strings.NewReader(`{"modules":["example.com/foo/bar@v1.0.0"]}`)
+	resp, err := http.Post(srv.URL+"/admin/go/collect", "application/json", body) //nolint:noctx // test request
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("go collect admin status = %d, want 200", resp.StatusCode)
+	}
+	var res ExportResult
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if res.ExportedModules != 1 || res.BundleID != "go-bundle-000001" {
+		t.Errorf("unexpected admin collect result: %+v", res)
 	}
 }
 

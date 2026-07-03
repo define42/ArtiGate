@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -319,15 +318,19 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 	if len(req.Requirements) == 0 {
 		return ExportResult{}, errors.New("no python requirements provided")
 	}
-	seq := s.nextSequence()
-	bundleID := bundleIDForSequence(seq)
-	stageRoot := filepath.Join(s.cfg.Root, "python", "staging", bundleID)
-	_ = os.RemoveAll(stageRoot)
+	stagingBase := filepath.Join(s.cfg.Root, "python", "staging")
+	if err := os.MkdirAll(stagingBase, 0o755); err != nil {
+		return ExportResult{}, err
+	}
+	stageRoot, err := os.MkdirTemp(stagingBase, "collect-")
+	if err != nil {
+		return ExportResult{}, err
+	}
+	defer os.RemoveAll(stageRoot)
 	dest := filepath.Join(stageRoot, "python", "packages")
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return ExportResult{}, err
 	}
-	defer os.RemoveAll(stageRoot)
 
 	if _, err := s.runPip(ctx, pipDownloadArgs(dest, req)...); err != nil {
 		return ExportResult{}, err
@@ -340,23 +343,18 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 	if len(files) == 0 {
 		return ExportResult{}, errors.New("pip download produced no wheels")
 	}
-	return s.writePythonBundle(seq, stageRoot, files, projects)
-}
 
-// nextSequence atomically allocates and persists the next global bundle
-// sequence number.
-func (s *LowServer) nextSequence() int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	seq := s.state.NextSequence
-	if seq < 1 {
-		seq = 1
+	// Peek/commit the sequence around the write so a failed collection never
+	// burns a sequence number and leaves a gap the high side would block on.
+	seq := s.peekSequence()
+	res, err := s.writePythonBundle(seq, stageRoot, files, projects)
+	if err != nil {
+		return ExportResult{}, err
 	}
-	s.state.NextSequence = seq + 1
-	if err := s.saveStateLocked(); err != nil {
-		log.Printf("save low state: %v", err)
+	if err := s.commitSequence(seq); err != nil {
+		return ExportResult{}, err
 	}
-	return seq
+	return res, nil
 }
 
 // collectPythonDist scans a pip download directory and returns the manifest
