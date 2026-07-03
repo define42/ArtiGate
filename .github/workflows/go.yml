@@ -35,10 +35,14 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
       - name: Run unit tests with coverage
-        run: go test ./... -race -coverprofile=coverage.out -covermode=atomic
+        run: gotestsum --junitfile junit.xml -- ./... -race -coverprofile=coverage.out -covermode=atomic
 
       - name: Show coverage in job summary
+        if: ${{ !cancelled() }}
         run: |
           go tool cover -func=coverage.out | tee coverage.txt
           {
@@ -47,6 +51,20 @@ jobs:
             cat coverage.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.out
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: junit.xml
 
   # ---------------------------------------------------------------------------
   # Lint (uses the repository's .golangci.yml)
