@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 # Build stage: compile a static ArtiGate binary using only the Go stdlib.
 # -----------------------------------------------------------------------------
-FROM golang:1.22-alpine AS build
+FROM golang:1.25-alpine AS build
 
 WORKDIR /src
 
@@ -20,14 +20,14 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/artigate ./cmd/art
 # -----------------------------------------------------------------------------
 # Runtime stage.
 #
-# The `low` mode shells out to `go` and `git`, so the runtime image ships the
-# Go toolchain and git. The `high` mode uses neither; if you only deploy the
-# high side you can base a slimmer image on `alpine` or `scratch` and copy just
-# the binary.
+# The `low` mode shells out to `go` and `git` (Go modules) and to `pip` (Python
+# wheels), so the runtime image ships the Go toolchain, git, and python3/pip. The
+# `high` mode uses none of them; if you only deploy the high side you can base a
+# slimmer image on `alpine` or `scratch` and copy just the binary.
 # -----------------------------------------------------------------------------
-FROM golang:1.22-alpine
+FROM golang:1.25-alpine
 
-RUN apk add --no-cache git ca-certificates openssh-client \
+RUN apk add --no-cache git ca-certificates openssh-client python3 py3-pip \
     && addgroup -S artigate \
     && adduser -S -G artigate -h /home/artigate artigate
 
@@ -37,9 +37,9 @@ COPY --from=build /out/artigate /usr/local/bin/artigate
 ENV HOME=/home/artigate \
     GOCACHE=/home/artigate/.cache/go-build \
     GOMODCACHE=/home/artigate/go/pkg/mod
-RUN mkdir -p /var/lib/artigate /var/spool/diode-out /var/spool/diode-in \
+RUN mkdir -p /var/lib/artigate /var/spool/diode-out /var/spool/diode-in /keys \
              "$GOCACHE" "$GOMODCACHE" \
-    && chown -R artigate:artigate /home/artigate /var/lib/artigate /var/spool/diode-out /var/spool/diode-in
+    && chown -R artigate:artigate /home/artigate /var/lib/artigate /var/spool/diode-out /var/spool/diode-in /keys
 
 USER artigate
 WORKDIR /home/artigate

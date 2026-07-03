@@ -17,6 +17,42 @@ The implementation intentionally uses only the Go standard library. The low side
 go build -o artigate ./cmd/artigate
 ```
 
+## Quick start with Docker Compose
+
+Bring up a full low-side + high-side stack, wired together by a shared `diode`
+volume that stands in for the one-way data diode:
+
+```bash
+make run          # docker compose up --build (foreground)
+# or: make run-detach   to run in the background
+# then: make stop       stop but KEEP state (bundle sequence continues on restart)
+# or:   make reset       stop and WIPE all volumes (fresh start, sequence back to 1)
+```
+
+State (the bundle sequence counter, signing keys, and the mirror) lives in Docker
+volumes, so `make stop` followed by `make run` resumes where you left off. Use
+`make reset` only when you want a clean slate.
+
+Then:
+
+- Low-side exporter dashboard: <http://localhost:8080/>
+- High-side repository dashboard (package tree): <http://localhost:8081/>
+
+Mirror something on the low side and watch it flow through to the high side:
+
+```bash
+# Go module plus its dependency graph
+curl -XPOST localhost:8080/admin/go/collect \
+  -d '{"modules":["rsc.io/quote@latest"],"resolve_deps":true}'
+
+# Python wheels
+curl -XPOST localhost:8080/admin/python/collect \
+  -d '{"requirements":["requests"]}'
+```
+
+A one-time `keygen` service generates the signing key pair into a shared volume,
+so the low side signs and the high side verifies without any manual key setup.
+
 ## Create signing keys
 
 ```bash
@@ -46,6 +82,16 @@ Low-side Go clients:
 ```bash
 go env -w GOPROXY=http://low-proxy:8080,off
 ```
+
+### Newer Go toolchains
+
+Some modules declare a `go` directive newer than the toolchain installed on the
+low side (e.g. a module requiring `go 1.25` while the fetcher runs `go 1.22`). By
+default the low side sets `GOTOOLCHAIN=auto`, so `go` transparently downloads the
+required toolchain to fetch such modules. Override with `--gotoolchain` — for
+example `--gotoolchain local` to pin the installed toolchain (fetching a module
+that needs a newer one then fails with `requires go >= X`), or a specific version
+like `--gotoolchain go1.25.0`.
 
 For private GitHub modules, configure the service user's `git`/SSH credentials before starting the proxy, for example:
 

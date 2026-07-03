@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -223,6 +224,7 @@ type LowConfig struct {
 	ExportInterval  time.Duration
 	AutoApprove     bool
 	GoBinary        string
+	GoToolchain     string
 	PipBinary       string
 }
 
@@ -267,6 +269,7 @@ func runLow(args []string) {
 	fs.DurationVar(&cfg.ExportInterval, "export-interval", 60*time.Second, "automatic export interval; 0 disables background export")
 	fs.BoolVar(&cfg.AutoApprove, "auto-approve", true, "automatically approve discovered module versions for export")
 	fs.StringVar(&cfg.GoBinary, "go", "go", "go command path")
+	fs.StringVar(&cfg.GoToolchain, "gotoolchain", "auto", "GOTOOLCHAIN for the low-side fetcher; \"auto\" lets go download a newer toolchain when a module requires one, \"local\" pins the installed toolchain")
 	fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
 	_ = fs.Parse(args)
 
@@ -455,6 +458,13 @@ func (s *LowServer) goEnv() []string {
 	set("GOPROXY", s.cfg.UpstreamGOPROXY)
 	set("GOSUMDB", s.cfg.GOSUMDB)
 	set("GOVCS", s.cfg.GOVCS)
+	// Allow the toolchain to be fetched on demand so modules that declare a
+	// newer `go` directive than the installed toolchain can still be mirrored.
+	// The official golang images pin GOTOOLCHAIN=local, which would otherwise
+	// abort with "requires go >= X".
+	if s.cfg.GoToolchain != "" {
+		set("GOTOOLCHAIN", s.cfg.GoToolchain)
+	}
 	if s.cfg.GOPRIVATE != "" {
 		set("GOPRIVATE", s.cfg.GOPRIVATE)
 	}
@@ -2630,18 +2640,36 @@ func moveBundleFiles(srcDir, dstDir, bundleID string) error {
 	if err := os.MkdirAll(dstDir, 0o755); err != nil {
 		return err
 	}
-	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
+	for _, suffix := range bundleSuffixes() {
 		src := filepath.Join(srcDir, bundleID+suffix)
 		if !fileExists(src) {
 			continue
 		}
-		dst := filepath.Join(dstDir, bundleID+suffix)
-		_ = os.Remove(dst)
-		if err := os.Rename(src, dst); err != nil {
+		if err := moveFile(src, filepath.Join(dstDir, bundleID+suffix), 0o644); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// moveFile moves src to dst. It uses rename when possible, and falls back to
+// copy+remove when they are on different filesystems. That happens in
+// containerized deployments where the landing directory and the repository root
+// are separate mounts/volumes, in which case rename returns EXDEV
+// ("invalid cross-device link").
+func moveFile(src, dst string, mode os.FileMode) error {
+	_ = os.Remove(dst)
+	err := os.Rename(src, dst)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+	if err := copyFileAtomic(src, dst, mode); err != nil {
+		return err
+	}
+	return os.Remove(src)
 }
 
 func moveImportedFilesFromDir(srcDir, importedDir, bundleID string) error {

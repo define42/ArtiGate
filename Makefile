@@ -5,6 +5,9 @@ GOLANGCI_LINT_VERSION ?= v2.5.0
 GOBIN                  := $(shell go env GOPATH)/bin
 GOLANGCI_LINT         := $(GOBIN)/golangci-lint
 
+# docker compose v2 (`docker compose`) with a fallback to the legacy binary.
+COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo 'docker compose' || echo 'docker-compose')
+
 .DEFAULT_GOAL := build
 
 .PHONY: build
@@ -30,6 +33,22 @@ vet: ## Run go vet
 .PHONY: fmt
 fmt: ## Format the code (gofmt)
 	gofmt -w cmd
+
+.PHONY: run
+run: ## Build and start the low+high stack with docker compose
+	$(COMPOSE) up --build
+
+.PHONY: run-detach
+run-detach: ## Start the low+high stack in the background
+	$(COMPOSE) up --build -d
+
+.PHONY: stop
+stop: ## Stop the stack, keeping state (sequence, keys, mirror) so restart continues
+	$(COMPOSE) down
+
+.PHONY: reset
+reset: ## Stop the stack AND wipe all volumes (fresh start: sequence back to 1)
+	$(COMPOSE) down -v
 
 .PHONY: clean
 clean: ## Remove build and coverage artifacts

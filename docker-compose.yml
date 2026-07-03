@@ -1,0 +1,79 @@
+# ArtiGate demo stack: a low side and a high side wired together.
+#
+# In a real deployment the two sides are physically separated by a one-way data
+# diode. Here the `diode` volume — written by the low side's export dir and read
+# by the high side's landing dir — stands in for that one-way transfer so the
+# whole pipeline can be exercised on one host.
+#
+# The `keygen` service creates the Ed25519 signing key pair once into the shared
+# `keys` volume (idempotent: it will not overwrite existing keys), then low and
+# high start after it completes.
+#
+# UIs after `make run`:
+#   Low side  (exporter dashboard): http://localhost:8080/
+#   High side (repository + tree):  http://localhost:8081/
+#
+# Try it:
+#   # Mirror a Go module (+ its dependency graph) on the low side:
+#   curl -XPOST localhost:8080/admin/go/collect \
+#     -d '{"modules":["rsc.io/quote@latest"],"resolve_deps":true}'
+#   # Mirror Python wheels:
+#   curl -XPOST localhost:8080/admin/python/collect \
+#     -d '{"requirements":["requests"]}'
+#   # Then watch them appear on the high side dashboard at :8081.
+
+services:
+  keygen:
+    build: .
+    entrypoint: ["sh", "-c"]
+    command:
+      - 'test -f /keys/low.ed25519 || artigate keygen --private /keys/low.ed25519 --public /keys/high.ed25519.pub'
+    volumes:
+      - keys:/keys
+
+  low:
+    build: .
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
+    command:
+      - low
+      - --listen=:8080
+      - --root=/var/lib/artigate
+      - --export-dir=/var/spool/diode-out
+      - --private-key=/keys/low.ed25519
+      - --upstream-goproxy=https://proxy.golang.org,direct
+      - --export-interval=30s
+    ports:
+      - "8080:8080"
+    volumes:
+      - keys:/keys:ro
+      - diode:/var/spool/diode-out
+      - low-data:/var/lib/artigate
+    restart: unless-stopped
+
+  high:
+    build: .
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
+    command:
+      - high
+      - --listen=:8080
+      - --root=/var/lib/artigate
+      - --landing=/var/spool/diode-in
+      - --public-key=/keys/high.ed25519.pub
+      - --import-interval=10s
+    ports:
+      - "8081:8080"
+    volumes:
+      - keys:/keys:ro
+      - diode:/var/spool/diode-in
+      - high-data:/var/lib/artigate
+    restart: unless-stopped
+
+volumes:
+  keys:
+  diode:
+  low-data:
+  high-data:
