@@ -1,0 +1,24 @@
+[Unit]
+Description=High-side ArtiGate Go module repository/importer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=artigate
+Group=artigate
+ExecStart=/usr/local/bin/artigate high \
+  --listen :8080 \
+  --root /var/lib/artigate-high \
+  --landing /var/spool/diode-in \
+  --public-key /etc/artigate/high.ed25519.pub \
+  --import-interval 10s
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/artigate-high /var/spool/diode-in
+
+[Install]
+WantedBy=multi-user.target

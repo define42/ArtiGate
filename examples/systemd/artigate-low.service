@@ -1,0 +1,27 @@
+[Unit]
+Description=Low-side ArtiGate Go module proxy/exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=artigate
+Group=artigate
+ExecStart=/usr/local/bin/artigate low \
+  --listen :8080 \
+  --root /var/lib/artigate-low \
+  --export-dir /var/spool/diode-out \
+  --private-key /etc/artigate/low.ed25519 \
+  --upstream-goproxy https://proxy.golang.org,direct \
+  --goprivate github.com/your-org/* \
+  --gonosumdb github.com/your-org/* \
+  --export-interval 60s
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/var/lib/artigate-low /var/spool/diode-out /etc/artigate
+
+[Install]
+WantedBy=multi-user.target
