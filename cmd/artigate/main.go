@@ -674,19 +674,28 @@ func (s *LowServer) ExportPending(ctx context.Context) (ExportResult, error) {
 	return res, nil
 }
 
-// GoCollectRequest is the body of POST /admin/go/collect. Each entry is a
-// module spec: "module@version" for a concrete version, or "module" /
-// "module@latest" to resolve the latest version via the low-side toolchain.
-// When ResolveDeps is set, the transitive module graph of the listed modules is
-// resolved and bundled too (like pip's dependency resolution).
+// GoCollectRequest is the body of POST /admin/go/collect.
+//
+// Modules is a list of specs, each "module@version" for a concrete version, or
+// "module" / "module@latest" to resolve the latest version. When ResolveDeps is
+// set, the transitive module graph of the listed modules is resolved and
+// bundled too (like pip's dependency resolution).
+//
+// Alternatively, GoMod may carry a project's own go.mod content (with optional
+// GoSum), in which case ArtiGate mirrors exactly the module graph that project
+// resolves — the most faithful "what this project needs to build" mode. When
+// GoMod is set, Modules and ResolveDeps are ignored.
 type GoCollectRequest struct {
 	Modules     []string `json:"modules"`
 	ResolveDeps bool     `json:"resolve_deps"`
+	GoMod       string   `json:"go_mod"`
+	GoSum       string   `json:"go_sum"`
 }
 
-// HandleGoCollect parses a JSON collect request and runs the collection.
+// HandleGoCollect parses a JSON collect request and runs the collection. The
+// body limit is generous because a request may embed a project's go.sum.
 func (s *LowServer) HandleGoCollect(ctx context.Context, r *http.Request) (ExportResult, error) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -699,24 +708,18 @@ func (s *LowServer) HandleGoCollect(ctx context.Context, r *http.Request) (Expor
 	return s.CollectGo(ctx, req)
 }
 
-// CollectGo fetches an explicit list of Go modules on demand (resolving
-// "latest" where needed) and writes them into a signed bundle on the shared
-// ArtiGate sequence stream. This complements the pull-through proxy for cases
-// where the set of modules is known ahead of time, mirroring the Python
-// collector.
+// CollectGo fetches Go modules on demand and writes them into a signed bundle
+// on the shared ArtiGate sequence stream. This complements the pull-through
+// proxy for cases where the set of modules is known ahead of time, mirroring
+// the Python collector. The modules can come from an explicit list (optionally
+// with their transitive graph) or from a project's own go.mod.
 func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (ExportResult, error) {
-	if len(req.Modules) == 0 {
-		return ExportResult{}, errors.New("no go modules provided")
-	}
-	records, err := s.resolveGoRequests(ctx, req.Modules)
+	records, err := s.resolveGoCollectRecords(ctx, req)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	if req.ResolveDeps {
-		records, err = s.resolveGoDependencies(ctx, records)
-		if err != nil {
-			return ExportResult{}, err
-		}
+	if len(records) == 0 {
+		return ExportResult{}, errors.New("no go modules resolved")
 	}
 	// Peek the sequence, fetch+write, and only commit on success so a failed
 	// fetch never burns a sequence number and leaves a gap the high side would
@@ -730,6 +733,25 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 		return ExportResult{}, err
 	}
 	return res, nil
+}
+
+// resolveGoCollectRecords turns a collect request into the concrete set of
+// module@version records to bundle.
+func (s *LowServer) resolveGoCollectRecords(ctx context.Context, req GoCollectRequest) ([]RequestRecord, error) {
+	if strings.TrimSpace(req.GoMod) != "" {
+		return s.resolveGoModGraph(ctx, req.GoMod, req.GoSum)
+	}
+	if len(req.Modules) == 0 {
+		return nil, errors.New("no go modules provided")
+	}
+	records, err := s.resolveGoRequests(ctx, req.Modules)
+	if err != nil {
+		return nil, err
+	}
+	if req.ResolveDeps {
+		return s.resolveGoDependencies(ctx, records)
+	}
+	return records, nil
 }
 
 func (s *LowServer) resolveGoRequests(ctx context.Context, specs []string) ([]RequestRecord, error) {
@@ -777,21 +799,57 @@ type goModDownloadEntry struct {
 // roots, then asks the toolchain to download the whole module graph, which also
 // populates the cache the bundle is built from.
 func (s *LowServer) resolveGoDependencies(ctx context.Context, roots []RequestRecord) ([]RequestRecord, error) {
-	base := filepath.Join(s.cfg.Root, "gocollect")
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		return nil, err
-	}
-	dir, err := os.MkdirTemp(base, "deps-")
+	dir, cleanup, err := s.tempCollectDir("deps-")
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
+	defer cleanup()
 
 	if err := writeSyntheticGoMod(dir, roots); err != nil {
 		return nil, err
 	}
-	// `go 1.16` in the synthetic module disables module-graph pruning so `all`
-	// yields the complete transitive set, which is what a mirror wants.
+	return s.downloadModuleGraph(ctx, dir)
+}
+
+// resolveGoModGraph mirrors exactly what a project's own go.mod resolves. The
+// provided go.mod (and optional go.sum) are written into a temporary module and
+// its whole module graph is downloaded, honoring the project's own `go`
+// directive and requirements.
+func (s *LowServer) resolveGoModGraph(ctx context.Context, goMod, goSum string) ([]RequestRecord, error) {
+	dir, cleanup, err := s.tempCollectDir("project-")
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(goSum) != "" {
+		if err := os.WriteFile(filepath.Join(dir, "go.sum"), []byte(goSum), 0o644); err != nil {
+			return nil, err
+		}
+	}
+	return s.downloadModuleGraph(ctx, dir)
+}
+
+// tempCollectDir creates a scratch module directory and returns a cleanup func.
+func (s *LowServer) tempCollectDir(prefix string) (string, func(), error) {
+	base := filepath.Join(s.cfg.Root, "gocollect")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return "", nil, err
+	}
+	dir, err := os.MkdirTemp(base, prefix)
+	if err != nil {
+		return "", nil, err
+	}
+	return dir, func() { _ = os.RemoveAll(dir) }, nil
+}
+
+// downloadModuleGraph downloads the whole module graph of the module rooted at
+// dir and returns its concrete module@version records. The download also
+// populates the cache the bundle is later built from.
+func (s *LowServer) downloadModuleGraph(ctx context.Context, dir string) ([]RequestRecord, error) {
 	out, err := s.runGoDir(ctx, dir, "mod", "download", "-json", "all")
 	if err != nil {
 		return nil, err

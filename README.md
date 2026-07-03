@@ -111,6 +111,31 @@ download all`), so indirect dependencies such as `golang.org/x/text` are bundled
 too. `@latest` entries are still resolved to concrete versions first, so the
 bundle is fully pinned.
 
+#### Mirror exactly what a project needs
+
+For the most faithful result, send the project's own `go.mod` (and optionally
+`go.sum`) instead of a module list. ArtiGate then mirrors exactly the module
+graph that project resolves, honoring its own `go` directive and requirements:
+
+```bash
+curl -XPOST http://127.0.0.1:8080/admin/go/collect \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -Rs --argjson empty '{}' \
+        '{go_mod: ., go_sum: ""}' < go.mod)"
+```
+
+or more simply from a script:
+
+```bash
+jq -n --rawfile mod go.mod --rawfile sum go.sum '{go_mod:$mod, go_sum:$sum}' \
+  | curl -XPOST http://127.0.0.1:8080/admin/go/collect \
+      -H 'Content-Type: application/json' -d @-
+```
+
+When `go_mod` is provided, `modules` and `resolve_deps` are ignored — the go.mod
+is the source of truth. This is the closest equivalent to "download everything
+needed to build this project offline".
+
 You can list previously exported bundle sequences:
 
 ```bash

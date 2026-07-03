@@ -42,9 +42,12 @@ case "$*" in
     printf '{"Path":"%s","Versions":["v1.0.0","v1.1.0"]}' "$last"
     ;;
   *"download -json all")
-    while read -r kw p v; do
-      [ "$kw" = "require" ] || continue
-      emit "$p" "$v"
+    in_block=0
+    while read -r a b c; do
+      if [ "$a" = "require" ] && [ "$b" = "(" ]; then in_block=1; continue; fi
+      if [ "$in_block" = "1" ] && [ "$a" = ")" ]; then in_block=0; continue; fi
+      if [ "$in_block" = "1" ]; then emit "$a" "$b"; continue; fi
+      if [ "$a" = "require" ]; then emit "$b" "$c"; fi
     done < go.mod
     emit "example.com/dep" "v0.1.0"
     ;;
@@ -274,6 +277,50 @@ func TestLowServerGoCollectWithDeps(t *testing.T) {
 	}
 	if !hs.isComplete("example.com/dep", "v0.1.0") {
 		t.Error("transitive dependency was not captured and served")
+	}
+}
+
+func TestLowServerGoCollectFromGoMod(t *testing.T) {
+	ls, priv := newFakeLowServer(t)
+	ctx := context.Background()
+
+	// A real-world go.mod using a require block.
+	goMod := "module example.com/myapp\n\ngo 1.22\n\n" +
+		"require (\n" +
+		"\texample.com/foo/bar v1.0.0\n" +
+		"\texample.com/foo/baz v1.1.0 // indirect\n" +
+		")\n"
+
+	res, err := ls.CollectGo(ctx, GoCollectRequest{GoMod: goMod})
+	if err != nil {
+		t.Fatalf("CollectGo from go.mod: %v", err)
+	}
+	// Both required modules plus the toolchain-discovered transitive dep.
+	if res.ExportedModules != 3 {
+		t.Fatalf("ExportedModules = %d, want 3", res.ExportedModules)
+	}
+
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
+		name := res.BundleID + suffix
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, name), b)
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("high import failed: %v", err)
+	}
+	for _, m := range []struct{ mod, ver string }{
+		{"example.com/foo/bar", "v1.0.0"},
+		{"example.com/foo/baz", "v1.1.0"},
+		{"example.com/dep", "v0.1.0"},
+	} {
+		if !hs.isComplete(m.mod, m.ver) {
+			t.Errorf("%s@%s not complete on high side", m.mod, m.ver)
+		}
 	}
 }
 
