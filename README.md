@@ -95,6 +95,22 @@ written into a signed bundle on the shared sequence stream, exactly like the
 Python collector (`/admin/python/collect`). This is the Go equivalent of a
 `requirements.txt`-style manifest.
 
+By default only the listed modules are fetched. Set `resolve_deps` to also
+capture their full transitive module graph (the Go analogue of pip resolving a
+dependency tree):
+
+```bash
+curl -XPOST http://127.0.0.1:8080/admin/go/collect \
+  -H 'Content-Type: application/json' \
+  -d '{"modules": ["rsc.io/quote@latest"], "resolve_deps": true}'
+```
+
+With `resolve_deps`, ArtiGate writes a synthetic module that requires the listed
+modules and asks the toolchain to download the whole module graph (`go mod
+download all`), so indirect dependencies such as `golang.org/x/text` are bundled
+too. `@latest` entries are still resolved to concrete versions first, so the
+bundle is fully pinned.
+
 You can list previously exported bundle sequences:
 
 ```bash

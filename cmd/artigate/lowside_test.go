@@ -15,29 +15,41 @@ import (
 	"testing"
 )
 
-// fakeGoScript is a stand-in for the `go` command. The low side only shells out
-// for three things, so the script answers each and, for downloads, materializes
-// the .info/.mod/.zip files into the module cache exactly where the real `go`
-// would ($GOMODCACHE/cache/download/<module>/@v/<version>.*).
+// fakeGoScript is a stand-in for the `go` command. The low side shells out for
+// list-versions, list-latest, single module downloads, and (for dependency
+// resolution) a whole-graph download. Each download materializes the
+// .info/.mod/.zip files into the module cache exactly where the real `go` would
+// ($GOMODCACHE/cache/download/<module>/@v/<version>.*). For graph downloads the
+// script reads the synthetic go.mod's require lines and emits an extra
+// "example.com/dep" module so tests can prove transitive capture.
 const fakeGoScript = `#!/usr/bin/env bash
 set -eu
 dldir="${GOMODCACHE}/cache/download"
+emit() {
+  local mod="$1" ver="$2"
+  local d="${dldir}/${mod}/@v"
+  mkdir -p "$d"
+  printf '{"Version":"%s","Time":"2020-01-01T00:00:00Z"}' "$ver" > "${d}/${ver}.info"
+  printf 'module %s\n' "$mod" > "${d}/${ver}.mod"
+  printf 'fake-zip-bytes' > "${d}/${ver}.zip"
+  printf '{"Path":"%s","Version":"%s","Info":"%s","GoMod":"%s","Zip":"%s"}\n' \
+    "$mod" "$ver" "${d}/${ver}.info" "${d}/${ver}.mod" "${d}/${ver}.zip"
+}
 last=""
 for a in "$@"; do last="$a"; done
 case "$*" in
   *"-versions"*)
     printf '{"Path":"%s","Versions":["v1.0.0","v1.1.0"]}' "$last"
     ;;
+  *"download -json all")
+    while read -r kw p v; do
+      [ "$kw" = "require" ] || continue
+      emit "$p" "$v"
+    done < go.mod
+    emit "example.com/dep" "v0.1.0"
+    ;;
   *"download"*)
-    mod="${last%@*}"
-    ver="${last##*@}"
-    d="${dldir}/${mod}/@v"
-    mkdir -p "$d"
-    printf '{"Version":"%s","Time":"2020-01-01T00:00:00Z"}' "$ver" > "${d}/${ver}.info"
-    printf 'module %s\n' "$mod" > "${d}/${ver}.mod"
-    printf 'fake-zip-bytes' > "${d}/${ver}.zip"
-    printf '{"Path":"%s","Version":"%s","Info":"%s","GoMod":"%s","Zip":"%s"}' \
-      "$mod" "$ver" "${d}/${ver}.info" "${d}/${ver}.mod" "${d}/${ver}.zip"
+    emit "${last%@*}" "${last##*@}"
     ;;
   *)
     mod="${last%@latest}"
@@ -225,6 +237,43 @@ func TestLowServerGoCollect(t *testing.T) {
 	// An empty module list is rejected.
 	if _, err := ls.CollectGo(ctx, GoCollectRequest{}); err == nil {
 		t.Error("empty CollectGo should error")
+	}
+}
+
+func TestLowServerGoCollectWithDeps(t *testing.T) {
+	ls, priv := newFakeLowServer(t)
+	ctx := context.Background()
+
+	res, err := ls.CollectGo(ctx, GoCollectRequest{
+		Modules:     []string{"example.com/foo/bar@v1.0.0"},
+		ResolveDeps: true,
+	})
+	if err != nil {
+		t.Fatalf("CollectGo with deps: %v", err)
+	}
+	// The requested module plus its transitive dep (example.com/dep) are bundled.
+	if res.ExportedModules != 2 {
+		t.Fatalf("ExportedModules = %d, want 2 (root + transitive dep)", res.ExportedModules)
+	}
+
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
+		name := res.BundleID + suffix
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, name), b)
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("high import failed: %v", err)
+	}
+	if !hs.isComplete("example.com/foo/bar", "v1.0.0") {
+		t.Error("root module not complete on high side")
+	}
+	if !hs.isComplete("example.com/dep", "v0.1.0") {
+		t.Error("transitive dependency was not captured and served")
 	}
 }
 

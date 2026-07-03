@@ -467,11 +467,17 @@ func (s *LowServer) goEnv() []string {
 }
 
 func (s *LowServer) runGo(ctx context.Context, args ...string) ([]byte, error) {
+	return s.runGoDir(ctx, s.cfg.Root, args...)
+}
+
+// runGoDir runs the go command in the given working directory. Dependency
+// resolution needs a synthetic module directory, hence the configurable dir.
+func (s *LowServer) runGoDir(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, s.cfg.GoBinary, args...)
 	cmd.Env = s.goEnv()
-	cmd.Dir = s.cfg.Root
+	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("go %s failed: %w\n%s", strings.Join(args, " "), err, string(out))
@@ -671,8 +677,11 @@ func (s *LowServer) ExportPending(ctx context.Context) (ExportResult, error) {
 // GoCollectRequest is the body of POST /admin/go/collect. Each entry is a
 // module spec: "module@version" for a concrete version, or "module" /
 // "module@latest" to resolve the latest version via the low-side toolchain.
+// When ResolveDeps is set, the transitive module graph of the listed modules is
+// resolved and bundled too (like pip's dependency resolution).
 type GoCollectRequest struct {
-	Modules []string `json:"modules"`
+	Modules     []string `json:"modules"`
+	ResolveDeps bool     `json:"resolve_deps"`
 }
 
 // HandleGoCollect parses a JSON collect request and runs the collection.
@@ -702,6 +711,12 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 	records, err := s.resolveGoRequests(ctx, req.Modules)
 	if err != nil {
 		return ExportResult{}, err
+	}
+	if req.ResolveDeps {
+		records, err = s.resolveGoDependencies(ctx, records)
+		if err != nil {
+			return ExportResult{}, err
+		}
 	}
 	// Peek the sequence, fetch+write, and only commit on success so a failed
 	// fetch never burns a sequence number and leaves a gap the high side would
@@ -749,6 +764,72 @@ func (s *LowServer) resolveGoSpec(ctx context.Context, spec string) (module, ver
 		version = info.Version
 	}
 	return module, version, nil
+}
+
+type goModDownloadEntry struct {
+	Path    string `json:"Path"`
+	Version string `json:"Version"`
+	Error   string `json:"Error"`
+}
+
+// resolveGoDependencies expands a set of root modules into their full
+// transitive module graph. It builds a synthetic module that requires the
+// roots, then asks the toolchain to download the whole module graph, which also
+// populates the cache the bundle is built from.
+func (s *LowServer) resolveGoDependencies(ctx context.Context, roots []RequestRecord) ([]RequestRecord, error) {
+	base := filepath.Join(s.cfg.Root, "gocollect")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp(base, "deps-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+
+	if err := writeSyntheticGoMod(dir, roots); err != nil {
+		return nil, err
+	}
+	// `go 1.16` in the synthetic module disables module-graph pruning so `all`
+	// yields the complete transitive set, which is what a mirror wants.
+	out, err := s.runGoDir(ctx, dir, "mod", "download", "-json", "all")
+	if err != nil {
+		return nil, err
+	}
+	return parseGoModDownload(out)
+}
+
+func writeSyntheticGoMod(dir string, roots []RequestRecord) error {
+	var b strings.Builder
+	b.WriteString("module artigate-collect\n\ngo 1.16\n\n")
+	for _, r := range roots {
+		fmt.Fprintf(&b, "require %s %s\n", r.Module, r.Version)
+	}
+	return os.WriteFile(filepath.Join(dir, "go.mod"), []byte(b.String()), 0o644)
+}
+
+// parseGoModDownload reads the JSON stream emitted by `go mod download -json`
+// into concrete module@version records.
+func parseGoModDownload(out []byte) ([]RequestRecord, error) {
+	dec := json.NewDecoder(strings.NewReader(string(out)))
+	var records []RequestRecord
+	for {
+		var e goModDownloadEntry
+		if err := dec.Decode(&e); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("parse go mod download: %w", err)
+		}
+		if e.Error != "" {
+			return nil, fmt.Errorf("go mod download %s@%s: %s", e.Path, e.Version, e.Error)
+		}
+		if e.Version == "" {
+			continue
+		}
+		records = append(records, RequestRecord{Module: e.Path, Version: e.Version})
+	}
+	return records, nil
 }
 
 // peekSequence returns the next sequence number to write without advancing it.
