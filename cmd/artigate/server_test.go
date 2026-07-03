@@ -490,6 +490,22 @@ func TestSafeJoin(t *testing.T) {
 	}
 }
 
+func TestLogHTTPPassesThrough(t *testing.T) {
+	called := false
+	h := logHTTP(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/whatever", nil))
+	if !called {
+		t.Error("logHTTP did not call the wrapped handler")
+	}
+	if rec.Code != http.StatusTeapot {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusTeapot)
+	}
+}
+
 func TestHostnameOrDefault(t *testing.T) {
 	if hostnameOrDefault() == "" {
 		t.Error("hostnameOrDefault returned an empty string")

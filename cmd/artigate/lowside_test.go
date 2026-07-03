@@ -1,0 +1,220 @@
+package main
+
+import (
+	"context"
+	"crypto/ed25519"
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+// fakeGoScript is a stand-in for the `go` command. The low side only shells out
+// for three things, so the script answers each and, for downloads, materializes
+// the .info/.mod/.zip files into the module cache exactly where the real `go`
+// would ($GOMODCACHE/cache/download/<module>/@v/<version>.*).
+const fakeGoScript = `#!/usr/bin/env bash
+set -eu
+dldir="${GOMODCACHE}/cache/download"
+last=""
+for a in "$@"; do last="$a"; done
+case "$*" in
+  *"-versions"*)
+    printf '{"Path":"%s","Versions":["v1.0.0","v1.1.0"]}' "$last"
+    ;;
+  *"download"*)
+    mod="${last%@*}"
+    ver="${last##*@}"
+    d="${dldir}/${mod}/@v"
+    mkdir -p "$d"
+    printf '{"Version":"%s","Time":"2020-01-01T00:00:00Z"}' "$ver" > "${d}/${ver}.info"
+    printf 'module %s\n' "$mod" > "${d}/${ver}.mod"
+    printf 'fake-zip-bytes' > "${d}/${ver}.zip"
+    printf '{"Path":"%s","Version":"%s","Info":"%s","GoMod":"%s","Zip":"%s"}' \
+      "$mod" "$ver" "${d}/${ver}.info" "${d}/${ver}.mod" "${d}/${ver}.zip"
+    ;;
+  *)
+    mod="${last%@latest}"
+    printf '{"Path":"%s","Version":"v1.1.0","Time":"2020-01-01T00:00:00Z"}' "$mod"
+    ;;
+esac
+`
+
+func writeFakeGo(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake go shell script is not portable to Windows")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available for fake go script")
+	}
+	p := filepath.Join(t.TempDir(), "go")
+	if err := os.WriteFile(p, []byte(fakeGoScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func newFakeLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
+	t.Helper()
+	_, priv := newTestKeys(t)
+	cfg := LowConfig{
+		Root:            t.TempDir(),
+		ExportDir:       filepath.Join(t.TempDir(), "out"),
+		AutoApprove:     true,
+		GoBinary:        writeFakeGo(t),
+		UpstreamGOPROXY: "off",
+		GOSUMDB:         "off",
+	}
+	ls, err := NewLowServer(cfg, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ls, priv
+}
+
+func TestLowServerGoListAndLatest(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	ctx := context.Background()
+
+	versions, err := ls.goListVersions(ctx, "example.com/foo/bar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(versions, ",") != "v1.0.0,v1.1.0" {
+		t.Errorf("goListVersions = %v", versions)
+	}
+
+	info, err := ls.goLatest(ctx, "example.com/foo/bar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Version != "v1.1.0" {
+		t.Errorf("goLatest version = %q, want v1.1.0", info.Version)
+	}
+}
+
+func TestLowServerServeProxy(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	srv := httptest.NewServer(ls)
+	defer srv.Close()
+
+	cases := []struct {
+		path    string
+		wantSub string
+	}{
+		{"/example.com/foo/bar/@v/list", "v1.0.0"},
+		{"/example.com/foo/bar/@latest", `"v1.1.0"`},
+		{"/example.com/foo/bar/@v/v1.0.0.info", `"Version":"v1.0.0"`}, // missing -> fetched -> served
+	}
+	for _, c := range cases {
+		code, body := httpGet(t, srv.URL+c.path)
+		if code != http.StatusOK {
+			t.Errorf("GET %s: status %d", c.path, code)
+		}
+		if !strings.Contains(body, c.wantSub) {
+			t.Errorf("GET %s: body %q missing %q", c.path, body, c.wantSub)
+		}
+	}
+
+	// The @latest and .info requests above recorded two modules; export them.
+	resp, err := http.Post(srv.URL+"/admin/export", "", nil) //nolint:noctx // test request
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("POST /admin/export: status %d", resp.StatusCode)
+	}
+	if code, _ := httpGet(t, srv.URL+"/admin/bundles"); code != http.StatusOK {
+		t.Errorf("GET /admin/bundles: status %d", code)
+	}
+}
+
+func TestLowServerExportAndReexport(t *testing.T) {
+	ls, priv := newFakeLowServer(t)
+	ctx := context.Background()
+	ls.recordRequest("example.com/foo/bar", "v1.0.0")
+
+	res, err := ls.ExportPending(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExportedModules != 1 || res.Sequence != 1 || res.BundleID != "go-bundle-000001" {
+		t.Fatalf("unexpected export result: %+v", res)
+	}
+
+	// The three signed bundle files must exist and the signature must verify.
+	pub := priv.Public().(ed25519.PublicKey)
+	manifestBytes, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, "go-bundle-000001.manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sigB64, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, "go-bundle-000001.manifest.json.sig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigB64)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ed25519.Verify(pub, manifestBytes, sig) {
+		t.Error("exported bundle signature does not verify")
+	}
+
+	// Re-exporting the same sequence must succeed and regenerate it.
+	r := httptest.NewRequest(http.MethodPost, "/admin/reexport?sequences=1", nil)
+	rr, err := ls.HandleReexportRequest(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rr.Reexported) != 1 || len(rr.Failed) != 0 {
+		t.Errorf("reexport result: %+v", rr)
+	}
+}
+
+// TestLowToHighPipeline exports a bundle on the low side, delivers it to a high
+// server, imports it, and serves it back — the whole diode round-trip.
+func TestLowToHighPipeline(t *testing.T) {
+	ls, priv := newFakeLowServer(t)
+	ctx := context.Background()
+	ls.recordRequest("example.com/foo/bar", "v1.0.0")
+	if _, err := ls.ExportPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+
+	// Deliver the exported bundle files into the high-side landing directory.
+	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
+		name := "go-bundle-000001" + suffix
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, name), b)
+	}
+
+	res, err := hs.ImportNext()
+	if err != nil {
+		t.Fatalf("high import of low-produced bundle failed: %v", err)
+	}
+	if !res.Imported || res.Sequence != 1 {
+		t.Fatalf("unexpected high import result: %+v", res)
+	}
+	if !hs.isComplete("example.com/foo/bar", "v1.0.0") {
+		t.Error("module not complete on high side after pipeline")
+	}
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	if code, body := httpGet(t, srv.URL+"/example.com/foo/bar/@v/list"); code != http.StatusOK || !strings.Contains(body, "v1.0.0") {
+		t.Errorf("high list after pipeline: status %d body %q", code, body)
+	}
+}
