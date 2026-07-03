@@ -105,14 +105,16 @@ Useful admin endpoints:
 // -----------------------------------------------------------------------------
 
 type BundleManifest struct {
-	Type             string         `json:"type"`
-	Sequence         int64          `json:"sequence"`
-	PreviousSequence int64          `json:"previous_sequence"`
-	Created          time.Time      `json:"created"`
-	Generator        string         `json:"generator"`
-	BundleID         string         `json:"bundle_id"`
-	Modules          []ManifestMod  `json:"modules"`
-	Files            []ManifestFile `json:"files"`
+	Type             string          `json:"type"`
+	Sequence         int64           `json:"sequence"`
+	PreviousSequence int64           `json:"previous_sequence"`
+	Created          time.Time       `json:"created"`
+	Generator        string          `json:"generator"`
+	BundleID         string          `json:"bundle_id"`
+	Ecosystems       []string        `json:"ecosystems,omitempty"`
+	Modules          []ManifestMod   `json:"modules,omitempty"`
+	Python           *PythonManifest `json:"python,omitempty"`
+	Files            []ManifestFile  `json:"files"`
 }
 
 type ManifestMod struct {
@@ -221,6 +223,7 @@ type LowConfig struct {
 	ExportInterval  time.Duration
 	AutoApprove     bool
 	GoBinary        string
+	PipBinary       string
 }
 
 type LowState struct {
@@ -264,6 +267,7 @@ func runLow(args []string) {
 	fs.DurationVar(&cfg.ExportInterval, "export-interval", 60*time.Second, "automatic export interval; 0 disables background export")
 	fs.BoolVar(&cfg.AutoApprove, "auto-approve", true, "automatically approve discovered module versions for export")
 	fs.StringVar(&cfg.GoBinary, "go", "go", "go command path")
+	fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
 	_ = fs.Parse(args)
 
 	if cfg.PrivateKeyPath == "" {
@@ -368,6 +372,13 @@ func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 		writeJSON(w, res)
 	case r.URL.Path == "/admin/bundles" && r.Method == http.MethodGet:
 		writeJSON(w, s.BundleStatus())
+	case r.URL.Path == "/admin/python/collect" && r.Method == http.MethodPost:
+		res, err := s.HandlePythonCollect(r.Context(), r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return true
+		}
+		writeJSON(w, res)
 	case strings.HasPrefix(r.URL.Path, "/admin/"):
 		http.Error(w, "not found", http.StatusNotFound)
 	default:
@@ -687,7 +698,7 @@ func (s *LowServer) writeBundle(ctx context.Context, seq int64, records []Reques
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
 
-	if err := s.writeBundleArtifacts(bundleID, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(bundleID, s.downloadDir, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 
@@ -720,8 +731,9 @@ func (s *LowServer) fetchBundleContent(ctx context.Context, records []RequestRec
 }
 
 // writeBundleArtifacts writes the archive, manifest, and signature for a bundle
-// into the export directory.
-func (s *LowServer) writeBundleArtifacts(bundleID string, manifestBytes, sig []byte, files []ManifestFile) error {
+// into the export directory. baseDir is the root the manifest file paths are
+// relative to (the Go module cache for Go bundles, a staging dir for Python).
+func (s *LowServer) writeBundleArtifacts(bundleID, baseDir string, manifestBytes, sig []byte, files []ManifestFile) error {
 	if err := os.MkdirAll(s.cfg.ExportDir, 0o755); err != nil {
 		return err
 	}
@@ -729,7 +741,7 @@ func (s *LowServer) writeBundleArtifacts(bundleID string, manifestBytes, sig []b
 	manifestPath := filepath.Join(s.cfg.ExportDir, bundleID+".manifest.json")
 	sigPath := filepath.Join(s.cfg.ExportDir, bundleID+".manifest.json.sig")
 
-	if err := createTarGzAtomic(archivePath, s.downloadDir, files); err != nil {
+	if err := createTarGzAtomic(archivePath, baseDir, files); err != nil {
 		return err
 	}
 	if err := writeBytesAtomic(manifestPath, manifestBytes, 0o644); err != nil {
@@ -1064,6 +1076,9 @@ func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
 
 func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.serveHighAdmin(w, r) {
+		return
+	}
+	if s.servePython(w, r) {
 		return
 	}
 
@@ -1498,14 +1513,26 @@ func markPresentComplete(dir string, seqs []int64, present map[int64]bool, maxSe
 }
 
 func validateManifestCompleteness(m BundleManifest) error {
-	if len(m.Modules) == 0 {
-		return errors.New("manifest contains no modules")
-	}
 	seen, err := validateManifestFiles(m.Files)
 	if err != nil {
 		return err
 	}
-	return validateManifestModules(m.Modules, seen)
+	hasGo := len(m.Modules) > 0
+	hasPython := m.Python != nil && len(m.Python.Projects) > 0
+	if !hasGo && !hasPython {
+		return errors.New("manifest contains no modules or python projects")
+	}
+	if hasGo {
+		if err := validateManifestModules(m.Modules, seen); err != nil {
+			return err
+		}
+	}
+	if hasPython {
+		if err := validatePythonProjects(m.Python.Projects, seen); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // validateManifestFiles checks each listed file's path and hash, returning the

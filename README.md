@@ -189,6 +189,76 @@ A module version is visible only if these exist and a `.complete` marker has bee
 2. else highest pre-release version
 3. else newest pseudo-version by `.info` time
 
+## Python (PyPI) support
+
+ArtiGate mirrors Python wheels through the same numbered, signed bundle
+pipeline. Go modules and Python packages share one global sequence stream, so a
+bundle may carry Go only, Python only, or both.
+
+The low side collects wheels with `pip download` (resolution without install)
+and packs them into a signed bundle. The high side imports the wheels and serves
+them through the [PyPI Simple Repository API](https://peps.python.org/pep-0503/).
+
+### Low side: collect wheels
+
+Trigger a collection from the low side. Requirements and an optional cross-target
+are sent as JSON:
+
+```bash
+curl -XPOST http://127.0.0.1:8080/admin/python/collect \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "requirements": ["requests==2.32.4", "urllib3"],
+        "target": {
+          "python_version": "3.12",
+          "implementation": "cp",
+          "abi": "cp312",
+          "platforms": ["manylinux_2_28_x86_64", "manylinux_2_34_x86_64"]
+        }
+      }'
+```
+
+When a `target` is given, ArtiGate passes `--only-binary=:all:` plus the matching
+`--python-version`, `--implementation`, `--abi`, and `--platform` flags so pip
+downloads wheels for the high-side interpreter rather than the low-side host.
+Without a `target`, wheels are downloaded for the current platform. Set the
+interpreter with `--python` (default `python3`).
+
+The result is a normal signed bundle (`go-bundle-NNNNNN.*`) transferred through
+the diode exactly like a Go bundle.
+
+### High side: serve /simple/
+
+After import, the high side serves:
+
+```text
+/simple/                      # index of all mirrored projects
+/simple/<normalized-project>/ # one hashed anchor per wheel
+/packages/<filename>          # the wheel bytes
+```
+
+Project names are normalized per PEP 503 (lowercase; runs of `.`, `_`, and `-`
+collapse to a single `-`), so `/simple/Requests/` and `/simple/requests/` resolve
+to the same project. Each file link includes a `#sha256=...` fragment.
+
+High-side pip clients should use **only** ArtiGate — avoid `--extra-index-url`,
+which is vulnerable to dependency confusion:
+
+```ini
+# /etc/pip.conf
+[global]
+index-url = https://artigate-high.local/simple/
+disable-pip-version-check = true
+```
+
+```bash
+pip install --only-binary=:all: -r requirements.txt
+```
+
+Wheels-only is the recommended mode for air-gapped builds: the high side then
+needs no compilers, C headers, Rust, build backends, or network access for build
+dependencies. Source-distribution (sdist) mirroring is not implemented.
+
 ## Notes and limitations
 
 - This is a production-oriented starter implementation, not a full artifact-management product.
@@ -196,5 +266,6 @@ A module version is visible only if these exist and a `.complete` marker has bee
 - It uses JSON state files to keep the implementation dependency-free. Use SQLite/PostgreSQL if you need multiple writers or a larger approval workflow.
 - Admin endpoints are unauthenticated. Bind to localhost or protect them.
 - High-side gaps and out-of-order future bundles are quarantined, not rejected. Check `/admin/missing` and re-export the requested range from the low side with `/admin/reexport`.
-- Low-side fetching depends on the installed Go toolchain and Git/VCS tools.
-- High side never invokes `go` and has no upstream fetcher.
+- Low-side fetching depends on the installed Go toolchain and Git/VCS tools, and (for Python) on `pip`.
+- High side never invokes `go` or `pip` and has no upstream fetcher.
+- Python support mirrors wheels only; sdists and PyPI metadata (`requires-python`, yank status) beyond the manifest are not yet surfaced. Python bundle re-export is not tracked like Go module re-export.
