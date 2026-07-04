@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeGoScript is a stand-in for the `go` command. The low side shells out for
@@ -93,7 +94,6 @@ func newFakeLowServerWithGo(t *testing.T, goBin string) (*LowServer, ed25519.Pri
 	cfg := LowConfig{
 		Root:            t.TempDir(),
 		ExportDir:       filepath.Join(t.TempDir(), "out"),
-		AutoApprove:     true,
 		GoBinary:        goBin,
 		UpstreamGOPROXY: "off",
 		GOSUMDB:         "off",
@@ -133,19 +133,13 @@ case "$*" in
 esac
 `
 
-func TestLowServerGoListAndLatest(t *testing.T) {
+// TestLowServerGoLatest checks that "module@latest" resolution — used by
+// /admin/go/collect for an unpinned module — picks the highest release version
+// from the fake upstream.
+func TestLowServerGoLatest(t *testing.T) {
 	ls, _ := newFakeLowServer(t)
-	ctx := context.Background()
 
-	versions, err := ls.goListVersions(ctx, "example.com/foo/bar")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(versions, ",") != "v1.0.0,v1.1.0" {
-		t.Errorf("goListVersions = %v", versions)
-	}
-
-	info, err := ls.goLatest(ctx, "example.com/foo/bar")
+	info, err := ls.goLatest(context.Background(), "example.com/foo/bar")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,49 +148,11 @@ func TestLowServerGoListAndLatest(t *testing.T) {
 	}
 }
 
-func TestLowServerServeProxy(t *testing.T) {
-	ls, _ := newFakeLowServer(t)
-	srv := httptest.NewServer(ls)
-	defer srv.Close()
-
-	cases := []struct {
-		path    string
-		wantSub string
-	}{
-		{"/example.com/foo/bar/@v/list", "v1.0.0"},
-		{"/example.com/foo/bar/@latest", `"v1.1.0"`},
-		{"/example.com/foo/bar/@v/v1.0.0.info", `"Version":"v1.0.0"`}, // missing -> fetched -> served
-	}
-	for _, c := range cases {
-		code, body := httpGet(t, srv.URL+c.path)
-		if code != http.StatusOK {
-			t.Errorf("GET %s: status %d", c.path, code)
-		}
-		if !strings.Contains(body, c.wantSub) {
-			t.Errorf("GET %s: body %q missing %q", c.path, body, c.wantSub)
-		}
-	}
-
-	// The @latest and .info requests above recorded two modules; export them.
-	resp, err := http.Post(srv.URL+"/admin/export", "", nil) //nolint:noctx // test request
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("POST /admin/export: status %d", resp.StatusCode)
-	}
-	if code, _ := httpGet(t, srv.URL+"/admin/bundles"); code != http.StatusOK {
-		t.Errorf("GET /admin/bundles: status %d", code)
-	}
-}
-
 func TestLowServerExportAndReexport(t *testing.T) {
 	ls, priv := newFakeLowServer(t)
 	ctx := context.Background()
-	ls.recordRequest("example.com/foo/bar", "v1.0.0")
 
-	res, err := ls.ExportPending(ctx)
+	res, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{"example.com/foo/bar@v1.0.0"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +180,7 @@ func TestLowServerExportAndReexport(t *testing.T) {
 
 	// Re-exporting the same sequence must succeed and regenerate it.
 	r := httptest.NewRequest(http.MethodPost, "/admin/reexport?sequences=1", nil)
-	rr, err := ls.HandleReexportRequest(ctx, r)
+	rr, err := ls.HandleReexportRequest(r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,13 +238,14 @@ func TestLowServerGoCollect(t *testing.T) {
 	}
 }
 
-// TestLowServerConcurrentExportsUniqueSequences guards the export-sequence
-// serialization. Before exportMu wrapped the whole allocate->write->commit,
-// two concurrent exporters could peek the same NextSequence, both write the
-// same go-bundle-NNNNNN.* files, and both advance the counter — silently
-// dropping one exporter's modules or pairing a manifest with the other's
-// signature (which permanently blocks the high side). Each concurrent export
-// must instead receive a distinct sequence with an intact, verifiable bundle.
+// TestLowServerConcurrentExportsUniqueSequences guards the within-stream
+// export-sequence serialization. Before a stream's lock wrapped the whole
+// allocate->write->commit, two concurrent exporters could peek the same
+// sequence, both write the same go-bundle-NNNNNN.* files, and both advance the
+// counter — silently dropping one exporter's modules or pairing a manifest with
+// the other's signature (which permanently blocks the high side). Each
+// concurrent export on a stream must instead receive a distinct sequence with
+// an intact, verifiable bundle.
 func TestLowServerConcurrentExportsUniqueSequences(t *testing.T) {
 	ls, priv := newFakeLowServer(t)
 	pub := priv.Public().(ed25519.PublicKey)
@@ -337,6 +294,51 @@ func TestLowServerConcurrentExportsUniqueSequences(t *testing.T) {
 	}
 }
 
+// TestStreamLocksAreIndependent proves the per-stream export locks let different
+// ecosystems export concurrently while still serializing within a stream:
+// holding the go lock must not block acquiring the python lock (so a long
+// APT/Go fetch never blocks a Python collect), but must block a second
+// acquisition of the go lock.
+func TestStreamLocksAreIndependent(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+
+	goMu := ls.streamLock(streamGo)
+	goMu.Lock()
+	defer goMu.Unlock()
+
+	// A different stream's lock is a different mutex and must be immediately
+	// acquirable while the go lock is held.
+	if ls.streamLock(streamPython) == goMu {
+		t.Fatal("python and go must not share an export lock")
+	}
+	gotPy := make(chan struct{})
+	go func() {
+		pyMu := ls.streamLock(streamPython)
+		pyMu.Lock()
+		pyMu.Unlock()
+		close(gotPy)
+	}()
+	select {
+	case <-gotPy:
+	case <-time.After(2 * time.Second):
+		t.Fatal("python export blocked while the go stream lock was held")
+	}
+
+	// The same stream's lock, by contrast, must not be acquirable concurrently.
+	gotGo := make(chan struct{})
+	go func() {
+		goMu.Lock() // blocks until the deferred Unlock releases it after the test
+		goMu.Unlock()
+		close(gotGo)
+	}()
+	select {
+	case <-gotGo:
+		t.Fatal("a second go export acquired the go lock while it was already held")
+	case <-time.After(200 * time.Millisecond):
+		// Expected: still blocked while this test holds the go lock.
+	}
+}
+
 // assertBundleSigned checks that a bundle's three files exist in dir and that
 // its signature verifies against pub over the manifest bytes.
 func assertBundleSigned(t *testing.T, dir, bundleID string, pub ed25519.PublicKey) {
@@ -361,31 +363,20 @@ func assertBundleSigned(t *testing.T, dir, bundleID string, pub ed25519.PublicKe
 	}
 }
 
-// exportedSeq returns the recorded export sequence for a module@version (0 if
-// still pending), reading state under the lock.
-func (s *LowServer) exportedSeq(module, version string) int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if rec := s.state.Requests[module+"@"+version]; rec != nil {
-		return rec.ExportedSeq
-	}
-	return -1
-}
-
 // TestLowServerExportSkipsUnfetchableModule proves one unfetchable module no
 // longer poisons the whole batch: the healthy modules still export, the bad one
-// is reported and left pending for retry, and the sequence stream keeps moving.
+// is reported as skipped, and the sequence stream keeps moving.
 func TestLowServerExportSkipsUnfetchableModule(t *testing.T) {
 	ls, priv := newFakeLowServerWithGo(t, writeFakeGoWith(t, poisonGoScript))
 	pub := priv.Public().(ed25519.PublicKey)
 	ctx := context.Background()
 
-	ls.recordRequest("example.com/good/one", "v1.0.0")
-	ls.recordRequest("example.com/poison/gone", "v2.0.0")
-
-	res, err := ls.ExportPending(ctx)
+	res, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{
+		"example.com/good/one@v1.0.0",
+		"example.com/poison/gone@v2.0.0",
+	}})
 	if err != nil {
-		t.Fatalf("ExportPending must succeed despite one unfetchable module: %v", err)
+		t.Fatalf("CollectGo must succeed despite one unfetchable module: %v", err)
 	}
 	if res.Sequence != 1 || res.BundleID != "go-bundle-000001" || res.ExportedModules != 1 {
 		t.Fatalf("export = %+v, want seq 1 / go-bundle-000001 / 1 module", res)
@@ -393,22 +384,16 @@ func TestLowServerExportSkipsUnfetchableModule(t *testing.T) {
 	if len(res.SkippedModules) != 1 || res.SkippedModules[0].Module != "example.com/poison/gone" {
 		t.Fatalf("SkippedModules = %+v, want the poison module", res.SkippedModules)
 	}
-
-	// Healthy module marked exported; poison one left pending (not lost).
-	if got := ls.exportedSeq("example.com/good/one", "v1.0.0"); got != 1 {
-		t.Errorf("healthy module ExportedSeq = %d, want 1", got)
-	}
-	if got := ls.exportedSeq("example.com/poison/gone", "v2.0.0"); got != 0 {
-		t.Errorf("poison module ExportedSeq = %d, want 0 (still pending)", got)
-	}
 	assertBundleSigned(t, ls.cfg.ExportDir, "go-bundle-000001", pub)
 
 	// The stream keeps flowing: a new healthy module exports as sequence 2 while
-	// the poison one is retried and skipped again.
-	ls.recordRequest("example.com/good/two", "v1.0.0")
-	res2, err := ls.ExportPending(ctx)
+	// the poison one is skipped again.
+	res2, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{
+		"example.com/good/two@v1.0.0",
+		"example.com/poison/gone@v2.0.0",
+	}})
 	if err != nil {
-		t.Fatalf("second ExportPending failed: %v", err)
+		t.Fatalf("second CollectGo failed: %v", err)
 	}
 	if res2.Sequence != 2 || res2.ExportedModules != 1 || len(res2.SkippedModules) != 1 {
 		t.Errorf("second export = %+v, want seq 2 / 1 module / 1 skipped", res2)
@@ -422,11 +407,12 @@ func TestLowServerExportAllUnfetchableDoesNotBurnSequence(t *testing.T) {
 	ls, _ := newFakeLowServerWithGo(t, writeFakeGoWith(t, poisonGoScript))
 	ctx := context.Background()
 
-	ls.recordRequest("example.com/poison/a", "v1.0.0")
-	ls.recordRequest("example.com/poison/b", "v1.0.0")
-
-	if _, err := ls.ExportPending(ctx); err == nil {
-		t.Fatal("ExportPending should error when every module is unfetchable")
+	_, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{
+		"example.com/poison/a@v1.0.0",
+		"example.com/poison/b@v1.0.0",
+	}})
+	if err == nil {
+		t.Fatal("CollectGo should error when every module is unfetchable")
 	}
 	if got := ls.peekSequence(streamGo); got != 1 {
 		t.Errorf("NextSequence = %d, want 1 (no sequence burned)", got)
@@ -584,8 +570,7 @@ func TestLowServerGoCollectAdmin(t *testing.T) {
 func TestLowToHighPipeline(t *testing.T) {
 	ls, priv := newFakeLowServer(t)
 	ctx := context.Background()
-	ls.recordRequest("example.com/foo/bar", "v1.0.0")
-	if _, err := ls.ExportPending(ctx); err != nil {
+	if _, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{"example.com/foo/bar@v1.0.0"}}); err != nil {
 		t.Fatal(err)
 	}
 

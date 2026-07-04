@@ -43,7 +43,6 @@ services:
       - --export-dir=/var/spool/diode-out
       - --private-key=/keys/low.ed25519
       - --upstream-goproxy=https://proxy.golang.org,direct
-      - --export-interval=30s
     ports:
       - "8080:8080"
     volumes:

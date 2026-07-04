@@ -13,8 +13,7 @@ import (
 
 func TestLowServerUIStatus(t *testing.T) {
 	ls, _ := newFakeLowServer(t)
-	ls.recordRequest("example.com/foo/bar", "v1.0.0")
-	if _, err := ls.ExportPending(context.Background()); err != nil {
+	if _, err := ls.CollectGo(context.Background(), GoCollectRequest{Modules: []string{"example.com/foo/bar@v1.0.0"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -36,6 +35,9 @@ func TestLowServerUIStatus(t *testing.T) {
 	if !goStream.ExportedSequences[0].FilesPresent {
 		t.Error("exported bundle files should be present")
 	}
+	if goStream.ExportedSequences[0].SizeBytes <= 0 {
+		t.Errorf("exported bundle should report a nonzero size, got %d", goStream.ExportedSequences[0].SizeBytes)
+	}
 }
 
 func TestLowServerUIPage(t *testing.T) {
@@ -50,6 +52,8 @@ func TestLowServerUIPage(t *testing.T) {
 	for _, want := range []string{
 		"<title>ArtiGate low-side</title>",
 		"/admin/reexport", "Re-transmit bundles", "/ui/api/status",
+		// Export-status table shows each bundle's size.
+		"formatBytes", "size_bytes", `<th class="num">Size</th>`,
 		// Top menu splits each ecosystem onto its own view/page.
 		"function setView(", `data-view="go"`, `data-view="java"`, `data-view="status"`,
 		`id="view-go"`, `id="view-java"`, `id="view-status"`,
@@ -144,7 +148,7 @@ func reexportRestoresFiles(t *testing.T, ls *LowServer, stream string, seq int64
 			t.Fatalf("remove %s%s: %v", bundleID, suffix, err)
 		}
 	}
-	res := ls.ReexportSequences(context.Background(), stream, []SequenceRange{{Start: seq, End: seq}})
+	res := ls.ReexportSequences(stream, []SequenceRange{{Start: seq, End: seq}})
 	if len(res.Reexported) != 1 || len(res.Failed) != 0 {
 		t.Fatalf("reexport %s seq %d result: %+v", stream, seq, res)
 	}
@@ -181,8 +185,7 @@ func TestLowServerReexportGoCollect(t *testing.T) {
 // sequence range to /admin/reexport and confirm it regenerates the bundle.
 func TestLowServerUIReexportFlow(t *testing.T) {
 	ls, _ := newFakeLowServer(t)
-	ls.recordRequest("example.com/foo/bar", "v1.0.0")
-	if _, err := ls.ExportPending(context.Background()); err != nil {
+	if _, err := ls.CollectGo(context.Background(), GoCollectRequest{Modules: []string{"example.com/foo/bar@v1.0.0"}}); err != nil {
 		t.Fatal(err)
 	}
 

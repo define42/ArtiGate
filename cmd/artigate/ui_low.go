@@ -78,6 +78,7 @@ const lowUIHTML = `<!DOCTYPE html>
   th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid #2a2f3a; }
   th { color: #8b93a5; font-weight: 600; }
   td.mono { font-family: ui-monospace, monospace; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .empty { color: #8b93a5; font-style: italic; }
 </style>
 </head>
@@ -219,6 +220,13 @@ const lowUIHTML = `<!DOCTYPE html>
 <script>
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',apt:'APT',rpm:'RPM'})[name]||name;}
+function formatBytes(n){
+  n=Number(n)||0;
+  const u=['B','KiB','MiB','GiB','TiB'];
+  let i=0;
+  while(n>=1024 && i<u.length-1){ n/=1024; i++; }
+  return (i===0 ? n : n.toFixed(n<10?1:0))+' '+u[i];
+}
 
 // setView shows one ecosystem (or the status) page and hides the rest, matching
 // the active nav button. The status page is refreshed each time it is opened.
@@ -284,7 +292,7 @@ async function collectGoMod(ev){
     let msg='&#10003; Collected '+esc(d.exported_modules)+' module(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
     const skipped=d.skipped_modules||[];
     if(skipped.length){
-      msg+='<br>&#9888; Skipped '+esc(skipped.length)+' unfetchable module(s); they stay pending for retry:<ul>'+
+      msg+='<br>&#9888; Skipped '+esc(skipped.length)+' unfetchable module(s); re-run the collect to retry them:<ul>'+
         skipped.map(m=>'<li><code>'+esc(m.module)+'@'+esc(m.version)+'</code></li>').join('')+'</ul>';
       showGoResult('warn', msg);
     } else {
@@ -468,20 +476,20 @@ async function loadStatus(){
     const streams=s.streams||[];
     const nextSummary=streams.map(st=>esc(streamLabel(st.stream))+' <b>#'+esc(st.next_sequence)+'</b>').join(' &middot; ');
     document.getElementById('meta').innerHTML=
-      '<span>Pending Go modules: <b>'+esc(s.pending_modules)+'</b></span>'+
-      (nextSummary?'<span>Next bundle &mdash; '+nextSummary+'</span>':'');
+      nextSummary?'<span>Next bundle &mdash; '+nextSummary+'</span>':'<span>No bundles exported yet.</span>';
     // One combined table across every stream; each ecosystem numbers its own
     // bundles independently, so the stream is shown alongside the sequence.
     const rows=[];
     for(const st of streams){
       for(const x of (st.exported_sequences||[])){
         rows.push('<tr><td>'+esc(streamLabel(st.stream))+'</td><td class="mono">#'+esc(x.sequence)+
-          '</td><td class="mono">'+esc(x.bundle_id)+'</td><td>'+(x.files_present?'✓':'&#10007; missing')+'</td></tr>');
+          '</td><td class="mono">'+esc(x.bundle_id)+'</td><td class="num">'+esc(formatBytes(x.size_bytes))+
+          '</td><td>'+(x.files_present?'✓':'&#10007; missing')+'</td></tr>');
       }
     }
     const box=document.getElementById('bundles');
     if(!rows.length){ box.innerHTML='<p class="empty">No bundles exported yet.</p>'; return; }
-    box.innerHTML='<table><thead><tr><th>Stream</th><th>Sequence</th><th>Bundle</th><th>Files present</th></tr></thead><tbody>'+
+    box.innerHTML='<table><thead><tr><th>Stream</th><th>Sequence</th><th>Bundle</th><th class="num">Size</th><th>Files present</th></tr></thead><tbody>'+
       rows.join('')+'</tbody></table>';
   }catch(e){
     document.getElementById('meta').textContent='Failed to load status: '+e.message;

@@ -1,9 +1,9 @@
-// artigate implements a low-side Go module pull-through/export server
-// and a high-side read-only Go module repository server for data-diode use.
+// artigate implements a low-side multi-ecosystem exporter and a high-side
+// read-only repository server for data-diode use.
 //
 // It intentionally uses only the Go standard library. The low side delegates
-// GitHub/direct VCS fetching to the installed `go` command. The high side never
-// invokes `go` and never fetches upstream.
+// fetching to the installed `go`/`git`/`pip`/`mvn` tools; the high side never
+// invokes them and never fetches upstream.
 package main
 
 import (
@@ -91,8 +91,7 @@ func usage() {
     --private-key /etc/artigate/low.ed25519 \
     --upstream-goproxy https://proxy.golang.org,direct \
     --goprivate github.com/your-org/* \
-    --gonosumdb github.com/your-org/* \
-    --export-interval 60s
+    --gonosumdb github.com/your-org/*
 
   artigate high \
     --listen :8080 \
@@ -101,16 +100,13 @@ func usage() {
     --public-key /etc/artigate/high.ed25519.pub \
     --import-interval 10s
 
-Low-side clients:
-  GOPROXY=http://low-proxy:8080,off
-
 High-side clients:
   GOPROXY=http://high-proxy:8080,off
   GOSUMDB=off
 
 Useful admin endpoints:
-  low:  POST /admin/export
-  low:  POST /admin/reexport?sequences=42,45-47
+  low:  POST /admin/{go,python,maven,apt,rpm}/collect
+  low:  POST /admin/reexport?stream=go&sequences=42,45-47
   low:  GET  /admin/bundles
   high: POST /admin/import
   high: GET  /admin/missing
@@ -243,8 +239,6 @@ type LowConfig struct {
 	GONOSUMDB       string
 	GONOPROXY       string
 	GOVCS           string
-	ExportInterval  time.Duration
-	AutoApprove     bool
 	GoBinary        string
 	GoToolchain     string
 	PipBinary       string
@@ -256,18 +250,14 @@ type LowState struct {
 	Sequences map[string]int64 `json:"sequences"`
 	// NextSequence is the legacy single-stream counter, migrated into
 	// Sequences["go"] on load.
-	NextSequence int64                     `json:"next_sequence,omitempty"`
-	Requests     map[string]*RequestRecord `json:"requests"`
+	NextSequence int64 `json:"next_sequence,omitempty"`
 }
 
+// RequestRecord is a concrete module@version to fetch into a Go bundle, produced
+// by resolving a collect request (an explicit module list or a project go.mod).
 type RequestRecord struct {
-	Module      string    `json:"module"`
-	Version     string    `json:"version"`
-	FirstSeen   time.Time `json:"first_seen"`
-	LastSeen    time.Time `json:"last_seen"`
-	Approved    bool      `json:"approved"`
-	ExportedSeq int64     `json:"exported_sequence,omitempty"`
-	ExportedAt  time.Time `json:"exported_at,omitempty"`
+	Module  string `json:"module"`
+	Version string `json:"version"`
 }
 
 type LowServer struct {
@@ -276,15 +266,19 @@ type LowServer struct {
 	downloadDir string // $GOPATH/pkg/mod/cache/download
 	gopath      string
 	statePath   string
-	// exportMu serializes bundle production (sequence allocate -> write ->
-	// commit) across every export path, so two concurrent exporters can never
-	// claim the same sequence number and clobber each other's bundle. It is
-	// deliberately separate from mu: mu guards state for fast readers/writers
-	// (the proxy hot path, status endpoints) that must not block for the
-	// minutes a bundle write can take.
-	exportMu sync.Mutex
-	mu       sync.Mutex
-	state    LowState
+	// streamLocks serializes bundle production (sequence allocate -> write ->
+	// commit) per stream: two exporters on the same stream can never claim the
+	// same sequence number and clobber each other's bundle, while different
+	// ecosystems (a long APT mirror and a Python collect, say) export
+	// concurrently — safe because each stream has its own sequence counter and
+	// its own bundle/staging paths. streamLocksMu guards the map itself. These
+	// are deliberately separate from mu: mu guards state for fast
+	// readers/writers (the proxy hot path, status endpoints) that must not block
+	// for the minutes a bundle write can take.
+	streamLocksMu sync.Mutex
+	streamLocks   map[string]*sync.Mutex
+	mu            sync.Mutex
+	state         LowState
 }
 
 func runLow(args []string) {
@@ -300,8 +294,6 @@ func runLow(args []string) {
 	fs.StringVar(&cfg.GONOSUMDB, "gonosumdb", "", "GONOSUMDB for private modules")
 	fs.StringVar(&cfg.GONOPROXY, "gonoproxy", "", "GONOPROXY for private modules")
 	fs.StringVar(&cfg.GOVCS, "govcs", "*:git", "GOVCS used by low-side fetcher")
-	fs.DurationVar(&cfg.ExportInterval, "export-interval", 60*time.Second, "automatic export interval; 0 disables background export")
-	fs.BoolVar(&cfg.AutoApprove, "auto-approve", true, "automatically approve discovered module versions for export")
 	fs.StringVar(&cfg.GoBinary, "go", "go", "go command path")
 	fs.StringVar(&cfg.GoToolchain, "gotoolchain", "auto", "GOTOOLCHAIN for the low-side fetcher; \"auto\" lets go download a newer toolchain when a module requires one, \"local\" pins the installed toolchain")
 	fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
@@ -317,14 +309,10 @@ func runLow(args []string) {
 	ls, err := NewLowServer(cfg, priv)
 	must(err)
 
-	if cfg.ExportInterval > 0 {
-		go ls.exportLoop()
-	}
-
 	mux := http.NewServeMux()
 	mux.Handle("/", ls)
-	log.Printf("low-side proxy listening on %s", cfg.Listen)
-	log.Printf("low-side cache: %s", ls.downloadDir)
+	log.Printf("low-side exporter listening on %s", cfg.Listen)
+	log.Printf("low-side go module cache: %s", ls.downloadDir)
 	log.Printf("low-side export dir: %s", cfg.ExportDir)
 	must(http.ListenAndServe(cfg.Listen, logHTTP(mux)))
 }
@@ -352,7 +340,8 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 		downloadDir: dl,
 		gopath:      gopath,
 		statePath:   filepath.Join(cfg.Root, "low-state.json"),
-		state:       LowState{Sequences: map[string]int64{}, Requests: map[string]*RequestRecord{}},
+		state:       LowState{Sequences: map[string]int64{}},
+		streamLocks: map[string]*sync.Mutex{},
 	}
 	if err := ls.loadState(); err != nil {
 		return nil, err
@@ -367,28 +356,9 @@ func (s *LowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.serveLowUI(w, r) {
 		return
 	}
-
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	req, err := parseProxyRequest(r.URL.Path)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	switch req.Kind {
-	case proxyList:
-		s.handleLowList(w, r, req)
-	case proxyLatest:
-		s.handleLowLatest(w, r, req)
-	case proxyVersionFile:
-		s.handleLowVersionFile(w, r, req)
-	case proxyUnknown:
-		http.Error(w, "not found", http.StatusNotFound)
-	}
+	// The low side is an exporter, not a module proxy: all fetching is driven by
+	// the /admin/*/collect endpoints and the dashboard. Anything else is unknown.
+	http.Error(w, "not found", http.StatusNotFound)
 }
 
 // serveLowAdmin handles the health check and /admin/* routes. It reports
@@ -400,11 +370,8 @@ func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 	switch {
 	case r.URL.Path == "/healthz":
 		_, _ = w.Write([]byte("ok\n"))
-	case r.URL.Path == "/admin/export" && r.Method == http.MethodPost:
-		res, err := s.ExportPending(r.Context())
-		return respondJSONOrError(w, http.StatusInternalServerError, res, err)
 	case r.URL.Path == "/admin/reexport" && r.Method == http.MethodPost:
-		res, err := s.HandleReexportRequest(r.Context(), r)
+		res, err := s.HandleReexportRequest(r)
 		return respondJSONOrError(w, http.StatusBadRequest, res, err)
 	case r.URL.Path == "/admin/bundles" && r.Method == http.MethodGet:
 		writeJSON(w, s.BundleStatus())
@@ -453,57 +420,6 @@ func respondJSONOrError(w http.ResponseWriter, errStatus int, res any, err error
 	}
 	writeJSON(w, res)
 	return true
-}
-
-func (s *LowServer) handleLowList(w http.ResponseWriter, r *http.Request, req ProxyRequest) {
-	versions, err := s.goListVersions(r.Context(), req.Module)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	versions = filterNonPseudoValid(versions)
-	sortVersionsAsc(versions)
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	for _, v := range versions {
-		_, _ = fmt.Fprintln(w, v)
-	}
-}
-
-func (s *LowServer) handleLowLatest(w http.ResponseWriter, r *http.Request, req ProxyRequest) {
-	info, err := s.goLatest(r.Context(), req.Module)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	if err := s.fetchVersion(r.Context(), req.Module, info.Version); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	s.recordRequest(req.Module, info.Version)
-	writeJSON(w, info)
-}
-
-func (s *LowServer) handleLowVersionFile(w http.ResponseWriter, r *http.Request, req ProxyRequest) {
-	rel := req.RelativePath
-	abs := filepath.Join(s.downloadDir, filepath.FromSlash(rel))
-	if !safeJoin(s.downloadDir, abs) {
-		http.Error(w, "unsafe path", http.StatusBadRequest)
-		return
-	}
-
-	if _, err := os.Stat(abs); err != nil {
-		if req.Ext == ".ziphash" {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		if err := s.fetchVersion(r.Context(), req.Module, req.Version); err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-	}
-
-	s.recordRequest(req.Module, req.Version)
-	serveFile(w, r, abs)
 }
 
 func (s *LowServer) goEnv() []string {
@@ -568,17 +484,11 @@ func (s *LowServer) runGoDir(ctx context.Context, dir string, args ...string) ([
 	return stdout.Bytes(), nil
 }
 
-type goListVersionsJSON struct {
-	Path     string   `json:"Path"`
-	Versions []string `json:"Versions"`
-	Error    string   `json:"Error"`
-}
-
 // validateGoModulePath rejects module paths that the go tool would misparse as
 // a command-line flag (a leading '-') or that carry argument-unsafe bytes. It
 // guards every place a caller-supplied module string becomes a `go` argument,
-// so neither the pull-through proxy nor /admin/go/collect can inject flags such
-// as `-modfile` or `-C` into the fetcher.
+// so a /admin/go/collect request cannot inject flags such as `-modfile` or `-C`
+// into the fetcher.
 func validateGoModulePath(modulePath string) error {
 	if modulePath == "" {
 		return errors.New("empty module path")
@@ -614,24 +524,6 @@ func validateGoVersion(version string) error {
 		}
 	}
 	return nil
-}
-
-func (s *LowServer) goListVersions(ctx context.Context, modulePath string) ([]string, error) {
-	if err := validateGoModulePath(modulePath); err != nil {
-		return nil, err
-	}
-	out, err := s.runGo(ctx, "list", "-m", "-versions", "-json", modulePath)
-	if err != nil {
-		return nil, err
-	}
-	var v goListVersionsJSON
-	if err := json.Unmarshal(out, &v); err != nil {
-		return nil, fmt.Errorf("parse go list versions: %w: %s", err, string(out))
-	}
-	if v.Error != "" {
-		return nil, errors.New(v.Error)
-	}
-	return v.Versions, nil
 }
 
 type goLatestJSON struct {
@@ -700,28 +592,6 @@ func (s *LowServer) fetchVersion(ctx context.Context, modulePath, version string
 	return nil
 }
 
-func (s *LowServer) recordRequest(modulePath, version string) {
-	if modulePath == "" || version == "" || version == "latest" {
-		return
-	}
-	now := time.Now().UTC()
-	key := modulePath + "@" + version
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rec, ok := s.state.Requests[key]
-	if !ok {
-		rec = &RequestRecord{Module: modulePath, Version: version, FirstSeen: now, Approved: s.cfg.AutoApprove}
-		s.state.Requests[key] = rec
-	}
-	rec.LastSeen = now
-	if s.cfg.AutoApprove {
-		rec.Approved = true
-	}
-	if err := s.saveStateLocked(); err != nil {
-		log.Printf("save low state: %v", err)
-	}
-}
-
 func (s *LowServer) loadState() error {
 	b, err := os.ReadFile(s.statePath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -744,30 +614,12 @@ func (s *LowServer) loadState() error {
 		}
 		st.NextSequence = 0
 	}
-	if st.Requests == nil {
-		st.Requests = map[string]*RequestRecord{}
-	}
 	s.state = st
 	return nil
 }
 
 func (s *LowServer) saveStateLocked() error {
 	return writeJSONAtomic(s.statePath, s.state, stateFileMode)
-}
-
-func (s *LowServer) exportLoop() {
-	t := time.NewTicker(s.cfg.ExportInterval)
-	defer t.Stop()
-	for range t.C {
-		res, err := s.ExportPending(context.Background())
-		if err != nil {
-			log.Printf("export failed: %v", err)
-			continue
-		}
-		if res.ExportedModules > 0 {
-			log.Printf("exported bundle sequence=%d modules=%d", res.Sequence, res.ExportedModules)
-		}
-	}
 }
 
 type ExportResult struct {
@@ -779,88 +631,14 @@ type ExportResult struct {
 	SkippedModules  []FailedModule `json:"skipped_modules,omitempty"`
 }
 
-// FailedModule records a module that could not be fetched at export time. Such
-// modules are skipped so the rest of the batch still exports — one unfetchable
-// version (e.g. retracted or deleted upstream) must never block the whole
-// bundle stream. In the demand-driven export they stay pending, so a transient
-// failure is retried on the next export.
+// FailedModule records a module that could not be fetched during a collect.
+// Such modules are skipped so the rest of the batch still exports — one
+// unfetchable version (e.g. retracted or deleted upstream) must never block the
+// whole bundle. Skipped modules are reported back in the collect result.
 type FailedModule struct {
 	Module  string `json:"module"`
 	Version string `json:"version"`
 	Error   string `json:"error"`
-}
-
-func (s *LowServer) ExportPending(ctx context.Context) (ExportResult, error) {
-	s.exportMu.Lock()
-	defer s.exportMu.Unlock()
-
-	pending, seq := s.pendingForExport()
-	if len(pending) == 0 {
-		return ExportResult{ExportedModules: 0, Message: "no pending modules"}, nil
-	}
-
-	res, err := s.writeBundle(ctx, streamGo, seq, pending)
-	if err != nil {
-		return ExportResult{}, err
-	}
-
-	if err := s.commitExport(pending, seq, res.SkippedModules); err != nil {
-		return ExportResult{}, err
-	}
-
-	if len(res.SkippedModules) > 0 {
-		log.Printf("export sequence=%d skipped %d unfetchable module(s), left pending for retry: %s",
-			seq, len(res.SkippedModules), summarizeFailures(res.SkippedModules))
-	}
-
-	return res, nil
-}
-
-// pendingForExport snapshots the approved, not-yet-exported records and the
-// sequence number the next bundle would use.
-func (s *LowServer) pendingForExport() ([]RequestRecord, int64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var pending []RequestRecord
-	for _, rec := range s.state.Requests {
-		if rec.Approved && rec.ExportedSeq == 0 {
-			pending = append(pending, *rec)
-		}
-	}
-	seq := s.state.Sequences[streamGo]
-	if seq < 1 {
-		seq = 1
-	}
-	return pending, seq
-}
-
-// commitExport marks the modules that actually made it into the bundle as
-// exported at seq and advances the sequence counter. Modules in skipped failed
-// to fetch and are left pending, so a later export retries them and they never
-// block the ones that did succeed.
-func (s *LowServer) commitExport(pending []RequestRecord, seq int64, skipped []FailedModule) error {
-	skippedKeys := make(map[string]bool, len(skipped))
-	for _, f := range skipped {
-		skippedKeys[f.Module+"@"+f.Version] = true
-	}
-
-	now := time.Now().UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, rec := range pending {
-		key := rec.Module + "@" + rec.Version
-		if skippedKeys[key] {
-			continue
-		}
-		if cur := s.state.Requests[key]; cur != nil && cur.ExportedSeq == 0 {
-			cur.ExportedSeq = seq
-			cur.ExportedAt = now
-		}
-	}
-	if s.state.Sequences[streamGo] <= seq {
-		s.state.Sequences[streamGo] = seq + 1
-	}
-	return s.saveStateLocked()
 }
 
 // GoCollectRequest is the body of POST /admin/go/collect.
@@ -897,16 +675,17 @@ func (s *LowServer) HandleGoCollect(ctx context.Context, r *http.Request) (Expor
 	return s.CollectGo(ctx, req)
 }
 
-// CollectGo fetches Go modules on demand and writes them into a signed bundle
-// on the shared ArtiGate sequence stream. This complements the pull-through
-// proxy for cases where the set of modules is known ahead of time, mirroring
-// the Python collector. The modules can come from an explicit list (optionally
-// with their transitive graph) or from a project's own go.mod.
+// CollectGo fetches Go modules on demand and writes them into a signed bundle on
+// the go stream, mirroring the Python collector. The modules can come from an
+// explicit list (optionally with their transitive graph) or from a project's own
+// go.mod.
 func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (ExportResult, error) {
-	// Hold exportMu for the whole allocate->write->commit so a concurrent
-	// exporter cannot claim the same sequence number between peek and commit.
-	s.exportMu.Lock()
-	defer s.exportMu.Unlock()
+	// Hold the go stream's lock for the whole allocate->write->commit so a
+	// concurrent go exporter cannot claim the same sequence number between peek
+	// and commit. Other streams export in parallel.
+	mu := s.streamLock(streamGo)
+	mu.Lock()
+	defer mu.Unlock()
 
 	records, err := s.resolveGoCollectRecords(ctx, req)
 	if err != nil {
@@ -1084,9 +863,24 @@ func parseGoModDownload(out []byte) ([]RequestRecord, error) {
 	return records, nil
 }
 
+// streamLock returns the per-stream export lock, creating it on first use.
+// Holding it serializes a stream's allocate -> write -> commit; different
+// streams get different locks and so export (fetch, write) concurrently.
+func (s *LowServer) streamLock(stream string) *sync.Mutex {
+	s.streamLocksMu.Lock()
+	defer s.streamLocksMu.Unlock()
+	mu, ok := s.streamLocks[stream]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.streamLocks[stream] = mu
+	}
+	return mu
+}
+
 // peekSequence returns the stream's next sequence number without advancing it.
-// Callers must hold exportMu across the matching peek/write/commitSequence so
-// two exporters cannot observe and write the same sequence.
+// Callers must hold the stream's streamLock across the matching
+// peek/write/commitSequence so two exporters cannot observe and write the same
+// sequence.
 func (s *LowServer) peekSequence(stream string) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1320,7 +1114,7 @@ type ReexportResult struct {
 	Failed          []string       `json:"failed,omitempty"`
 }
 
-func (s *LowServer) HandleReexportRequest(ctx context.Context, r *http.Request) (ReexportResult, error) {
+func (s *LowServer) HandleReexportRequest(r *http.Request) (ReexportResult, error) {
 	stream, spec, err := reexportSpecFromRequest(r)
 	if err != nil {
 		return ReexportResult{}, err
@@ -1332,7 +1126,7 @@ func (s *LowServer) HandleReexportRequest(ctx context.Context, r *http.Request) 
 	if err != nil {
 		return ReexportResult{}, err
 	}
-	return s.ReexportSequences(ctx, stream, ranges), nil
+	return s.ReexportSequences(stream, ranges), nil
 }
 
 // reexportSpecFromRequest extracts the stream and sequence spec from either the
@@ -1361,11 +1155,11 @@ func reexportSpecFromRequest(r *http.Request) (stream, spec string, err error) {
 	return orDefault(stream, streamGo), trimmed, nil
 }
 
-func (s *LowServer) ReexportSequences(ctx context.Context, stream string, ranges []SequenceRange) ReexportResult {
+func (s *LowServer) ReexportSequences(stream string, ranges []SequenceRange) ReexportResult {
 	seqs := expandSequenceRanges(ranges, 10000)
 	res := ReexportResult{Stream: stream, RequestedRanges: rangesToStrings(ranges), Sequences: seqs}
 	for _, seq := range seqs {
-		out, err := s.ExportSequence(ctx, stream, seq)
+		out, err := s.ExportSequence(stream, seq)
 		if err != nil {
 			res.Failed = append(res.Failed, fmt.Sprintf("%d: %v", seq, err))
 			continue
@@ -1375,15 +1169,16 @@ func (s *LowServer) ReexportSequences(ctx context.Context, stream string, ranges
 	return res
 }
 
-func (s *LowServer) ExportSequence(ctx context.Context, stream string, seq int64) (ExportResult, error) {
-	// Serialize against the sequence-allocating export paths so a re-export can
-	// never write a bundle file concurrently with a fresh export of the same
-	// sequence.
-	s.exportMu.Lock()
-	defer s.exportMu.Unlock()
+func (s *LowServer) ExportSequence(stream string, seq int64) (ExportResult, error) {
+	// Serialize against the same stream's sequence-allocating export path so a
+	// re-export can never write a bundle file concurrently with a fresh export
+	// of the same sequence. A re-export of one stream does not block others.
+	mu := s.streamLock(stream)
+	mu.Lock()
+	defer mu.Unlock()
 
-	// Prefer replaying the exact archived bundle. This works for every ecosystem
-	// and needs no re-signing.
+	// Replay the exact archived bundle bytes. Every produced bundle is retained
+	// in the archive, so this covers every ecosystem and needs no re-signing.
 	res, ok, err := s.replayArchivedBundle(stream, seq)
 	if err != nil {
 		return ExportResult{}, err
@@ -1391,29 +1186,11 @@ func (s *LowServer) ExportSequence(ctx context.Context, stream string, seq int64
 	if ok {
 		return res, nil
 	}
-
-	// Fallback for legacy go bundles produced before archiving existed:
-	// reconstruct a Go proxy bundle from the recorded module requests.
-	if stream != streamGo {
-		return ExportResult{}, fmt.Errorf("no archived bundle for %s", bundleIDFor(stream, seq))
-	}
-	s.mu.Lock()
-	var records []RequestRecord
-	for _, rec := range s.state.Requests {
-		if rec.ExportedSeq == seq {
-			records = append(records, *rec)
-		}
-	}
-	s.mu.Unlock()
-	if len(records) == 0 {
-		return ExportResult{}, fmt.Errorf("no archived bundle or recorded modules for %s", bundleIDFor(stream, seq))
-	}
-	return s.writeBundle(ctx, streamGo, seq, records)
+	return ExportResult{}, fmt.Errorf("no archived bundle for %s", bundleIDFor(stream, seq))
 }
 
 type LowBundleStatus struct {
-	Streams        []LowStreamStatus `json:"streams"`
-	PendingModules int               `json:"pending_modules"`
+	Streams []LowStreamStatus `json:"streams"`
 }
 
 type LowStreamStatus struct {
@@ -1426,6 +1203,9 @@ type ExportedSequenceInfo struct {
 	Sequence     int64  `json:"sequence"`
 	BundleID     string `json:"bundle_id"`
 	FilesPresent bool   `json:"files_present"`
+	// SizeBytes is the bundle's total on-diode size (archive + manifest +
+	// signature), taken from the persistent archive copy.
+	SizeBytes int64 `json:"size_bytes"`
 }
 
 // Stream returns the export status for the named stream, or a zero value with
@@ -1441,12 +1221,6 @@ func (s LowBundleStatus) Stream(name string) LowStreamStatus {
 
 func (s *LowServer) BundleStatus() LowBundleStatus {
 	s.mu.Lock()
-	pending := 0
-	for _, rec := range s.state.Requests {
-		if rec.Approved && rec.ExportedSeq == 0 {
-			pending++
-		}
-	}
 	next := make(map[string]int64, len(s.state.Sequences))
 	for stream, n := range s.state.Sequences {
 		next[stream] = n
@@ -1472,7 +1246,7 @@ func (s *LowServer) BundleStatus() LowBundleStatus {
 	}
 	sort.Strings(streams)
 
-	out := LowBundleStatus{PendingModules: pending}
+	out := LowBundleStatus{}
 	for _, stream := range streams {
 		n := next[stream]
 		if n < 1 {
@@ -1485,6 +1259,7 @@ func (s *LowServer) BundleStatus() LowBundleStatus {
 				Sequence:     seq,
 				BundleID:     id,
 				FilesPresent: bundleCompleteInDir(s.cfg.ExportDir, id),
+				SizeBytes:    bundleSizeInDir(s.bundleArchiveDir(), id),
 			})
 		}
 		out.Streams = append(out.Streams, ss)
@@ -3025,6 +2800,18 @@ func bundleCompleteInDir(dir, bundleID string) bool {
 		}
 	}
 	return true
+}
+
+// bundleSizeInDir returns the total size in bytes of the bundle's files present
+// in dir (archive + manifest + signature); missing files simply contribute 0.
+func bundleSizeInDir(dir, bundleID string) int64 {
+	var total int64
+	for _, suffix := range bundleSuffixes() {
+		if fi, err := os.Stat(filepath.Join(dir, bundleID+suffix)); err == nil {
+			total += fi.Size()
+		}
+	}
+	return total
 }
 
 // findBundleStreams groups the manifest files in dir by stream, returning each

@@ -454,10 +454,12 @@ func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (
 	if err != nil {
 		return ExportResult{}, err
 	}
-	// Hold exportMu for the whole resolve->write->commit so a concurrent
-	// exporter cannot claim the same sequence number between peek and commit.
-	s.exportMu.Lock()
-	defer s.exportMu.Unlock()
+	// Hold only the maven stream's lock for the whole resolve->write->commit so
+	// a concurrent maven exporter cannot claim the same sequence number between
+	// peek and commit. Other streams export in parallel.
+	mu := s.streamLock(streamMaven)
+	mu.Lock()
+	defer mu.Unlock()
 
 	stagingBase := filepath.Join(s.cfg.Root, "maven", "staging")
 	if err := os.MkdirAll(stagingBase, 0o755); err != nil {

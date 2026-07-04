@@ -375,10 +375,12 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 	if err := validatePythonRequest(req); err != nil {
 		return ExportResult{}, err
 	}
-	// Hold exportMu for the whole download->write->commit so a concurrent
-	// exporter cannot claim the same sequence number between peek and commit.
-	s.exportMu.Lock()
-	defer s.exportMu.Unlock()
+	// Hold only the python stream's lock for the whole download->write->commit
+	// so a concurrent python exporter cannot claim the same sequence number
+	// between peek and commit. Other streams export in parallel.
+	mu := s.streamLock(streamPython)
+	mu.Lock()
+	defer mu.Unlock()
 
 	stagingBase := filepath.Join(s.cfg.Root, "python", "staging")
 	if err := os.MkdirAll(stagingBase, 0o755); err != nil {

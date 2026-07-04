@@ -9,7 +9,7 @@ environments.
 
 It contains two modes in one binary:
 
-- `low`: internet-side GOPROXY pull-through server that can fetch from `proxy.golang.org`, `direct` VCS/GitHub, or private GitHub repos using normal `go`/`git` credentials. It records concrete `module@version` requests and exports signed bundle files.
+- `low`: internet-side exporter. On request — a `go.mod`/module list, a Python requirements list, Maven coordinates, an APT source, or a `.repo` file — it fetches the artifacts from upstream (`proxy.golang.org`, `direct` VCS/GitHub, PyPI, Maven, distro mirrors) using normal `go`/`git`/`pip`/`mvn` credentials and writes signed, numbered bundle files. It is not a module proxy; every ecosystem is driven the same way, by submitting a spec.
 - `high`: air-gapped, read-only GOPROXY server. It imports signed bundles in sequence — independently per ecosystem stream — verifies all hashes, quarantines out-of-order future bundles until gaps are filled, and serves only complete module versions.
 
 The implementation intentionally uses only the Go standard library. The low side invokes the installed `go` command to produce canonical `.info`, `.mod`, and `.zip` files in the normal Go module cache layout.
@@ -88,15 +88,13 @@ Keep the private key only on the low side. Install the public key on the high si
   --private-key /etc/artigate/low.ed25519 \
   --upstream-goproxy https://proxy.golang.org,direct \
   --goprivate github.com/your-org/* \
-  --gonosumdb github.com/your-org/* \
-  --export-interval 60s
+  --gonosumdb github.com/your-org/*
 ```
 
-Low-side Go clients:
-
-```bash
-go env -w GOPROXY=http://low-proxy:8080,off
-```
+The low side is **not** a module proxy — nothing points a `go` client at it.
+Mirror Go modules by uploading a project's `go.mod` or POSTing a module list to
+`/admin/go/collect` (below); `--upstream-goproxy` is only where the low side
+itself fetches those modules from.
 
 ### Newer Go toolchains
 
@@ -108,7 +106,7 @@ example `--gotoolchain local` to pin the installed toolchain (fetching a module
 that needs a newer one then fails with `requires go >= X`), or a specific version
 like `--gotoolchain go1.25.0`.
 
-For private GitHub modules, configure the service user's `git`/SSH credentials before starting the proxy, for example:
+For private GitHub modules, configure the service user's `git`/SSH credentials before starting the exporter, for example:
 
 ```bash
 git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
@@ -128,19 +126,12 @@ go-bundle-000001.manifest.json.sig
 
 The implementation uses `.tar.gz` because it is in the Go standard library. If you want `.tar.zst`, replace the gzip writer/reader with a zstd package such as `klauspost/compress/zstd`.
 
-You can force an export immediately:
-
-```bash
-curl -XPOST http://127.0.0.1:8080/admin/export
-```
-
 ### Collecting an explicit module list
 
-Besides the demand-driven pull-through cache (where a `go` client hitting the
-proxy is what triggers a fetch), the low side can fetch an explicit list of
-modules on demand and export them in one bundle — useful when you already know
-what an air-gapped project needs. Each entry is `module@version`, or `module` /
-`module@latest` to resolve the latest version:
+The low side fetches an explicit list of modules on demand and exports them in
+one bundle — useful when you already know what an air-gapped project needs. Each
+entry is `module@version`, or `module` / `module@latest` to resolve the latest
+version:
 
 ```bash
 curl -XPOST http://127.0.0.1:8080/admin/go/collect \
@@ -222,14 +213,14 @@ curl -XPOST http://127.0.0.1:8080/admin/reexport \
   -d '{"stream":"python","sequences":"42,45-47"}'
 ```
 
-Every produced bundle (Go pull-through, `/admin/go/collect`, `/admin/python/collect`, Maven, APT, or RPM) is retained in a persistent archive under `<root>/bundles/`, grouped by stream. Re-export replays the exact archived signed files back into the export directory, so it works uniformly for **every ecosystem** — no re-signing and no dependency on the original recorded requests. (Legacy Go bundles produced before archiving existed fall back to reconstructing the Go bundle from recorded module requests.)
+Every produced bundle (`/admin/go/collect`, `/admin/python/collect`, Maven, APT, or RPM) is retained in a persistent archive under `<root>/bundles/`, grouped by stream. Re-export replays the exact archived signed files back into the export directory, so it works uniformly for **every ecosystem** — no re-signing and no dependency on the original request.
 
 ### Web dashboard
 
 The low side serves a self-contained web UI at its root:
 
 ```text
-http://low-proxy:8080/
+http://low-exporter:8080/
 ```
 
 It provides a form to **re-transmit a bundle number or range** the high side is
@@ -395,7 +386,7 @@ A module version is visible only if these exist and a `.complete` marker has bee
 
 `@v/list` returns complete non-pseudo versions only.
 
-`@latest` means "latest imported and approved in this mirror", selected as:
+`@latest` means "latest version imported into this mirror", selected as:
 
 1. highest release version
 2. else highest pre-release version
@@ -716,6 +707,7 @@ Use ArtiGate's high-side key. If the mirror is unsigned, set `repo_gpgcheck=0`
 - It uses JSON state files to keep the implementation dependency-free. Use SQLite/PostgreSQL if you need multiple writers or a larger approval workflow.
 - Admin endpoints are unauthenticated. Bind to localhost or protect them.
 - High-side gaps and out-of-order future bundles are quarantined, not rejected. Check `/admin/missing` and re-export the requested range from the low side with `/admin/reexport`.
+- Low-side exports are serialized **per stream**, not globally: a long-running mirror (a large APT or RPM repo, say) does not block collects for other ecosystems (Go, Python, Maven), which run concurrently. Two collects on the *same* stream still serialize, so that stream's bundle sequence numbers stay unique and gap-free.
 - Low-side fetching depends on the installed Go toolchain and Git/VCS tools, on `pip` (Python), on `mvn` + a JDK (Java/Maven), on `gpgv` (verifying upstream APT/RPM repositories), and on `xz` (some RPM indexes). APT `.deb` and RPM `.rpm` files are fetched over plain HTTP(S) with the Go standard library.
 - High side never invokes `go`, `pip`, or `mvn` and has no upstream fetcher; it uses `gpg` only to sign regenerated APT/RPM repositories when `--apt-gpg-key`/`--rpm-gpg-key` is set.
 - Java support mirrors release Maven artifacts only; SNAPSHOT and dynamic/range versions are rejected. SBT/Ivy-only repositories and the Gradle Plugin Portal are not specially handled beyond their Maven-compatible endpoints.

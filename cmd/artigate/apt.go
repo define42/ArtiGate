@@ -187,8 +187,11 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 	if err != nil {
 		return ExportResult{}, err
 	}
-	s.exportMu.Lock()
-	defer s.exportMu.Unlock()
+	// Hold only the apt stream's lock across the whole mirror->write->commit, so
+	// a long APT fetch does not block Python/Go/Maven/RPM collects.
+	mu := s.streamLock(streamApt)
+	mu.Lock()
+	defer mu.Unlock()
 
 	stagingBase := filepath.Join(s.cfg.Root, "apt", "staging")
 	if err := os.MkdirAll(stagingBase, 0o755); err != nil {

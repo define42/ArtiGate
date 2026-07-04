@@ -656,36 +656,32 @@ func TestReexportSpecFromRequest(t *testing.T) {
 	}
 }
 
-func TestLowServerRecordAndStatus(t *testing.T) {
+// TestLowServerSequencePersists checks the status defaults (every known stream
+// starts at sequence 1) and that an advanced per-stream counter survives a
+// restart over the same root.
+func TestLowServerSequencePersists(t *testing.T) {
 	_, priv := newTestKeys(t)
 	root := t.TempDir()
-	cfg := LowConfig{Root: root, ExportDir: filepath.Join(t.TempDir(), "out"), AutoApprove: true}
+	cfg := LowConfig{Root: root, ExportDir: filepath.Join(t.TempDir(), "out")}
 
 	ls, err := NewLowServer(cfg, priv)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	ls.recordRequest("github.com/foo/bar", "v1.0.0")
-	ls.recordRequest("github.com/foo/bar", "v1.0.0") // duplicate collapses
-	ls.recordRequest("github.com/baz/qux", "v2.0.0")
-	ls.recordRequest("ignored", "latest") // never recorded
-
-	status := ls.BundleStatus()
-	if status.Stream(streamGo).NextSequence != 1 {
-		t.Errorf("go NextSequence = %d, want 1", status.Stream(streamGo).NextSequence)
-	}
-	if status.PendingModules != 2 {
-		t.Errorf("PendingModules = %d, want 2", status.PendingModules)
+	if got := ls.BundleStatus().Stream(streamGo).NextSequence; got != 1 {
+		t.Errorf("go NextSequence = %d, want 1", got)
 	}
 
-	// A fresh server over the same root reloads persisted state.
+	// Advancing a stream's counter persists across a reload.
+	if err := ls.commitSequence(streamGo, 1); err != nil {
+		t.Fatal(err)
+	}
 	reloaded, err := NewLowServer(cfg, priv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reloaded.BundleStatus().PendingModules; got != 2 {
-		t.Errorf("reloaded PendingModules = %d, want 2", got)
+	if got := reloaded.BundleStatus().Stream(streamGo).NextSequence; got != 2 {
+		t.Errorf("reloaded go NextSequence = %d, want 2", got)
 	}
 }
 

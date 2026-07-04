@@ -211,8 +211,11 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	if err != nil {
 		return ExportResult{}, err
 	}
-	s.exportMu.Lock()
-	defer s.exportMu.Unlock()
+	// Hold only the rpm stream's lock across the whole mirror->write->commit, so
+	// a long RPM fetch does not block Python/Go/Maven/APT collects.
+	mu := s.streamLock(streamRpm)
+	mu.Lock()
+	defer mu.Unlock()
 
 	stagingBase := filepath.Join(s.cfg.Root, "rpm", "staging")
 	if err := os.MkdirAll(stagingBase, 0o755); err != nil {
