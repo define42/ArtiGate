@@ -95,6 +95,45 @@ func buildModuleFiles(t *testing.T, src string, m moduleSpec) (ManifestMod, []Ma
 	return ManifestMod{Module: m.module, Version: m.version, Files: modFiles}, files
 }
 
+// writeSignedStreamBundle writes a valid signed bundle tagged for an arbitrary
+// stream. The payload is a single go-module unit keyed off the bundle ID so it
+// never collides across streams or sequences; the stream field, not the payload
+// type, is what drives per-stream sequencing, so this is enough to exercise
+// per-stream import isolation without a real adapter.
+func writeSignedStreamBundle(t *testing.T, landing string, priv ed25519.PrivateKey, stream string, seq, prevSeq int64) {
+	t.Helper()
+	bundleID := bundleIDFor(stream, seq)
+	src := t.TempDir()
+	mod, files := buildModuleFiles(t, src, moduleSpec{module: "example.com/" + bundleID, version: "v1.0.0"})
+
+	manifest := BundleManifest{
+		Type:             manifestType,
+		Stream:           stream,
+		Sequence:         seq,
+		PreviousSequence: prevSeq,
+		Created:          time.Unix(0, 0).UTC(),
+		Generator:        "test",
+		BundleID:         bundleID,
+		Modules:          []ManifestMod{mod},
+		Files:            files,
+	}
+	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := ed25519.Sign(priv, manifestBytes)
+
+	if err := os.MkdirAll(landing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := createTarGzAtomic(filepath.Join(landing, bundleID+".tar.gz"), src, files); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(landing, bundleID+".manifest.json"), manifestBytes)
+	writeFile(t, filepath.Join(landing, bundleID+".manifest.json.sig"),
+		[]byte(base64.StdEncoding.EncodeToString(sig)+"\n"))
+}
+
 func writeFile(t *testing.T, p string, b []byte) {
 	t.Helper()
 	if err := os.WriteFile(p, b, 0o644); err != nil {
@@ -148,7 +187,7 @@ func TestHighServerImportAndServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ImportNext: %v", err)
 	}
-	if !res.Imported || res.Sequence != 1 || res.Modules != 1 {
+	if !res.Imported || len(res.ImportedBundles) != 1 || res.ImportedBundles[0] != "go-bundle-000001" {
 		t.Fatalf("unexpected import result: %+v", res)
 	}
 	if !hs.isComplete("github.com/foo/bar", "v1.0.0") {
@@ -210,13 +249,14 @@ func TestHighServerQuarantineThenDrain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.BlockingMissing != 2 {
-		t.Errorf("BlockingMissing = %d, want 2", status.BlockingMissing)
+	st := status.Stream(streamGo)
+	if st.BlockingMissing != 2 {
+		t.Errorf("BlockingMissing = %d, want 2", st.BlockingMissing)
 	}
-	if len(status.QuarantinedSequences) != 1 || status.QuarantinedSequences[0] != 3 {
-		t.Errorf("QuarantinedSequences = %v, want [3]", status.QuarantinedSequences)
+	if len(st.QuarantinedSequences) != 1 || st.QuarantinedSequences[0] != 3 {
+		t.Errorf("QuarantinedSequences = %v, want [3]", st.QuarantinedSequences)
 	}
-	if got := strings.Join(status.MissingRanges, ","); got != "2" {
+	if got := strings.Join(st.MissingRanges, ","); got != "2" {
 		t.Errorf("MissingRanges = %q, want \"2\"", got)
 	}
 
@@ -226,14 +266,71 @@ func TestHighServerQuarantineThenDrain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Sequence != 3 {
-		t.Errorf("final imported sequence = %d, want 3", res.Sequence)
+	if !res.Imported || res.ImportedBundles[len(res.ImportedBundles)-1] != "go-bundle-000003" {
+		t.Errorf("expected drain through go-bundle-000003, got %+v", res)
 	}
 	for _, v := range []string{"v1.0.0", "v2.0.0", "v3.0.0"} {
 		if !hs.isComplete("m", v) {
 			t.Errorf("m@%s should be complete", v)
 		}
 	}
+}
+
+func mustImportNext(t *testing.T, hs *HighServer) ImportResult {
+	t.Helper()
+	res, err := hs.ImportNext()
+	if err != nil {
+		t.Fatalf("ImportNext: %v", err)
+	}
+	return res
+}
+
+// assertStreamProgress checks a stream's last-imported sequence and the bundle
+// it is blocked on (0 = not blocked).
+func assertStreamProgress(t *testing.T, hs *HighServer, stream string, wantLast, wantBlocking int64) {
+	t.Helper()
+	status, err := hs.ImportStatus()
+	if err != nil {
+		t.Fatalf("ImportStatus: %v", err)
+	}
+	st := status.Stream(stream)
+	if st.LastImportedSequence != wantLast {
+		t.Errorf("%s last imported = %d, want %d", stream, st.LastImportedSequence, wantLast)
+	}
+	if st.BlockingMissing != wantBlocking {
+		t.Errorf("%s blocking = %d, want %d", stream, st.BlockingMissing, wantBlocking)
+	}
+}
+
+// TestHighServerPerStreamIsolation proves each ecosystem stream sequences and
+// imports independently: a gap in one stream never blocks another. The go stream
+// is missing bundle 1 (bundle 2 arrives early and is quarantined), yet the
+// python stream imports its bundle 1 normally; filling the go gap later drains
+// both go bundles (proving bundle 2 was retained in quarantine) without
+// disturbing python.
+func TestHighServerPerStreamIsolation(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+
+	writeSignedStreamBundle(t, hs.cfg.Landing, priv, streamGo, 2, 1)     // go: gap, bundle 1 missing
+	writeSignedStreamBundle(t, hs.cfg.Landing, priv, streamPython, 1, 0) // python: in order
+
+	res := mustImportNext(t, hs)
+	if !res.Imported || len(res.ImportedBundles) != 1 || res.ImportedBundles[0] != "python-bundle-000001" {
+		t.Fatalf("expected only python-bundle-000001 imported, got %+v", res)
+	}
+	// python advanced; go stays blocked on its missing bundle 1 — streams isolated.
+	assertStreamProgress(t, hs, streamPython, 1, 0)
+	assertStreamProgress(t, hs, streamGo, 0, 1)
+
+	// Fill the go gap: bundles 1 and 2 drain, python is untouched.
+	writeSignedStreamBundle(t, hs.cfg.Landing, priv, streamGo, 1, 0)
+	res = mustImportNext(t, hs)
+	if len(res.ImportedBundles) != 2 {
+		t.Fatalf("expected go bundles 1 and 2 to drain, got %+v", res)
+	}
+	assertStreamProgress(t, hs, streamGo, 2, 0)
+	assertStreamProgress(t, hs, streamPython, 1, 0)
 }
 
 func TestHighServerRejectsTamperedManifest(t *testing.T) {
@@ -548,7 +645,7 @@ func TestReexportSpecFromRequest(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		got, err := reexportSpecFromRequest(tt.req)
+		_, got, err := reexportSpecFromRequest(tt.req)
 		if err != nil {
 			t.Errorf("%s: %v", tt.name, err)
 			continue
@@ -575,8 +672,8 @@ func TestLowServerRecordAndStatus(t *testing.T) {
 	ls.recordRequest("ignored", "latest") // never recorded
 
 	status := ls.BundleStatus()
-	if status.NextSequence != 1 {
-		t.Errorf("NextSequence = %d, want 1", status.NextSequence)
+	if status.Stream(streamGo).NextSequence != 1 {
+		t.Errorf("go NextSequence = %d, want 1", status.Stream(streamGo).NextSequence)
 	}
 	if status.PendingModules != 2 {
 		t.Errorf("PendingModules = %d, want 2", status.PendingModules)

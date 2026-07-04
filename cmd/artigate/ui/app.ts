@@ -3,7 +3,8 @@
 // only that node's immediate children, so nothing large is transferred or
 // rendered up front. The top menu switches between the Go and Python trees.
 
-interface ImportStatus {
+interface StreamStatus {
+  stream: string;
   last_imported_sequence: number;
   next_expected_sequence: number;
   highest_seen_sequence: number;
@@ -11,6 +12,12 @@ interface ImportStatus {
   missing_ranges: string[];
   quarantined_sequences: number[];
   ready_to_import: boolean;
+}
+
+// Each ecosystem is an independently sequenced stream: a gap in one never blocks
+// the others, so the status is reported per stream rather than as one counter.
+interface ImportStatus {
+  streams: StreamStatus[];
 }
 
 interface Overview {
@@ -87,26 +94,74 @@ function unitFor(kind: string): string {
   }
 }
 
+const STREAM_LABELS: Record<string, string> = {
+  go: "Go",
+  python: "Python",
+  maven: "Maven",
+  apt: "APT",
+  rpm: "RPM",
+};
+
+function streamLabel(name: string): string {
+  return STREAM_LABELS[name] ?? name;
+}
+
 function renderStatus(status: ImportStatus): void {
   const banner = byId("banner");
-  const missing = status.missing_ranges ?? [];
-  const quarantined = status.quarantined_sequences ?? [];
+  const streams = status.streams ?? [];
+  const blocked = streams.filter((s) => (s.missing_ranges ?? []).length > 0);
 
-  if (missing.length > 0) {
+  if (streams.length === 0) {
+    banner.className = "banner ok";
+    banner.textContent = "No bundles imported yet.";
+  } else if (blocked.length > 0) {
     banner.className = "banner warn";
+    const names = blocked.map((s) => streamLabel(s.stream)).join(", ");
     banner.innerHTML =
-      `&#9888; Missing bundles: ${esc(missing.join(", "))} ` +
-      `&mdash; waiting for these before advancing past #${esc(status.next_expected_sequence)}`;
+      `&#9888; Waiting on missing bundles in: ${esc(names)} ` +
+      "&mdash; those streams pause until the gaps arrive; the rest keep importing independently.";
   } else {
     banner.className = "banner ok";
-    banner.textContent = `✓ All bundles imported through #${status.last_imported_sequence}`;
+    banner.textContent = "✓ All streams up to date.";
   }
 
-  byId("meta").innerHTML =
-    `<span>Last imported: <b>#${esc(status.last_imported_sequence)}</b></span>` +
-    `<span>Next expected: <b>#${esc(status.next_expected_sequence)}</b></span>` +
-    `<span>Highest seen: <b>#${esc(status.highest_seen_sequence)}</b></span>` +
-    `<span>Quarantined: <b>${quarantined.length ? esc(quarantined.join(", ")) : "none"}</b></span>`;
+  renderStreamTable(streams);
+}
+
+function statusPill(ok: boolean): string {
+  return ok
+    ? '<span class="pill ok">up to date</span>'
+    : '<span class="pill warn">waiting</span>';
+}
+
+function streamRow(s: StreamStatus): string {
+  const missing = s.missing_ranges ?? [];
+  const quarantined = s.quarantined_sequences ?? [];
+  return (
+    "<tr>" +
+    `<td class="s-name">${esc(streamLabel(s.stream))}</td>` +
+    `<td>#${esc(s.last_imported_sequence)}</td>` +
+    `<td>#${esc(s.next_expected_sequence)}</td>` +
+    `<td>${missing.length ? esc(missing.join(", ")) : "&mdash;"}</td>` +
+    `<td>${quarantined.length ? esc(quarantined.join(", ")) : "&mdash;"}</td>` +
+    `<td>${statusPill(missing.length === 0)}</td>` +
+    "</tr>"
+  );
+}
+
+function renderStreamTable(streams: StreamStatus[]): void {
+  const meta = byId("meta");
+  if (streams.length === 0) {
+    meta.innerHTML = "";
+    return;
+  }
+  meta.innerHTML =
+    '<table class="streams"><thead><tr>' +
+    "<th>Stream</th><th>Last imported</th><th>Next expected</th>" +
+    "<th>Missing</th><th>Quarantined</th><th>Status</th>" +
+    "</tr></thead><tbody>" +
+    streams.map(streamRow).join("") +
+    "</tbody></table>";
 }
 
 async function fetchChildren(view: View, path: string): Promise<TreeNode[]> {

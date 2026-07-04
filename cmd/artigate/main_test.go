@@ -475,25 +475,25 @@ func TestRangesToStrings(t *testing.T) {
 }
 
 func TestBundleIDAndParse(t *testing.T) {
-	if got := bundleIDForSequence(42); got != "go-bundle-000042" {
-		t.Errorf("bundleIDForSequence(42) = %q", got)
+	if got := bundleIDFor(streamGo, 42); got != "go-bundle-000042" {
+		t.Errorf("bundleIDFor(go,42) = %q", got)
 	}
-	if got := bundleIDForSequence(123456); got != "go-bundle-123456" {
-		t.Errorf("bundleIDForSequence(123456) = %q", got)
+	if got := bundleIDFor(streamApt, 1); got != "apt-bundle-000001" {
+		t.Errorf("bundleIDFor(apt,1) = %q", got)
 	}
 
-	seq, ok := parseBundleSeqFromManifestName("go-bundle-000042.manifest.json")
-	if !ok || seq != 42 {
-		t.Errorf("parseBundleSeqFromManifestName = %d, %v; want 42, true", seq, ok)
+	stream, seq, ok := parseBundleName("apt-bundle-000042.manifest.json")
+	if !ok || stream != "apt" || seq != 42 {
+		t.Errorf("parseBundleName = %q,%d,%v; want apt,42,true", stream, seq, ok)
 	}
 
 	// Past 999999 the id grows to seven digits; the name must still round-trip
 	// (a 6-digit-exact match would wedge the import stream at sequence 1e6).
-	if got := bundleIDForSequence(1000000); got != "go-bundle-1000000" {
-		t.Errorf("bundleIDForSequence(1000000) = %q", got)
+	if got := bundleIDFor(streamGo, 1000000); got != "go-bundle-1000000" {
+		t.Errorf("bundleIDFor(go,1000000) = %q", got)
 	}
-	if seq, ok := parseBundleSeqFromManifestName("go-bundle-1000000.manifest.json"); !ok || seq != 1000000 {
-		t.Errorf("parseBundleSeqFromManifestName(7-digit) = %d, %v; want 1000000, true", seq, ok)
+	if _, seq, ok := parseBundleName("go-bundle-1000000.manifest.json"); !ok || seq != 1000000 {
+		t.Errorf("parseBundleName(7-digit) = %d, %v; want 1000000, true", seq, ok)
 	}
 
 	badNames := []string{
@@ -503,54 +503,61 @@ func TestBundleIDAndParse(t *testing.T) {
 		"random.json",
 	}
 	for _, n := range badNames {
-		if _, ok := parseBundleSeqFromManifestName(n); ok {
-			t.Errorf("parseBundleSeqFromManifestName(%q) ok = true, want false", n)
+		if _, _, ok := parseBundleName(n); ok {
+			t.Errorf("parseBundleName(%q) ok = true, want false", n)
 		}
 	}
 }
 
-func TestFindBundleSequencesAndComplete(t *testing.T) {
+func TestFindBundleStreamsAndComplete(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Bundle 1 is complete; bundle 2 is missing its signature.
+	// go bundle 1 is complete; go bundle 2 is missing its signature; an apt
+	// bundle is present in its own stream.
 	write("go-bundle-000001.tar.gz")
 	write("go-bundle-000001.manifest.json")
 	write("go-bundle-000001.manifest.json.sig")
 	write("go-bundle-000002.tar.gz")
 	write("go-bundle-000002.manifest.json")
+	write("apt-bundle-000001.tar.gz")
+	write("apt-bundle-000001.manifest.json")
+	write("apt-bundle-000001.manifest.json.sig")
 	write("unrelated.txt")
 
-	seqs, err := findBundleSequences(dir)
+	byStream, err := findBundleStreams(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(seqs, []int64{1, 2}) {
-		t.Errorf("findBundleSequences = %v, want [1 2]", seqs)
+	if !reflect.DeepEqual(byStream["go"], []int64{1, 2}) {
+		t.Errorf("go stream = %v, want [1 2]", byStream["go"])
+	}
+	if !reflect.DeepEqual(byStream["apt"], []int64{1}) {
+		t.Errorf("apt stream = %v, want [1]", byStream["apt"])
 	}
 
-	complete := filterCompleteSequences(dir, seqs)
+	complete := filterCompleteSequences(dir, "go", byStream["go"])
 	if !reflect.DeepEqual(complete, []int64{1}) {
 		t.Errorf("filterCompleteSequences = %v, want [1]", complete)
 	}
 
 	if !bundleCompleteInDir(dir, "go-bundle-000001") {
-		t.Error("bundle 1 should be complete")
+		t.Error("go bundle 1 should be complete")
 	}
 	if bundleCompleteInDir(dir, "go-bundle-000002") {
-		t.Error("bundle 2 should be incomplete")
+		t.Error("go bundle 2 should be incomplete")
 	}
 }
 
-func TestFindBundleSequencesMissingDir(t *testing.T) {
-	seqs, err := findBundleSequences(filepath.Join(t.TempDir(), "does-not-exist"))
+func TestFindBundleStreamsMissingDir(t *testing.T) {
+	byStream, err := findBundleStreams(filepath.Join(t.TempDir(), "does-not-exist"))
 	if err != nil {
 		t.Fatalf("expected nil error for missing dir, got %v", err)
 	}
-	if seqs != nil {
-		t.Errorf("expected nil seqs for missing dir, got %v", seqs)
+	if len(byStream) != 0 {
+		t.Errorf("expected no streams for missing dir, got %v", byStream)
 	}
 }

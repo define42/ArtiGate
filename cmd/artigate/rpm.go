@@ -244,12 +244,12 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 		return ExportResult{}, errors.New("rpm mirror produced no packages")
 	}
 
-	seq := s.peekSequence()
+	seq := s.peekSequence(streamRpm)
 	res, err := s.writeRpmBundle(seq, stageRoot, files, mirrors)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	if err := s.commitSequence(seq); err != nil {
+	if err := s.commitSequence(streamRpm, seq); err != nil {
 		return ExportResult{}, err
 	}
 	return res, nil
@@ -366,14 +366,15 @@ func readStagedMetadata(stageRoot, mirror, relHref string) ([]byte, error) {
 
 func (s *LowServer) writeRpmBundle(seq int64, stageRoot string, files []ManifestFile, mirrors []RpmMirror) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	bundleID := bundleIDForSequence(seq)
+	id := bundleIDFor(streamRpm, seq)
 	manifest := BundleManifest{
 		Type:             manifestType,
+		Stream:           streamRpm,
 		Sequence:         seq,
 		PreviousSequence: seq - 1,
 		Created:          time.Now().UTC(),
 		Generator:        hostnameOrDefault(),
-		BundleID:         bundleID,
+		BundleID:         id,
 		Ecosystems:       []string{"rpm"},
 		Rpm:              &RpmManifest{Mirrors: mirrors},
 		Files:            files,
@@ -383,14 +384,14 @@ func (s *LowServer) writeRpmBundle(seq int64, stageRoot string, files []Manifest
 		return ExportResult{}, err
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(bundleID, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(id, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 	total := 0
 	for _, m := range mirrors {
 		total += len(m.Packages)
 	}
-	return ExportResult{Sequence: seq, ExportedModules: total, BundleID: bundleID}, nil
+	return ExportResult{Stream: streamRpm, Sequence: seq, ExportedModules: total, BundleID: id}, nil
 }
 
 // -----------------------------------------------------------------------------

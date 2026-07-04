@@ -408,12 +408,12 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 
 	// Peek/commit the sequence around the write so a failed collection never
 	// burns a sequence number and leaves a gap the high side would block on.
-	seq := s.peekSequence()
+	seq := s.peekSequence(streamPython)
 	res, err := s.writePythonBundle(seq, stageRoot, files, projects)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	if err := s.commitSequence(seq); err != nil {
+	if err := s.commitSequence(streamPython, seq); err != nil {
 		return ExportResult{}, err
 	}
 	return res, nil
@@ -462,14 +462,15 @@ func collectPythonDist(dest string) ([]ManifestFile, []PythonProject, error) {
 
 func (s *LowServer) writePythonBundle(seq int64, stageRoot string, files []ManifestFile, projects []PythonProject) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	bundleID := bundleIDForSequence(seq)
+	id := bundleIDFor(streamPython, seq)
 	manifest := BundleManifest{
 		Type:             manifestType,
+		Stream:           streamPython,
 		Sequence:         seq,
 		PreviousSequence: seq - 1,
 		Created:          time.Now().UTC(),
 		Generator:        hostnameOrDefault(),
-		BundleID:         bundleID,
+		BundleID:         id,
 		Ecosystems:       []string{"python"},
 		Python:           &PythonManifest{Projects: projects},
 		Files:            files,
@@ -479,8 +480,8 @@ func (s *LowServer) writePythonBundle(seq int64, stageRoot string, files []Manif
 		return ExportResult{}, err
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(bundleID, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(id, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
-	return ExportResult{Sequence: seq, ExportedModules: len(projects), BundleID: bundleID}, nil
+	return ExportResult{Stream: streamPython, Sequence: seq, ExportedModules: len(projects), BundleID: id}, nil
 }

@@ -43,6 +43,23 @@ const (
 	stateFileMode = 0o600
 )
 
+// Bundle streams. Each ecosystem is its own independently-sequenced stream, so a
+// lost or out-of-order bundle in one stream never blocks the others. The "go"
+// stream keeps the pre-multi-stream numbering for backward compatibility.
+const (
+	streamGo     = "go"
+	streamPython = "python"
+	streamMaven  = "maven"
+	streamApt    = "apt"
+	streamRpm    = "rpm"
+)
+
+// knownStreams is the set of built-in ecosystem streams, shown in the low-side
+// status even before anything has been exported.
+func knownStreams() []string {
+	return []string{streamGo, streamPython, streamMaven, streamApt, streamRpm}
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
 	if len(os.Args) < 2 {
@@ -108,6 +125,7 @@ Useful admin endpoints:
 
 type BundleManifest struct {
 	Type             string          `json:"type"`
+	Stream           string          `json:"stream,omitempty"`
 	Sequence         int64           `json:"sequence"`
 	PreviousSequence int64           `json:"previous_sequence"`
 	Created          time.Time       `json:"created"`
@@ -234,7 +252,11 @@ type LowConfig struct {
 }
 
 type LowState struct {
-	NextSequence int64                     `json:"next_sequence"`
+	// Sequences maps each stream to its next sequence number.
+	Sequences map[string]int64 `json:"sequences"`
+	// NextSequence is the legacy single-stream counter, migrated into
+	// Sequences["go"] on load.
+	NextSequence int64                     `json:"next_sequence,omitempty"`
 	Requests     map[string]*RequestRecord `json:"requests"`
 }
 
@@ -330,7 +352,7 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 		downloadDir: dl,
 		gopath:      gopath,
 		statePath:   filepath.Join(cfg.Root, "low-state.json"),
-		state:       LowState{NextSequence: 1, Requests: map[string]*RequestRecord{}},
+		state:       LowState{Sequences: map[string]int64{}, Requests: map[string]*RequestRecord{}},
 	}
 	if err := ls.loadState(); err != nil {
 		return nil, err
@@ -712,8 +734,15 @@ func (s *LowServer) loadState() error {
 	if err := json.Unmarshal(b, &st); err != nil {
 		return err
 	}
-	if st.NextSequence <= 0 {
-		st.NextSequence = 1
+	if st.Sequences == nil {
+		st.Sequences = map[string]int64{}
+	}
+	// Migrate a legacy single-stream counter into the "go" stream.
+	if st.NextSequence > 0 {
+		if _, ok := st.Sequences[streamGo]; !ok {
+			st.Sequences[streamGo] = st.NextSequence
+		}
+		st.NextSequence = 0
 	}
 	if st.Requests == nil {
 		st.Requests = map[string]*RequestRecord{}
@@ -742,6 +771,7 @@ func (s *LowServer) exportLoop() {
 }
 
 type ExportResult struct {
+	Stream          string         `json:"stream,omitempty"`
 	Sequence        int64          `json:"sequence,omitempty"`
 	ExportedModules int            `json:"exported_modules"`
 	BundleID        string         `json:"bundle_id,omitempty"`
@@ -769,7 +799,7 @@ func (s *LowServer) ExportPending(ctx context.Context) (ExportResult, error) {
 		return ExportResult{ExportedModules: 0, Message: "no pending modules"}, nil
 	}
 
-	res, err := s.writeBundle(ctx, seq, pending)
+	res, err := s.writeBundle(ctx, streamGo, seq, pending)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -797,7 +827,11 @@ func (s *LowServer) pendingForExport() ([]RequestRecord, int64) {
 			pending = append(pending, *rec)
 		}
 	}
-	return pending, s.state.NextSequence
+	seq := s.state.Sequences[streamGo]
+	if seq < 1 {
+		seq = 1
+	}
+	return pending, seq
 }
 
 // commitExport marks the modules that actually made it into the bundle as
@@ -823,8 +857,8 @@ func (s *LowServer) commitExport(pending []RequestRecord, seq int64, skipped []F
 			cur.ExportedAt = now
 		}
 	}
-	if s.state.NextSequence <= seq {
-		s.state.NextSequence = seq + 1
+	if s.state.Sequences[streamGo] <= seq {
+		s.state.Sequences[streamGo] = seq + 1
 	}
 	return s.saveStateLocked()
 }
@@ -884,12 +918,12 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 	// Peek the sequence, fetch+write, and only commit on success so a failed
 	// fetch never burns a sequence number and leaves a gap the high side would
 	// block on.
-	seq := s.peekSequence()
-	res, err := s.writeBundle(ctx, seq, records)
+	seq := s.peekSequence(streamGo)
+	res, err := s.writeBundle(ctx, streamGo, seq, records)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	if err := s.commitSequence(seq); err != nil {
+	if err := s.commitSequence(streamGo, seq); err != nil {
 		return ExportResult{}, err
 	}
 	return res, nil
@@ -1050,13 +1084,13 @@ func parseGoModDownload(out []byte) ([]RequestRecord, error) {
 	return records, nil
 }
 
-// peekSequence returns the next sequence number to write without advancing it.
+// peekSequence returns the stream's next sequence number without advancing it.
 // Callers must hold exportMu across the matching peek/write/commitSequence so
 // two exporters cannot observe and write the same sequence.
-func (s *LowServer) peekSequence() int64 {
+func (s *LowServer) peekSequence(stream string) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	seq := s.state.NextSequence
+	seq := s.state.Sequences[stream]
 	if seq < 1 {
 		seq = 1
 	}
@@ -1065,21 +1099,21 @@ func (s *LowServer) peekSequence() int64 {
 
 // commitSequence advances the stream past seq after a bundle for it has been
 // written successfully.
-func (s *LowServer) commitSequence(seq int64) error {
+func (s *LowServer) commitSequence(stream string, seq int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state.NextSequence <= seq {
-		s.state.NextSequence = seq + 1
+	if s.state.Sequences[stream] <= seq {
+		s.state.Sequences[stream] = seq + 1
 	}
 	return s.saveStateLocked()
 }
 
-func (s *LowServer) writeBundle(ctx context.Context, seq int64, records []RequestRecord) (ExportResult, error) {
+func (s *LowServer) writeBundle(ctx context.Context, stream string, seq int64, records []RequestRecord) (ExportResult, error) {
 	if seq <= 0 {
 		return ExportResult{}, fmt.Errorf("invalid sequence %d", seq)
 	}
 	if len(records) == 0 {
-		return ExportResult{Sequence: seq, ExportedModules: 0, Message: "no modules for sequence"}, nil
+		return ExportResult{Stream: stream, Sequence: seq, ExportedModules: 0, Message: "no modules for sequence"}, nil
 	}
 	sortRequestRecords(records)
 
@@ -1093,14 +1127,15 @@ func (s *LowServer) writeBundle(ctx context.Context, seq int64, records []Reques
 		return ExportResult{}, fmt.Errorf("no modules could be fetched for sequence %d: %s", seq, summarizeFailures(failed))
 	}
 
-	bundleID := bundleIDForSequence(seq)
+	id := bundleIDFor(stream, seq)
 	manifest := BundleManifest{
 		Type:             manifestType,
+		Stream:           stream,
 		Sequence:         seq,
 		PreviousSequence: seq - 1,
 		Created:          time.Now().UTC(),
 		Generator:        hostnameOrDefault(),
-		BundleID:         bundleID,
+		BundleID:         id,
 		Ecosystems:       []string{"go"},
 		Modules:          mods,
 		Files:            files,
@@ -1112,11 +1147,11 @@ func (s *LowServer) writeBundle(ctx context.Context, seq int64, records []Reques
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
 
-	if err := s.writeBundleArtifacts(bundleID, s.downloadDir, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(id, s.downloadDir, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 
-	return ExportResult{Sequence: seq, ExportedModules: len(mods), BundleID: bundleID, SkippedModules: failed}, nil
+	return ExportResult{Stream: stream, Sequence: seq, ExportedModules: len(mods), BundleID: id, SkippedModules: failed}, nil
 }
 
 // summarizeFailures renders a compact, bounded description of skipped modules
@@ -1219,8 +1254,8 @@ func (s *LowServer) archiveBundle(bundleID string) error {
 // directory so it can be transferred again. It works for any ecosystem because
 // it replays the exact signed bytes. The bool reports whether an archived bundle
 // was found.
-func (s *LowServer) replayArchivedBundle(seq int64) (ExportResult, bool, error) {
-	bundleID := bundleIDForSequence(seq)
+func (s *LowServer) replayArchivedBundle(stream string, seq int64) (ExportResult, bool, error) {
+	bundleID := bundleIDFor(stream, seq)
 	archive := s.bundleArchiveDir()
 	if !bundleCompleteInDir(archive, bundleID) {
 		return ExportResult{}, false, nil
@@ -1236,6 +1271,7 @@ func (s *LowServer) replayArchivedBundle(seq int64) (ExportResult, bool, error) 
 		}
 	}
 	res := ExportResult{
+		Stream:          stream,
 		Sequence:        seq,
 		BundleID:        bundleID,
 		ExportedModules: archivedBundleUnitCount(filepath.Join(archive, bundleID+".manifest.json")),
@@ -1272,10 +1308,12 @@ func sortRequestRecords(records []RequestRecord) {
 }
 
 type ReexportHTTPBody struct {
+	Stream    string `json:"stream"`
 	Sequences string `json:"sequences"`
 }
 
 type ReexportResult struct {
+	Stream          string         `json:"stream"`
 	RequestedRanges []string       `json:"requested_ranges"`
 	Sequences       []int64        `json:"sequences"`
 	Reexported      []ExportResult `json:"reexported"`
@@ -1283,46 +1321,51 @@ type ReexportResult struct {
 }
 
 func (s *LowServer) HandleReexportRequest(ctx context.Context, r *http.Request) (ReexportResult, error) {
-	spec, err := reexportSpecFromRequest(r)
+	stream, spec, err := reexportSpecFromRequest(r)
 	if err != nil {
 		return ReexportResult{}, err
 	}
 	if spec == "" {
-		return ReexportResult{}, errors.New("missing sequence range; use ?sequences=42,45-47 or JSON {\"sequences\":\"42,45-47\"}")
+		return ReexportResult{}, errors.New("missing sequence range; use ?stream=go&sequences=42,45-47 or JSON {\"stream\":\"go\",\"sequences\":\"42,45-47\"}")
 	}
 	ranges, err := parseSequenceSpec(spec)
 	if err != nil {
 		return ReexportResult{}, err
 	}
-	return s.ReexportSequences(ctx, ranges), nil
+	return s.ReexportSequences(ctx, stream, ranges), nil
 }
 
-// reexportSpecFromRequest extracts the sequence spec from either the
-// ?sequences= query parameter, a raw request body, or a JSON body.
-func reexportSpecFromRequest(r *http.Request) (string, error) {
-	if spec := strings.TrimSpace(r.URL.Query().Get("sequences")); spec != "" {
-		return spec, nil
+// reexportSpecFromRequest extracts the stream and sequence spec from either the
+// ?stream=/?sequences= query parameters, a raw request body, or a JSON body.
+// The stream defaults to "go" (the legacy stream) when unspecified.
+func reexportSpecFromRequest(r *http.Request) (stream, spec string, err error) {
+	stream = strings.TrimSpace(r.URL.Query().Get("stream"))
+	if q := strings.TrimSpace(r.URL.Query().Get("sequences")); q != "" {
+		return orDefault(stream, streamGo), q, nil
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	trimmed := strings.TrimSpace(string(body))
 	if strings.HasPrefix(trimmed, "{") {
 		var req ReexportHTTPBody
 		if err := json.Unmarshal([]byte(trimmed), &req); err != nil {
-			return "", err
+			return "", "", err
 		}
-		return strings.TrimSpace(req.Sequences), nil
+		if req.Stream != "" {
+			stream = strings.TrimSpace(req.Stream)
+		}
+		return orDefault(stream, streamGo), strings.TrimSpace(req.Sequences), nil
 	}
-	return trimmed, nil
+	return orDefault(stream, streamGo), trimmed, nil
 }
 
-func (s *LowServer) ReexportSequences(ctx context.Context, ranges []SequenceRange) ReexportResult {
+func (s *LowServer) ReexportSequences(ctx context.Context, stream string, ranges []SequenceRange) ReexportResult {
 	seqs := expandSequenceRanges(ranges, 10000)
-	res := ReexportResult{RequestedRanges: rangesToStrings(ranges), Sequences: seqs}
+	res := ReexportResult{Stream: stream, RequestedRanges: rangesToStrings(ranges), Sequences: seqs}
 	for _, seq := range seqs {
-		out, err := s.ExportSequence(ctx, seq)
+		out, err := s.ExportSequence(ctx, stream, seq)
 		if err != nil {
 			res.Failed = append(res.Failed, fmt.Sprintf("%d: %v", seq, err))
 			continue
@@ -1332,7 +1375,7 @@ func (s *LowServer) ReexportSequences(ctx context.Context, ranges []SequenceRang
 	return res
 }
 
-func (s *LowServer) ExportSequence(ctx context.Context, seq int64) (ExportResult, error) {
+func (s *LowServer) ExportSequence(ctx context.Context, stream string, seq int64) (ExportResult, error) {
 	// Serialize against the sequence-allocating export paths so a re-export can
 	// never write a bundle file concurrently with a fresh export of the same
 	// sequence.
@@ -1340,8 +1383,8 @@ func (s *LowServer) ExportSequence(ctx context.Context, seq int64) (ExportResult
 	defer s.exportMu.Unlock()
 
 	// Prefer replaying the exact archived bundle. This works for every ecosystem
-	// (Go proxy, Go collect, Python collect) and needs no re-signing.
-	res, ok, err := s.replayArchivedBundle(seq)
+	// and needs no re-signing.
+	res, ok, err := s.replayArchivedBundle(stream, seq)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -1349,8 +1392,11 @@ func (s *LowServer) ExportSequence(ctx context.Context, seq int64) (ExportResult
 		return res, nil
 	}
 
-	// Fallback for bundles produced before archiving existed: reconstruct a Go
-	// proxy bundle from the recorded module requests.
+	// Fallback for legacy go bundles produced before archiving existed:
+	// reconstruct a Go proxy bundle from the recorded module requests.
+	if stream != streamGo {
+		return ExportResult{}, fmt.Errorf("no archived bundle for %s", bundleIDFor(stream, seq))
+	}
 	s.mu.Lock()
 	var records []RequestRecord
 	for _, rec := range s.state.Requests {
@@ -1360,51 +1406,88 @@ func (s *LowServer) ExportSequence(ctx context.Context, seq int64) (ExportResult
 	}
 	s.mu.Unlock()
 	if len(records) == 0 {
-		return ExportResult{}, fmt.Errorf("no archived bundle or recorded modules for sequence %d", seq)
+		return ExportResult{}, fmt.Errorf("no archived bundle or recorded modules for %s", bundleIDFor(stream, seq))
 	}
-	return s.writeBundle(ctx, seq, records)
+	return s.writeBundle(ctx, streamGo, seq, records)
 }
 
 type LowBundleStatus struct {
+	Streams        []LowStreamStatus `json:"streams"`
+	PendingModules int               `json:"pending_modules"`
+}
+
+type LowStreamStatus struct {
+	Stream            string                 `json:"stream"`
 	NextSequence      int64                  `json:"next_sequence"`
-	PendingModules    int                    `json:"pending_modules"`
 	ExportedSequences []ExportedSequenceInfo `json:"exported_sequences"`
 }
 
 type ExportedSequenceInfo struct {
 	Sequence     int64  `json:"sequence"`
 	BundleID     string `json:"bundle_id"`
-	Modules      int    `json:"modules"`
 	FilesPresent bool   `json:"files_present"`
+}
+
+// Stream returns the export status for the named stream, or a zero value with
+// that name if the stream is unknown.
+func (s LowBundleStatus) Stream(name string) LowStreamStatus {
+	for _, ss := range s.Streams {
+		if ss.Stream == name {
+			return ss
+		}
+	}
+	return LowStreamStatus{Stream: name}
 }
 
 func (s *LowServer) BundleStatus() LowBundleStatus {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	bySeq := map[int64]int{}
 	pending := 0
 	for _, rec := range s.state.Requests {
 		if rec.Approved && rec.ExportedSeq == 0 {
 			pending++
 		}
-		if rec.ExportedSeq > 0 {
-			bySeq[rec.ExportedSeq]++
+	}
+	next := make(map[string]int64, len(s.state.Sequences))
+	for stream, n := range s.state.Sequences {
+		next[stream] = n
+	}
+	s.mu.Unlock()
+
+	// Exported bundles are the ones retained in the persistent archive, grouped
+	// by stream; this covers every ecosystem uniformly.
+	archived, _ := findBundleStreams(s.bundleArchiveDir())
+	names := map[string]bool{}
+	for _, stream := range knownStreams() {
+		names[stream] = true
+	}
+	for stream := range next {
+		names[stream] = true
+	}
+	for stream := range archived {
+		names[stream] = true
+	}
+	streams := make([]string, 0, len(names))
+	for stream := range names {
+		streams = append(streams, stream)
+	}
+	sort.Strings(streams)
+
+	out := LowBundleStatus{PendingModules: pending}
+	for _, stream := range streams {
+		n := next[stream]
+		if n < 1 {
+			n = 1
 		}
-	}
-	seqs := make([]int64, 0, len(bySeq))
-	for seq := range bySeq {
-		seqs = append(seqs, seq)
-	}
-	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
-	out := LowBundleStatus{NextSequence: s.state.NextSequence, PendingModules: pending}
-	for _, seq := range seqs {
-		bundleID := bundleIDForSequence(seq)
-		out.ExportedSequences = append(out.ExportedSequences, ExportedSequenceInfo{
-			Sequence:     seq,
-			BundleID:     bundleID,
-			Modules:      bySeq[seq],
-			FilesPresent: bundleCompleteInDir(s.cfg.ExportDir, bundleID),
-		})
+		ss := LowStreamStatus{Stream: stream, NextSequence: n}
+		for _, seq := range archived[stream] {
+			id := bundleIDFor(stream, seq)
+			ss.ExportedSequences = append(ss.ExportedSequences, ExportedSequenceInfo{
+				Sequence:     seq,
+				BundleID:     id,
+				FilesPresent: bundleCompleteInDir(s.cfg.ExportDir, id),
+			})
+		}
+		out.Streams = append(out.Streams, ss)
 	}
 	return out
 }
@@ -1527,8 +1610,11 @@ type HighConfig struct {
 }
 
 type HighState struct {
-	LastImportedSequence int64     `json:"last_imported_sequence"`
-	LastImportedBundle   string    `json:"last_imported_bundle,omitempty"`
+	// Imported maps each stream to its last-imported sequence number.
+	Imported map[string]int64 `json:"imported"`
+	// LastImportedSequence is the legacy single-stream field, migrated into
+	// Imported["go"] on load.
+	LastImportedSequence int64     `json:"last_imported_sequence,omitempty"`
 	ImportedAt           time.Time `json:"imported_at,omitempty"`
 }
 
@@ -1785,7 +1871,7 @@ func (s *HighServer) isComplete(moduleEsc, versionEsc string) bool {
 func (s *HighServer) loadState() error {
 	b, err := os.ReadFile(s.statePath)
 	if errors.Is(err, os.ErrNotExist) {
-		s.state = HighState{}
+		s.state = HighState{Imported: map[string]int64{}}
 		return s.saveStateLocked()
 	}
 	if err != nil {
@@ -1794,6 +1880,16 @@ func (s *HighServer) loadState() error {
 	var st HighState
 	if err := json.Unmarshal(b, &st); err != nil {
 		return err
+	}
+	if st.Imported == nil {
+		st.Imported = map[string]int64{}
+	}
+	// Migrate a legacy single-stream counter into the "go" stream.
+	if st.LastImportedSequence > 0 {
+		if _, ok := st.Imported[streamGo]; !ok {
+			st.Imported[streamGo] = st.LastImportedSequence
+		}
+		st.LastImportedSequence = 0
 	}
 	s.state = st
 	return nil
@@ -1813,30 +1909,43 @@ func (s *HighServer) importLoop() {
 			continue
 		}
 		if res.Imported {
-			log.Printf("imported bundle sequence=%d modules=%d", res.Sequence, res.Modules)
+			log.Printf("imported bundles: %s", strings.Join(res.ImportedBundles, ", "))
 		}
 	}
 }
 
 type ImportResult struct {
-	Imported             bool     `json:"imported"`
-	Sequence             int64    `json:"sequence,omitempty"`
-	Modules              int      `json:"modules,omitempty"`
-	ImportedSequences    []int64  `json:"imported_sequences,omitempty"`
-	QuarantinedSequences []int64  `json:"quarantined_sequences,omitempty"`
-	MissingRanges        []string `json:"missing_ranges,omitempty"`
-	Message              string   `json:"message,omitempty"`
+	Imported        bool     `json:"imported"`
+	ImportedBundles []string `json:"imported_bundles,omitempty"`
+	Message         string   `json:"message,omitempty"`
 }
 
+// ImportStatus reports import progress per stream; each stream sequences,
+// quarantines, and reports missing bundles independently of the others.
 type ImportStatus struct {
+	Streams []StreamImportStatus `json:"streams"`
+}
+
+type StreamImportStatus struct {
+	Stream               string   `json:"stream"`
 	LastImportedSequence int64    `json:"last_imported_sequence"`
 	NextExpectedSequence int64    `json:"next_expected_sequence"`
 	HighestSeenSequence  int64    `json:"highest_seen_sequence"`
 	BlockingMissing      int64    `json:"blocking_missing_sequence,omitempty"`
 	MissingRanges        []string `json:"missing_ranges"`
-	LandingSequences     []int64  `json:"landing_sequences"`
 	QuarantinedSequences []int64  `json:"quarantined_sequences"`
 	ReadyToImport        bool     `json:"ready_to_import"`
+}
+
+// Stream returns the import status for the named stream, or a zero value with
+// that name if the stream is unknown.
+func (st ImportStatus) Stream(name string) StreamImportStatus {
+	for _, s := range st.Streams {
+		if s.Stream == name {
+			return s
+		}
+	}
+	return StreamImportStatus{Stream: name}
 }
 
 func (s *HighServer) ImportStatus() (ImportStatus, error) {
@@ -1848,51 +1957,83 @@ func (s *HighServer) ImportStatus() (ImportStatus, error) {
 	return s.importStatusLocked()
 }
 
+// knownStreamsLocked returns every stream that has imported state or bundles
+// waiting in landing/quarantine, sorted for stable output.
+func (s *HighServer) knownStreamsLocked() ([]string, error) {
+	set := map[string]bool{}
+	for stream := range s.state.Imported {
+		set[stream] = true
+	}
+	for _, dir := range []string{s.cfg.Landing, s.cfg.Quarantine} {
+		byStream, err := findBundleStreams(dir)
+		if err != nil {
+			return nil, err
+		}
+		for stream := range byStream {
+			set[stream] = true
+		}
+	}
+	streams := make([]string, 0, len(set))
+	for stream := range set {
+		streams = append(streams, stream)
+	}
+	sort.Strings(streams)
+	return streams, nil
+}
+
 func (s *HighServer) ImportNext() (ImportResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var importedSeqs []int64
-	modules := 0
+	if err := s.quarantineFutureBundlesLocked(); err != nil {
+		return ImportResult{}, err
+	}
+	streams, err := s.knownStreamsLocked()
+	if err != nil {
+		return ImportResult{}, err
+	}
 
-	for {
-		if err := s.quarantineFutureBundlesLocked(); err != nil {
-			return ImportResult{}, err
-		}
-
-		next := s.state.LastImportedSequence + 1
-		bundleID := bundleIDForSequence(next)
-		bundleDir, ok := s.findBundleDirLocked(bundleID)
-		if !ok {
-			status, err := s.importStatusLocked()
+	// Drain each stream independently: a gap in one stream never blocks another.
+	var imported []string
+	for _, stream := range streams {
+		for {
+			next := s.state.Imported[stream] + 1
+			id := bundleIDFor(stream, next)
+			bundleDir, ok := s.findBundleDirLocked(id)
+			if !ok {
+				break
+			}
+			manifest, err := s.importBundleFromDirLocked(bundleDir, stream, id, next)
 			if err != nil {
 				return ImportResult{}, err
 			}
-			msg := fmt.Sprintf("waiting for bundle sequence %d", next)
-			if len(status.MissingRanges) > 0 {
-				msg = fmt.Sprintf("%s; missing ranges: %s", msg, strings.Join(status.MissingRanges, ","))
-			}
-			return ImportResult{
-				Imported:             len(importedSeqs) > 0,
-				Sequence:             s.state.LastImportedSequence,
-				Modules:              modules,
-				ImportedSequences:    importedSeqs,
-				QuarantinedSequences: status.QuarantinedSequences,
-				MissingRanges:        status.MissingRanges,
-				Message:              msg,
-			}, nil
+			imported = append(imported, manifest.BundleID)
 		}
-
-		manifest, err := s.importBundleFromDirLocked(bundleDir, bundleID, next)
-		if err != nil {
-			return ImportResult{}, err
-		}
-		importedSeqs = append(importedSeqs, manifest.Sequence)
-		modules += len(manifest.Modules)
 	}
+
+	status, err := s.importStatusLocked()
+	if err != nil {
+		return ImportResult{}, err
+	}
+	return ImportResult{Imported: len(imported) > 0, ImportedBundles: imported, Message: importWaitMessage(status)}, nil
 }
 
-func (s *HighServer) importBundleFromDirLocked(bundleDir, bundleID string, expectedSeq int64) (BundleManifest, error) {
+// importWaitMessage summarizes which streams are blocked on a missing bundle.
+func importWaitMessage(status ImportStatus) string {
+	var waits []string
+	for _, st := range status.Streams {
+		if st.BlockingMissing > 0 {
+			waits = append(waits, fmt.Sprintf("%s waiting for %d (missing %s)",
+				st.Stream, st.BlockingMissing, strings.Join(st.MissingRanges, ",")))
+		}
+	}
+	if len(waits) == 0 {
+		return "all streams up to date"
+	}
+	return strings.Join(waits, "; ")
+}
+
+func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID string, expectedSeq int64) (BundleManifest, error) {
 	manifestPath := filepath.Join(bundleDir, bundleID+".manifest.json")
 	sigPath := filepath.Join(bundleDir, bundleID+".manifest.json.sig")
 	archivePath := filepath.Join(bundleDir, bundleID+".tar.gz")
@@ -1901,7 +2042,7 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, bundleID string, expec
 		return BundleManifest{}, fmt.Errorf("bundle %s incomplete: need archive, manifest and signature", bundleID)
 	}
 
-	manifest, err := s.loadVerifiedManifest(manifestPath, sigPath, bundleID, expectedSeq)
+	manifest, err := s.loadVerifiedManifest(manifestPath, sigPath, stream, bundleID, expectedSeq)
 	if err != nil {
 		return BundleManifest{}, err
 	}
@@ -1920,8 +2061,7 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, bundleID string, expec
 		return BundleManifest{}, err
 	}
 
-	s.state.LastImportedSequence = manifest.Sequence
-	s.state.LastImportedBundle = manifest.BundleID
+	s.state.Imported[stream] = manifest.Sequence
 	s.state.ImportedAt = time.Now().UTC()
 	if err := s.saveStateLocked(); err != nil {
 		return BundleManifest{}, err
@@ -1934,7 +2074,7 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, bundleID string, expec
 
 // loadVerifiedManifest reads the manifest and its detached signature, verifies
 // the signature, and checks the manifest's identifying fields.
-func (s *HighServer) loadVerifiedManifest(manifestPath, sigPath, bundleID string, expectedSeq int64) (BundleManifest, error) {
+func (s *HighServer) loadVerifiedManifest(manifestPath, sigPath, stream, bundleID string, expectedSeq int64) (BundleManifest, error) {
 	manifestBytes, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return BundleManifest{}, err
@@ -1955,22 +2095,28 @@ func (s *HighServer) loadVerifiedManifest(manifestPath, sigPath, bundleID string
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		return BundleManifest{}, err
 	}
-	if err := s.checkManifestFields(manifest, bundleID, expectedSeq); err != nil {
+	if err := s.checkManifestFields(manifest, stream, bundleID, expectedSeq); err != nil {
 		return BundleManifest{}, err
 	}
 	return manifest, nil
 }
 
-// checkManifestFields validates the manifest's type, sequencing, and identity
-// against what the importer expects next.
-func (s *HighServer) checkManifestFields(manifest BundleManifest, bundleID string, expectedSeq int64) error {
+// checkManifestFields validates the manifest's type, stream, sequencing, and
+// identity against what the importer expects next for that stream.
+func (s *HighServer) checkManifestFields(manifest BundleManifest, stream, bundleID string, expectedSeq int64) error {
+	gotStream := manifest.Stream
+	if gotStream == "" {
+		gotStream = streamGo // legacy single-stream manifests
+	}
 	switch {
 	case manifest.Type != manifestType:
 		return fmt.Errorf("wrong manifest type %q", manifest.Type)
+	case gotStream != stream:
+		return fmt.Errorf("stream mismatch: got %q, want %q", gotStream, stream)
 	case manifest.Sequence != expectedSeq:
 		return fmt.Errorf("sequence mismatch: got %d, want %d", manifest.Sequence, expectedSeq)
-	case manifest.PreviousSequence != s.state.LastImportedSequence:
-		return fmt.Errorf("previous sequence mismatch: got %d, want %d", manifest.PreviousSequence, s.state.LastImportedSequence)
+	case manifest.PreviousSequence != s.state.Imported[stream]:
+		return fmt.Errorf("previous sequence mismatch: got %d, want %d", manifest.PreviousSequence, s.state.Imported[stream])
 	case manifest.BundleID != bundleID:
 		return fmt.Errorf("bundle_id mismatch: got %q, want %q", manifest.BundleID, bundleID)
 	}
@@ -1978,27 +2124,35 @@ func (s *HighServer) checkManifestFields(manifest BundleManifest, bundleID strin
 }
 
 func (s *HighServer) quarantineFutureBundlesLocked() error {
-	next := s.state.LastImportedSequence + 1
-	seqs, err := findBundleSequences(s.cfg.Landing)
+	byStream, err := findBundleStreams(s.cfg.Landing)
 	if err != nil {
 		return err
 	}
-	for _, seq := range seqs {
-		bundleID := bundleIDForSequence(seq)
-		if !bundleCompleteInDir(s.cfg.Landing, bundleID) {
-			continue
-		}
-		switch {
-		case seq > next:
-			if err := moveBundleFiles(s.cfg.Landing, s.cfg.Quarantine, bundleID); err != nil {
-				return err
-			}
-		case seq <= s.state.LastImportedSequence:
-			dupDir := filepath.Join(s.cfg.Landing, "duplicates")
-			if err := moveBundleFiles(s.cfg.Landing, dupDir, bundleID); err != nil {
+	for stream, seqs := range byStream {
+		next := s.state.Imported[stream] + 1
+		for _, seq := range seqs {
+			if err := s.sortLandingBundleLocked(stream, seq, next); err != nil {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// sortLandingBundleLocked moves a complete bundle out of the landing directory
+// when it cannot be imported next: a future bundle (seq > next) goes to
+// quarantine, an already-imported one (seq <= last imported) goes to
+// duplicates. The bundle at exactly next is left in place for import.
+func (s *HighServer) sortLandingBundleLocked(stream string, seq, next int64) error {
+	id := bundleIDFor(stream, seq)
+	if !bundleCompleteInDir(s.cfg.Landing, id) {
+		return nil
+	}
+	switch {
+	case seq > next:
+		return moveBundleFiles(s.cfg.Landing, s.cfg.Quarantine, id)
+	case seq <= s.state.Imported[stream]:
+		return moveBundleFiles(s.cfg.Landing, filepath.Join(s.cfg.Landing, "duplicates"), id)
 	}
 	return nil
 }
@@ -2014,42 +2168,53 @@ func (s *HighServer) findBundleDirLocked(bundleID string) (string, bool) {
 }
 
 func (s *HighServer) importStatusLocked() (ImportStatus, error) {
-	landing, err := findBundleSequences(s.cfg.Landing)
+	landing, err := findBundleStreams(s.cfg.Landing)
 	if err != nil {
 		return ImportStatus{}, err
 	}
-	quarantined, err := findBundleSequences(s.cfg.Quarantine)
+	quarantined, err := findBundleStreams(s.cfg.Quarantine)
 	if err != nil {
 		return ImportStatus{}, err
 	}
+	streams, err := s.knownStreamsLocked()
+	if err != nil {
+		return ImportStatus{}, err
+	}
+	out := ImportStatus{Streams: make([]StreamImportStatus, 0, len(streams))}
+	for _, stream := range streams {
+		out.Streams = append(out.Streams, s.streamStatusLocked(stream, landing[stream], quarantined[stream]))
+	}
+	return out, nil
+}
 
+func (s *HighServer) streamStatusLocked(stream string, landing, quarantined []int64) StreamImportStatus {
 	present := map[int64]bool{}
-	maxSeen := s.state.LastImportedSequence
-	maxSeen = markPresentComplete(s.cfg.Landing, landing, present, maxSeen)
-	maxSeen = markPresentComplete(s.cfg.Quarantine, quarantined, present, maxSeen)
+	maxSeen := s.state.Imported[stream]
+	maxSeen = markPresentComplete(s.cfg.Landing, stream, landing, present, maxSeen)
+	maxSeen = markPresentComplete(s.cfg.Quarantine, stream, quarantined, present, maxSeen)
 
-	next := s.state.LastImportedSequence + 1
+	next := s.state.Imported[stream] + 1
 	missing := missingRanges(next, maxSeen, present)
-	status := ImportStatus{
-		LastImportedSequence: s.state.LastImportedSequence,
+	st := StreamImportStatus{
+		Stream:               stream,
+		LastImportedSequence: s.state.Imported[stream],
 		NextExpectedSequence: next,
 		HighestSeenSequence:  maxSeen,
 		MissingRanges:        rangesToStrings(missing),
-		LandingSequences:     filterCompleteSequences(s.cfg.Landing, landing),
-		QuarantinedSequences: filterCompleteSequences(s.cfg.Quarantine, quarantined),
+		QuarantinedSequences: filterCompleteSequences(s.cfg.Quarantine, stream, quarantined),
 		ReadyToImport:        present[next],
 	}
 	if !present[next] && maxSeen >= next {
-		status.BlockingMissing = next
+		st.BlockingMissing = next
 	}
-	return status, nil
+	return st
 }
 
-// markPresentComplete marks every complete bundle in dir as present and returns
-// the updated highest-seen sequence.
-func markPresentComplete(dir string, seqs []int64, present map[int64]bool, maxSeen int64) int64 {
+// markPresentComplete marks every complete bundle of the stream in dir as
+// present and returns the updated highest-seen sequence.
+func markPresentComplete(dir, stream string, seqs []int64, present map[int64]bool, maxSeen int64) int64 {
 	for _, seq := range seqs {
-		if bundleCompleteInDir(dir, bundleIDForSequence(seq)) {
+		if bundleCompleteInDir(dir, bundleIDFor(stream, seq)) {
 			present[seq] = true
 			if seq > maxSeen {
 				maxSeen = seq
@@ -2823,24 +2988,35 @@ func logHTTP(next http.Handler) http.Handler {
 	})
 }
 
-// bundleManifestNameRE matches at least six digits so the naming stays
-// zero-padded to six for readability but does not silently stop matching once a
-// sequence grows past 999999 (bundleIDForSequence uses %06d, a minimum width,
-// not a cap).
-var bundleManifestNameRE = regexp.MustCompile(`^go-bundle-([0-9]{6,})\.manifest\.json$`)
+// bundleManifestNameRE captures the stream name and sequence from a manifest
+// filename like "go-bundle-000042.manifest.json" or "apt-bundle-000001...". The
+// digits match six-or-more so numbering stays zero-padded to six for
+// readability without capping at 999999 (%06d is a minimum width).
+var bundleManifestNameRE = regexp.MustCompile(`^([a-z0-9]+)-bundle-([0-9]{6,})\.manifest\.json$`)
 
-func bundleIDForSequence(seq int64) string {
-	return fmt.Sprintf("go-bundle-%06d", seq)
+// bundleIDFor renders the on-disk id for a stream's sequence, e.g.
+// "go-bundle-000042" or "apt-bundle-000001". Each ecosystem has its own stream,
+// so a lost or stalled bundle in one stream never blocks the others.
+func bundleIDFor(stream string, seq int64) string {
+	return fmt.Sprintf("%s-bundle-%06d", stream, seq)
 }
 
-func parseBundleSeqFromManifestName(name string) (int64, bool) {
+// parseBundleName extracts the stream and sequence from a manifest filename.
+func parseBundleName(name string) (stream string, seq int64, ok bool) {
 	m := bundleManifestNameRE.FindStringSubmatch(name)
 	if m == nil {
-		return 0, false
+		return "", 0, false
 	}
-	n, err := strconv.ParseInt(m[1], 10, 64)
-	return n, err == nil
+	n, err := strconv.ParseInt(m[2], 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return m[1], n, true
 }
+
+// bundleIDForSequence is a convenience for the "go" stream (its ids match the
+// pre-multi-stream scheme, easing migration).
+func bundleIDForSequence(seq int64) string { return bundleIDFor(streamGo, seq) }
 
 func bundleCompleteInDir(dir, bundleID string) bool {
 	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
@@ -2851,36 +3027,44 @@ func bundleCompleteInDir(dir, bundleID string) bool {
 	return true
 }
 
-func findBundleSequences(dir string) ([]int64, error) {
+// findBundleStreams groups the manifest files in dir by stream, returning each
+// stream's sorted sequence numbers.
+func findBundleStreams(dir string) (map[string][]int64, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return map[string][]int64{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	seen := map[int64]bool{}
+	seen := map[string]map[int64]bool{}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		seq, ok := parseBundleSeqFromManifestName(e.Name())
-		if ok {
-			seen[seq] = true
+		if stream, seq, ok := parseBundleName(e.Name()); ok {
+			if seen[stream] == nil {
+				seen[stream] = map[int64]bool{}
+			}
+			seen[stream][seq] = true
 		}
 	}
-	seqs := make([]int64, 0, len(seen))
-	for seq := range seen {
-		seqs = append(seqs, seq)
+	out := make(map[string][]int64, len(seen))
+	for stream, set := range seen {
+		seqs := make([]int64, 0, len(set))
+		for seq := range set {
+			seqs = append(seqs, seq)
+		}
+		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+		out[stream] = seqs
 	}
-	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
-	return seqs, nil
+	return out, nil
 }
 
-func filterCompleteSequences(dir string, seqs []int64) []int64 {
+func filterCompleteSequences(dir, stream string, seqs []int64) []int64 {
 	out := make([]int64, 0, len(seqs))
 	for _, seq := range seqs {
-		if bundleCompleteInDir(dir, bundleIDForSequence(seq)) {
+		if bundleCompleteInDir(dir, bundleIDFor(stream, seq)) {
 			out = append(out, seq)
 		}
 	}

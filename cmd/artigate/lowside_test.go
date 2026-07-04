@@ -332,7 +332,7 @@ func TestLowServerConcurrentExportsUniqueSequences(t *testing.T) {
 	}
 
 	// The counter must have advanced exactly past the last sequence.
-	if got := ls.peekSequence(); got != int64(n+1) {
+	if got := ls.peekSequence(streamGo); got != int64(n+1) {
 		t.Errorf("NextSequence after %d concurrent collects = %d, want %d", n, got, n+1)
 	}
 }
@@ -428,7 +428,7 @@ func TestLowServerExportAllUnfetchableDoesNotBurnSequence(t *testing.T) {
 	if _, err := ls.ExportPending(ctx); err == nil {
 		t.Fatal("ExportPending should error when every module is unfetchable")
 	}
-	if got := ls.peekSequence(); got != 1 {
+	if got := ls.peekSequence(streamGo); got != 1 {
 		t.Errorf("NextSequence = %d, want 1 (no sequence burned)", got)
 	}
 	if entries, _ := os.ReadDir(ls.cfg.ExportDir); len(entries) != 0 {
@@ -606,7 +606,7 @@ func TestLowToHighPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("high import of low-produced bundle failed: %v", err)
 	}
-	if !res.Imported || res.Sequence != 1 {
+	if !res.Imported || len(res.ImportedBundles) != 1 {
 		t.Fatalf("unexpected high import result: %+v", res)
 	}
 	if !hs.isComplete("example.com/foo/bar", "v1.0.0") {

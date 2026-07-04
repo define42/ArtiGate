@@ -46,6 +46,7 @@ const lowUIHTML = `<!DOCTYPE html>
   .hint { color: #8b93a5; font-size: .85rem; margin: .1rem 0 .8rem; }
   form { display: flex; gap: .6rem; flex-wrap: wrap; }
   input[type=text] { flex: 1; min-width: 240px; background: #0f1115; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .55rem .7rem; font-family: ui-monospace, monospace; }
+  select.restream { background: #0f1115; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .55rem .7rem; font: inherit; cursor: pointer; }
   button.primary { background: #1f6f43; color: #eafff2; border: 1px solid #2b8f59; border-radius: 6px; padding: .55rem 1.1rem; cursor: pointer; font-weight: 600; }
   .rbox { margin-top: .9rem; padding: .7rem .9rem; border-radius: 6px; display: none; }
   .rbox.busy { display: block; background: #12161f; border: 1px solid #3a4150; color: #a9b2c3; }
@@ -165,8 +166,15 @@ const lowUIHTML = `<!DOCTYPE html>
 
   <div class="card">
     <h2>Re-transmit bundles</h2>
-    <p class="hint">Enter a bundle number or range that the high side is missing, e.g. <code>42</code>, <code>45-47</code>, or <code>42,45-47</code>. The bundle files are regenerated in the export directory to be sent through the diode again.</p>
+    <p class="hint">Pick the stream, then enter a bundle number or range the high side is missing, e.g. <code>42</code>, <code>45-47</code>, or <code>42,45-47</code>. Each ecosystem has its own independent bundle numbering, so choose the matching stream. The bundle files are regenerated in the export directory to be sent through the diode again.</p>
     <form onsubmit="reexport(event)">
+      <select id="restream" class="restream" aria-label="Stream">
+        <option value="go">Go</option>
+        <option value="python">Python</option>
+        <option value="maven">Maven</option>
+        <option value="apt">APT</option>
+        <option value="rpm">RPM</option>
+      </select>
       <input id="seq" type="text" placeholder="42,45-47" autocomplete="off" autofocus>
       <button class="primary" type="submit">Re-export</button>
     </form>
@@ -181,6 +189,7 @@ const lowUIHTML = `<!DOCTYPE html>
 </main>
 <script>
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',apt:'APT',rpm:'RPM'})[name]||name;}
 
 function showResult(cls, html){
   const el=document.getElementById('result');
@@ -190,16 +199,17 @@ function showResult(cls, html){
 
 async function reexport(ev){
   ev.preventDefault();
+  const stream=document.getElementById('restream').value;
   const v=document.getElementById('seq').value.trim();
   if(!v){ showResult('err','Enter a bundle number or range.'); return; }
   try{
-    const r=await fetch('/admin/reexport',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sequences:v})});
+    const r=await fetch('/admin/reexport',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stream:stream, sequences:v})});
     const text=await r.text();
     if(!r.ok){ showResult('err','Error: '+esc(text.trim())); return; }
     const d=JSON.parse(text);
     const done=(d.reexported||[]).map(x=>'#'+x.sequence);
     const failed=d.failed||[];
-    let msg='Re-exported '+(done.length?esc(done.join(', ')):'nothing');
+    let msg='Re-exported '+esc(streamLabel(stream))+' '+(done.length?esc(done.join(', ')):'nothing');
     if(failed.length) msg+='<br>Failed: '+esc(failed.join('; '));
     showResult(failed.length?'err':'ok', msg);
     loadStatus();
@@ -400,16 +410,24 @@ async function loadStatus(){
     const r=await fetch('/ui/api/status',{cache:'no-store'});
     if(!r.ok) throw new Error('HTTP '+r.status);
     const s=await r.json();
+    const streams=s.streams||[];
+    const nextSummary=streams.map(st=>esc(streamLabel(st.stream))+' <b>#'+esc(st.next_sequence)+'</b>').join(' &middot; ');
     document.getElementById('meta').innerHTML=
-      '<span>Next sequence: <b>#'+esc(s.next_sequence)+'</b></span>'+
-      '<span>Pending modules: <b>'+esc(s.pending_modules)+'</b></span>';
-    const rows=(s.exported_sequences||[]);
+      '<span>Pending Go modules: <b>'+esc(s.pending_modules)+'</b></span>'+
+      (nextSummary?'<span>Next bundle &mdash; '+nextSummary+'</span>':'');
+    // One combined table across every stream; each ecosystem numbers its own
+    // bundles independently, so the stream is shown alongside the sequence.
+    const rows=[];
+    for(const st of streams){
+      for(const x of (st.exported_sequences||[])){
+        rows.push('<tr><td>'+esc(streamLabel(st.stream))+'</td><td class="mono">#'+esc(x.sequence)+
+          '</td><td class="mono">'+esc(x.bundle_id)+'</td><td>'+(x.files_present?'✓':'&#10007; missing')+'</td></tr>');
+      }
+    }
     const box=document.getElementById('bundles');
     if(!rows.length){ box.innerHTML='<p class="empty">No bundles exported yet.</p>'; return; }
-    box.innerHTML='<table><thead><tr><th>Sequence</th><th>Bundle</th><th>Modules</th><th>Files present</th></tr></thead><tbody>'+
-      rows.map(x=>'<tr><td class="mono">#'+esc(x.sequence)+'</td><td class="mono">'+esc(x.bundle_id)+
-        '</td><td>'+esc(x.modules)+'</td><td>'+(x.files_present?'✓':'&#10007; missing')+'</td></tr>').join('')+
-      '</tbody></table>';
+    box.innerHTML='<table><thead><tr><th>Stream</th><th>Sequence</th><th>Bundle</th><th>Files present</th></tr></thead><tbody>'+
+      rows.join('')+'</tbody></table>';
   }catch(e){
     document.getElementById('meta').textContent='Failed to load status: '+e.message;
   }

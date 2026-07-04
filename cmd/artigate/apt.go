@@ -223,12 +223,12 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 		return ExportResult{}, errors.New("apt mirror produced no packages")
 	}
 
-	seq := s.peekSequence()
+	seq := s.peekSequence(streamApt)
 	res, err := s.writeAptBundle(seq, stageRoot, files, mirrors)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	if err := s.commitSequence(seq); err != nil {
+	if err := s.commitSequence(streamApt, seq); err != nil {
 		return ExportResult{}, err
 	}
 	return res, nil
@@ -434,14 +434,15 @@ func splitStanzaBlocks(data []byte) []string {
 
 func (s *LowServer) writeAptBundle(seq int64, stageRoot string, files []ManifestFile, mirrors []AptMirror) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	bundleID := bundleIDForSequence(seq)
+	id := bundleIDFor(streamApt, seq)
 	manifest := BundleManifest{
 		Type:             manifestType,
+		Stream:           streamApt,
 		Sequence:         seq,
 		PreviousSequence: seq - 1,
 		Created:          time.Now().UTC(),
 		Generator:        hostnameOrDefault(),
-		BundleID:         bundleID,
+		BundleID:         id,
 		Ecosystems:       []string{"apt"},
 		Apt:              &AptManifest{Mirrors: mirrors},
 		Files:            files,
@@ -451,14 +452,14 @@ func (s *LowServer) writeAptBundle(seq int64, stageRoot string, files []Manifest
 		return ExportResult{}, err
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(bundleID, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(id, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 	total := 0
 	for _, m := range mirrors {
 		total += len(m.Packages)
 	}
-	return ExportResult{Sequence: seq, ExportedModules: total, BundleID: bundleID}, nil
+	return ExportResult{Stream: streamApt, Sequence: seq, ExportedModules: total, BundleID: id}, nil
 }
 
 // -----------------------------------------------------------------------------

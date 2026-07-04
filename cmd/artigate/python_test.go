@@ -263,7 +263,7 @@ func TestLowServerPythonCollectAdmin(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		t.Fatal(err)
 	}
-	if res.BundleID != "go-bundle-000001" || res.ExportedModules != 2 {
+	if res.BundleID != "python-bundle-000001" || res.ExportedModules != 2 {
 		t.Errorf("unexpected collect result: %+v", res)
 	}
 
@@ -284,7 +284,7 @@ func TestLowToHighPythonPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectPython: %v", err)
 	}
-	if res.BundleID != "go-bundle-000001" || res.ExportedModules != 2 {
+	if res.BundleID != "python-bundle-000001" || res.ExportedModules != 2 {
 		t.Fatalf("unexpected collect result: %+v", res)
 	}
 

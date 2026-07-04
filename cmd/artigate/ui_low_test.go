@@ -29,10 +29,11 @@ func TestLowServerUIStatus(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &st); err != nil {
 		t.Fatalf("decode status: %v", err)
 	}
-	if len(st.ExportedSequences) != 1 || st.ExportedSequences[0].Sequence != 1 {
-		t.Fatalf("exported sequences = %+v", st.ExportedSequences)
+	goStream := st.Stream(streamGo)
+	if len(goStream.ExportedSequences) != 1 || goStream.ExportedSequences[0].Sequence != 1 {
+		t.Fatalf("go exported sequences = %+v", goStream.ExportedSequences)
 	}
-	if !st.ExportedSequences[0].FilesPresent {
+	if !goStream.ExportedSequences[0].FilesPresent {
 		t.Error("exported bundle files should be present")
 	}
 }
@@ -89,7 +90,7 @@ func TestLowServerUIPythonCollectFlow(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		t.Fatal(err)
 	}
-	if res.BundleID != "go-bundle-000001" || res.ExportedModules < 1 {
+	if res.BundleID != "python-bundle-000001" || res.ExportedModules < 1 {
 		t.Errorf("unexpected python collect result: %+v", res)
 	}
 }
@@ -132,17 +133,17 @@ func TestLowServerUIGoModCollectFlow(t *testing.T) {
 // reexportRestoresFiles deletes the export-dir copy of a bundle (as the diode
 // transfer would consume it), re-exports the sequence, and asserts every file
 // is restored from the archive.
-func reexportRestoresFiles(t *testing.T, ls *LowServer, seq int64) ReexportResult {
+func reexportRestoresFiles(t *testing.T, ls *LowServer, stream string, seq int64) ReexportResult {
 	t.Helper()
-	bundleID := bundleIDForSequence(seq)
+	bundleID := bundleIDFor(stream, seq)
 	for _, suffix := range bundleSuffixes() {
 		if err := os.Remove(filepath.Join(ls.cfg.ExportDir, bundleID+suffix)); err != nil {
 			t.Fatalf("remove %s%s: %v", bundleID, suffix, err)
 		}
 	}
-	res := ls.ReexportSequences(context.Background(), []SequenceRange{{Start: seq, End: seq}})
+	res := ls.ReexportSequences(context.Background(), stream, []SequenceRange{{Start: seq, End: seq}})
 	if len(res.Reexported) != 1 || len(res.Failed) != 0 {
-		t.Fatalf("reexport seq %d result: %+v", seq, res)
+		t.Fatalf("reexport %s seq %d result: %+v", stream, seq, res)
 	}
 	for _, suffix := range bundleSuffixes() {
 		if !fileExists(filepath.Join(ls.cfg.ExportDir, bundleID+suffix)) {
@@ -158,7 +159,7 @@ func TestLowServerReexportPython(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectPython: %v", err)
 	}
-	rr := reexportRestoresFiles(t, ls, res.Sequence)
+	rr := reexportRestoresFiles(t, ls, streamPython, res.Sequence)
 	if rr.Reexported[0].ExportedModules != 2 {
 		t.Errorf("re-exported python unit count = %d, want 2", rr.Reexported[0].ExportedModules)
 	}
@@ -170,7 +171,7 @@ func TestLowServerReexportGoCollect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectGo: %v", err)
 	}
-	reexportRestoresFiles(t, ls, res.Sequence)
+	reexportRestoresFiles(t, ls, streamGo, res.Sequence)
 }
 
 // TestLowServerUIReexportFlow drives the same request the UI issues: POST a

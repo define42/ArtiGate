@@ -154,7 +154,7 @@ func collectAndImportApt(t *testing.T) (*HighServer, ExportResult, string) {
 // high side regenerated the APT metadata and serves the repository.
 func TestLowToHighAptPipeline(t *testing.T) {
 	hs, res, debBody := collectAndImportApt(t)
-	if res.BundleID != "go-bundle-000001" || res.ExportedModules != 1 {
+	if res.BundleID != "apt-bundle-000001" || res.ExportedModules != 1 {
 		t.Fatalf("unexpected collect result: %+v", res)
 	}
 
@@ -195,7 +195,7 @@ func TestCollectAptMultipleRepos(t *testing.T) {
 		t.Fatalf("CollectApt (two repos): %v", err)
 	}
 	// One bundle carrying both repositories' packages.
-	if res.BundleID != "go-bundle-000001" || res.ExportedModules != 2 {
+	if res.BundleID != "apt-bundle-000001" || res.ExportedModules != 2 {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 

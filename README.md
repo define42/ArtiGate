@@ -10,7 +10,7 @@ environments.
 It contains two modes in one binary:
 
 - `low`: internet-side GOPROXY pull-through server that can fetch from `proxy.golang.org`, `direct` VCS/GitHub, or private GitHub repos using normal `go`/`git` credentials. It records concrete `module@version` requests and exports signed bundle files.
-- `high`: air-gapped, read-only GOPROXY server. It imports signed bundles in sequence, verifies all hashes, quarantines out-of-order future bundles until gaps are filled, and serves only complete module versions.
+- `high`: air-gapped, read-only GOPROXY server. It imports signed bundles in sequence — independently per ecosystem stream — verifies all hashes, quarantines out-of-order future bundles until gaps are filled, and serves only complete module versions.
 
 The implementation intentionally uses only the Go standard library. The low side invokes the installed `go` command to produce canonical `.info`, `.mod`, and `.zip` files in the normal Go module cache layout.
 
@@ -115,7 +115,10 @@ git config --global url."ssh://git@github.com/".insteadOf "https://github.com/"
 ssh-keyscan github.com >> ~/.ssh/known_hosts
 ```
 
-The low side writes these files for every export batch:
+The low side writes these three files for every export batch. Each ecosystem is
+its own independently numbered **stream** (`go`, `python`, `maven`, `apt`,
+`rpm`), so bundles are named `<stream>-bundle-NNNNNN` and each stream counts from
+`000001` on its own. A Go export produces:
 
 ```text
 go-bundle-000001.tar.gz
@@ -152,9 +155,9 @@ curl -XPOST http://127.0.0.1:8080/admin/go/collect \
 ```
 
 Each requested `module@version` is fetched with the low-side toolchain and
-written into a signed bundle on the shared sequence stream, exactly like the
-Python collector (`/admin/python/collect`). This is the Go equivalent of a
-`requirements.txt`-style manifest.
+written into a signed bundle on the **go** stream, exactly like the Python
+collector (`/admin/python/collect`) writes to the **python** stream. This is the
+Go equivalent of a `requirements.txt`-style manifest.
 
 By default only the listed modules are fetched. Set `resolve_deps` to also
 capture their full transitive module graph (the Go analogue of pip resolving a
@@ -203,10 +206,12 @@ You can list previously exported bundle sequences:
 curl http://127.0.0.1:8080/admin/bundles
 ```
 
-If the high side reports missing bundles, enter the missing number or range on the low side to regenerate those exact sequence numbers:
+If the high side reports missing bundles, re-export those exact sequence numbers.
+Because each ecosystem numbers its bundles independently, name the stream (it
+defaults to `go` when omitted):
 
 ```bash
-curl -XPOST 'http://127.0.0.1:8080/admin/reexport?sequences=42,45-47'
+curl -XPOST 'http://127.0.0.1:8080/admin/reexport?stream=python&sequences=42,45-47'
 ```
 
 The same endpoint also accepts a raw body or JSON body:
@@ -214,10 +219,10 @@ The same endpoint also accepts a raw body or JSON body:
 ```bash
 curl -XPOST http://127.0.0.1:8080/admin/reexport \
   -H 'Content-Type: application/json' \
-  -d '{"sequences":"42,45-47"}'
+  -d '{"stream":"python","sequences":"42,45-47"}'
 ```
 
-Every produced bundle (Go pull-through, `/admin/go/collect`, or `/admin/python/collect`) is retained in a persistent archive under `<root>/bundles/`. Re-export replays the exact archived signed files back into the export directory, so it works uniformly for **both Go and Python** bundles — no re-signing and no dependency on the original recorded requests. (Bundles produced before archiving existed fall back to reconstructing the Go bundle from recorded module requests.)
+Every produced bundle (Go pull-through, `/admin/go/collect`, `/admin/python/collect`, Maven, APT, or RPM) is retained in a persistent archive under `<root>/bundles/`, grouped by stream. Re-export replays the exact archived signed files back into the export directory, so it works uniformly for **every ecosystem** — no re-signing and no dependency on the original recorded requests. (Legacy Go bundles produced before archiving existed fall back to reconstructing the Go bundle from recorded module requests.)
 
 ### Web dashboard
 
@@ -228,11 +233,12 @@ http://low-proxy:8080/
 ```
 
 It provides a form to **re-transmit a bundle number or range** the high side is
-missing (e.g. `42`, `45-47`, or `42,45-47`) — the same operation as
-`/admin/reexport`, but point-and-click — and shows the current export status:
-the next sequence, pending modules, and a table of exported bundles indicating
-whether each bundle's files are still present in the export directory. The
-status is also available as JSON at `/ui/api/status`.
+missing (e.g. `42`, `45-47`, or `42,45-47`) — pick the stream, then the same
+operation as `/admin/reexport`, but point-and-click — and shows the current
+export status: the next sequence **per stream**, pending Go modules, and a table
+of exported bundles across all streams indicating whether each bundle's files
+are still present in the export directory. The status is also available as JSON
+at `/ui/api/status`.
 
 Protect the admin endpoints (and the UI) with firewall rules, a local-only listener, or a reverse proxy with authentication.
 
@@ -241,12 +247,20 @@ Protect the admin endpoints (and the UI) with firewall rules, a local-only liste
 Transfer the three files together:
 
 ```text
-go-bundle-NNNNNN.tar.gz
-go-bundle-NNNNNN.manifest.json
-go-bundle-NNNNNN.manifest.json.sig
+<stream>-bundle-NNNNNN.tar.gz
+<stream>-bundle-NNNNNN.manifest.json
+<stream>-bundle-NNNNNN.manifest.json.sig
 ```
 
-The high side imports bundles strictly in sequence, but future bundles are **not rejected**. If bundle `000043` arrives while `000042` is missing, bundle `000043` is moved to the high-side quarantine directory. It stays there until `000042` arrives and is imported. The importer then automatically drains any consecutive quarantined bundles.
+Each ecosystem (`go`, `python`, `maven`, `apt`, `rpm`) is its own stream with its
+own counter, so a `go-bundle-000007` and a `python-bundle-000007` are unrelated.
+The high side imports **each stream** strictly in sequence, but future bundles
+are **not rejected**, and the streams are independent — a gap in one never blocks
+another. If `go-bundle-000043` arrives while `go-bundle-000042` is missing,
+`000043` is moved to the high-side quarantine directory; it stays there until
+`000042` arrives and is imported, after which the importer automatically drains
+any consecutive quarantined bundles of that stream. Meanwhile the `python`,
+`maven`, `apt`, and `rpm` streams keep importing on their own schedules.
 
 Duplicates and old replays are moved aside and are not imported.
 
@@ -293,22 +307,37 @@ The same status is available from:
 curl http://127.0.0.1:8080/admin/status
 ```
 
-Example response when bundle `42` is missing but `43`, `44`, and `47` are already quarantined:
+The status reports every stream independently. Example response where the `go`
+stream is blocked on bundle `42` (with `43`, `44`, `47` already quarantined)
+while the `python` stream is fully caught up:
 
 ```json
 {
-  "last_imported_sequence": 41,
-  "next_expected_sequence": 42,
-  "highest_seen_sequence": 47,
-  "blocking_missing_sequence": 42,
-  "missing_ranges": ["42", "45-46"],
-  "landing_sequences": [],
-  "quarantined_sequences": [43, 44, 47],
-  "ready_to_import": false
+  "streams": [
+    {
+      "stream": "go",
+      "last_imported_sequence": 41,
+      "next_expected_sequence": 42,
+      "highest_seen_sequence": 47,
+      "blocking_missing_sequence": 42,
+      "missing_ranges": ["42", "45-46"],
+      "quarantined_sequences": [43, 44, 47],
+      "ready_to_import": false
+    },
+    {
+      "stream": "python",
+      "last_imported_sequence": 8,
+      "next_expected_sequence": 9,
+      "highest_seen_sequence": 8,
+      "missing_ranges": [],
+      "quarantined_sequences": [],
+      "ready_to_import": false
+    }
+  ]
 }
 ```
 
-After bundle `42` is received, `/admin/import` imports `42` and then automatically processes quarantined `43` and `44`. It will stop again at `45` until `45-46` are received.
+After go bundle `42` is received, `/admin/import` imports it and then automatically processes the quarantined `43` and `44`. It stops again at `45` until `45-46` are received. The `python` stream (and every other stream) is unaffected throughout — each drains as far as its own contiguous bundles allow.
 
 ### Web dashboard
 
@@ -319,10 +348,12 @@ it works fully air-gapped):
 http://high-proxy:8080/
 ```
 
-The front page shows the import status — prominently flagging **missing bundles**
-(the ranges the repository is blocked on) alongside the last-imported, next-expected,
-highest-seen, and quarantined sequences. A top menu switches between **Go modules**,
-**Python packages**, **Maven artifacts**, **APT packages**, and **RPM packages**.
+The front page shows the import status as a **per-stream table** — each
+ecosystem's last-imported and next-expected bundle, any missing ranges it is
+blocked on, and its quarantined sequences — with a banner that flags which
+streams (if any) are waiting on a missing bundle. A top menu switches between
+**Go modules**, **Python packages**, **Maven artifacts**, **APT packages**, and
+**RPM packages**.
 
 Below that is a **lazily loaded tree**. Go modules are grouped hierarchically by
 their import path — everything under `github.com` sits beneath a single
@@ -373,8 +404,8 @@ A module version is visible only if these exist and a `.complete` marker has bee
 ## Python (PyPI) support
 
 ArtiGate mirrors Python wheels through the same numbered, signed bundle
-pipeline. Go modules and Python packages share one global sequence stream, so a
-bundle may carry Go only, Python only, or both.
+pipeline, on its own independently numbered **python** stream (separate from the
+`go` stream, so a stalled Go bundle never holds up Python imports).
 
 The low side collects wheels with `pip download` (resolution without install)
 and packs them into a signed bundle. The high side imports the wheels and serves
@@ -405,8 +436,8 @@ downloads wheels for the high-side interpreter rather than the low-side host.
 Without a `target`, wheels are downloaded for the current platform. Set the
 interpreter with `--python` (default `python3`).
 
-The result is a normal signed bundle (`go-bundle-NNNNNN.*`) transferred through
-the diode exactly like a Go bundle.
+The result is a normal signed bundle (`python-bundle-NNNNNN.*`) transferred
+through the diode exactly like a Go bundle.
 
 ### High side: serve /simple/
 
@@ -445,8 +476,9 @@ dependencies. Source-distribution (sdist) mirroring is not implemented.
 ArtiGate mirrors Java/JVM dependencies through the same numbered, signed bundle
 pipeline and serves them as a **Maven 2 repository**. Maven, Gradle, SBT,
 Kotlin, Scala, and Spring Boot all resolve from Maven-compatible repositories,
-so one adapter covers the JVM ecosystem. Go, Python, and Maven share the same
-global sequence stream, so a bundle may carry any mix of the three.
+so one adapter covers the JVM ecosystem. Maven bundles ride their own
+independently numbered **maven** stream, separate from `go`, `python`, `apt`,
+and `rpm`.
 
 The low side delegates to `mvn dependency:go-offline`, which resolves a
 project's full dependency **and plugin** closure into an isolated local
@@ -690,4 +722,4 @@ Use ArtiGate's high-side key. If the mirror is unsigned, set `repo_gpgcheck=0`
 - APT support mirrors binary `deb` packages for the configured suite/components/architectures; `deb-src`, `Contents-*`, `Translation-*`, and by-hash indexes are not mirrored. The high side regenerates `Packages`/`Release`; publish signed with `--apt-gpg-key` or have clients trust the repo explicitly.
 - RPM support mirrors a repository's full metadata (`primary`, `filelists`, `other`, `updateinfo`, `comps`, `modules` — carried verbatim) plus every `.rpm`; the high side regenerates and re-signs `repomd.xml`. Requirements/limits: `baseurl` must be concrete (`$releasever`/`$basearch` rejected); the `primary` index must be readable as plain/`.gz`/`.xz` to enumerate packages (a zchunk-*only* `primary` isn't parseable, though `.zck` variants are still mirrored for clients); each collect is a full re-sync (no incremental delta yet). Publish signed with `--rpm-gpg-key` or set `repo_gpgcheck=0` on clients.
 - Python support mirrors wheels only; sdists and PyPI metadata (`requires-python`, yank status) beyond the manifest are not yet surfaced.
-- Re-export (`/admin/reexport`) replays any produced bundle — Go proxy, `/admin/go/collect`, or `/admin/python/collect` — from the persistent archive under `<root>/bundles/`. The archive grows over time; prune old sequences if disk is a concern (they can be re-collected).
+- Re-export (`/admin/reexport`) replays any produced bundle of any stream — Go proxy, `/admin/go/collect`, `/admin/python/collect`, Maven, APT, or RPM — from the persistent archive under `<root>/bundles/`; name the stream in the request (defaults to `go`). The archive grows over time; prune old sequences if disk is a concern (they can be re-collected).

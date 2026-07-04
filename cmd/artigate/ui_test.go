@@ -33,11 +33,12 @@ func TestHighServerUIOverview(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &ov); err != nil {
 		t.Fatalf("decode overview: %v", err)
 	}
-	if strings.Join(ov.Status.MissingRanges, ",") != "2" {
-		t.Errorf("MissingRanges = %v, want [2]", ov.Status.MissingRanges)
+	st := ov.Status.Stream(streamGo)
+	if strings.Join(st.MissingRanges, ",") != "2" {
+		t.Errorf("MissingRanges = %v, want [2]", st.MissingRanges)
 	}
-	if len(ov.Status.QuarantinedSequences) != 1 || ov.Status.QuarantinedSequences[0] != 3 {
-		t.Errorf("QuarantinedSequences = %v, want [3]", ov.Status.QuarantinedSequences)
+	if len(st.QuarantinedSequences) != 1 || st.QuarantinedSequences[0] != 3 {
+		t.Errorf("QuarantinedSequences = %v, want [3]", st.QuarantinedSequences)
 	}
 }
 

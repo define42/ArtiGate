@@ -149,7 +149,7 @@ func TestLowToHighMavenPipeline(t *testing.T) {
 		Coordinates: []string{"org.slf4j:slf4j-api:2.0.16"},
 	})
 	// slf4j-api plus the transitive helper the fake mvn resolved.
-	if res.BundleID != "go-bundle-000001" || res.ExportedModules < 2 {
+	if res.BundleID != "maven-bundle-000001" || res.ExportedModules < 2 {
 		t.Fatalf("unexpected collect result: %+v", res)
 	}
 
@@ -246,7 +246,7 @@ func TestLowServerUIMavenCollectFlow(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		t.Fatal(err)
 	}
-	if res.BundleID != "go-bundle-000001" || res.ExportedModules < 2 {
+	if res.BundleID != "maven-bundle-000001" || res.ExportedModules < 2 {
 		t.Errorf("unexpected maven collect result: %+v", res)
 	}
 }

@@ -140,7 +140,7 @@ func collectAndImportRpm(t *testing.T) (*HighServer, ExportResult, string) {
 // every metadata type and regenerates a repomd that lists them all.
 func TestLowToHighRpmPipeline(t *testing.T) {
 	hs, res, rpmBody := collectAndImportRpm(t)
-	if res.BundleID != "go-bundle-000001" || res.ExportedModules != 1 {
+	if res.BundleID != "rpm-bundle-000001" || res.ExportedModules != 1 {
 		t.Fatalf("unexpected collect result: %+v", res)
 	}
 

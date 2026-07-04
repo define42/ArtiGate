@@ -496,12 +496,12 @@ func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (
 		return ExportResult{}, err
 	}
 
-	seq := s.peekSequence()
+	seq := s.peekSequence(streamMaven)
 	res, err := s.writeMavenBundle(seq, stageRoot, files, artifacts)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	if err := s.commitSequence(seq); err != nil {
+	if err := s.commitSequence(streamMaven, seq); err != nil {
 		return ExportResult{}, err
 	}
 	return res, nil
@@ -653,14 +653,15 @@ func rejectMavenSnapshots(arts []MavenArtifact) error {
 
 func (s *LowServer) writeMavenBundle(seq int64, stageRoot string, files []ManifestFile, artifacts []MavenArtifact) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	bundleID := bundleIDForSequence(seq)
+	id := bundleIDFor(streamMaven, seq)
 	manifest := BundleManifest{
 		Type:             manifestType,
+		Stream:           streamMaven,
 		Sequence:         seq,
 		PreviousSequence: seq - 1,
 		Created:          time.Now().UTC(),
 		Generator:        hostnameOrDefault(),
-		BundleID:         bundleID,
+		BundleID:         id,
 		Ecosystems:       []string{"maven"},
 		Maven:            &MavenManifest{Artifacts: artifacts},
 		Files:            files,
@@ -670,8 +671,8 @@ func (s *LowServer) writeMavenBundle(seq int64, stageRoot string, files []Manife
 		return ExportResult{}, err
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(bundleID, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(id, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
-	return ExportResult{Sequence: seq, ExportedModules: len(artifacts), BundleID: bundleID}, nil
+	return ExportResult{Stream: streamMaven, Sequence: seq, ExportedModules: len(artifacts), BundleID: id}, nil
 }
