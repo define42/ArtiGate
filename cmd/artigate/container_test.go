@@ -124,9 +124,14 @@ type fakeImage struct {
 }
 
 func makeFakeImage(layerContent string) fakeImage {
+	// The config carries a build history: one filesystem layer (the ADD, which
+	// matches the single manifest layer) plus a metadata-only CMD step.
 	img := fakeImage{
-		layer:  []byte(layerContent),
-		config: []byte(`{"architecture":"amd64","os":"linux"}`),
+		layer: []byte(layerContent),
+		config: []byte(`{"architecture":"amd64","os":"linux","history":[` +
+			`{"created_by":"/bin/sh -c #(nop) ADD file:abc123 in / "},` +
+			`{"created_by":"/bin/sh -c #(nop)  CMD [\"/bin/sh\"]","empty_layer":true}` +
+			`]}`),
 	}
 	manifest := map[string]any{
 		"schemaVersion": 2,
@@ -511,8 +516,41 @@ func readAllString(t *testing.T, resp *http.Response) string {
 	return string(b)
 }
 
+// assertContainerLayers checks the layers box built from the fake image's
+// config history: the ADD step is a filesystem layer carrying the stored
+// layer's size and digest; the CMD step is metadata-only with no layer.
+func assertContainerLayers(t *testing.T, layers []UIImageLayer, wantLayerDigest string) {
+	t.Helper()
+	if len(layers) != 2 {
+		t.Fatalf("detail layers = %d, want 2: %+v", len(layers), layers)
+	}
+	fsLayer := layers[0]
+	if fsLayer.Command != "ADD file:abc123 in /" || fsLayer.Empty || fsLayer.Size == "" || fsLayer.Digest != wantLayerDigest {
+		t.Errorf("filesystem layer = %+v", fsLayer)
+	}
+	metaLayer := layers[1]
+	if metaLayer.Command != `CMD ["/bin/sh"]` || !metaLayer.Empty || metaLayer.Size != "" {
+		t.Errorf("metadata layer = %+v", metaLayer)
+	}
+}
+
+func TestCleanDockerfileCommand(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{`/bin/sh -c #(nop)  CMD ["/bin/sh"]`, `CMD ["/bin/sh"]`},
+		{"/bin/sh -c #(nop) ADD file:abc in / ", "ADD file:abc in /"},
+		{"/bin/sh -c apk add --no-cache curl", "RUN apk add --no-cache curl"},
+		{"RUN go build ./... # buildkit", "RUN go build ./... # buildkit"},
+		{"", "(metadata)"},
+	}
+	for _, tt := range tests {
+		if got := cleanDockerfileCommand(tt.in); got != tt.want {
+			t.Errorf("cleanDockerfileCommand(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestContainerDashboardAndDetail(t *testing.T) {
-	hs, _, _ := collectAndImportContainers(t)
+	hs, alpine, _ := collectAndImportContainers(t)
 	srv := httptest.NewServer(hs)
 	defer srv.Close()
 
@@ -537,6 +575,7 @@ func TestContainerDashboardAndDetail(t *testing.T) {
 	if detail.CopyRef != "docker.io/library/alpine:3.20" {
 		t.Fatalf("detail copy_ref = %q, want docker.io/library/alpine:3.20", detail.CopyRef)
 	}
+	assertContainerLayers(t, detail.Layers, containerSHA(alpine.layer))
 	// Repos for the "Set me up" guide.
 	code, got = httpGet(t, srv.URL+"/ui/api/repos?eco=containers")
 	if code != http.StatusOK || !strings.Contains(got, "docker.io/library/alpine") {

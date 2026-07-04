@@ -190,6 +190,65 @@ function renderDetail(detail) {
         panel.appendChild(label);
         panel.appendChild(pre);
     }
+    renderLayers(detail.layers ?? []);
+}
+// renderLayers fills the box below the detail panel with a container image's
+// build history: one numbered step per config-history entry, showing the
+// command it ran and (for filesystem layers) the layer size and short digest.
+// Hidden when the selection has no layers (every non-container leaf).
+function renderLayers(layers) {
+    const box = byId("layers");
+    box.textContent = "";
+    if (layers.length === 0) {
+        box.hidden = true;
+        return;
+    }
+    box.hidden = false;
+    const heading = document.createElement("h3");
+    heading.textContent = "Layers";
+    box.appendChild(heading);
+    const fsCount = layers.filter((l) => !l.empty).length;
+    const sub = document.createElement("p");
+    sub.className = "layers-sub";
+    sub.textContent = `${layers.length} build steps · ${fsCount} filesystem layer${fsCount === 1 ? "" : "s"} (sizes are compressed)`;
+    box.appendChild(sub);
+    const list = document.createElement("ol");
+    list.className = "layer-list";
+    for (const layer of layers) {
+        list.appendChild(layerRow(layer));
+    }
+    box.appendChild(list);
+}
+function layerRow(layer) {
+    const li = document.createElement("li");
+    if (layer.empty) {
+        li.classList.add("meta");
+    }
+    const cmd = document.createElement("code");
+    cmd.className = "layer-cmd";
+    cmd.textContent = layer.command;
+    li.appendChild(cmd);
+    const meta = document.createElement("div");
+    meta.className = "layer-meta";
+    if (layer.empty || !layer.size) {
+        meta.textContent = "no filesystem layer";
+    }
+    else {
+        const sz = document.createElement("span");
+        sz.className = "sz";
+        sz.textContent = layer.size;
+        meta.appendChild(sz);
+        if (layer.digest) {
+            meta.appendChild(document.createTextNode(` · ${shortDigest(layer.digest)}`));
+        }
+    }
+    li.appendChild(meta);
+    return li;
+}
+// shortDigest abbreviates a "sha256:<64 hex>" digest to its first 12 hex chars.
+function shortDigest(digest) {
+    const hex = digest.replace(/^sha256:/, "");
+    return `sha256:${hex.slice(0, 12)}`;
 }
 // copyRefButton renders a prominent click-to-copy control for a full,
 // host-qualified image reference — exactly what `docker pull` / `podman pull`
@@ -233,6 +292,7 @@ async function selectLeaf(el, node) {
     el.classList.add("selected");
     const panel = byId("detail");
     setMessage(panel, "loading…");
+    hideLayers();
     try {
         const url = `/ui/api/detail?eco=${encodeURIComponent(currentView)}&path=${encodeURIComponent(node.path)}`;
         const resp = await fetch(url, { cache: "no-store" });
@@ -245,9 +305,19 @@ async function selectLeaf(el, node) {
         setMessage(panel, `Failed to load details: ${err.message}`);
     }
 }
+// hideLayers clears and hides the layers box (no selection, a non-container
+// leaf, or a failed load).
+function hideLayers() {
+    const box = document.getElementById("layers");
+    if (box) {
+        box.hidden = true;
+        box.textContent = "";
+    }
+}
 function clearDetail() {
     selectedLeaf = null;
     setMessage(byId("detail"), "Select a version to see its details.");
+    hideLayers();
 }
 // repoGuideButton is the per-repository "Set me up" button shown on an APT/RPM
 // top-level node; it opens the guide for just that repository.

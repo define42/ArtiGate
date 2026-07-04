@@ -470,6 +470,21 @@ type UIDetail struct {
 	Fields   []UIDetailField `json:"fields"`
 	GoMod    string          `json:"go_mod,omitempty"`
 	CopyRef  string          `json:"copy_ref,omitempty"`
+	// Layers is a container image's build-history breakdown (the command each
+	// step ran, and the filesystem layer it produced), rendered as a box below
+	// the detail panel. Empty for non-container leaves.
+	Layers []UIImageLayer `json:"layers,omitempty"`
+}
+
+// UIImageLayer is one build step of a container image, from its config
+// history: the command it ran and, for steps that created a filesystem layer,
+// the stored layer's size and digest. Empty steps (ENV, CMD, LABEL, …) carry
+// no layer.
+type UIImageLayer struct {
+	Command string `json:"command"`
+	Size    string `json:"size,omitempty"`
+	Digest  string `json:"digest,omitempty"`
+	Empty   bool   `json:"empty,omitempty"`
 }
 
 // handleUIDetail returns details for a selected leaf. path is "module@version"

@@ -1549,7 +1549,13 @@ func (s *HighServer) containerDetail(spec string) (UIDetail, error) {
 	// the dashboard prepends its own host and renders it as a prominent
 	// click-to-copy button, so the operator copies exactly what `docker pull`
 	// needs for this ArtiGate.
-	return UIDetail{Title: name, Subtitle: subtitle, Fields: fields, CopyRef: name + refSuffix(img)}, nil
+	return UIDetail{
+		Title:    name,
+		Subtitle: subtitle,
+		Fields:   fields,
+		CopyRef:  name + refSuffix(img),
+		Layers:   s.containerImageLayers(img),
+	}, nil
 }
 
 // refSuffix renders how a client appends the reference: ":tag" or "@digest".
@@ -1558,4 +1564,83 @@ func refSuffix(img ContainerImage) string {
 		return ":" + img.Tag
 	}
 	return "@" + img.Digest
+}
+
+// ociHistory is one entry of an image config's build history.
+type ociHistory struct {
+	CreatedBy  string `json:"created_by"`
+	EmptyLayer bool   `json:"empty_layer"`
+}
+
+// ociImageConfig is the part of an image config blob ArtiGate reads: the build
+// history that names the command each step ran.
+type ociImageConfig struct {
+	History []ociHistory `json:"history"`
+}
+
+// containerImageLayers reads an image's config blob and returns its build
+// history as layer entries: the command each step ran and, for steps that
+// produced a filesystem layer, the matching stored layer's size and digest.
+// The config's non-empty history entries are in the same order as the
+// manifest's layers, which are stored as img.Blobs[1:] (img.Blobs[0] is the
+// config). Returns nil if the config is missing or unreadable, so the panel
+// simply omits the layers box.
+func (s *HighServer) containerImageLayers(img ContainerImage) []UIImageLayer {
+	if len(img.Blobs) == 0 {
+		return nil
+	}
+	layerBlobs := img.Blobs[1:] // Blobs[0] is the config; the rest are layers.
+	b, err := os.ReadFile(s.containerBlobPath(img.Blobs[0].Digest))
+	if err != nil {
+		return nil
+	}
+	var cfg ociImageConfig
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return nil
+	}
+	// Some minimal images ship no history; fall back to the raw layer list.
+	if len(cfg.History) == 0 {
+		return rawContainerLayers(layerBlobs)
+	}
+	out := make([]UIImageLayer, 0, len(cfg.History))
+	li := 0
+	for _, h := range cfg.History {
+		entry := UIImageLayer{Command: cleanDockerfileCommand(h.CreatedBy), Empty: h.EmptyLayer}
+		if !h.EmptyLayer && li < len(layerBlobs) {
+			entry.Size = formatBytes(layerBlobs[li].Size)
+			entry.Digest = layerBlobs[li].Digest
+			li++
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// rawContainerLayers lists layer blobs without commands, for images whose
+// config carries no build history.
+func rawContainerLayers(layerBlobs []ContainerBlob) []UIImageLayer {
+	out := make([]UIImageLayer, 0, len(layerBlobs))
+	for _, lb := range layerBlobs {
+		out = append(out, UIImageLayer{Command: "(no build history recorded)", Size: formatBytes(lb.Size), Digest: lb.Digest})
+	}
+	return out
+}
+
+// cleanDockerfileCommand turns a config history "created_by" into a readable
+// build step, mirroring `docker history`: a "/bin/sh -c #(nop)  CMD ..." meta
+// step becomes "CMD ...", and a plain "/bin/sh -c <cmd>" becomes "RUN <cmd>".
+// Buildkit steps (already prefixed "RUN"/"COPY"/…) pass through unchanged.
+func cleanDockerfileCommand(createdBy string) string {
+	s := strings.TrimSpace(createdBy)
+	if s == "" {
+		return "(metadata)"
+	}
+	const nop = "/bin/sh -c #(nop)"
+	if rest, ok := strings.CutPrefix(s, nop); ok {
+		return strings.TrimSpace(rest)
+	}
+	if rest, ok := strings.CutPrefix(s, "/bin/sh -c "); ok {
+		return "RUN " + strings.TrimSpace(rest)
+	}
+	return s
 }

@@ -40,7 +40,19 @@
   .leaf:hover { background: #1c2230; }
   .leaf.selected { background: #1f6f43; color: #eafff2; }
   .empty { color: #8b93a5; font-style: italic; padding: .2rem 0 .2rem 1.2rem; margin: 0; }
-  .detail { position: sticky; top: 1rem; background: #161a22; border: 1px solid #2a2f3a; border-radius: 8px; padding: 1rem 1.1rem; }
+  .detail-col { position: sticky; top: 1rem; display: flex; flex-direction: column; gap: 1rem; }
+  .detail { background: #161a22; border: 1px solid #2a2f3a; border-radius: 8px; padding: 1rem 1.1rem; }
+  .layers h3 { margin: 0 0 .1rem; font-size: 1rem; }
+  .layers .layers-sub { color: #8b93a5; font-size: .78rem; margin: 0 0 .7rem; }
+  .layer-list { list-style: none; margin: 0; padding: 0; counter-reset: layer; }
+  .layer-list li { border-top: 1px solid #232833; padding: .5rem 0 .55rem 1.7rem; position: relative; }
+  .layer-list li:first-child { border-top: none; }
+  .layer-list li::before { counter-increment: layer; content: counter(layer); position: absolute; left: 0; top: .5rem; color: #8b93a5; font-size: .72rem; font-variant-numeric: tabular-nums; }
+  .layer-list li.meta::before { color: #56607a; }
+  .layer-cmd { display: block; font-family: ui-monospace, monospace; font-size: .8rem; color: #c7cedb; white-space: pre-wrap; word-break: break-word; }
+  .layer-list li.meta .layer-cmd { color: #8b93a5; }
+  .layer-meta { color: #8b93a5; font-size: .74rem; margin-top: .22rem; font-variant-numeric: tabular-nums; }
+  .layer-meta .sz { color: #7ee2a8; }
   .detail h3 { margin: 0; font-size: 1rem; font-family: ui-monospace, monospace; word-break: break-all; }
   .detail .subtitle { color: #8b93a5; font-size: .85rem; margin: .1rem 0 .8rem; }
   .detail dl { display: grid; grid-template-columns: auto 1fr; gap: .35rem .8rem; margin: 0; font-size: .85rem; }
@@ -113,8 +125,11 @@
       </div>
       <div id="tree"></div>
     </section>
-    <aside id="detail" class="detail">
-      <p class="empty">Select a version to see its details.</p>
+    <aside class="detail-col">
+      <div id="detail" class="detail">
+        <p class="empty">Select a version to see its details.</p>
+      </div>
+      <div id="layers" class="detail layers" hidden></div>
     </aside>
   </div>
   <dialog id="guide" class="guide-modal" aria-label="How to use this mirror from your clients">
