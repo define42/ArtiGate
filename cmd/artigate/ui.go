@@ -71,6 +71,7 @@ type treeCache struct {
 	python []UIProject
 	maven  []UIModule
 	apt    []UIModule
+	rpm    []UIModule
 }
 
 func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
@@ -148,6 +149,8 @@ func (s *HighServer) handleUITree(w http.ResponseWriter, r *http.Request) {
 		nodes = goTreeChildren(lists.maven, path)
 	case "apt":
 		nodes = goTreeChildren(lists.apt, path)
+	case "rpm":
+		nodes = goTreeChildren(lists.rpm, path)
 	default:
 		nodes = goTreeChildren(lists.mods, path)
 	}
@@ -160,6 +163,7 @@ type ecoLists struct {
 	python []UIProject
 	maven  []UIModule
 	apt    []UIModule
+	rpm    []UIModule
 }
 
 // cachedLists returns the mirrored inventory across ecosystems, memoized for a
@@ -168,7 +172,7 @@ func (s *HighServer) cachedLists() (ecoLists, error) {
 	s.tree.mu.Lock()
 	defer s.tree.mu.Unlock()
 	if time.Now().Before(s.tree.expiry) {
-		return ecoLists{s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt}, nil
+		return ecoLists{mods: s.tree.mods, python: s.tree.python, maven: s.tree.maven, apt: s.tree.apt, rpm: s.tree.rpm}, nil
 	}
 	mods, err := s.listGoModules()
 	if err != nil {
@@ -186,9 +190,13 @@ func (s *HighServer) cachedLists() (ecoLists, error) {
 	if err != nil {
 		return ecoLists{}, err
 	}
-	s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt = mods, python, maven, apt
+	rpm, err := s.listRpmMirrors()
+	if err != nil {
+		return ecoLists{}, err
+	}
+	s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt, s.tree.rpm = mods, python, maven, apt, rpm
 	s.tree.expiry = time.Now().Add(3 * time.Second)
-	return ecoLists{mods, python, maven, apt}, nil
+	return ecoLists{mods: mods, python: python, maven: maven, apt: apt, rpm: rpm}, nil
 }
 
 // goTreeChildren returns the immediate children of prefix in the Go module path
@@ -319,7 +327,8 @@ func (s *HighServer) listGoModules() ([]UIModule, error) {
 		moduleEsc := filepath.ToSlash(rel)
 		if moduleEsc == "python" || strings.HasPrefix(moduleEsc, "python/") ||
 			moduleEsc == "maven" || strings.HasPrefix(moduleEsc, "maven/") ||
-			moduleEsc == "apt" || strings.HasPrefix(moduleEsc, "apt/") {
+			moduleEsc == "apt" || strings.HasPrefix(moduleEsc, "apt/") ||
+			moduleEsc == "rpm" || strings.HasPrefix(moduleEsc, "rpm/") {
 			return filepath.SkipDir
 		}
 		if mod, ok := s.goModuleAt(moduleEsc); ok {
@@ -406,6 +415,8 @@ func (s *HighServer) handleUIDetail(w http.ResponseWriter, r *http.Request) {
 		detail, err = s.mavenDetail(path)
 	case "apt":
 		detail, err = s.aptDetail(path)
+	case "rpm":
+		detail, err = s.rpmDetail(path)
 	default:
 		detail, err = s.goDetail(path)
 	}

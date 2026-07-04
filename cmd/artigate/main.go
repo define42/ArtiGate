@@ -118,6 +118,7 @@ type BundleManifest struct {
 	Python           *PythonManifest `json:"python,omitempty"`
 	Maven            *MavenManifest  `json:"maven,omitempty"`
 	Apt              *AptManifest    `json:"apt,omitempty"`
+	Rpm              *RpmManifest    `json:"rpm,omitempty"`
 	Files            []ManifestFile  `json:"files"`
 }
 
@@ -413,6 +414,8 @@ func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool
 		res, err = s.HandleMavenCollect(r.Context(), r)
 	case "/admin/apt/collect":
 		res, err = s.HandleAptCollect(r.Context(), r)
+	case "/admin/rpm/collect":
+		res, err = s.HandleRpmCollect(r.Context(), r)
 	default:
 		return false
 	}
@@ -1520,6 +1523,7 @@ type HighConfig struct {
 	PublicKeyPath  string
 	ImportInterval time.Duration
 	AptGPGKey      string
+	RpmGPGKey      string
 }
 
 type HighState struct {
@@ -1548,6 +1552,7 @@ func runHigh(args []string) {
 	fs.StringVar(&cfg.PublicKeyPath, "public-key", "", "base64 Ed25519 public key path")
 	fs.DurationVar(&cfg.ImportInterval, "import-interval", 10*time.Second, "bundle import scan interval; 0 disables background import")
 	fs.StringVar(&cfg.AptGPGKey, "apt-gpg-key", "", "GPG key id used to sign regenerated APT repositories (InRelease); unset serves them unsigned")
+	fs.StringVar(&cfg.RpmGPGKey, "rpm-gpg-key", "", "GPG key id used to sign regenerated RPM repositories (repomd.xml.asc); unset serves them unsigned")
 	_ = fs.Parse(args)
 	if cfg.PublicKeyPath == "" {
 		log.Fatal("--public-key is required")
@@ -1615,6 +1620,9 @@ func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.serveApt(w, r) {
+		return
+	}
+	if s.serveRpm(w, r) {
 		return
 	}
 	if s.serveUI(w, r) {
@@ -2064,6 +2072,7 @@ func validateManifestCompleteness(m BundleManifest) error {
 		{m.Python != nil && len(m.Python.Projects) > 0, func(s map[string]bool) error { return validatePythonProjects(m.Python.Projects, s) }},
 		{m.Maven != nil && len(m.Maven.Artifacts) > 0, func(s map[string]bool) error { return validateMavenArtifacts(m.Maven.Artifacts, s) }},
 		{m.Apt != nil && len(m.Apt.Mirrors) > 0, func(s map[string]bool) error { return validateAptMirrors(m.Apt.Mirrors, s) }},
+		{m.Rpm != nil && len(m.Rpm.Mirrors) > 0, func(s map[string]bool) error { return validateRpmMirrors(m.Rpm.Mirrors, s) }},
 	}
 	matched := false
 	for _, e := range ecosystems {
@@ -2076,7 +2085,7 @@ func validateManifestCompleteness(m BundleManifest) error {
 		}
 	}
 	if !matched {
-		return errors.New("manifest contains no modules, python projects, maven artifacts, or apt mirrors")
+		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, or rpm mirrors")
 	}
 	return nil
 }
@@ -2124,6 +2133,9 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 	// Regenerate APT repository metadata from the accumulated stanzas of the
 	// .deb files now present (never trusting the transferred Release/Packages).
 	if err := s.publishApt(manifest.Apt); err != nil {
+		return err
+	}
+	if err := s.publishRpm(manifest.Rpm); err != nil {
 		return err
 	}
 	// Complete markers are written only after all files are installed.

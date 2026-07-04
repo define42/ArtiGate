@@ -3,8 +3,9 @@
 [![codecov](https://codecov.io/gh/define42/ArtiGate/graph/badge.svg?token=RBKT8U26R8)](https://codecov.io/gh/define42/ArtiGate)
 
 `ArtiGate` is a multi-ecosystem dependency mirror — Go modules, Python (PyPI)
-wheels, Java (Maven 2) artifacts, and APT (Debian/Ubuntu `.deb`) repositories —
-for one-way data-diode environments.
+wheels, Java (Maven 2) artifacts, APT (Debian/Ubuntu `.deb`) repositories, and
+RPM (Fedora/RHEL `.rpm`, yum/dnf) repositories — for one-way data-diode
+environments.
 
 It contains two modes in one binary:
 
@@ -58,6 +59,10 @@ curl -XPOST localhost:8080/admin/maven/collect \
 # APT (deb) repository — full mirror of one suite/component/arch
 curl -XPOST localhost:8080/admin/apt/collect -d '{"source_list":
   "Types: deb\nURIs: https://packages.microsoft.com/repos/code\nSuites: stable\nComponents: main\nArchitectures: amd64\n"}'
+
+# RPM (yum/dnf) repository — full mirror of one .repo
+curl -XPOST localhost:8080/admin/rpm/collect -d '{"repo_file":
+  "[code]\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\ngpgcheck=1\n"}'
 ```
 
 A one-time `keygen` service generates the signing key pair into a shared volume,
@@ -317,7 +322,7 @@ http://high-proxy:8080/
 The front page shows the import status — prominently flagging **missing bundles**
 (the ranges the repository is blocked on) alongside the last-imported, next-expected,
 highest-seen, and quarantined sequences. A top menu switches between **Go modules**,
-**Python packages**, **Maven artifacts**, and **APT packages**.
+**Python packages**, **Maven artifacts**, **APT packages**, and **RPM packages**.
 
 Below that is a **lazily loaded tree**. Go modules are grouped hierarchically by
 their import path — everything under `github.com` sits beneath a single
@@ -597,6 +602,74 @@ Signed-By: /usr/share/keyrings/artigate-apt.gpg
 If the mirror is published unsigned, use `[trusted=yes]` (one-line format) or an
 `apt` policy that allows it instead of `Signed-By`.
 
+## RPM (Fedora/RHEL) support
+
+ArtiGate mirrors YUM/DNF repositories the same way it mirrors APT. The low side
+downloads `repodata/repomd.xml`, optionally **verifies `repomd.xml.asc`** with
+`gpgv` against a caller-supplied key, reads the `primary` metadata location and
+checksum, downloads and verifies the `primary.xml` index, then downloads every
+referenced `.rpm` and verifies each one's SHA256 against the index. The `.rpm`
+files are packed into a signed bundle with their `<package>` metadata.
+
+On import the high side **regenerates** `primary.xml.gz` and `repomd.xml` from
+the metadata of the `.rpm` files actually present (never serving the transferred
+repodata as-is) and, when a signing key is configured, detach-signs
+`repomd.xml.asc`. The repository is then served statically under
+`/rpm/<mirror>/`.
+
+### Low side: mirror a repository
+
+Send a yum/dnf `.repo` stanza (several `[sections]` mirror several repos, each
+into its own namespace):
+
+```bash
+curl -XPOST http://127.0.0.1:8080/admin/rpm/collect \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -Rs '{repo_file: .}' <<'EOF'
+[code]
+name=Visual Studio Code
+baseurl=https://packages.microsoft.com/yumrepos/vscode
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.microsoft.com/keys/microsoft.asc
+EOF
+)"
+```
+
+`baseurl` must be concrete — `$releasever`/`$basearch` variables are rejected.
+To GPG-verify the upstream `repomd.xml` on the low side, supply a **local**
+keyring via the `gpg_key` field or a `gpgkey=file:///…` line (a remote
+`gpgkey=https://…` is for clients and is not used for low-side verification; the
+SHA256 chain is always enforced). `.zck` (zchunk) indexes are not supported;
+`.gz`/`.xz` are.
+
+### High side: serve /rpm/&lt;mirror&gt;/
+
+After import the high side serves a standard YUM/DNF repository:
+
+```text
+/rpm/<mirror>/repodata/repomd.xml            # regenerated (+ repomd.xml.asc when signed)
+/rpm/<mirror>/repodata/primary.xml.gz
+/rpm/<mirror>/Packages/<name>-<version>.<arch>.rpm
+```
+
+Sign it by starting the high side with `--rpm-gpg-key <keyid>` (secret key in the
+process's `GNUPGHOME`); otherwise it is published unsigned. High-side client
+`.repo`:
+
+```ini
+[artigate]
+name=ArtiGate mirror
+baseurl=https://artigate-high.local/rpm/<mirror>
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate
+```
+
+Use ArtiGate's high-side key. If the mirror is unsigned, set `repo_gpgcheck=0`
+(per-package `gpgcheck` against signed `.rpm`s still applies).
+
 ## Notes and limitations
 
 - This is a production-oriented starter implementation, not a full artifact-management product.
@@ -604,9 +677,10 @@ If the mirror is published unsigned, use `[trusted=yes]` (one-line format) or an
 - It uses JSON state files to keep the implementation dependency-free. Use SQLite/PostgreSQL if you need multiple writers or a larger approval workflow.
 - Admin endpoints are unauthenticated. Bind to localhost or protect them.
 - High-side gaps and out-of-order future bundles are quarantined, not rejected. Check `/admin/missing` and re-export the requested range from the low side with `/admin/reexport`.
-- Low-side fetching depends on the installed Go toolchain and Git/VCS tools, on `pip` (Python), on `mvn` + a JDK (Java/Maven), and on `gpgv` (verifying upstream APT repositories). APT `.deb` files are fetched over plain HTTP(S) with the Go standard library.
-- High side never invokes `go`, `pip`, or `mvn` and has no upstream fetcher; it uses `gpg` only to sign regenerated APT repositories when `--apt-gpg-key` is set.
+- Low-side fetching depends on the installed Go toolchain and Git/VCS tools, on `pip` (Python), on `mvn` + a JDK (Java/Maven), on `gpgv` (verifying upstream APT/RPM repositories), and on `xz` (some RPM indexes). APT `.deb` and RPM `.rpm` files are fetched over plain HTTP(S) with the Go standard library.
+- High side never invokes `go`, `pip`, or `mvn` and has no upstream fetcher; it uses `gpg` only to sign regenerated APT/RPM repositories when `--apt-gpg-key`/`--rpm-gpg-key` is set.
 - Java support mirrors release Maven artifacts only; SNAPSHOT and dynamic/range versions are rejected. SBT/Ivy-only repositories and the Gradle Plugin Portal are not specially handled beyond their Maven-compatible endpoints.
 - APT support mirrors binary `deb` packages for the configured suite/components/architectures; `deb-src`, `Contents-*`, `Translation-*`, and by-hash indexes are not mirrored. The high side regenerates `Packages`/`Release`; publish signed with `--apt-gpg-key` or have clients trust the repo explicitly.
+- RPM support mirrors `.rpm` packages listed in a repo's `primary` metadata (concrete `baseurl` only). The high side regenerates `primary.xml`/`repomd.xml`; `filelists`/`other`/`updateinfo`/`comps` and zchunk (`.zck`) indexes are not produced. Publish signed with `--rpm-gpg-key` or set `repo_gpgcheck=0` on clients.
 - Python support mirrors wheels only; sdists and PyPI metadata (`requires-python`, yank status) beyond the manifest are not yet surfaced.
 - Re-export (`/admin/reexport`) replays any produced bundle — Go proxy, `/admin/go/collect`, or `/admin/python/collect` — from the persistent archive under `<root>/bundles/`. The archive grows over time; prune old sequences if disk is a concern (they can be re-collected).

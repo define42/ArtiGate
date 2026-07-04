@@ -8,6 +8,7 @@ const VIEW_TITLES = {
     python: "Python packages",
     maven: "Maven artifacts",
     apt: "APT packages",
+    rpm: "RPM packages",
 };
 let currentView = "go";
 let selectedLeaf = null;
@@ -323,6 +324,26 @@ function guideSections(base) {
             note: "Use ArtiGate's high-side APT key (Signed-By), not the upstream vendor " +
                 "key. If the mirror is published unsigned, use [trusted=yes] instead of " +
                 "Signed-By.",
+        },
+        {
+            heading: "RPM (Fedora / RHEL)",
+            body: "Point dnf/yum at a mirrored repository. Replace <mirror> with the value " +
+                "from the RPM packages tab.",
+            blocks: [
+                {
+                    label: "/etc/yum.repos.d/artigate.repo",
+                    code: "[artigate]\n" +
+                        "name=ArtiGate mirror\n" +
+                        `baseurl=${base}/rpm/<mirror>\n` +
+                        "enabled=1\n" +
+                        "gpgcheck=1\n" +
+                        "repo_gpgcheck=1\n" +
+                        "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate",
+                },
+            ],
+            note: "repo_gpgcheck=1 verifies repomd.xml against ArtiGate's high-side key. If " +
+                "the mirror is published unsigned, set repo_gpgcheck=0 (package gpgcheck " +
+                "still applies to signed .rpms).",
         },
     ];
 }

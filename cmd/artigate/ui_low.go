@@ -152,6 +152,18 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
 
   <div class="card">
+    <h2>Mirror an RPM (yum/dnf) repository</h2>
+    <p class="hint">Paste a yum/dnf <code>.repo</code> stanza. ArtiGate downloads and verifies <code>repomd.xml</code> and the <code>primary</code> index, mirrors every referenced <code>.rpm</code>, and writes a signed bundle. The high side regenerates <code>repodata</code> and (optionally) re-signs it. This is <code>/admin/rpm/collect</code>. <code>baseurl</code> must be concrete (no <code>$releasever</code>/<code>$basearch</code>).</p>
+    <form class="gomod-form" onsubmit="collectRpm(event)">
+      <label class="filelabel">Repo file (.repo)
+        <textarea id="rpmrepo" rows="6" placeholder="[code]&#10;name=Visual Studio Code&#10;baseurl=https://packages.microsoft.com/yumrepos/vscode&#10;enabled=1&#10;gpgcheck=1&#10;gpgkey=https://packages.microsoft.com/keys/microsoft.asc" autocomplete="off"></textarea>
+      </label>
+      <button class="primary" type="submit" id="rpmBtn">Collect &amp; export</button>
+    </form>
+    <div id="rpmResult" class="rbox"></div>
+  </div>
+
+  <div class="card">
     <h2>Re-transmit bundles</h2>
     <p class="hint">Enter a bundle number or range that the high side is missing, e.g. <code>42</code>, <code>45-47</code>, or <code>42,45-47</code>. The bundle files are regenerated in the export directory to be sent through the diode again.</p>
     <form onsubmit="reexport(event)">
@@ -355,6 +367,31 @@ async function collectApt(ev){
     showAptResult('ok','&#10003; Mirrored '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').');
     loadStatus();
   }catch(e){ showAptResult('err','Request failed: '+esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent=label; }
+}
+
+function showRpmResult(cls, html){
+  const el=document.getElementById('rpmResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+async function collectRpm(ev){
+  ev.preventDefault();
+  const repo=document.getElementById('rpmrepo').value.trim();
+  if(!repo){ showRpmResult('err','Paste a yum/dnf .repo stanza.'); return; }
+  const btn=document.getElementById('rpmBtn');
+  const label=btn.textContent;
+  btn.disabled=true; btn.textContent='Mirroring…';
+  showRpmResult('busy','Downloading and verifying repomd.xml, the primary index, and every .rpm… this can take a while.');
+  try{
+    const r=await fetch('/admin/rpm/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repo_file:repo})});
+    const text=await r.text();
+    if(!r.ok){ showRpmResult('err','Error: '+esc(text.trim())); return; }
+    const d=JSON.parse(text);
+    showRpmResult('ok','&#10003; Mirrored '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').');
+    loadStatus();
+  }catch(e){ showRpmResult('err','Request failed: '+esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent=label; }
 }
 
