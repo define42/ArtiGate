@@ -604,18 +604,25 @@ If the mirror is published unsigned, use `[trusted=yes]` (one-line format) or an
 
 ## RPM (Fedora/RHEL) support
 
-ArtiGate mirrors YUM/DNF repositories the same way it mirrors APT. The low side
-downloads `repodata/repomd.xml`, optionally **verifies `repomd.xml.asc`** with
-`gpgv` against a caller-supplied key, reads the `primary` metadata location and
-checksum, downloads and verifies the `primary.xml` index, then downloads every
-referenced `.rpm` and verifies each one's SHA256 against the index. The `.rpm`
-files are packed into a signed bundle with their `<package>` metadata.
+ArtiGate mirrors YUM/DNF repositories at **full metadata fidelity**, suitable
+for full distro mirroring (Fedora/RHEL/EPEL), not just small vendor repos. The
+low side downloads `repodata/repomd.xml`, optionally **verifies
+`repomd.xml.asc`** with `gpgv` against a caller-supplied key, then downloads and
+verifies **every** metadata file `repomd` references — `primary`, `filelists`,
+`other`, `updateinfo` (security advisories), `comps` (groups), `modules`, and
+zchunk variants — against its recorded checksum. It parses the `primary` index
+to enumerate packages and downloads every `.rpm`, verifying each against the
+index. All of it is packed into a signed bundle.
 
-On import the high side **regenerates** `primary.xml.gz` and `repomd.xml` from
-the metadata of the `.rpm` files actually present (never serving the transferred
-repodata as-is) and, when a signing key is configured, detach-signs
-`repomd.xml.asc`. The repository is then served statically under
-`/rpm/<mirror>/`.
+On import the high side serves those metadata files **verbatim** (they are
+integrity-locked by the ArtiGate manifest and were signature-verified on the low
+side) and **regenerates + optionally re-signs only `repomd.xml`** from the
+recorded entries — so it owns the repository entry point without ever trusting a
+transferred `repomd`/signature as final, while preserving every metadata type
+exactly as upstream produced it (which a `createrepo_c`-only rebuild could not —
+it cannot reproduce `updateinfo`/`comps`/`modules`). The repository is served
+statically under `/rpm/<mirror>/`. Re-collecting publishes a newer snapshot
+(metadata is replaced; `.rpm`s accumulate in the pool).
 
 ### Low side: mirror a repository
 
@@ -681,6 +688,6 @@ Use ArtiGate's high-side key. If the mirror is unsigned, set `repo_gpgcheck=0`
 - High side never invokes `go`, `pip`, or `mvn` and has no upstream fetcher; it uses `gpg` only to sign regenerated APT/RPM repositories when `--apt-gpg-key`/`--rpm-gpg-key` is set.
 - Java support mirrors release Maven artifacts only; SNAPSHOT and dynamic/range versions are rejected. SBT/Ivy-only repositories and the Gradle Plugin Portal are not specially handled beyond their Maven-compatible endpoints.
 - APT support mirrors binary `deb` packages for the configured suite/components/architectures; `deb-src`, `Contents-*`, `Translation-*`, and by-hash indexes are not mirrored. The high side regenerates `Packages`/`Release`; publish signed with `--apt-gpg-key` or have clients trust the repo explicitly.
-- RPM support mirrors `.rpm` packages listed in a repo's `primary` metadata (concrete `baseurl` only). The high side regenerates `primary.xml`/`repomd.xml`; `filelists`/`other`/`updateinfo`/`comps` and zchunk (`.zck`) indexes are not produced. Publish signed with `--rpm-gpg-key` or set `repo_gpgcheck=0` on clients.
+- RPM support mirrors a repository's full metadata (`primary`, `filelists`, `other`, `updateinfo`, `comps`, `modules` — carried verbatim) plus every `.rpm`; the high side regenerates and re-signs `repomd.xml`. Requirements/limits: `baseurl` must be concrete (`$releasever`/`$basearch` rejected); the `primary` index must be readable as plain/`.gz`/`.xz` to enumerate packages (a zchunk-*only* `primary` isn't parseable, though `.zck` variants are still mirrored for clients); each collect is a full re-sync (no incremental delta yet). Publish signed with `--rpm-gpg-key` or set `repo_gpgcheck=0` on clients.
 - Python support mirrors wheels only; sdists and PyPI metadata (`requires-python`, yank status) beyond the manifest are not yet surfaced.
 - Re-export (`/admin/reexport`) replays any produced bundle — Go proxy, `/admin/go/collect`, or `/admin/python/collect` — from the persistent archive under `<root>/bundles/`. The archive grows over time; prune old sequences if disk is a concern (they can be re-collected).

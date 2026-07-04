@@ -1,24 +1,30 @@
 package main
 
-// RPM (YUM/DNF) ecosystem adapter — full mirror mode for a single upstream
-// repository, parallel to the APT adapter.
+// RPM (YUM/DNF) ecosystem adapter — full repository mirror, parallel to the APT
+// adapter. It mirrors an entire upstream repository at full metadata fidelity,
+// suitable for full distro mirroring (Fedora/RHEL/EPEL), not just small vendor
+// repos.
 //
 // Low side: fetch repodata/repomd.xml, optionally GPG-verify repomd.xml.asc
-// against a caller-supplied key, read the primary metadata location + checksum,
-// download and verify primary.xml(.gz/.xz), parse every <package> entry, then
-// download every referenced .rpm and verify its SHA256 against the index. The
-// .rpm files are packed into the standard signed ArtiGate bundle; each
-// package's raw <package> XML block is stored in the manifest.
+// against a caller-supplied key, then download and verify EVERY metadata file
+// repomd references (primary, filelists, other, updateinfo, comps, modules,
+// zchunk variants, …) against its recorded checksum. It parses the primary
+// index to enumerate packages, downloads every .rpm, and verifies each against
+// the index. The .rpm files and all metadata files are packed into the standard
+// signed ArtiGate bundle, along with the repomd <data> entries.
 //
-// High side: on import, regenerate primary.xml(.gz) and repomd.xml from the
-// stored <package> blocks of the .rpm files actually present (never trusting
-// the transferred metadata), optionally detach-signing repomd.xml.asc with a
-// high-side key; the repository is then served as static files under /rpm/.
+// High side: on import, it serves the mirrored metadata files verbatim (they are
+// integrity-locked by the ArtiGate manifest and were signature-verified on the
+// low side) and regenerates repomd.xml from the recorded entries whose files are
+// present — so the high side owns and (optionally) re-signs the repository's
+// entry point without ever trusting a transferred repomd/signature as final.
 
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha1" //nolint:gosec // used only to verify legacy repo checksums, not as a security primitive
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -31,7 +37,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -49,20 +54,32 @@ type RpmMirror struct {
 	Name     string       `json:"name"`
 	BaseURL  string       `json:"base_url"`
 	GPGKey   string       `json:"gpg_key,omitempty"`
-	Packages []RpmPackage `json:"packages"`
+	Repodata []RpmData    `json:"repodata"` // repomd.xml <data> entries, for high-side regeneration
+	Packages []RpmPackage `json:"packages"` // enumerated from primary.xml, for UI + validation
+}
+
+// RpmData is one repomd.xml <data> entry (primary, filelists, other, …).
+type RpmData struct {
+	Type             string `json:"type"`
+	Href             string `json:"href"`
+	ChecksumType     string `json:"checksum_type"`
+	Checksum         string `json:"checksum"`
+	OpenChecksumType string `json:"open_checksum_type,omitempty"`
+	OpenChecksum     string `json:"open_checksum,omitempty"`
+	Size             int64  `json:"size,omitempty"`
+	OpenSize         int64  `json:"open_size,omitempty"`
+	Timestamp        string `json:"timestamp,omitempty"`
 }
 
 type RpmPackage struct {
 	Name     string `json:"name"`
 	Version  string `json:"version"`
 	Arch     string `json:"arch"`
-	Location string `json:"location"` // href relative to the repo base, e.g. Packages/foo.rpm
+	Location string `json:"location"`
 	SHA256   string `json:"sha256"`
 	Size     int64  `json:"size"`
-	XML      string `json:"xml"` // the raw <package> block, for high-side regeneration
 }
 
-// rpmFileRel returns the bundle/repository-relative path of a package's .rpm.
 func rpmFileRel(mirror, location string) string {
 	return path.Join("rpm", mirror, location)
 }
@@ -81,9 +98,30 @@ type rpmRepomdData struct {
 		Type  string `xml:"type,attr"`
 		Value string `xml:",chardata"`
 	} `xml:"checksum"`
+	OpenChecksum struct {
+		Type  string `xml:"type,attr"`
+		Value string `xml:",chardata"`
+	} `xml:"open-checksum"`
 	Location struct {
 		Href string `xml:"href,attr"`
 	} `xml:"location"`
+	Size      int64  `xml:"size"`
+	OpenSize  int64  `xml:"open-size"`
+	Timestamp string `xml:"timestamp"`
+}
+
+func (d rpmRepomdData) toRpmData() RpmData {
+	return RpmData{
+		Type:             d.Type,
+		Href:             d.Location.Href,
+		ChecksumType:     d.Checksum.Type,
+		Checksum:         strings.TrimSpace(d.Checksum.Value),
+		OpenChecksumType: d.OpenChecksum.Type,
+		OpenChecksum:     strings.TrimSpace(d.OpenChecksum.Value),
+		Size:             d.Size,
+		OpenSize:         d.OpenSize,
+		Timestamp:        strings.TrimSpace(d.Timestamp),
+	}
 }
 
 type rpmPrimaryDoc struct {
@@ -94,9 +132,8 @@ type rpmPrimaryPackage struct {
 	Name    string `xml:"name"`
 	Arch    string `xml:"arch"`
 	Version struct {
-		Epoch string `xml:"epoch,attr"`
-		Ver   string `xml:"ver,attr"`
-		Rel   string `xml:"rel,attr"`
+		Ver string `xml:"ver,attr"`
+		Rel string `xml:"rel,attr"`
 	} `xml:"version"`
 	Checksum struct {
 		Type  string `xml:"type,attr"`
@@ -110,22 +147,15 @@ type rpmPrimaryPackage struct {
 	} `xml:"location"`
 }
 
-var rpmPackageBlockRE = regexp.MustCompile(`(?s)<package\b.*?</package>`)
-
-// parseRpmPrimary parses a decompressed primary.xml into RpmPackage records,
-// keeping each raw <package> block (matched in document order) for high-side
-// regeneration.
+// parseRpmPrimary parses a decompressed primary.xml into package records used to
+// download/verify the .rpm files and to populate the dashboard.
 func parseRpmPrimary(data []byte) ([]RpmPackage, error) {
 	var doc rpmPrimaryDoc
 	if err := xml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse primary.xml: %w", err)
 	}
-	blocks := rpmPackageBlockRE.FindAllString(string(data), -1)
-	if len(blocks) != len(doc.Packages) {
-		return nil, fmt.Errorf("primary.xml package count mismatch: %d parsed, %d raw blocks", len(doc.Packages), len(blocks))
-	}
 	out := make([]RpmPackage, 0, len(doc.Packages))
-	for i, p := range doc.Packages {
+	for _, p := range doc.Packages {
 		version := p.Version.Ver
 		if p.Version.Rel != "" {
 			version += "-" + p.Version.Rel
@@ -137,7 +167,6 @@ func parseRpmPrimary(data []byte) ([]RpmPackage, error) {
 			Location: p.Location.Href,
 			SHA256:   strings.ToLower(strings.TrimSpace(p.Checksum.Value)),
 			Size:     p.Size.Package,
-			XML:      strings.TrimSpace(blocks[i]),
 		})
 	}
 	return out, nil
@@ -226,35 +255,64 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	return res, nil
 }
 
-// mirrorRpmRepo downloads and verifies repomd, primary, and every .rpm for one
-// mirror, staging the .rpm files under stageRoot.
+// mirrorRpmRepo downloads and verifies repomd, every metadata file it lists, and
+// every .rpm, staging them under stageRoot.
 func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stageRoot string) (RpmMirror, []ManifestFile, error) {
 	base := strings.TrimRight(cfg.BaseURL, "/")
 
-	pkgs, err := s.fetchRpmPrimary(ctx, base, cfg.GPGKey)
+	repomdRaw, err := s.fetchRepomd(ctx, base, cfg.GPGKey)
 	if err != nil {
 		return RpmMirror{}, nil, err
 	}
-	mirror := RpmMirror{Name: cfg.Name, BaseURL: base, GPGKey: filepath.Base(cfg.GPGKey), Packages: pkgs}
+	var md rpmRepomd
+	if err := xml.Unmarshal(repomdRaw, &md); err != nil {
+		return RpmMirror{}, nil, fmt.Errorf("parse repomd.xml: %w", err)
+	}
 
+	mirror := RpmMirror{Name: cfg.Name, BaseURL: base, GPGKey: filepath.Base(cfg.GPGKey)}
 	var files []ManifestFile
-	seen := map[string]bool{}
-	for _, pkg := range pkgs {
-		mf, err := s.downloadRpm(ctx, base, cfg.Name, pkg, stageRoot)
+
+	// Download and verify every metadata file repomd references.
+	var primaryRel string
+	for _, d := range md.Data {
+		entry := d.toRpmData()
+		mf, err := s.downloadRpmFile(ctx, base, cfg.Name, entry.Href, entry.ChecksumType, entry.Checksum, stageRoot)
 		if err != nil {
-			return RpmMirror{}, nil, err
+			return RpmMirror{}, nil, fmt.Errorf("metadata %s: %w", entry.Type, err)
 		}
-		if !seen[mf.Path] {
-			files = append(files, mf)
-			seen[mf.Path] = true
+		files = append(files, mf)
+		mirror.Repodata = append(mirror.Repodata, entry)
+		if entry.Type == "primary" {
+			primaryRel = entry.Href
 		}
+	}
+	if primaryRel == "" {
+		return RpmMirror{}, nil, errors.New("repomd.xml has no primary metadata")
+	}
+
+	// Parse the staged primary to enumerate and fetch every .rpm.
+	primaryPlain, err := readStagedMetadata(stageRoot, cfg.Name, primaryRel)
+	if err != nil {
+		return RpmMirror{}, nil, err
+	}
+	pkgs, err := parseRpmPrimary(primaryPlain)
+	if err != nil {
+		return RpmMirror{}, nil, err
+	}
+	mirror.Packages = pkgs
+	for _, pkg := range pkgs {
+		mf, err := s.downloadRpmFile(ctx, base, cfg.Name, pkg.Location, "sha256", pkg.SHA256, stageRoot)
+		if err != nil {
+			return RpmMirror{}, nil, fmt.Errorf("package %s: %w", pkg.Name, err)
+		}
+		files = append(files, mf)
 	}
 	return mirror, files, nil
 }
 
-// fetchRpmPrimary fetches repomd.xml (verifying repomd.xml.asc when a key is
-// given), then downloads, verifies, and parses the primary metadata.
-func (s *LowServer) fetchRpmPrimary(ctx context.Context, base, gpgKey string) ([]RpmPackage, error) {
+// fetchRepomd downloads repodata/repomd.xml and verifies repomd.xml.asc against
+// the caller's keyring when one is supplied.
+func (s *LowServer) fetchRepomd(ctx context.Context, base, gpgKey string) ([]byte, error) {
 	repomd, err := httpDownload(ctx, base+"/repodata/repomd.xml")
 	if err != nil {
 		return nil, fmt.Errorf("fetch repomd.xml: %w", err)
@@ -268,54 +326,23 @@ func (s *LowServer) fetchRpmPrimary(ctx context.Context, base, gpgKey string) ([
 			return nil, fmt.Errorf("verify repomd.xml: %w", err)
 		}
 	}
-	var md rpmRepomd
-	if err := xml.Unmarshal(repomd, &md); err != nil {
-		return nil, fmt.Errorf("parse repomd.xml: %w", err)
-	}
-	primary, ok := rpmPrimaryData(md)
-	if !ok {
-		return nil, errors.New("repomd.xml has no primary metadata")
-	}
-	if primary.Checksum.Type != "sha256" {
-		return nil, fmt.Errorf("unsupported primary checksum type %q (need sha256)", primary.Checksum.Type)
-	}
-	raw, err := httpDownload(ctx, base+"/"+primary.Location.Href)
-	if err != nil {
-		return nil, err
-	}
-	if err := verifySHA256(raw, primary.Checksum.Value); err != nil {
-		return nil, fmt.Errorf("primary index: %w", err)
-	}
-	plain, err := decompressByExt(primary.Location.Href, raw)
-	if err != nil {
-		return nil, err
-	}
-	return parseRpmPrimary(plain)
+	return repomd, nil
 }
 
-func rpmPrimaryData(md rpmRepomd) (rpmRepomdData, bool) {
-	for _, d := range md.Data {
-		if d.Type == "primary" {
-			return d, true
-		}
+// downloadRpmFile fetches one repository file (metadata or .rpm), verifies it
+// against the repo-declared checksum, and stages it under rpm/<mirror>/<rel>.
+func (s *LowServer) downloadRpmFile(ctx context.Context, base, mirror, relHref, checksumType, checksum string, stageRoot string) (ManifestFile, error) {
+	if err := validateRelPath(relHref); err != nil {
+		return ManifestFile{}, fmt.Errorf("unsafe location %q: %w", relHref, err)
 	}
-	return rpmRepomdData{}, false
-}
-
-// downloadRpm fetches one .rpm, verifies its SHA256, and stages it under
-// rpm/<mirror>/<location>.
-func (s *LowServer) downloadRpm(ctx context.Context, base, mirror string, pkg RpmPackage, stageRoot string) (ManifestFile, error) {
-	if err := validateRelPath(pkg.Location); err != nil {
-		return ManifestFile{}, fmt.Errorf("unsafe package location %q: %w", pkg.Location, err)
-	}
-	data, err := httpDownload(ctx, base+"/"+pkg.Location)
+	data, err := httpDownload(ctx, base+"/"+relHref)
 	if err != nil {
 		return ManifestFile{}, err
 	}
-	if err := verifySHA256(data, pkg.SHA256); err != nil {
-		return ManifestFile{}, fmt.Errorf("%s: %w", pkg.Location, err)
+	if err := verifyChecksum(data, checksumType, checksum); err != nil {
+		return ManifestFile{}, fmt.Errorf("%s: %w", relHref, err)
 	}
-	rel := rpmFileRel(mirror, pkg.Location)
+	rel := rpmFileRel(mirror, relHref)
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return ManifestFile{}, err
@@ -323,7 +350,18 @@ func (s *LowServer) downloadRpm(ctx context.Context, base, mirror string, pkg Rp
 	if err := os.WriteFile(abs, data, 0o644); err != nil {
 		return ManifestFile{}, err
 	}
-	return ManifestFile{Path: rel, SHA256: pkg.SHA256, Size: int64(len(data))}, nil
+	return ManifestFile{Path: rel, SHA256: sha256Hex(data), Size: int64(len(data))}, nil
+}
+
+// readStagedMetadata reads a staged metadata file and decompresses it by
+// extension.
+func readStagedMetadata(stageRoot, mirror, relHref string) ([]byte, error) {
+	abs := filepath.Join(stageRoot, filepath.FromSlash(rpmFileRel(mirror, relHref)))
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, err
+	}
+	return decompressByExt(relHref, raw)
 }
 
 func (s *LowServer) writeRpmBundle(seq int64, stageRoot string, files []ManifestFile, mirrors []RpmMirror) (ExportResult, error) {
@@ -356,10 +394,9 @@ func (s *LowServer) writeRpmBundle(seq int64, stageRoot string, files []Manifest
 }
 
 // -----------------------------------------------------------------------------
-// Helpers (HTTP, decompression)
+// Helpers (HTTP, decompression, checksums)
 // -----------------------------------------------------------------------------
 
-// httpDownload GETs a URL with a timeout and a size cap.
 func httpDownload(ctx context.Context, rawURL string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
@@ -372,7 +409,7 @@ func httpDownload(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<30))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<30))
 	if err != nil {
 		return nil, err
 	}
@@ -382,9 +419,8 @@ func httpDownload(ctx context.Context, rawURL string) ([]byte, error) {
 	return body, nil
 }
 
-// decompressByExt decompresses data according to href's extension: .gz via the
-// standard library, .xz by shelling to xz, and plain otherwise. Zchunk (.zck)
-// is not supported.
+// decompressByExt decompresses by href extension: .gz via the standard library,
+// .xz by shelling to xz, and plain otherwise.
 func decompressByExt(href string, data []byte) ([]byte, error) {
 	switch {
 	case strings.HasSuffix(href, ".gz"):
@@ -392,7 +428,7 @@ func decompressByExt(href string, data []byte) ([]byte, error) {
 	case strings.HasSuffix(href, ".xz"):
 		return xzDecompress(data)
 	case strings.HasSuffix(href, ".zck"):
-		return nil, fmt.Errorf("zchunk (.zck) metadata is not supported: %s", href)
+		return nil, fmt.Errorf("zchunk (.zck) index cannot be parsed: %s", href)
 	default:
 		return data, nil
 	}
@@ -415,6 +451,29 @@ func sha256Hex(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
+// verifyChecksum verifies data against a repo-declared checksum of the named
+// type (sha256/sha512/sha1). ArtiGate's own bundle integrity always uses
+// sha256; this only mirrors what the upstream repomd declares.
+func verifyChecksum(data []byte, algo, want string) error {
+	var got string
+	switch strings.ToLower(algo) {
+	case "sha256", "":
+		got = sha256Hex(data)
+	case "sha512":
+		h := sha512.Sum512(data)
+		got = hex.EncodeToString(h[:])
+	case "sha1", "sha":
+		h := sha1.Sum(data) //nolint:gosec // verifying a legacy repo-declared checksum
+		got = hex.EncodeToString(h[:])
+	default:
+		return fmt.Errorf("unsupported checksum type %q", algo)
+	}
+	if !strings.EqualFold(got, strings.TrimSpace(want)) {
+		return fmt.Errorf("%s mismatch: got %s want %s", algo, got, want)
+	}
+	return nil
+}
+
 // -----------------------------------------------------------------------------
 // Config resolution + .repo parsing
 // -----------------------------------------------------------------------------
@@ -427,7 +486,7 @@ func resolveRpmMirrors(req RpmCollectRequest) ([]rpmMirrorConfig, error) {
 			return nil, err
 		}
 		configs = parsed
-		if req.GPGKey != "" { // an explicit local keyring applies to all sections
+		if req.GPGKey != "" {
 			for i := range configs {
 				configs[i].GPGKey = req.GPGKey
 			}
@@ -497,7 +556,7 @@ func applyRepoField(cur *rpmMirrorConfig, line string) {
 	key, val := strings.TrimSpace(line[:eq]), strings.TrimSpace(line[eq+1:])
 	switch key {
 	case "baseurl":
-		cur.BaseURL = val
+		cur.BaseURL = firstField(val)
 	case "gpgkey":
 		if p, ok := localKeyringPath(val); ok {
 			cur.GPGKey = p
@@ -546,36 +605,47 @@ func validateRpmMirrorConfig(cfg rpmMirrorConfig) (rpmMirrorConfig, error) {
 
 func validateRpmMirrors(mirrors []RpmMirror, seen map[string]bool) error {
 	for _, m := range mirrors {
-		if m.Name == "" || m.BaseURL == "" {
-			return errors.New("rpm mirror missing name or base_url")
+		if err := validateRpmMirror(m, seen); err != nil {
+			return err
 		}
-		if strings.ContainsRune(m.Name, '/') {
-			return fmt.Errorf("invalid rpm mirror name %q", m.Name)
+	}
+	return nil
+}
+
+func validateRpmMirror(m RpmMirror, seen map[string]bool) error {
+	if m.Name == "" || m.BaseURL == "" {
+		return errors.New("rpm mirror missing name or base_url")
+	}
+	if strings.ContainsRune(m.Name, '/') {
+		return fmt.Errorf("invalid rpm mirror name %q", m.Name)
+	}
+	if len(m.Repodata) == 0 {
+		return fmt.Errorf("rpm mirror %s has no repodata", m.Name)
+	}
+	for _, d := range m.Repodata {
+		if !seen[rpmFileRel(m.Name, d.Href)] {
+			return fmt.Errorf("rpm mirror %s references metadata not in manifest.files: %s", m.Name, d.Href)
 		}
-		for _, p := range m.Packages {
-			if p.Location == "" || p.SHA256 == "" || strings.TrimSpace(p.XML) == "" {
-				return fmt.Errorf("rpm package %s missing location, sha256, or xml", p.Name)
-			}
-			rel := rpmFileRel(m.Name, p.Location)
-			if !seen[rel] {
-				return fmt.Errorf("rpm package references file not listed in manifest.files: %s", rel)
-			}
+	}
+	for _, p := range m.Packages {
+		if !seen[rpmFileRel(m.Name, p.Location)] {
+			return fmt.Errorf("rpm mirror %s references package not in manifest.files: %s", m.Name, p.Location)
 		}
 	}
 	return nil
 }
 
 // -----------------------------------------------------------------------------
-// High side: regenerate + publish repodata (called on import)
+// High side: regenerate + publish repomd (called on import)
 // -----------------------------------------------------------------------------
 
 func (s *HighServer) rpmDir() string {
 	return filepath.Join(s.downloadDir, "rpm")
 }
 
-// publishRpm regenerates repodata for every mirror in a freshly imported
-// bundle, rebuilding primary.xml/repomd.xml from the stored <package> blocks of
-// the .rpm files actually present.
+// publishRpm regenerates repomd.xml for every mirror in a freshly imported
+// bundle. Each mirror's newest snapshot wins (metadata files are content-named
+// and immutable; repomd is high-side-owned and re-signed).
 func (s *HighServer) publishRpm(m *RpmManifest) error {
 	if m == nil {
 		return nil
@@ -588,103 +658,74 @@ func (s *HighServer) publishRpm(m *RpmManifest) error {
 	return nil
 }
 
-func (s *HighServer) mergeRpmMirror(mirror RpmMirror) (RpmMirror, error) {
+func (s *HighServer) publishRpmMirror(mirror RpmMirror) error {
+	// Persist the latest snapshot's state (repodata entries + package list) so
+	// the dashboard and repomd reflect the current repository.
 	indexPath := filepath.Join(s.rpmDir(), mirror.Name, "index.json")
-	merged := RpmMirror{Name: mirror.Name, BaseURL: mirror.BaseURL}
-	if b, err := os.ReadFile(indexPath); err == nil {
-		if err := json.Unmarshal(b, &merged); err != nil {
-			return RpmMirror{}, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return RpmMirror{}, err
-	}
-	merged.BaseURL = mirror.BaseURL
-	byLoc := map[string]int{}
-	for i, p := range merged.Packages {
-		byLoc[p.Location] = i
-	}
-	for _, p := range mirror.Packages {
-		if i, ok := byLoc[p.Location]; ok {
-			merged.Packages[i] = p
-		} else {
-			byLoc[p.Location] = len(merged.Packages)
-			merged.Packages = append(merged.Packages, p)
-		}
-	}
-	sort.Slice(merged.Packages, func(i, j int) bool { return merged.Packages[i].Location < merged.Packages[j].Location })
-	out, err := json.MarshalIndent(merged, "", "  ")
+	out, err := json.MarshalIndent(mirror, "", "  ")
 	if err != nil {
-		return RpmMirror{}, err
+		return err
 	}
 	if err := writeBytesAtomic(indexPath, out, 0o644); err != nil {
-		return RpmMirror{}, err
+		return err
 	}
-	return merged, nil
+
+	mirrorRoot := filepath.Join(s.rpmDir(), mirror.Name)
+	repomd := buildRpmRepomd(mirrorRoot, mirror.Repodata)
+	if err := writeBytesAtomic(filepath.Join(mirrorRoot, "repodata", "repomd.xml"), repomd, 0o644); err != nil {
+		return err
+	}
+	return s.signRpmRepomd(filepath.Join(mirrorRoot, "repodata"))
 }
 
-func (s *HighServer) publishRpmMirror(mirror RpmMirror) error {
-	merged, err := s.mergeRpmMirror(mirror)
-	if err != nil {
-		return err
-	}
-	mirrorRoot := filepath.Join(s.rpmDir(), merged.Name)
-	repodata := filepath.Join(mirrorRoot, "repodata")
-
-	primary := buildRpmPrimary(mirrorRoot, merged.Packages)
-	primaryGz, err := gzipBytes(primary)
-	if err != nil {
-		return err
-	}
-	if err := writeBytesAtomic(filepath.Join(repodata, "primary.xml.gz"), primaryGz, 0o644); err != nil {
-		return err
-	}
-	repomd := buildRpmRepomd(primary, primaryGz)
-	if err := writeBytesAtomic(filepath.Join(repodata, "repomd.xml"), repomd, 0o644); err != nil {
-		return err
-	}
-	return s.signRpmRepomd(repodata, repomd)
-}
-
-// buildRpmPrimary concatenates the stored <package> blocks (for .rpm files
-// present on disk) into a primary.xml document.
-func buildRpmPrimary(mirrorRoot string, pkgs []RpmPackage) []byte {
-	var blocks []string
-	for _, p := range pkgs {
-		if fileExists(filepath.Join(mirrorRoot, filepath.FromSlash(p.Location))) {
-			blocks = append(blocks, strings.TrimSpace(p.XML))
-		}
-	}
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
-	fmt.Fprintf(&b, `<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="%d">`+"\n", len(blocks))
-	for _, blk := range blocks {
-		b.WriteString(blk)
-		b.WriteString("\n")
-	}
-	b.WriteString("</metadata>\n")
-	return []byte(b.String())
-}
-
-func buildRpmRepomd(primary, primaryGz []byte) []byte {
-	now := time.Now().UTC().Unix()
+// buildRpmRepomd renders repomd.xml from the recorded <data> entries whose files
+// are present on disk. It preserves the upstream checksums/open-checksums (the
+// files are carried verbatim and integrity-locked), so it never has to
+// decompress or re-hash the potentially large or zchunk-only metadata.
+func buildRpmRepomd(mirrorRoot string, entries []RpmData) []byte {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	b.WriteString(`<repomd xmlns="http://linux.duke.edu/metadata/repo" xmlns:rpm="http://linux.duke.edu/metadata/rpm">` + "\n")
-	fmt.Fprintf(&b, "  <revision>%d</revision>\n", now)
-	b.WriteString(`  <data type="primary">` + "\n")
-	fmt.Fprintf(&b, `    <checksum type="sha256">%s</checksum>`+"\n", sha256Hex(primaryGz))
-	fmt.Fprintf(&b, `    <open-checksum type="sha256">%s</open-checksum>`+"\n", sha256Hex(primary))
-	b.WriteString(`    <location href="repodata/primary.xml.gz"/>` + "\n")
-	fmt.Fprintf(&b, "    <timestamp>%d</timestamp>\n", now)
-	fmt.Fprintf(&b, "    <size>%d</size>\n", len(primaryGz))
-	fmt.Fprintf(&b, "    <open-size>%d</open-size>\n", len(primary))
-	b.WriteString("  </data>\n</repomd>\n")
+	fmt.Fprintf(&b, "  <revision>%d</revision>\n", time.Now().UTC().Unix())
+	for _, d := range entries {
+		if !fileExists(filepath.Join(mirrorRoot, filepath.FromSlash(d.Href))) {
+			continue
+		}
+		writeRepomdData(&b, d)
+	}
+	b.WriteString("</repomd>\n")
 	return []byte(b.String())
+}
+
+func writeRepomdData(b *strings.Builder, d RpmData) {
+	fmt.Fprintf(b, "  <data type=%q>\n", d.Type)
+	fmt.Fprintf(b, "    <checksum type=%q>%s</checksum>\n", orDefault(d.ChecksumType, "sha256"), d.Checksum)
+	if d.OpenChecksum != "" {
+		fmt.Fprintf(b, "    <open-checksum type=%q>%s</open-checksum>\n", orDefault(d.OpenChecksumType, "sha256"), d.OpenChecksum)
+	}
+	fmt.Fprintf(b, "    <location href=%q/>\n", d.Href)
+	if d.Timestamp != "" {
+		fmt.Fprintf(b, "    <timestamp>%s</timestamp>\n", d.Timestamp)
+	}
+	if d.Size > 0 {
+		fmt.Fprintf(b, "    <size>%d</size>\n", d.Size)
+	}
+	if d.OpenSize > 0 {
+		fmt.Fprintf(b, "    <open-size>%d</open-size>\n", d.OpenSize)
+	}
+	b.WriteString("  </data>\n")
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 // signRpmRepomd writes a detached repomd.xml.asc when a high-side RPM signing
 // key is configured; otherwise it removes any stale signature (unsigned repo).
-func (s *HighServer) signRpmRepomd(repodata string, _ []byte) error {
+func (s *HighServer) signRpmRepomd(repodata string) error {
 	key := s.cfg.RpmGPGKey
 	sigPath := filepath.Join(repodata, "repomd.xml.asc")
 	if key == "" {

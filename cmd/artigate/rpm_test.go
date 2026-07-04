@@ -12,44 +12,53 @@ import (
 	"testing"
 )
 
-// registerRpmRepo serves a minimal valid YUM/DNF repository (repomd.xml +
-// primary.xml.gz + one .rpm) for one package at prefix on mux, with a correctly
-// chaining SHA256 so the collector verifies without GPG. tamper corrupts the
-// served .rpm. It returns the .rpm body.
+// registerRpmRepo serves a full-metadata YUM/DNF repository (repomd.xml with
+// primary + filelists + updateinfo, plus one .rpm) for one package at prefix on
+// mux, with correctly chaining SHA256s so the collector verifies without GPG.
+// tamper corrupts the served .rpm. It returns the .rpm body.
 func registerRpmRepo(t *testing.T, mux *http.ServeMux, prefix, pkg, ver, rel string, tamper bool) string {
 	t.Helper()
 	rpmBytes := []byte("FAKE-RPM-" + pkg + "-" + ver + "-" + rel)
+	rpmSHA := aptSHA256(rpmBytes)
 	loc := fmt.Sprintf("Packages/%s-%s-%s.x86_64.rpm", pkg, ver, rel)
-	block := fmt.Sprintf(`<package type="rpm">
-  <name>%s</name>
-  <arch>x86_64</arch>
-  <version epoch="0" ver="%s" rel="%s"/>
-  <checksum type="sha256" pkgid="YES">%s</checksum>
-  <size package="%d"/>
-  <location href="%s"/>
-</package>`, pkg, ver, rel, aptSHA256(rpmBytes), len(rpmBytes), loc)
-	primary := []byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
-		`<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1">` + "\n" +
-		block + "\n</metadata>\n")
-	primaryGz, err := gzipBytes(primary)
-	if err != nil {
-		t.Fatal(err)
+
+	primary := []byte(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>`+"\n"+
+		`<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1">`+"\n"+
+		`<package type="rpm"><name>%s</name><arch>x86_64</arch><version epoch="0" ver="%s" rel="%s"/>`+
+		`<checksum type="sha256" pkgid="YES">%s</checksum><size package="%d"/><location href="%s"/></package>`+"\n"+
+		`</metadata>`+"\n", pkg, ver, rel, rpmSHA, len(rpmBytes), loc))
+	filelists := []byte(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>`+"\n"+
+		`<filelists xmlns="http://linux.duke.edu/metadata/filelists" packages="1">`+"\n"+
+		`<package pkgid="%s" name="%s" arch="x86_64"><version epoch="0" ver="%s" rel="%s"/></package>`+"\n"+
+		`</filelists>`+"\n", rpmSHA, pkg, ver, rel))
+	updateinfo := []byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n<updates></updates>\n")
+
+	// data serves one metadata file (gzipped) and returns its repomd <data> block.
+	data := func(typ string, plain []byte) string {
+		gz, err := gzipBytes(plain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		href := "repodata/" + typ + ".xml.gz"
+		mux.HandleFunc("/"+strings.TrimLeft(prefix+"/"+href, "/"), func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(gz) })
+		return fmt.Sprintf(`  <data type="%s">`+"\n"+
+			`    <checksum type="sha256">%s</checksum>`+"\n"+
+			`    <open-checksum type="sha256">%s</open-checksum>`+"\n"+
+			`    <location href="%s"/>`+"\n"+
+			`    <size>%d</size>`+"\n"+
+			`    <open-size>%d</open-size>`+"\n"+
+			`  </data>`+"\n", typ, aptSHA256(gz), aptSHA256(plain), href, len(gz), len(plain))
 	}
-	repomd := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>`+"\n"+
-		`<repomd xmlns="http://linux.duke.edu/metadata/repo">`+"\n"+
-		`  <revision>1</revision>`+"\n"+
-		`  <data type="primary">`+"\n"+
-		`    <checksum type="sha256">%s</checksum>`+"\n"+
-		`    <location href="repodata/primary.xml.gz"/>`+"\n"+
-		`    <size>%d</size>`+"\n"+
-		`  </data>`+"\n</repomd>\n", aptSHA256(primaryGz), len(primaryGz))
+	repomd := `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+		`<repomd xmlns="http://linux.duke.edu/metadata/repo">` + "\n  <revision>1</revision>\n" +
+		data("primary", primary) + data("filelists", filelists) + data("updateinfo", updateinfo) +
+		`</repomd>` + "\n"
+	mux.HandleFunc(prefix+"/repodata/repomd.xml", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(repomd)) })
 
 	served := rpmBytes
 	if tamper {
 		served = []byte("CORRUPTED-DIFFERENT-BYTES")
 	}
-	mux.HandleFunc(prefix+"/repodata/repomd.xml", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(repomd)) })
-	mux.HandleFunc(prefix+"/repodata/primary.xml.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(primaryGz) })
 	mux.HandleFunc(prefix+"/"+loc, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(served) })
 	return string(rpmBytes)
 }
@@ -83,11 +92,9 @@ func TestParseRepoFile(t *testing.T) {
 	if len(cfgs) != 1 || cfgs[0].Name != "code" || cfgs[0].BaseURL != "https://packages.microsoft.com/yumrepos/vscode" {
 		t.Fatalf("parseRepoFile = %+v", cfgs)
 	}
-	// A remote gpgkey URL cannot be used as a local keyring, so verification is skipped.
 	if cfgs[0].GPGKey != "" {
 		t.Errorf("remote gpgkey should not become a keyring path, got %q", cfgs[0].GPGKey)
 	}
-	// Multi-section file yields one config per repo.
 	multi := "[a]\nbaseurl=https://a.example/repo\n\n[b]\nbaseurl=https://b.example/repo\n"
 	got, err := parseRepoFile(multi)
 	if err != nil || len(got) != 2 || got[0].Name != "a" || got[1].BaseURL != "https://b.example/repo" {
@@ -98,42 +105,6 @@ func TestParseRepoFile(t *testing.T) {
 func TestValidateRpmMirrorConfigRejectsVariables(t *testing.T) {
 	if _, err := validateRpmMirrorConfig(rpmMirrorConfig{Name: "x", BaseURL: "https://ex/$releasever/os"}); err == nil {
 		t.Error("baseurl with $releasever should be rejected")
-	}
-}
-
-// TestLowToHighRpmPipeline is the full round-trip: mirror a fake upstream RPM
-// repo, transfer the signed bundle, import it, and confirm the high side
-// regenerated repodata and serves the repository.
-func TestLowToHighRpmPipeline(t *testing.T) {
-	hs, res, rpmBody := collectAndImportRpm(t)
-	if res.BundleID != "go-bundle-000001" || res.ExportedModules != 1 {
-		t.Fatalf("unexpected collect result: %+v", res)
-	}
-
-	srv := httptest.NewServer(hs)
-	defer srv.Close()
-
-	base := srv.URL + "/rpm/vscode"
-	assertServed(t, base+"/Packages/code-1.101.2-1.x86_64.rpm", rpmBody)
-	assertServed(t, base+"/repodata/repomd.xml", `type="primary"`)
-	assertServed(t, base+"/repodata/repomd.xml", "sha256")
-	assertServed(t, base+"/repodata/primary.xml.gz", "")
-
-	// Unsigned by default (no --rpm-gpg-key): repomd.xml.asc absent.
-	if code, _ := httpGet(t, base+"/repodata/repomd.xml.asc"); code == http.StatusOK {
-		t.Error("repomd.xml.asc should be absent without a high-side signing key")
-	}
-	// The regenerated primary lists the package.
-	code, body := httpGet(t, base+"/repodata/primary.xml.gz")
-	if code != http.StatusOK {
-		t.Fatalf("primary.xml.gz status %d", code)
-	}
-	plain, err := gunzip([]byte(body))
-	if err != nil {
-		t.Fatalf("gunzip primary: %v", err)
-	}
-	if !strings.Contains(string(plain), "<name>code</name>") {
-		t.Errorf("regenerated primary missing package: %s", plain)
 	}
 }
 
@@ -162,6 +133,46 @@ func collectAndImportRpm(t *testing.T) (*HighServer, ExportResult, string) {
 		t.Fatalf("high import of rpm bundle failed: %v", err)
 	}
 	return hs, res, rpmBody
+}
+
+// TestLowToHighRpmPipeline is the full round-trip: mirror a full-metadata fake
+// upstream, transfer the bundle, import it, and confirm the high side carries
+// every metadata type and regenerates a repomd that lists them all.
+func TestLowToHighRpmPipeline(t *testing.T) {
+	hs, res, rpmBody := collectAndImportRpm(t)
+	if res.BundleID != "go-bundle-000001" || res.ExportedModules != 1 {
+		t.Fatalf("unexpected collect result: %+v", res)
+	}
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	base := srv.URL + "/rpm/vscode"
+	assertServed(t, base+"/Packages/code-1.101.2-1.x86_64.rpm", rpmBody)
+
+	// Every metadata file is served, including filelists and updateinfo — the
+	// types a createrepo_c-only regeneration would drop.
+	assertServed(t, base+"/repodata/primary.xml.gz", "")
+	assertServed(t, base+"/repodata/filelists.xml.gz", "")
+	assertServed(t, base+"/repodata/updateinfo.xml.gz", "")
+
+	// The regenerated repomd lists all three types.
+	for _, want := range []string{`type="primary"`, `type="filelists"`, `type="updateinfo"`, "sha256"} {
+		assertServed(t, base+"/repodata/repomd.xml", want)
+	}
+	// Unsigned by default: repomd.xml.asc absent.
+	if code, _ := httpGet(t, base+"/repodata/repomd.xml.asc"); code == http.StatusOK {
+		t.Error("repomd.xml.asc should be absent without a high-side signing key")
+	}
+	// The served primary lists the package (carried verbatim from upstream).
+	_, body := httpGet(t, base+"/repodata/primary.xml.gz")
+	plain, err := gunzip([]byte(body))
+	if err != nil {
+		t.Fatalf("gunzip primary: %v", err)
+	}
+	if !strings.Contains(string(plain), "<name>code</name>") {
+		t.Errorf("served primary missing package: %s", plain)
+	}
 }
 
 // TestCollectRpmMultipleRepos mirrors two repos and confirms they stay in
@@ -202,7 +213,6 @@ func TestCollectRpmMultipleRepos(t *testing.T) {
 	assertServed(t, srv.URL+"/rpm/code/Packages/code-1.0-1.x86_64.rpm", "FAKE-RPM-code")
 	assertServed(t, srv.URL+"/rpm/tools/Packages/tool-2.0-1.x86_64.rpm", "FAKE-RPM-tool")
 
-	// Not mixed: code's regenerated primary contains code, not tool.
 	_, body := httpGet(t, srv.URL+"/rpm/code/repodata/primary.xml.gz")
 	plain, err := gunzip([]byte(body))
 	if err != nil {
