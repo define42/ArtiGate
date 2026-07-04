@@ -99,17 +99,26 @@ const lowUIHTML = `<!DOCTYPE html>
 <header>
   <h1>ArtiGate <span style="color:#8b93a5;font-weight:400">low-side exporter</span></h1>
   <nav>
-    <button type="button" data-view="go" class="active" onclick="setView('go')">Go</button>
+    <button type="button" data-view="overview" class="active" onclick="setView('overview')">Overview</button>
+    <button type="button" data-view="go" onclick="setView('go')">Go</button>
     <button type="button" data-view="python" onclick="setView('python')">Python</button>
     <button type="button" data-view="java" onclick="setView('java')">Java</button>
     <button type="button" data-view="apt" onclick="setView('apt')">APT</button>
     <button type="button" data-view="rpm" onclick="setView('rpm')">RPM</button>
     <button type="button" data-view="status" onclick="setView('status')">Status</button>
   </nav>
-  <button type="button" class="refresh" onclick="loadStatus()">Refresh</button>
+  <button type="button" class="refresh" onclick="loadStatus();loadAllWatches()">Refresh</button>
 </header>
 <main>
-  <section class="view" id="view-go">
+  <section class="view" id="view-overview">
+  <div class="card">
+    <h2>Scheduled pulls</h2>
+    <p class="hint">Every schedule across all ecosystems, with its last run, status, and next run &mdash; so you can see at a glance whether they are working. Add or edit schedules on each ecosystem's page.</p>
+    <div id="allWatches"><p class="empty">Loading&hellip;</p></div>
+  </div>
+  </section>
+
+  <section class="view" id="view-go" hidden>
   <div class="card">
     <h2>Mirror Go modules</h2>
     <p class="hint">List modules to fetch &mdash; one per line: <code>module@v1.2.3</code> to pin, or just <code>module</code> (or <code>module@latest</code>) for the newest version, e.g. <code>github.com/caddyserver/certmagic</code>. Each listed module is fetched together with its full dependency graph. <em>Or</em> upload a project's <code>go.mod</code> to mirror exactly that project's module graph. Same as POSTing to <code>/admin/go/collect</code>.</p>
@@ -282,12 +291,13 @@ function formatBytes(n){
 // stream). Views without a stream (status) are absent.
 const VIEW_STREAM={go:'go',python:'python',java:'maven',apt:'apt',rpm:'rpm'};
 function setView(view){
-  for(const v of ['go','python','java','apt','rpm','status']){
+  for(const v of ['overview','go','python','java','apt','rpm','status']){
     document.getElementById('view-'+v).hidden = (v!==view);
   }
   document.querySelectorAll('nav button[data-view]').forEach(b=>{
     b.classList.toggle('active', b.dataset.view===view);
   });
+  if(view==='overview') loadAllWatches();
   if(view==='status') loadStatus();
   if(VIEW_STREAM[view]) loadWatchesInto(VIEW_STREAM[view]);
 }
@@ -635,13 +645,14 @@ function fmtEvery(sec){
 }
 function fmtTime(s){ if(!s) return '&mdash;'; const d=new Date(s); return isNaN(d.getTime())?esc(s):esc(d.toLocaleString()); }
 
-function watchRow(wt){
+function watchRow(wt, showStream){
   const status=wt.last_status==='error'?'<span class="pill warn">error</span>'
     :wt.last_status==='ok'?'<span class="pill ok">ok</span>':'&mdash;';
   const toggle=wt.enabled
     ? '<button onclick="watchAction(\'disable\','+wt.id+',\''+wt.stream+'\')">Disable</button>'
     : '<button onclick="watchAction(\'enable\','+wt.id+',\''+wt.stream+'\')">Enable</button>';
-  return '<tr><td>'+esc(wt.label)+'</td><td>'+esc(fmtEvery(wt.interval_seconds))+'</td>'+
+  const streamCell=showStream?'<td>'+esc(streamLabel(wt.stream))+'</td>':'';
+  return '<tr>'+streamCell+'<td>'+esc(wt.label)+'</td><td>'+esc(fmtEvery(wt.interval_seconds))+'</td>'+
     '<td>'+(wt.enabled?'yes':'no')+'</td><td>'+fmtTime(wt.last_run_at)+'</td>'+
     '<td>'+status+(wt.last_message?'<br><span class="wmsg">'+esc(wt.last_message)+'</span>':'')+'</td>'+
     '<td>'+fmtTime(wt.next_run_at)+'</td>'+
@@ -661,7 +672,23 @@ async function loadWatchesInto(stream){
     if(!list.length){ box.innerHTML=''; return; }
     box.innerHTML='<table><thead><tr><th>Schedule</th><th>Every</th><th>Enabled</th>'+
       '<th>Last run</th><th>Status</th><th>Next run</th><th>Actions</th></tr></thead><tbody>'+
-      list.map(watchRow).join('')+'</tbody></table>';
+      list.map(w=>watchRow(w,false)).join('')+'</tbody></table>';
+  }catch(e){ box.textContent='Failed to load schedules: '+e.message; }
+}
+
+// loadAllWatches renders every schedule across all ecosystems on the Overview
+// page, with a Stream column and each schedule's working status.
+async function loadAllWatches(){
+  const box=document.getElementById('allWatches');
+  if(!box) return;
+  try{
+    const r=await fetch('/admin/watches',{cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const list=(await r.json()).watches||[];
+    if(!list.length){ box.innerHTML='<p class="empty">No schedules yet. Add one from an ecosystem page.</p>'; return; }
+    box.innerHTML='<table><thead><tr><th>Stream</th><th>Schedule</th><th>Every</th><th>Enabled</th>'+
+      '<th>Last run</th><th>Status</th><th>Next run</th><th>Actions</th></tr></thead><tbody>'+
+      list.map(w=>watchRow(w,true)).join('')+'</tbody></table>';
   }catch(e){ box.textContent='Failed to load schedules: '+e.message; }
 }
 
@@ -673,11 +700,12 @@ async function watchAction(action, id, stream){
     if(!r.ok){ const t=await r.text(); show('err','Error: '+esc(t.trim())); return; }
     if(action==='run') show('ok','&#10003; Run started; the schedule updates when it finishes.');
     loadWatchesInto(stream);
+    loadAllWatches();
   }catch(e){ show('err','Request failed: '+esc(e.message)); }
 }
 
 loadStatus();
-loadWatchesInto('go');
+loadAllWatches();
 </script>
 </body>
 </html>
