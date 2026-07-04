@@ -117,6 +117,7 @@ type BundleManifest struct {
 	Modules          []ManifestMod   `json:"modules,omitempty"`
 	Python           *PythonManifest `json:"python,omitempty"`
 	Maven            *MavenManifest  `json:"maven,omitempty"`
+	Apt              *AptManifest    `json:"apt,omitempty"`
 	Files            []ManifestFile  `json:"files"`
 }
 
@@ -410,6 +411,8 @@ func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool
 		res, err = s.HandlePythonCollect(r.Context(), r)
 	case "/admin/maven/collect":
 		res, err = s.HandleMavenCollect(r.Context(), r)
+	case "/admin/apt/collect":
+		res, err = s.HandleAptCollect(r.Context(), r)
 	default:
 		return false
 	}
@@ -1516,6 +1519,7 @@ type HighConfig struct {
 	Quarantine     string
 	PublicKeyPath  string
 	ImportInterval time.Duration
+	AptGPGKey      string
 }
 
 type HighState struct {
@@ -1543,6 +1547,7 @@ func runHigh(args []string) {
 	fs.StringVar(&cfg.Quarantine, "quarantine", "", "directory for out-of-order future bundles; default is <root>/quarantine")
 	fs.StringVar(&cfg.PublicKeyPath, "public-key", "", "base64 Ed25519 public key path")
 	fs.DurationVar(&cfg.ImportInterval, "import-interval", 10*time.Second, "bundle import scan interval; 0 disables background import")
+	fs.StringVar(&cfg.AptGPGKey, "apt-gpg-key", "", "GPG key id used to sign regenerated APT repositories (InRelease); unset serves them unsigned")
 	_ = fs.Parse(args)
 	if cfg.PublicKeyPath == "" {
 		log.Fatal("--public-key is required")
@@ -1607,6 +1612,9 @@ func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.serveMaven(w, r) {
+		return
+	}
+	if s.serveApt(w, r) {
 		return
 	}
 	if s.serveUI(w, r) {
@@ -2048,26 +2056,27 @@ func validateManifestCompleteness(m BundleManifest) error {
 	if err != nil {
 		return err
 	}
-	hasGo := len(m.Modules) > 0
-	hasPython := m.Python != nil && len(m.Python.Projects) > 0
-	hasMaven := m.Maven != nil && len(m.Maven.Artifacts) > 0
-	if !hasGo && !hasPython && !hasMaven {
-		return errors.New("manifest contains no modules, python projects, or maven artifacts")
+	ecosystems := []struct {
+		present bool
+		check   func(map[string]bool) error
+	}{
+		{len(m.Modules) > 0, func(s map[string]bool) error { return validateManifestModules(m.Modules, s) }},
+		{m.Python != nil && len(m.Python.Projects) > 0, func(s map[string]bool) error { return validatePythonProjects(m.Python.Projects, s) }},
+		{m.Maven != nil && len(m.Maven.Artifacts) > 0, func(s map[string]bool) error { return validateMavenArtifacts(m.Maven.Artifacts, s) }},
+		{m.Apt != nil && len(m.Apt.Mirrors) > 0, func(s map[string]bool) error { return validateAptMirrors(m.Apt.Mirrors, s) }},
 	}
-	if hasGo {
-		if err := validateManifestModules(m.Modules, seen); err != nil {
+	matched := false
+	for _, e := range ecosystems {
+		if !e.present {
+			continue
+		}
+		matched = true
+		if err := e.check(seen); err != nil {
 			return err
 		}
 	}
-	if hasPython {
-		if err := validatePythonProjects(m.Python.Projects, seen); err != nil {
-			return err
-		}
-	}
-	if hasMaven {
-		if err := validateMavenArtifacts(m.Maven.Artifacts, seen); err != nil {
-			return err
-		}
+	if !matched {
+		return errors.New("manifest contains no modules, python projects, maven artifacts, or apt mirrors")
 	}
 	return nil
 }
@@ -2110,6 +2119,11 @@ func validateManifestModules(mods []ManifestMod, seen map[string]bool) error {
 
 func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManifest) error {
 	if err := s.installVerifiedFiles(staging, manifest.Files); err != nil {
+		return err
+	}
+	// Regenerate APT repository metadata from the accumulated stanzas of the
+	// .deb files now present (never trusting the transferred Release/Packages).
+	if err := s.publishApt(manifest.Apt); err != nil {
 		return err
 	}
 	// Complete markers are written only after all files are installed.

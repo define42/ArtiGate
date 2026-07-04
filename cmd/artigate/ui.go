@@ -70,6 +70,7 @@ type treeCache struct {
 	mods   []UIModule
 	python []UIProject
 	maven  []UIModule
+	apt    []UIModule
 }
 
 func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
@@ -131,7 +132,7 @@ func (s *HighServer) handleUITree(w http.ResponseWriter, r *http.Request) {
 	eco := r.URL.Query().Get("eco")
 	path := r.URL.Query().Get("path")
 
-	mods, python, maven, err := s.cachedLists()
+	lists, err := s.cachedLists()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -140,43 +141,54 @@ func (s *HighServer) handleUITree(w http.ResponseWriter, r *http.Request) {
 	var nodes []UITreeNode
 	switch eco {
 	case "python":
-		nodes = pythonTreeChildren(python, path)
+		nodes = pythonTreeChildren(lists.python, path)
 	case "maven":
-		// Maven coordinates form a slash-separated path tree just like Go module
-		// paths, so the same segment-tree builder applies.
-		nodes = goTreeChildren(maven, path)
+		// Maven coordinates and APT mirror/package keys form slash-separated path
+		// trees just like Go module paths, so the same segment-tree builder applies.
+		nodes = goTreeChildren(lists.maven, path)
+	case "apt":
+		nodes = goTreeChildren(lists.apt, path)
 	default:
-		nodes = goTreeChildren(mods, path)
+		nodes = goTreeChildren(lists.mods, path)
 	}
 	writeJSON(w, map[string][]UITreeNode{"nodes": nodes})
 }
 
-// cachedLists returns the mirrored Go modules, Python projects, and Maven
-// artifacts, memoized for a few seconds so a burst of lazy expand requests
-// reuses one scan.
-func (s *HighServer) cachedLists() ([]UIModule, []UIProject, []UIModule, error) {
+// ecoLists holds the mirrored inventory for each ecosystem's dashboard tree.
+type ecoLists struct {
+	mods   []UIModule
+	python []UIProject
+	maven  []UIModule
+	apt    []UIModule
+}
+
+// cachedLists returns the mirrored inventory across ecosystems, memoized for a
+// few seconds so a burst of lazy expand requests reuses one scan.
+func (s *HighServer) cachedLists() (ecoLists, error) {
 	s.tree.mu.Lock()
 	defer s.tree.mu.Unlock()
 	if time.Now().Before(s.tree.expiry) {
-		return s.tree.mods, s.tree.python, s.tree.maven, nil
+		return ecoLists{s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt}, nil
 	}
 	mods, err := s.listGoModules()
 	if err != nil {
-		return nil, nil, nil, err
+		return ecoLists{}, err
 	}
 	python, err := s.listPythonProjects()
 	if err != nil {
-		return nil, nil, nil, err
+		return ecoLists{}, err
 	}
 	maven, err := s.listMavenArtifacts()
 	if err != nil {
-		return nil, nil, nil, err
+		return ecoLists{}, err
 	}
-	s.tree.mods = mods
-	s.tree.python = python
-	s.tree.maven = maven
+	apt, err := s.listAptMirrors()
+	if err != nil {
+		return ecoLists{}, err
+	}
+	s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt = mods, python, maven, apt
 	s.tree.expiry = time.Now().Add(3 * time.Second)
-	return mods, python, maven, nil
+	return ecoLists{mods, python, maven, apt}, nil
 }
 
 // goTreeChildren returns the immediate children of prefix in the Go module path
@@ -306,7 +318,8 @@ func (s *HighServer) listGoModules() ([]UIModule, error) {
 		}
 		moduleEsc := filepath.ToSlash(rel)
 		if moduleEsc == "python" || strings.HasPrefix(moduleEsc, "python/") ||
-			moduleEsc == "maven" || strings.HasPrefix(moduleEsc, "maven/") {
+			moduleEsc == "maven" || strings.HasPrefix(moduleEsc, "maven/") ||
+			moduleEsc == "apt" || strings.HasPrefix(moduleEsc, "apt/") {
 			return filepath.SkipDir
 		}
 		if mod, ok := s.goModuleAt(moduleEsc); ok {
@@ -391,6 +404,8 @@ func (s *HighServer) handleUIDetail(w http.ResponseWriter, r *http.Request) {
 		detail, err = s.pythonDetail(path)
 	case "maven":
 		detail, err = s.mavenDetail(path)
+	case "apt":
+		detail, err = s.aptDetail(path)
 	default:
 		detail, err = s.goDetail(path)
 	}

@@ -42,12 +42,13 @@ interface Detail {
   go_mod?: string;
 }
 
-type View = "go" | "python" | "maven";
+type View = "go" | "python" | "maven" | "apt";
 
 const VIEW_TITLES: Record<View, string> = {
   go: "Go modules",
   python: "Python packages",
   maven: "Maven artifacts",
+  apt: "APT packages",
 };
 
 let currentView: View = "go";
@@ -396,6 +397,29 @@ function guideSections(base: string): GuideSection[] {
         "Do not add mavenCentral() or other external repositories — ArtiGate is " +
         "the single source of truth. Pin exact versions; SNAPSHOTs and ranges are " +
         "not mirrored.",
+    },
+    {
+      heading: "APT (Debian / Ubuntu)",
+      body:
+        "Point apt at a mirrored repository using the deb822 .sources format. " +
+        "Replace <mirror>/<suite>/<component>/<arch> with the values shown in the " +
+        "APT packages tab.",
+      blocks: [
+        {
+          label: "/etc/apt/sources.list.d/artigate.sources",
+          code:
+            "Types: deb\n" +
+            `URIs: ${base}/apt/<mirror>\n` +
+            "Suites: <suite>\n" +
+            "Components: <component>\n" +
+            "Architectures: <arch>\n" +
+            "Signed-By: /usr/share/keyrings/artigate-apt.gpg",
+        },
+      ],
+      note:
+        "Use ArtiGate's high-side APT key (Signed-By), not the upstream vendor " +
+        "key. If the mirror is published unsigned, use [trusted=yes] instead of " +
+        "Signed-By.",
     },
   ];
 }

@@ -3,7 +3,8 @@
 [![codecov](https://codecov.io/gh/define42/ArtiGate/graph/badge.svg?token=RBKT8U26R8)](https://codecov.io/gh/define42/ArtiGate)
 
 `ArtiGate` is a multi-ecosystem dependency mirror — Go modules, Python (PyPI)
-wheels, and Java (Maven 2) artifacts — for one-way data-diode environments.
+wheels, Java (Maven 2) artifacts, and APT (Debian/Ubuntu `.deb`) repositories —
+for one-way data-diode environments.
 
 It contains two modes in one binary:
 
@@ -53,6 +54,10 @@ curl -XPOST localhost:8080/admin/python/collect \
 # Java/Maven artifacts (release versions only)
 curl -XPOST localhost:8080/admin/maven/collect \
   -d '{"coordinates":["org.slf4j:slf4j-api:2.0.16"]}'
+
+# APT (deb) repository — full mirror of one suite/component/arch
+curl -XPOST localhost:8080/admin/apt/collect -d '{"source_list":
+  "Types: deb\nURIs: https://packages.microsoft.com/repos/code\nSuites: stable\nComponents: main\nArchitectures: amd64\n"}'
 ```
 
 A one-time `keygen` service generates the signing key pair into a shared volume,
@@ -312,7 +317,7 @@ http://high-proxy:8080/
 The front page shows the import status — prominently flagging **missing bundles**
 (the ranges the repository is blocked on) alongside the last-imported, next-expected,
 highest-seen, and quarantined sequences. A top menu switches between **Go modules**,
-**Python packages**, and **Maven artifacts**.
+**Python packages**, **Maven artifacts**, and **APT packages**.
 
 Below that is a **lazily loaded tree**. Go modules are grouped hierarchically by
 their import path — everything under `github.com` sits beneath a single
@@ -512,6 +517,80 @@ Do not add `mavenCentral()` or other external repositories on the high side;
 ArtiGate is the single source of truth. For reproducibility, pin exact versions
 and use Gradle dependency locking (`gradle/verification-metadata.xml`, lockfiles).
 
+## APT (Debian/Ubuntu) support
+
+ArtiGate mirrors a whole upstream APT repository (one suite / components /
+architectures) through the same signed bundle pipeline. This is the offline
+equivalent of a normal `deb` source.
+
+The low side downloads `dists/<suite>/InRelease`, optionally **verifies it with
+`gpgv`** against a caller-supplied keyring (`Signed-By`), reads the Release
+checksums, downloads and verifies the binary `Packages` index, then downloads
+every referenced `.deb` and verifies each one's SHA256 against the index. The
+`.deb` files are packed into a signed bundle along with their `Packages`
+stanzas.
+
+On import the high side **regenerates** `Packages`/`Packages.gz` and `Release`
+from the stanzas of the `.deb` files actually present (never serving the
+transferred upstream metadata as-is) and, when a signing key is configured,
+clearsigns `InRelease`. That yields three layers of trust: the upstream vendor
+key proves the low side fetched authentic metadata, the ArtiGate ed25519
+signature proves the diode transfer was intact and approved, and the high-side
+APT key proves air-gapped clients are using the approved offline mirror.
+
+### Low side: mirror a repository
+
+Send the exact deb822 source stanza (`.sources` format):
+
+```bash
+curl -XPOST http://127.0.0.1:8080/admin/apt/collect \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -Rs '{source_list: .}' <<'EOF'
+Types: deb
+URIs: https://packages.microsoft.com/repos/code
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/microsoft.gpg
+EOF
+)"
+```
+
+`Signed-By` (a keyring path on the low-side host) is used with `gpgv` to verify
+the upstream `InRelease`; omit it to skip upstream signature verification (the
+SHA256 chain from Release to each `.deb` is always enforced). The fields can
+also be sent explicitly as `{"uri","suite","components","architectures",
+"signed_by","name"}`.
+
+### High side: serve /apt/&lt;mirror&gt;/
+
+After import the high side serves a standard APT repository:
+
+```text
+/apt/<mirror>/dists/<suite>/InRelease            # present only when signed
+/apt/<mirror>/dists/<suite>/Release
+/apt/<mirror>/dists/<suite>/main/binary-amd64/Packages(.gz)
+/apt/<mirror>/pool/main/c/code/code_<version>_amd64.deb
+```
+
+Sign the regenerated repository by starting the high side with a GPG key
+(`--apt-gpg-key <keyid>`, with the secret key available in the process's
+`GNUPGHOME`); without it the repository is published unsigned.
+
+High-side client source — note the key is **ArtiGate's**, not the vendor's:
+
+```text
+Types: deb
+URIs: https://artigate-high.local/apt/<mirror>
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/artigate-apt.gpg
+```
+
+If the mirror is published unsigned, use `[trusted=yes]` (one-line format) or an
+`apt` policy that allows it instead of `Signed-By`.
+
 ## Notes and limitations
 
 - This is a production-oriented starter implementation, not a full artifact-management product.
@@ -519,8 +598,9 @@ and use Gradle dependency locking (`gradle/verification-metadata.xml`, lockfiles
 - It uses JSON state files to keep the implementation dependency-free. Use SQLite/PostgreSQL if you need multiple writers or a larger approval workflow.
 - Admin endpoints are unauthenticated. Bind to localhost or protect them.
 - High-side gaps and out-of-order future bundles are quarantined, not rejected. Check `/admin/missing` and re-export the requested range from the low side with `/admin/reexport`.
-- Low-side fetching depends on the installed Go toolchain and Git/VCS tools, on `pip` (Python), and on `mvn` + a JDK (Java/Maven).
-- High side never invokes `go`, `pip`, or `mvn` and has no upstream fetcher.
+- Low-side fetching depends on the installed Go toolchain and Git/VCS tools, on `pip` (Python), on `mvn` + a JDK (Java/Maven), and on `gpgv` (verifying upstream APT repositories). APT `.deb` files are fetched over plain HTTP(S) with the Go standard library.
+- High side never invokes `go`, `pip`, or `mvn` and has no upstream fetcher; it uses `gpg` only to sign regenerated APT repositories when `--apt-gpg-key` is set.
 - Java support mirrors release Maven artifacts only; SNAPSHOT and dynamic/range versions are rejected. SBT/Ivy-only repositories and the Gradle Plugin Portal are not specially handled beyond their Maven-compatible endpoints.
+- APT support mirrors binary `deb` packages for the configured suite/components/architectures; `deb-src`, `Contents-*`, `Translation-*`, and by-hash indexes are not mirrored. The high side regenerates `Packages`/`Release`; publish signed with `--apt-gpg-key` or have clients trust the repo explicitly.
 - Python support mirrors wheels only; sdists and PyPI metadata (`requires-python`, yank status) beyond the manifest are not yet surfaced.
 - Re-export (`/admin/reexport`) replays any produced bundle — Go proxy, `/admin/go/collect`, or `/admin/python/collect` — from the persistent archive under `<root>/bundles/`. The archive grows over time; prune old sequences if disk is a concern (they can be re-collected).

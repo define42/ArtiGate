@@ -140,6 +140,18 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
 
   <div class="card">
+    <h2>Mirror an APT (deb) repository</h2>
+    <p class="hint">Paste a deb822 source stanza (the <code>.sources</code> format). ArtiGate downloads and verifies the upstream <code>Release</code> and <code>Packages</code> index, mirrors every referenced <code>.deb</code> for the suite/components/architectures, and writes them to a signed bundle. The high side regenerates and (optionally) re-signs the repository. This is <code>/admin/apt/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectApt(event)">
+      <label class="filelabel">Source (deb822)
+        <textarea id="aptsrc" rows="6" placeholder="Types: deb&#10;URIs: https://packages.microsoft.com/repos/code&#10;Suites: stable&#10;Components: main&#10;Architectures: amd64&#10;Signed-By: /usr/share/keyrings/microsoft.gpg" autocomplete="off"></textarea>
+      </label>
+      <button class="primary" type="submit" id="aptBtn">Collect &amp; export</button>
+    </form>
+    <div id="aptResult" class="rbox"></div>
+  </div>
+
+  <div class="card">
     <h2>Re-transmit bundles</h2>
     <p class="hint">Enter a bundle number or range that the high side is missing, e.g. <code>42</code>, <code>45-47</code>, or <code>42,45-47</code>. The bundle files are regenerated in the export directory to be sent through the diode again.</p>
     <form onsubmit="reexport(event)">
@@ -318,6 +330,31 @@ async function collectMaven(ev){
     showMvnResult('ok','&#10003; Collected '+esc(d.exported_modules)+' artifact(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').');
     loadStatus();
   }catch(e){ showMvnResult('err','Request failed: '+esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent=label; }
+}
+
+function showAptResult(cls, html){
+  const el=document.getElementById('aptResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+async function collectApt(ev){
+  ev.preventDefault();
+  const src=document.getElementById('aptsrc').value.trim();
+  if(!src){ showAptResult('err','Paste a deb822 source stanza.'); return; }
+  const btn=document.getElementById('aptBtn');
+  const label=btn.textContent;
+  btn.disabled=true; btn.textContent='Mirroring…';
+  showAptResult('busy','Downloading and verifying the upstream Release, Packages index, and every .deb… this can take a while.');
+  try{
+    const r=await fetch('/admin/apt/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_list:src})});
+    const text=await r.text();
+    if(!r.ok){ showAptResult('err','Error: '+esc(text.trim())); return; }
+    const d=JSON.parse(text);
+    showAptResult('ok','&#10003; Mirrored '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').');
+    loadStatus();
+  }catch(e){ showAptResult('err','Request failed: '+esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent=label; }
 }
 

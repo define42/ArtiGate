@@ -21,14 +21,15 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/artigate ./cmd/art
 # Runtime stage.
 #
 # The `low` mode shells out to `go` and `git` (Go modules), `pip` (Python
-# wheels), and `mvn` (Java/Maven artifacts), so the runtime image ships the Go
-# toolchain, git, python3/pip, and Maven + a JDK. The `high` mode uses none of
-# them; if you only deploy the high side you can base a slimmer image on
-# `alpine` or `scratch` and copy just the binary.
+# wheels), `mvn` (Java/Maven artifacts), and `gpgv` (verifying upstream APT
+# repositories), so the runtime image ships the Go toolchain, git, python3/pip,
+# Maven + a JDK, and gnupg. The `high` mode uses gnupg only when signing
+# regenerated APT repositories (--apt-gpg-key); otherwise it needs none of them,
+# so a high-only deployment can use a slimmer image with just the binary + gnupg.
 # -----------------------------------------------------------------------------
 FROM golang:1.25-alpine
 
-RUN apk add --no-cache git ca-certificates openssh-client python3 py3-pip maven openjdk17-jre-headless \
+RUN apk add --no-cache git ca-certificates openssh-client python3 py3-pip maven openjdk17-jre-headless gnupg \
     && addgroup -S artigate \
     && adduser -S -G artigate -h /home/artigate artigate
 
