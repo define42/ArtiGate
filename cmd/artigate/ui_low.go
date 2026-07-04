@@ -37,9 +37,12 @@ const lowUIHTML = `<!DOCTYPE html>
 <style>
   :root { color-scheme: light dark; }
   body { font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }
-  header { padding: 1rem 1.5rem; background: #161a22; border-bottom: 1px solid #2a2f3a; display: flex; align-items: center; gap: 1rem; }
+  header { padding: 1rem 1.5rem; background: #161a22; border-bottom: 1px solid #2a2f3a; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   header h1 { font-size: 1.25rem; margin: 0; }
-  header button { margin-left: auto; background: #2a2f3a; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .4rem .8rem; cursor: pointer; }
+  nav { display: flex; gap: .4rem; flex-wrap: wrap; }
+  nav button { background: #2a2f3a; color: #c7cedb; border: 1px solid #3a4150; border-radius: 6px; padding: .4rem .9rem; cursor: pointer; font: inherit; }
+  nav button.active { background: #1f6f43; color: #eafff2; border-color: #2b8f59; }
+  header .refresh { margin-left: auto; background: #2a2f3a; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .4rem .8rem; cursor: pointer; font: inherit; }
   main { padding: 1.5rem; max-width: 960px; }
   .card { background: #161a22; border: 1px solid #2a2f3a; border-radius: 8px; padding: 1.1rem 1.25rem; margin-bottom: 1.5rem; }
   .card h2 { font-size: 1rem; margin: 0 0 .75rem; }
@@ -81,9 +84,18 @@ const lowUIHTML = `<!DOCTYPE html>
 <body>
 <header>
   <h1>ArtiGate <span style="color:#8b93a5;font-weight:400">low-side exporter</span></h1>
-  <button onclick="loadStatus()">Refresh</button>
+  <nav>
+    <button type="button" data-view="go" class="active" onclick="setView('go')">Go</button>
+    <button type="button" data-view="python" onclick="setView('python')">Python</button>
+    <button type="button" data-view="java" onclick="setView('java')">Java</button>
+    <button type="button" data-view="apt" onclick="setView('apt')">APT</button>
+    <button type="button" data-view="rpm" onclick="setView('rpm')">RPM</button>
+    <button type="button" data-view="status" onclick="setView('status')">Status</button>
+  </nav>
+  <button type="button" class="refresh" onclick="loadStatus()">Refresh</button>
 </header>
 <main>
+  <section class="view" id="view-go">
   <div class="card">
     <h2>Mirror a Go project (go.mod)</h2>
     <p class="hint">Upload a project's <code>go.mod</code> (optionally its <code>go.sum</code>). ArtiGate resolves and fetches exactly the module graph that project builds and writes it to a signed bundle &mdash; the same as POSTing the file to <code>/admin/go/collect</code>. This is the closest to &ldquo;download everything needed to build this project offline&rdquo;.</p>
@@ -98,7 +110,9 @@ const lowUIHTML = `<!DOCTYPE html>
     </form>
     <div id="goResult" class="rbox"></div>
   </div>
+  </section>
 
+  <section class="view" id="view-python" hidden>
   <div class="card">
     <h2>Mirror Python packages (requirements)</h2>
     <p class="hint">List packages to mirror &mdash; one requirement per line, requirements.txt format (e.g. <code>requests==2.32.4</code>). ArtiGate runs <code>pip download</code> and writes the wheels into a signed bundle, the same as POSTing to <code>/admin/python/collect</code>. Lines starting with <code>#</code> are ignored; pip option lines (<code>-r</code>, <code>--hash</code>, &hellip;) are skipped.</p>
@@ -124,7 +138,9 @@ const lowUIHTML = `<!DOCTYPE html>
     </form>
     <div id="pyResult" class="rbox"></div>
   </div>
+  </section>
 
+  <section class="view" id="view-java" hidden>
   <div class="card">
     <h2>Mirror Java/Maven artifacts</h2>
     <p class="hint">List Maven coordinates (one <code>groupId:artifactId:version</code> per line) or upload a <code>pom.xml</code>. ArtiGate runs <code>mvn dependency:go-offline</code> to resolve the full closure (including plugins) and writes it to a signed bundle, the same as POSTing to <code>/admin/maven/collect</code>. Release versions only &mdash; SNAPSHOTs and version ranges are rejected.</p>
@@ -139,7 +155,9 @@ const lowUIHTML = `<!DOCTYPE html>
     </form>
     <div id="mvnResult" class="rbox"></div>
   </div>
+  </section>
 
+  <section class="view" id="view-apt" hidden>
   <div class="card">
     <h2>Mirror an APT (deb) repository</h2>
     <p class="hint">Paste a deb822 source stanza (the <code>.sources</code> format). ArtiGate downloads and verifies the upstream <code>Release</code> and <code>Packages</code> index, mirrors every referenced <code>.deb</code> for the suite/components/architectures, and writes them to a signed bundle. The high side regenerates and (optionally) re-signs the repository. This is <code>/admin/apt/collect</code>.</p>
@@ -151,7 +169,9 @@ const lowUIHTML = `<!DOCTYPE html>
     </form>
     <div id="aptResult" class="rbox"></div>
   </div>
+  </section>
 
+  <section class="view" id="view-rpm" hidden>
   <div class="card">
     <h2>Mirror an RPM (yum/dnf) repository</h2>
     <p class="hint">Paste a yum/dnf <code>.repo</code> stanza. ArtiGate downloads and verifies <code>repomd.xml</code> and the <code>primary</code> index, mirrors every referenced <code>.rpm</code>, and writes a signed bundle. The high side regenerates <code>repodata</code> and (optionally) re-signs it. This is <code>/admin/rpm/collect</code>. <code>baseurl</code> must be concrete (no <code>$releasever</code>/<code>$basearch</code>).</p>
@@ -163,7 +183,9 @@ const lowUIHTML = `<!DOCTYPE html>
     </form>
     <div id="rpmResult" class="rbox"></div>
   </div>
+  </section>
 
+  <section class="view" id="view-status" hidden>
   <div class="card">
     <h2>Re-transmit bundles</h2>
     <p class="hint">Pick the stream, then enter a bundle number or range the high side is missing, e.g. <code>42</code>, <code>45-47</code>, or <code>42,45-47</code>. Each ecosystem has its own independent bundle numbering, so choose the matching stream. The bundle files are regenerated in the export directory to be sent through the diode again.</p>
@@ -186,10 +208,23 @@ const lowUIHTML = `<!DOCTYPE html>
     <div id="meta" class="meta">Loading…</div>
     <div id="bundles"></div>
   </div>
+  </section>
 </main>
 <script>
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',apt:'APT',rpm:'RPM'})[name]||name;}
+
+// setView shows one ecosystem (or the status) page and hides the rest, matching
+// the active nav button. The status page is refreshed each time it is opened.
+function setView(view){
+  for(const v of ['go','python','java','apt','rpm','status']){
+    document.getElementById('view-'+v).hidden = (v!==view);
+  }
+  document.querySelectorAll('nav button[data-view]').forEach(b=>{
+    b.classList.toggle('active', b.dataset.view===view);
+  });
+  if(view==='status') loadStatus();
+}
 
 function showResult(cls, html){
   const el=document.getElementById('result');

@@ -50,6 +50,9 @@ func TestLowServerUIPage(t *testing.T) {
 	for _, want := range []string{
 		"<title>ArtiGate low-side</title>",
 		"/admin/reexport", "Re-transmit bundles", "/ui/api/status",
+		// Top menu splits each ecosystem onto its own view/page.
+		"function setView(", `data-view="go"`, `data-view="java"`, `data-view="status"`,
+		`id="view-go"`, `id="view-java"`, `id="view-status"`,
 		"Mirror a Go project", `id="gomod"`, `id="gosum"`, "collectGoMod", "/admin/go/collect",
 		"Mirror Python packages", `id="pyreqs"`, "collectPython", "/admin/python/collect",
 		"Mirror Java/Maven artifacts", `id="mvncoords"`, `id="mvnpom"`, "collectMaven", "/admin/maven/collect",
