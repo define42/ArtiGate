@@ -436,6 +436,24 @@ func TestLowServerExportAllUnfetchableDoesNotBurnSequence(t *testing.T) {
 	}
 }
 
+// TestCollectGoRejectsFlagInjection proves a module spec that looks like a `go`
+// flag is rejected and never reaches the fetcher as a command-line argument,
+// whether it resolves via @latest or is a concrete version.
+func TestCollectGoRejectsFlagInjection(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	ctx := context.Background()
+
+	// @latest form is rejected at resolution (validated before `go list`).
+	if _, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{"-C@latest"}}); err == nil {
+		t.Error("CollectGo accepted a flag-like module spec (@latest)")
+	}
+	// Concrete-version form is rejected at fetch (validated before `go mod
+	// download`), so nothing is exported.
+	if _, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{"-modfile@v1.0.0"}}); err == nil {
+		t.Error("CollectGo accepted a flag-like module spec (concrete version)")
+	}
+}
+
 func TestLowServerGoCollectWithDeps(t *testing.T) {
 	ls, priv := newFakeLowServer(t)
 	ctx := context.Background()

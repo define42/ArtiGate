@@ -11,8 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -172,7 +174,7 @@ func (s *HighServer) handlePySimpleRoot(w http.ResponseWriter) {
 	var b strings.Builder
 	b.WriteString("<!DOCTYPE html>\n<html>\n  <body>\n")
 	for _, p := range projects {
-		fmt.Fprintf(&b, "    <a href=\"/simple/%s/\">%s</a>\n", p, p)
+		fmt.Fprintf(&b, "    <a href=\"/simple/%s/\">%s</a>\n", url.PathEscape(p), html.EscapeString(p))
 	}
 	b.WriteString("  </body>\n</html>\n")
 	writeHTML(w, b.String())
@@ -198,14 +200,14 @@ func (s *HighServer) handlePySimpleProject(w http.ResponseWriter, urlPath string
 	sort.Slice(matched, func(i, j int) bool { return matched[i].filename < matched[j].filename })
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "<!DOCTYPE html>\n<html>\n  <body>\n    <h1>Links for %s</h1>\n", project)
+	fmt.Fprintf(&b, "<!DOCTYPE html>\n<html>\n  <body>\n    <h1>Links for %s</h1>\n", html.EscapeString(project))
 	for _, f := range matched {
 		sum, err := sha256File(filepath.Join(s.pythonDir(), f.filename))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		fmt.Fprintf(&b, "    <a href=\"/packages/%s#sha256=%s\">%s</a>\n", f.filename, sum, f.filename)
+		fmt.Fprintf(&b, "    <a href=\"/packages/%s#sha256=%s\">%s</a>\n", url.PathEscape(f.filename), sum, html.EscapeString(f.filename))
 	}
 	b.WriteString("  </body>\n</html>\n")
 	writeHTML(w, b.String())
@@ -245,6 +247,58 @@ type PythonTarget struct {
 type PythonCollectRequest struct {
 	Requirements []string      `json:"requirements"`
 	Target       *PythonTarget `json:"target,omitempty"`
+}
+
+// validatePipArg rejects a user-supplied pip argument that pip would otherwise
+// reparse as an option. Requirement specifiers and target selectors never
+// legitimately begin with '-', so refusing that closes argument injection such
+// as a requirement of "-r/etc/passwd" or "--index-url=http://attacker/". Spaces
+// are allowed because PEP 508 environment markers contain them; only control
+// characters are rejected.
+func validatePipArg(kind, val string) error {
+	if strings.TrimSpace(val) == "" {
+		return fmt.Errorf("empty %s", kind)
+	}
+	if strings.HasPrefix(val, "-") {
+		return fmt.Errorf("%s %q must not start with '-' (would be parsed as a pip flag)", kind, val)
+	}
+	for _, r := range val {
+		if r < ' ' || r == 0x7f {
+			return fmt.Errorf("%s %q contains a control character", kind, val)
+		}
+	}
+	return nil
+}
+
+// validatePythonRequest validates every caller-supplied string that becomes a
+// pip argument (requirements and target selectors).
+func validatePythonRequest(req PythonCollectRequest) error {
+	for _, r := range req.Requirements {
+		if err := validatePipArg("requirement", r); err != nil {
+			return err
+		}
+	}
+	if req.Target == nil {
+		return nil
+	}
+	for _, f := range []struct{ kind, val string }{
+		{"python_version", req.Target.PythonVersion},
+		{"implementation", req.Target.Implementation},
+		{"abi", req.Target.ABI},
+	} {
+		if f.val == "" {
+			continue
+		}
+		if err := validatePipArg(f.kind, f.val); err != nil {
+			return err
+		}
+	}
+	for _, p := range req.Target.Platforms {
+		if err := validatePipArg("platform", p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // pipDownloadArgs builds the argument list for `python -m pip download`. When a
@@ -317,6 +371,9 @@ func (s *LowServer) HandlePythonCollect(ctx context.Context, r *http.Request) (E
 func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest) (ExportResult, error) {
 	if len(req.Requirements) == 0 {
 		return ExportResult{}, errors.New("no python requirements provided")
+	}
+	if err := validatePythonRequest(req); err != nil {
+		return ExportResult{}, err
 	}
 	// Hold exportMu for the whole download->write->commit so a concurrent
 	// exporter cannot claim the same sequence number between peek and commit.

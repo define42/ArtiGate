@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -310,5 +311,85 @@ func TestLowToHighPythonPipeline(t *testing.T) {
 	}
 	if code, body := httpGet(t, srv.URL+"/packages/urllib3-2.5.0-py3-none-any.whl"); code != http.StatusOK || body != "wheel-urllib3" {
 		t.Errorf("pipeline wheel download: status %d body %q", code, body)
+	}
+}
+
+func TestValidatePipArg(t *testing.T) {
+	valid := []string{
+		"requests",
+		"requests==2.32.4",
+		"urllib3>=1.26,<2",
+		"flask[async]",
+		`requests; python_version < "3.9"`, // PEP 508 marker, contains spaces
+	}
+	invalid := []string{
+		"",
+		"   ",
+		"-r/etc/passwd",
+		"--index-url=http://attacker.example/simple",
+		"-e.",
+		"pkg\nname", // control character
+	}
+	for _, r := range valid {
+		if err := validatePipArg("requirement", r); err != nil {
+			t.Errorf("validatePipArg(%q) = %v, want nil", r, err)
+		}
+	}
+	for _, r := range invalid {
+		if err := validatePipArg("requirement", r); err == nil {
+			t.Errorf("validatePipArg(%q) = nil, want error", r)
+		}
+	}
+}
+
+// TestCollectPythonRejectsFlagInjection proves a flag-like requirement is
+// rejected before pip is ever invoked, so it cannot be reparsed as a pip option
+// (e.g. redirecting the index or reading a file as a requirements list).
+func TestCollectPythonRejectsFlagInjection(t *testing.T) {
+	ls, _ := newPyLowServer(t)
+	_, err := ls.CollectPython(context.Background(), PythonCollectRequest{
+		Requirements: []string{"--index-url=http://attacker.example/simple", "evilpkg"},
+	})
+	if err == nil {
+		t.Fatal("CollectPython accepted a flag-like requirement")
+	}
+	if !strings.Contains(err.Error(), "'-'") {
+		t.Errorf("error should explain the flag rejection, got: %v", err)
+	}
+}
+
+// TestHighServerSimpleEscapesHTML proves the PEP 503 pages HTML-escape package
+// and wheel names, so a crafted filename that crossed the diode cannot inject
+// script into an operator's browser.
+func TestHighServerSimpleEscapesHTML(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+
+	// A wheel whose filename carries HTML metacharacters. It must still parse as
+	// a wheel so it reaches the /simple/ pages.
+	name := `x"><xss>-1.0-py3-none-any.whl`
+	if _, _, ok := parseWheelFilename(name); !ok {
+		t.Fatalf("test wheel name did not parse as a wheel: %q", name)
+	}
+	if err := os.MkdirAll(hs.pythonDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(hs.pythonDir(), name), []byte("wheel-bytes"))
+	project := normalizePyName(`x"><xss>`)
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	for _, p := range []string{"/simple/", "/simple/" + url.PathEscape(project) + "/"} {
+		code, body := httpGet(t, srv.URL+p)
+		if code != http.StatusOK {
+			t.Fatalf("GET %s status %d", p, code)
+		}
+		if strings.Contains(body, "<xss>") {
+			t.Errorf("GET %s echoed an unescaped tag from a crafted name:\n%s", p, body)
+		}
+		if !strings.Contains(body, "&lt;xss&gt;") {
+			t.Errorf("GET %s did not HTML-escape the crafted name:\n%s", p, body)
+		}
 	}
 }

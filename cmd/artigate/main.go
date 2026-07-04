@@ -511,7 +511,52 @@ type goListVersionsJSON struct {
 	Error    string   `json:"Error"`
 }
 
+// validateGoModulePath rejects module paths that the go tool would misparse as
+// a command-line flag (a leading '-') or that carry argument-unsafe bytes. It
+// guards every place a caller-supplied module string becomes a `go` argument,
+// so neither the pull-through proxy nor /admin/go/collect can inject flags such
+// as `-modfile` or `-C` into the fetcher.
+func validateGoModulePath(modulePath string) error {
+	if modulePath == "" {
+		return errors.New("empty module path")
+	}
+	for _, elem := range strings.Split(modulePath, "/") {
+		if elem == "" {
+			return fmt.Errorf("invalid module path %q: empty path element", modulePath)
+		}
+		if strings.HasPrefix(elem, "-") {
+			return fmt.Errorf("invalid module path %q: element %q must not start with '-'", modulePath, elem)
+		}
+	}
+	for _, r := range modulePath {
+		if r <= ' ' || r == 0x7f {
+			return fmt.Errorf("invalid module path %q: contains a control or space character", modulePath)
+		}
+	}
+	return nil
+}
+
+// validateGoVersion rejects version strings that could be misparsed as a flag
+// or carry argument-unsafe bytes.
+func validateGoVersion(version string) error {
+	if version == "" {
+		return errors.New("empty version")
+	}
+	if strings.HasPrefix(version, "-") {
+		return fmt.Errorf("invalid version %q: must not start with '-'", version)
+	}
+	for _, r := range version {
+		if r <= ' ' || r == 0x7f {
+			return fmt.Errorf("invalid version %q: contains a control or space character", version)
+		}
+	}
+	return nil
+}
+
 func (s *LowServer) goListVersions(ctx context.Context, modulePath string) ([]string, error) {
+	if err := validateGoModulePath(modulePath); err != nil {
+		return nil, err
+	}
 	out, err := s.runGo(ctx, "list", "-m", "-versions", "-json", modulePath)
 	if err != nil {
 		return nil, err
@@ -534,6 +579,9 @@ type goLatestJSON struct {
 }
 
 func (s *LowServer) goLatest(ctx context.Context, modulePath string) (ModuleInfo, error) {
+	if err := validateGoModulePath(modulePath); err != nil {
+		return ModuleInfo{}, err
+	}
 	out, err := s.runGo(ctx, "list", "-m", "-json", modulePath+"@latest")
 	if err != nil {
 		return ModuleInfo{}, err
@@ -565,6 +613,12 @@ type goDownloadJSON struct {
 func (s *LowServer) fetchVersion(ctx context.Context, modulePath, version string) error {
 	if modulePath == "" || version == "" || version == "latest" {
 		return fmt.Errorf("fetchVersion needs concrete module and version, got %q@%q", modulePath, version)
+	}
+	if err := validateGoModulePath(modulePath); err != nil {
+		return err
+	}
+	if err := validateGoVersion(version); err != nil {
+		return err
 	}
 	out, err := s.runGo(ctx, "mod", "download", "-json", modulePath+"@"+version)
 	if err != nil {
@@ -2584,14 +2638,53 @@ func writeJSONAtomic(p string, v any, mode os.FileMode) error {
 }
 
 func writeBytesAtomic(p string, b []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	dir := filepath.Dir(p)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, mode); err != nil {
+	_ = os.Remove(tmp)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	ok := false
+	defer func() {
+		_ = f.Close()
+		if !ok {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(b); err != nil {
+		return err
+	}
+	// fsync the contents before the rename so a crash cannot leave a truncated
+	// or zero-length file where the previous good one was. This backs the state
+	// files, bundle manifests, signatures, and .complete markers.
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		return err
+	}
+	ok = true
+	fsyncDir(dir)
+	return nil
+}
+
+// fsyncDir flushes a directory so a rename into it survives a crash. It is
+// best-effort: some filesystems do not support directory fsync, and a failure
+// to open or sync the directory must not fail an otherwise-completed write.
+func fsyncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer d.Close()
+	_ = d.Sync()
 }
 
 // -----------------------------------------------------------------------------
@@ -2660,7 +2753,11 @@ func logHTTP(next http.Handler) http.Handler {
 	})
 }
 
-var bundleManifestNameRE = regexp.MustCompile(`^go-bundle-([0-9]{6})\.manifest\.json$`)
+// bundleManifestNameRE matches at least six digits so the naming stays
+// zero-padded to six for readability but does not silently stop matching once a
+// sequence grows past 999999 (bundleIDForSequence uses %06d, a minimum width,
+// not a cap).
+var bundleManifestNameRE = regexp.MustCompile(`^go-bundle-([0-9]{6,})\.manifest\.json$`)
 
 func bundleIDForSequence(seq int64) string {
 	return fmt.Sprintf("go-bundle-%06d", seq)

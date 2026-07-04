@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -167,6 +169,36 @@ func TestHighServerUIDetailGo(t *testing.T) {
 	// Unknown version 404s.
 	if code, _ := httpGet(t, srv.URL+"/ui/api/detail?eco=go&path=github.com/foo/bar@v9.9.9"); code != http.StatusNotFound {
 		t.Errorf("unknown version status = %d, want 404", code)
+	}
+}
+
+// TestGoDetailRejectsPathTraversal plants a complete-looking module version
+// outside the module cache and proves goDetail refuses a "../" module path
+// before touching it — without the guard, isComplete would succeed and the
+// planted go.mod would leak.
+func TestGoDetailRejectsPathTraversal(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+
+	outside := filepath.Join(t.TempDir(), "secret")
+	vdir := filepath.Join(outside, "@v")
+	if err := os.MkdirAll(vdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"v1.0.0.info", "v1.0.0.mod", "v1.0.0.zip", "v1.0.0.complete"} {
+		if err := os.WriteFile(filepath.Join(vdir, f), []byte("SECRET"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rel, err := filepath.Rel(hs.downloadDir, outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := filepath.ToSlash(rel) + "@v1.0.0" // e.g. "../../secret@v1.0.0"
+
+	d, err := hs.goDetail(spec)
+	if err == nil {
+		t.Fatalf("goDetail(%q) succeeded and leaked %q; traversal not blocked", spec, d.GoMod)
 	}
 }
 

@@ -392,10 +392,23 @@ func (s *HighServer) goDetail(spec string) (UIDetail, error) {
 	}
 	module, version := spec[:i], spec[i+1:]
 	moduleEsc, versionEsc := escapePathApprox(module), escapeVersionApprox(version)
+	// The escape helpers only remap uppercase runes; they do not strip "/" or
+	// "..", so validate before building any filesystem path (the other proxy
+	// handlers do the same). Without this a spec like "../../etc@x" would escape
+	// the module cache root.
+	if err := validateRelPath(moduleEsc); err != nil {
+		return UIDetail{}, errors.New("invalid module path")
+	}
+	if strings.ContainsRune(versionEsc, '/') || strings.Contains(versionEsc, "..") {
+		return UIDetail{}, errors.New("invalid version")
+	}
+	base := filepath.Join(s.downloadDir, filepath.FromSlash(moduleEsc), "@v")
+	if !safeJoin(s.downloadDir, base) {
+		return UIDetail{}, errors.New("unsafe path")
+	}
 	if !s.isComplete(moduleEsc, versionEsc) {
 		return UIDetail{}, errors.New("version not found")
 	}
-	base := filepath.Join(s.downloadDir, filepath.FromSlash(moduleEsc), "@v")
 
 	fields := []UIDetailField{
 		{Label: "Module", Value: module, Mono: true},

@@ -258,6 +258,49 @@ func TestValidateRelPath(t *testing.T) {
 	}
 }
 
+func TestValidateGoModulePath(t *testing.T) {
+	valid := []string{
+		"rsc.io/quote",
+		"github.com/foo/bar",
+		"golang.org/x/text",
+		"example.com/Foo/Bar", // uppercase is legal in a module path
+	}
+	invalid := []string{
+		"",
+		"-flag",           // whole path looks like a flag
+		"-C",              // e.g. go's change-directory flag
+		"foo/-bar",        // an element looks like a flag
+		"foo bar",         // space
+		"foo\tbar",        // control char
+		"github.com/a//b", // empty element
+	}
+	for _, p := range valid {
+		if err := validateGoModulePath(p); err != nil {
+			t.Errorf("validateGoModulePath(%q) = %v, want nil", p, err)
+		}
+	}
+	for _, p := range invalid {
+		if err := validateGoModulePath(p); err == nil {
+			t.Errorf("validateGoModulePath(%q) = nil, want error", p)
+		}
+	}
+}
+
+func TestValidateGoVersion(t *testing.T) {
+	valid := []string{"v1.2.3", "v0.0.0-20220827204233-334a2380cb91", "latest"}
+	invalid := []string{"", "-x", "v1 2", "v1\n2"}
+	for _, v := range valid {
+		if err := validateGoVersion(v); err != nil {
+			t.Errorf("validateGoVersion(%q) = %v, want nil", v, err)
+		}
+	}
+	for _, v := range invalid {
+		if err := validateGoVersion(v); err == nil {
+			t.Errorf("validateGoVersion(%q) = nil, want error", v)
+		}
+	}
+}
+
 func TestParseProxyRequestParses(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -442,6 +485,15 @@ func TestBundleIDAndParse(t *testing.T) {
 	seq, ok := parseBundleSeqFromManifestName("go-bundle-000042.manifest.json")
 	if !ok || seq != 42 {
 		t.Errorf("parseBundleSeqFromManifestName = %d, %v; want 42, true", seq, ok)
+	}
+
+	// Past 999999 the id grows to seven digits; the name must still round-trip
+	// (a 6-digit-exact match would wedge the import stream at sequence 1e6).
+	if got := bundleIDForSequence(1000000); got != "go-bundle-1000000" {
+		t.Errorf("bundleIDForSequence(1000000) = %q", got)
+	}
+	if seq, ok := parseBundleSeqFromManifestName("go-bundle-1000000.manifest.json"); !ok || seq != 1000000 {
+		t.Errorf("parseBundleSeqFromManifestName(7-digit) = %d, %v; want 1000000, true", seq, ok)
 	}
 
 	badNames := []string{
