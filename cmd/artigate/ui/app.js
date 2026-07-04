@@ -4,13 +4,14 @@
 // only that node's immediate children, so nothing large is transferred or
 // rendered up front. The top menu switches between the Go and Python trees.
 const VIEW_TITLES = {
+    overview: "Overview",
     go: "Go modules",
     python: "Python packages",
     maven: "Maven artifacts",
     apt: "APT packages",
     rpm: "RPM packages",
 };
-let currentView = "go";
+let currentView = "overview";
 let selectedLeaf = null;
 function esc(value) {
     const map = {
@@ -283,7 +284,17 @@ function setView(view) {
     menuButtons().forEach((btn) => {
         btn.classList.toggle("active", btn.dataset["view"] === view);
     });
-    void loadTree();
+    // The Overview page carries the import-status table; the ecosystem views carry
+    // the package tree.
+    const overview = view === "overview";
+    byId("view-overview").hidden = !overview;
+    byId("view-tree").hidden = overview;
+    if (overview) {
+        void loadStatus();
+    }
+    else {
+        void loadTree();
+    }
 }
 async function loadStatus() {
     try {
@@ -302,7 +313,9 @@ async function loadStatus() {
 }
 function refresh() {
     void loadStatus();
-    void loadTree();
+    if (currentView !== "overview") {
+        void loadTree();
+    }
 }
 function serverBase() {
     return window.location.origin; // e.g. https://artigate-high.local (no trailing slash)

@@ -49,9 +49,10 @@ interface Detail {
   go_mod?: string;
 }
 
-type View = "go" | "python" | "maven" | "apt" | "rpm";
+type View = "overview" | "go" | "python" | "maven" | "apt" | "rpm";
 
 const VIEW_TITLES: Record<View, string> = {
+  overview: "Overview",
   go: "Go modules",
   python: "Python packages",
   maven: "Maven artifacts",
@@ -59,7 +60,7 @@ const VIEW_TITLES: Record<View, string> = {
   rpm: "RPM packages",
 };
 
-let currentView: View = "go";
+let currentView: View = "overview";
 let selectedLeaf: HTMLElement | null = null;
 
 function esc(value: unknown): string {
@@ -362,7 +363,16 @@ function setView(view: View): void {
   menuButtons().forEach((btn) => {
     btn.classList.toggle("active", btn.dataset["view"] === view);
   });
-  void loadTree();
+  // The Overview page carries the import-status table; the ecosystem views carry
+  // the package tree.
+  const overview = view === "overview";
+  byId("view-overview").hidden = !overview;
+  byId("view-tree").hidden = overview;
+  if (overview) {
+    void loadStatus();
+  } else {
+    void loadTree();
+  }
 }
 
 async function loadStatus(): Promise<void> {
@@ -382,7 +392,9 @@ async function loadStatus(): Promise<void> {
 
 function refresh(): void {
   void loadStatus();
-  void loadTree();
+  if (currentView !== "overview") {
+    void loadTree();
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -296,6 +296,10 @@ func TestHighServerUIPage(t *testing.T) {
 	// guide toggle and its container, and loads the JS.
 	for _, want := range []string{
 		"<title>ArtiGate</title>",
+		`data-view="overview"`,
+		"Import status",
+		`id="view-overview"`,
+		`id="view-tree"`,
 		`data-view="go"`,
 		`data-view="python"`,
 		`data-view="maven"`,
