@@ -162,12 +162,22 @@ function renderDetail(detail) {
         sub.textContent = detail.subtitle;
         panel.appendChild(sub);
     }
+    // A full, host-qualified pull reference (containers) as a prominent
+    // click-to-copy button, right under the title.
+    if (detail.copy_ref) {
+        panel.appendChild(copyRefButton(`${window.location.host}/${detail.copy_ref}`));
+    }
     const dl = document.createElement("dl");
     for (const field of detail.fields ?? []) {
         const dt = document.createElement("dt");
         dt.textContent = field.label;
+        const dd = document.createElement("dd");
+        dd.textContent = field.value;
+        if (field.mono) {
+            dd.className = "mono";
+        }
         dl.appendChild(dt);
-        dl.appendChild(detailValue(field));
+        dl.appendChild(dd);
     }
     panel.appendChild(dl);
     if (detail.go_mod) {
@@ -181,32 +191,39 @@ function renderDetail(detail) {
         panel.appendChild(pre);
     }
 }
-// detailValue builds one <dd> for the detail panel. A host_prefix field shows
-// the value qualified by this dashboard's host (e.g. the full container pull
-// reference); a copy field gets a small copy-to-clipboard button.
-function detailValue(field) {
-    const dd = document.createElement("dd");
-    if (field.mono) {
-        dd.className = "mono";
-    }
-    const value = field.host_prefix ? `${window.location.host}/${field.value}` : field.value;
-    if (!field.copy) {
-        dd.textContent = value;
-        return dd;
-    }
-    dd.classList.add("copyable");
-    const text = document.createElement("span");
-    text.className = "copy-value";
-    text.textContent = value;
+// copyRefButton renders a prominent click-to-copy control for a full,
+// host-qualified image reference — exactly what `docker pull` / `podman pull`
+// takes. Clicking anywhere on it copies the reference; only the "Copy" tag
+// flashes so the reference text stays visible.
+function copyRefButton(ref) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "copy-field";
-    btn.textContent = "Copy";
-    btn.title = "Copy to clipboard";
-    btn.addEventListener("click", () => void copyCode(value, text, btn));
-    dd.appendChild(text);
-    dd.appendChild(btn);
-    return dd;
+    btn.className = "copy-ref";
+    btn.title = "Copy the full image reference for this host";
+    const text = document.createElement("span");
+    text.className = "copy-ref-text";
+    text.textContent = ref;
+    const tag = document.createElement("span");
+    tag.className = "copy-ref-tag";
+    tag.textContent = "Copy";
+    btn.appendChild(text);
+    btn.appendChild(tag);
+    btn.addEventListener("click", () => {
+        void (async () => {
+            try {
+                if (!navigator.clipboard) {
+                    throw new Error("clipboard unavailable");
+                }
+                await navigator.clipboard.writeText(ref);
+                flashButton(tag, "Copied ✓");
+            }
+            catch {
+                selectText(text); // insecure context: let the user copy manually
+                flashButton(tag, "Press Ctrl+C");
+            }
+        })();
+    });
+    return btn;
 }
 async function selectLeaf(el, node) {
     if (selectedLeaf) {
@@ -451,6 +468,8 @@ function rpmGuideSection(base, repo) {
             : "This repository is served unsigned, so signature checks are off. To verify instead, sign it with --rpm-gpg-key on the high side.",
     };
 }
+// flashButton briefly swaps an element's text (a copy button, or just the
+// "Copy" tag of the reference control) and restores it.
 function flashButton(btn, text) {
     if (btn.dataset["label"] === undefined) {
         btn.dataset["label"] = btn.textContent ?? "Copy";

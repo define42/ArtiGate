@@ -451,25 +451,25 @@ func (s *HighServer) listPythonProjects() ([]UIProject, error) {
 // Leaf detail panel
 // -----------------------------------------------------------------------------
 
-// UIDetailField is one label/value row in the detail panel. Copy renders a
-// small copy-to-clipboard button next to the value. HostPrefix asks the
-// frontend to prepend the dashboard's own host to the value (so a mirrored
-// pull reference becomes the full address a client uses, honoring any reverse
-// proxy) — the host is only known client-side.
+// UIDetailField is one label/value row in the detail panel.
 type UIDetailField struct {
-	Label      string `json:"label"`
-	Value      string `json:"value"`
-	Mono       bool   `json:"mono,omitempty"`
-	Copy       bool   `json:"copy,omitempty"`
-	HostPrefix bool   `json:"host_prefix,omitempty"`
+	Label string `json:"label"`
+	Value string `json:"value"`
+	Mono  bool   `json:"mono,omitempty"`
 }
 
 // UIDetail describes a selected leaf (a Go module version or a Python wheel).
+// CopyRef, when set, is a host-relative reference (used for a container's full
+// pull reference): the dashboard prepends its own host — known only
+// client-side, honoring any reverse proxy — and renders a prominent
+// click-to-copy control, so the operator copies exactly what `docker pull`
+// takes.
 type UIDetail struct {
 	Title    string          `json:"title"`
 	Subtitle string          `json:"subtitle,omitempty"`
 	Fields   []UIDetailField `json:"fields"`
 	GoMod    string          `json:"go_mod,omitempty"`
+	CopyRef  string          `json:"copy_ref,omitempty"`
 }
 
 // handleUIDetail returns details for a selected leaf. path is "module@version"
