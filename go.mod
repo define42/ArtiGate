@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/caddyserver/certmagic v0.25.4
 	github.com/gorilla/securecookie v1.1.2
+	github.com/hashicorp/go-version v1.9.0
 	golang.org/x/crypto v0.53.0
 	modernc.org/sqlite v1.53.0
 )

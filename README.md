@@ -4,18 +4,19 @@
 
 ArtiGate is a dependency mirror for **one-way data-diode networks**. It mirrors
 Go modules, Python (PyPI) wheels, Java (Maven) artifacts, APT (`.deb`) and RPM
-(`.rpm`) repositories from the internet into an air-gapped network, and serves
-them there in each ecosystem's native format.
+(`.rpm`) repositories, and container images (Docker/OCI, linux/amd64) from the
+internet into an air-gapped network, and serves them there in each ecosystem's
+native format.
 
 One binary, two modes:
 
 - **`low`** — runs on the internet side. From its web dashboard you give it a spec
   (a `go.mod` or module list, a Python requirements list, Maven coordinates, an
-  APT source, or a `.repo`); it fetches the artifacts from upstream and writes
-  **signed, numbered bundle files**.
+  APT source, a `.repo`, or a list of container images); it fetches the artifacts
+  from upstream and writes **signed, numbered bundle files**.
 - **`high`** — runs air-gapped. It imports the bundles (in order, verifying every
   signature and hash) and serves them as a GOPROXY, a PyPI index, a Maven 2
-  repository, and APT/RPM repositories.
+  repository, APT/RPM repositories, and a read-only OCI container registry.
 
 ```
   spec ──▶ [ low ] ──▶ signed bundles ──▶ ((diode)) ──▶ [ high ] ──▶ clients
@@ -187,6 +188,32 @@ when a module requires one.
   gpgkey=https://packages.microsoft.com/keys/microsoft.asc
   ```
 
+- **Containers** — image references, one per line: `alpine:3.20`,
+  `ghcr.io/org/app:v1`, `registry.access.redhat.com/ubi9/ubi@sha256:…`. Only
+  **linux/amd64** is fetched (a multi-platform image is resolved to its amd64
+  manifest). Public images from any OCI registry (Docker Hub, GitHub, Red Hat,
+  quay.io, …) work anonymously; each upstream registry keeps its own namespace
+  on the high side, so `docker.io/...` and `ghcr.io/...` content never mixes.
+  Layers are content-addressed, so a base layer shared by several images is
+  bundled and stored once.
+
+  The tag position also takes a **version constraint**, resolved against the
+  upstream tag list at collect time to the newest matching version:
+
+  ```text
+  golang:1.26.x          # newest 1.26 patch release (e.g. 1.26.3)
+  golang:<2.0.0          # newest version below 2.0.0
+  golang:>=1.24, <2.0    # a range ([hashicorp/go-version] syntax)
+  ```
+
+  Only plain numeric tags (`1.26.3`, `v2.0`, `17`) are considered, so a variant
+  tag like `1.26.3-alpine` never outranks the plain image — pin variants
+  explicitly. The bundle records the resolved concrete tag, and a **scheduled**
+  collect re-resolves on every run, so `golang:1.26.x` keeps tracking new patch
+  releases through the diode automatically.
+
+[hashicorp/go-version]: https://github.com/hashicorp/go-version
+
 For APT and RPM, a **"Newest version only"** checkbox (on by default) mirrors just
 the latest version of each package; untick it to mirror every version.
 
@@ -271,6 +298,14 @@ repo_gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate
 ```
 
+```bash
+# Containers — the pull name embeds the upstream registry
+docker pull artigate-high.local/docker.io/library/alpine:3.20
+docker pull artigate-high.local/ghcr.io/org/app:v1
+# docker/podman require HTTPS: enable TLS on the high side, or add the host to
+# "insecure-registries" in /etc/docker/daemon.json.
+```
+
 On the high side, use **only** ArtiGate as the source — don't add
 `--extra-index-url`, `mavenCentral()`, or other upstreams, which reopens
 dependency-confusion risk. If a repo is published unsigned, relax the client's
@@ -293,5 +328,10 @@ signature check (`repo_gpgcheck=0`, `[trusted=yes]`, etc.).
   supported (use `.gz`/`.xz`). Each collect is a full re-sync.
 - **Signing the served repos** is optional (`--apt-gpg-key`/`--rpm-gpg-key`);
   otherwise APT/RPM repositories are published unsigned.
+- **Containers**: linux/amd64 only, anonymous pulls of public images only, and
+  registries on non-standard ports can't be mirrored (the port can't appear in
+  the high-side pull name). `--container-registry host=baseURL` on the low side
+  redirects a registry's API to a private mirror/proxy. The high-side registry
+  is read-only (no push).
 - Low-side collects for different ecosystems run concurrently; the high side never
   runs `go`/`pip`/`mvn` and does no upstream fetching.

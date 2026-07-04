@@ -118,6 +118,7 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="java" onclick="setView('java')">Java</button>
     <button type="button" data-view="apt" onclick="setView('apt')">APT</button>
     <button type="button" data-view="rpm" onclick="setView('rpm')">RPM</button>
+    <button type="button" data-view="containers" onclick="setView('containers')">Containers</button>
     <button type="button" data-view="status" onclick="setView('status')">Status</button>
   </nav>
   <button type="button" class="refresh" onclick="loadStatus();loadAllWatches()">Refresh</button>
@@ -263,6 +264,26 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   </section>
 
+  <section class="view" id="view-containers" hidden>
+  <div class="card">
+    <h2>Mirror container images</h2>
+    <p class="hint">List images to mirror &mdash; one reference per line, e.g. <code>alpine:3.20</code>, <code>ghcr.io/org/app:v1</code>, or <code>registry.access.redhat.com/ubi9/ubi@sha256:&hellip;</code>. The tag position also takes a <b>version constraint</b>, resolved to the newest matching numeric tag at collect time: <code>golang:1.26.x</code>, <code>golang:&lt;2.0.0</code>, or <code>golang:&gt;=1.24, &lt;2.0</code> (variant tags like <code>1.26.3-alpine</code> are never picked &mdash; pin those explicitly). Only <b>linux/amd64</b> is fetched. Each upstream registry keeps its own namespace on the high side (<code>docker.io/&hellip;</code>, <code>ghcr.io/&hellip;</code>), so sources never mix. Same as POSTing to <code>/admin/containers/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectContainers(event)">
+      <label class="filelabel">Images <span class="opt">&mdash; one per line; a missing tag means <code>latest</code>; scheduled pulls re-resolve constraints each run</span>
+        <textarea id="ctrimages" rows="5" placeholder="alpine:3.20&#10;golang:1.26.x&#10;ghcr.io/org/app:v1" autocomplete="off"></textarea>
+      </label>
+      <button class="primary" type="submit" id="ctrBtn">Collect &amp; export</button>
+    </form>
+    <div id="ctrResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule these images:</span>
+      <span class="every"><input id="ctrEvery" type="number" min="1" value="1" autocomplete="off"> <select id="ctrUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleContainers()">Add schedule</button>
+    </div>
+    <div id="ctrWatches" class="watchlist"></div>
+  </div>
+  </section>
+
   <section class="view" id="view-status" hidden>
   <div class="card">
     <h2>Re-transmit bundles</h2>
@@ -274,6 +295,7 @@ const lowUIHTML = `<!DOCTYPE html>
         <option value="maven">Maven</option>
         <option value="apt">APT</option>
         <option value="rpm">RPM</option>
+        <option value="containers">Containers</option>
       </select>
       <input id="seq" type="text" placeholder="42,45-47" autocomplete="off" autofocus>
       <button class="primary" type="submit">Re-export</button>
@@ -292,7 +314,7 @@ const lowUIHTML = `<!DOCTYPE html>
 // If the session has expired, any API call returns 401; bounce to the login page.
 (function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',apt:'APT',rpm:'RPM'})[name]||name;}
+function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',apt:'APT',rpm:'RPM',containers:'Containers'})[name]||name;}
 function formatBytes(n){
   n=Number(n)||0;
   const u=['B','KiB','MiB','GiB','TiB'];
@@ -305,9 +327,9 @@ function formatBytes(n){
 // the active nav button. The status page is refreshed each time it is opened.
 // VIEW_STREAM maps a nav view to its backend stream (the Java page is the maven
 // stream). Views without a stream (status) are absent.
-const VIEW_STREAM={go:'go',python:'python',java:'maven',apt:'apt',rpm:'rpm'};
+const VIEW_STREAM={go:'go',python:'python',java:'maven',apt:'apt',rpm:'rpm',containers:'containers'};
 function setView(view){
-  for(const v of ['overview','go','python','java','apt','rpm','status']){
+  for(const v of ['overview','go','python','java','apt','rpm','containers','status']){
     document.getElementById('view-'+v).hidden = (v!==view);
   }
   document.querySelectorAll('nav button[data-view]').forEach(b=>{
@@ -561,6 +583,51 @@ async function collectRpm(ev){
   finally{ btn.disabled=false; btn.textContent=label; }
 }
 
+function showCtrResult(cls, html){
+  const el=document.getElementById('ctrResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+// ctrImages reads the image list: one reference per line, comments dropped.
+function ctrImages(){
+  return document.getElementById('ctrimages').value.split(/\r?\n/)
+    .map(s=>s.replace(/\s+#.*$/,'').trim()).filter(l=>l && l.charAt(0)!=='#');
+}
+
+async function collectContainers(ev){
+  ev.preventDefault();
+  const images=ctrImages();
+  if(!images.length){ showCtrResult('err','List at least one image reference.'); return; }
+  const btn=document.getElementById('ctrBtn');
+  const label=btn.textContent;
+  btn.disabled=true; btn.textContent='Collecting…';
+  showCtrResult('busy','Resolving manifests and downloading layers for '+esc(images.length)+' image(s)… this can take a while.');
+  try{
+    const r=await fetch('/admin/containers/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({images:images})});
+    const text=await r.text();
+    if(!r.ok){ showCtrResult('err','Error: '+esc(text.trim())); return; }
+    const d=JSON.parse(text);
+    let msg='&#10003; Collected '+esc(d.exported_modules)+' image(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
+    const skipped=d.skipped_modules||[];
+    if(skipped.length){
+      msg+='<br>&#9888; Skipped '+esc(skipped.length)+' unfetchable image(s):<ul>'+
+        skipped.map(m=>'<li><code>'+esc(m.module)+':'+esc(m.version)+'</code> &mdash; '+esc(m.error)+'</li>').join('')+'</ul>';
+      showCtrResult('warn', msg);
+    } else {
+      showCtrResult('ok', msg);
+    }
+    loadStatus();
+  }catch(e){ showCtrResult('err','Request failed: '+esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent=label; }
+}
+
+async function scheduleContainers(){
+  const images=ctrImages();
+  if(!images.length){ showCtrResult('err','List at least one image reference to schedule.'); return; }
+  createWatch('containers','Containers: '+images.slice(0,3).join(', '), {images:images}, 'ctrEvery','ctrUnit', showCtrResult);
+}
+
 async function loadStatus(){
   try{
     const r=await fetch('/ui/api/status',{cache:'no-store'});
@@ -592,8 +659,8 @@ async function loadStatus(){
 // ---- Schedules (watches) ----
 // Each ecosystem page schedules a recurring collect from its own inputs, so the
 // spec built here is exactly what that page's collect button would POST.
-const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',apt:'aptWatches',rpm:'rpmWatches'};
-const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,apt:showAptResult,rpm:showRpmResult};
+const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches'};
+const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult};
 
 function intervalSeconds(everyId, unitId){
   const n=parseInt(document.getElementById(everyId).value,10);

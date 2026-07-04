@@ -49,7 +49,11 @@ interface Detail {
   go_mod?: string;
 }
 
-type View = "overview" | "go" | "python" | "maven" | "apt" | "rpm";
+type View = "overview" | "go" | "python" | "maven" | "apt" | "rpm" | "containers";
+
+// RepoEco are the views whose content is set up per mirrored repository (each
+// top-level tree node gets its own "Set me up" button).
+type RepoEco = "apt" | "rpm" | "containers";
 
 const VIEW_TITLES: Record<View, string> = {
   overview: "Overview",
@@ -58,6 +62,7 @@ const VIEW_TITLES: Record<View, string> = {
   maven: "Maven artifacts",
   apt: "APT packages",
   rpm: "RPM packages",
+  containers: "Container images",
 };
 
 let currentView: View = "overview";
@@ -101,6 +106,7 @@ const STREAM_LABELS: Record<string, string> = {
   maven: "Maven",
   apt: "APT",
   rpm: "RPM",
+  containers: "Containers",
 };
 
 function streamLabel(name: string): string {
@@ -186,7 +192,7 @@ function setMessage(container: HTMLElement, text: string): void {
 // renderNodes renders a level of the tree. repoEco is set only for the top level
 // of the APT/RPM views, where each node is a mirrored repository that gets its
 // own "Set me up" button.
-function renderNodes(container: HTMLElement, nodes: TreeNode[], repoEco?: "apt" | "rpm"): void {
+function renderNodes(container: HTMLElement, nodes: TreeNode[], repoEco?: RepoEco): void {
   container.textContent = "";
   if (nodes.length === 0) {
     setMessage(container, "empty");
@@ -282,7 +288,7 @@ function clearDetail(): void {
 
 // repoGuideButton is the per-repository "Set me up" button shown on an APT/RPM
 // top-level node; it opens the guide for just that repository.
-function repoGuideButton(eco: "apt" | "rpm", repoName: string): HTMLButtonElement {
+function repoGuideButton(eco: RepoEco, repoName: string): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "guide-toggle repo-guide";
@@ -295,7 +301,7 @@ function repoGuideButton(eco: "apt" | "rpm", repoName: string): HTMLButtonElemen
   return btn;
 }
 
-function expandableNode(node: TreeNode, repoEco?: "apt" | "rpm"): HTMLElement {
+function expandableNode(node: TreeNode, repoEco?: RepoEco): HTMLElement {
   const details = document.createElement("details");
   const summary = document.createElement("summary");
   summary.textContent = node.label;
@@ -342,14 +348,15 @@ async function loadTree(): Promise<void> {
   const tree = byId("tree");
   byId("treeTitle").textContent = VIEW_TITLES[currentView];
   // APT/RPM set up per repository, so the top "Set me up" button is hidden and
-  // each repo node carries its own instead.
+  // each repo node carries its own instead. (Containers group by upstream
+  // registry at the top level, so they keep the whole-ecosystem button.)
   const perRepo = currentView === "apt" || currentView === "rpm";
   byId("guideBtn").hidden = perRepo;
   clearDetail();
   setMessage(tree, "loading…");
   try {
     const nodes = await fetchChildren(currentView, "");
-    renderNodes(tree, nodes, perRepo ? (currentView as "apt" | "rpm") : undefined);
+    renderNodes(tree, nodes, perRepo ? (currentView as RepoEco) : undefined);
   } catch (err) {
     setMessage(tree, `Failed to load tree: ${(err as Error).message}`);
   }
@@ -420,12 +427,13 @@ function serverBase(): string {
   return window.location.origin; // e.g. https://artigate-high.local (no trailing slash)
 }
 
-// A mirrored APT/RPM repository, from /ui/api/repos.
+// A mirrored APT/RPM/container repository, from /ui/api/repos.
 interface UIRepo {
   name: string;
   suite?: string;
   components?: string[];
   architectures?: string[];
+  tags?: string[];
   signed?: boolean;
 }
 
@@ -666,8 +674,39 @@ function guideDialog(): HTMLDialogElement {
   return byId("guide") as HTMLDialogElement;
 }
 
-// openGuide shows the whole-ecosystem setup for Go/Python/Maven (one config for
-// the mirror). APT/RPM set up per repository instead, via openRepoGuide.
+// containersGuideSection shows how to pull from the mirrored OCI registry.
+// Pull names embed the upstream registry (docker.io/..., ghcr.io/...), so the
+// example commands are built from what is actually mirrored.
+function containersGuideSection(repos: UIRepo[]): GuideSection {
+  const host = window.location.host;
+  const pullName = (r: UIRepo): string =>
+    `${host}/${r.name}${r.tags && r.tags.length ? `:${r.tags[0]}` : ""}`;
+  const pulls = repos
+    .slice(0, 8)
+    .map((r) => `docker pull ${pullName(r)}`)
+    .join("\n");
+  return {
+    heading: "Container images",
+    body:
+      "This mirror is a read-only OCI registry (linux/amd64 only). Each " +
+      "upstream registry keeps its own namespace, so the pull name is " +
+      "<this-host>/<upstream-registry>/<repository>:<tag>.",
+    blocks: [
+      {
+        label: "Pull (docker / podman)",
+        code: pulls || `docker pull ${host}/docker.io/library/alpine:3.20`,
+      },
+    ],
+    note:
+      "Docker requires HTTPS for remote registries: enable TLS on the high side, " +
+      'or add this host to "insecure-registries" in /etc/docker/daemon.json ' +
+      "(podman: an insecure [[registry]] entry in registries.conf).",
+  };
+}
+
+// openGuide shows the whole-ecosystem setup for Go/Python/Maven/containers
+// (one config for the mirror). APT/RPM set up per repository instead, via
+// openRepoGuide.
 function openGuide(): void {
   const dialog = guideDialog();
   const body = byId("guideBody");
@@ -675,13 +714,30 @@ function openGuide(): void {
   byId("guideTitle").textContent = `Set up ${VIEW_TITLES[currentView]}`;
   body.textContent = "";
   body.appendChild(guideIntro(currentView, base));
-  const section =
-    currentView === "python"
-      ? pythonGuideSection(base)
-      : currentView === "maven"
-        ? mavenGuideSection(base)
-        : goGuideSection(base);
-  renderGuideSections(body, [section]);
+  if (currentView === "containers") {
+    // Built from the live repo list so the pull commands are copy-paste ready.
+    const loading = document.createElement("p");
+    loading.className = "empty";
+    loading.textContent = "Loading…";
+    body.appendChild(loading);
+    fetchRepos("containers")
+      .then((repos) => {
+        loading.remove();
+        renderGuideSections(body, [containersGuideSection(repos)]);
+      })
+      .catch(() => {
+        loading.remove();
+        renderGuideSections(body, [containersGuideSection([])]);
+      });
+  } else {
+    const section =
+      currentView === "python"
+        ? pythonGuideSection(base)
+        : currentView === "maven"
+          ? mavenGuideSection(base)
+          : goGuideSection(base);
+    renderGuideSections(body, [section]);
+  }
   if (!dialog.open) {
     dialog.showModal();
   }
@@ -689,7 +745,7 @@ function openGuide(): void {
 
 // openRepoGuide shows setup for a single mirrored APT/RPM repository, fetched
 // live so the URL and (for APT) suite/components/arch are exact.
-async function openRepoGuide(eco: "apt" | "rpm", repoName: string): Promise<void> {
+async function openRepoGuide(eco: RepoEco, repoName: string): Promise<void> {
   const dialog = guideDialog();
   const body = byId("guideBody");
   const base = serverBase();
@@ -710,7 +766,12 @@ async function openRepoGuide(eco: "apt" | "rpm", repoName: string): Promise<void
       renderGuideSections(body, []);
       return;
     }
-    const section = eco === "apt" ? aptGuideSection(base, repo) : rpmGuideSection(base, repo);
+    const section =
+      eco === "apt"
+        ? aptGuideSection(base, repo)
+        : eco === "rpm"
+          ? rpmGuideSection(base, repo)
+          : containersGuideSection([repo]);
     renderGuideSections(body, [section]);
   } catch (err) {
     loading.textContent = `Failed to load repository: ${(err as Error).message}`;

@@ -1,9 +1,11 @@
 // artigate implements a low-side multi-ecosystem exporter and a high-side
 // read-only repository server for data-diode use.
 //
-// It intentionally uses only the Go standard library. The low side delegates
-// fetching to the installed `go`/`git`/`pip`/`mvn` tools; the high side never
-// invokes them and never fetches upstream.
+// It intentionally sticks to the Go standard library (the only exceptions:
+// pure-Go SQLite for scheduled watches and hashicorp/go-version for container
+// tag constraints). The low side delegates fetching to the installed
+// `go`/`git`/`pip`/`mvn` tools; the high side never invokes them and never
+// fetches upstream.
 package main
 
 import (
@@ -47,17 +49,18 @@ const (
 // lost or out-of-order bundle in one stream never blocks the others. The "go"
 // stream keeps the pre-multi-stream numbering for backward compatibility.
 const (
-	streamGo     = "go"
-	streamPython = "python"
-	streamMaven  = "maven"
-	streamApt    = "apt"
-	streamRpm    = "rpm"
+	streamGo         = "go"
+	streamPython     = "python"
+	streamMaven      = "maven"
+	streamApt        = "apt"
+	streamRpm        = "rpm"
+	streamContainers = "containers"
 )
 
 // knownStreams is the set of built-in ecosystem streams, shown in the low-side
 // status even before anything has been exported.
 func knownStreams() []string {
-	return []string{streamGo, streamPython, streamMaven, streamApt, streamRpm}
+	return []string{streamGo, streamPython, streamMaven, streamApt, streamRpm, streamContainers}
 }
 
 func main() {
@@ -109,7 +112,7 @@ High-side clients:
   GOSUMDB=off
 
 Useful admin endpoints:
-  low:  POST /admin/{go,python,maven,apt,rpm}/collect
+  low:  POST /admin/{go,python,maven,apt,rpm,containers}/collect
   low:  POST /admin/reexport?stream=go&sequences=42,45-47
   low:  GET  /admin/bundles
   high: POST /admin/import
@@ -135,20 +138,21 @@ Auth (env, low side only):
 // -----------------------------------------------------------------------------
 
 type BundleManifest struct {
-	Type             string          `json:"type"`
-	Stream           string          `json:"stream,omitempty"`
-	Sequence         int64           `json:"sequence"`
-	PreviousSequence int64           `json:"previous_sequence"`
-	Created          time.Time       `json:"created"`
-	Generator        string          `json:"generator"`
-	BundleID         string          `json:"bundle_id"`
-	Ecosystems       []string        `json:"ecosystems,omitempty"`
-	Modules          []ManifestMod   `json:"modules,omitempty"`
-	Python           *PythonManifest `json:"python,omitempty"`
-	Maven            *MavenManifest  `json:"maven,omitempty"`
-	Apt              *AptManifest    `json:"apt,omitempty"`
-	Rpm              *RpmManifest    `json:"rpm,omitempty"`
-	Files            []ManifestFile  `json:"files"`
+	Type             string             `json:"type"`
+	Stream           string             `json:"stream,omitempty"`
+	Sequence         int64              `json:"sequence"`
+	PreviousSequence int64              `json:"previous_sequence"`
+	Created          time.Time          `json:"created"`
+	Generator        string             `json:"generator"`
+	BundleID         string             `json:"bundle_id"`
+	Ecosystems       []string           `json:"ecosystems,omitempty"`
+	Modules          []ManifestMod      `json:"modules,omitempty"`
+	Python           *PythonManifest    `json:"python,omitempty"`
+	Maven            *MavenManifest     `json:"maven,omitempty"`
+	Apt              *AptManifest       `json:"apt,omitempty"`
+	Rpm              *RpmManifest       `json:"rpm,omitempty"`
+	Containers       *ContainerManifest `json:"containers,omitempty"`
+	Files            []ManifestFile     `json:"files"`
 }
 
 type ManifestMod struct {
@@ -259,6 +263,9 @@ type LowConfig struct {
 	PipBinary       string
 	MavenBinary     string
 	WatchInterval   time.Duration
+	// ContainerRegistries optionally remaps container registry names to the
+	// endpoints they are fetched from, as comma-separated host=baseURL pairs.
+	ContainerRegistries string
 }
 
 type LowState struct {
@@ -305,6 +312,9 @@ type LowServer struct {
 	// authEnabled is set when ARTIGATE_LOW_AUTH is configured; it makes the UI
 	// render a "Log out" button.
 	authEnabled bool
+	// containerRegistryBases maps a container registry name to the API base URL
+	// it is fetched from (parsed from cfg.ContainerRegistries).
+	containerRegistryBases map[string]string
 }
 
 func runLow(args []string) {
@@ -324,6 +334,7 @@ func runLow(args []string) {
 	fs.StringVar(&cfg.GoToolchain, "gotoolchain", "auto", "GOTOOLCHAIN for the low-side fetcher; \"auto\" lets go download a newer toolchain when a module requires one, \"local\" pins the installed toolchain")
 	fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
 	fs.StringVar(&cfg.MavenBinary, "maven", "mvn", "maven command used to resolve Java/Maven artifacts")
+	fs.StringVar(&cfg.ContainerRegistries, "container-registry", "", "comma-separated host=baseURL overrides for container registries (e.g. docker.io=https://mirror.example.com)")
 	fs.DurationVar(&cfg.WatchInterval, "watch-interval", 60*time.Second, "how often the scheduler checks for due watches; 0 disables scheduled watches")
 	_ = fs.Parse(args)
 
@@ -387,16 +398,21 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 	if err := os.MkdirAll(dl, 0o755); err != nil {
 		return nil, err
 	}
+	registryBases, err := parseContainerRegistryOverrides(cfg.ContainerRegistries)
+	if err != nil {
+		return nil, err
+	}
 	ls := &LowServer{
-		cfg:          cfg,
-		privateKey:   priv,
-		downloadDir:  dl,
-		gopath:       gopath,
-		statePath:    filepath.Join(cfg.Root, "low-state.json"),
-		state:        LowState{Sequences: map[string]int64{}},
-		streamLocks:  map[string]*sync.Mutex{},
-		watchTick:    cfg.WatchInterval,
-		watchRunning: map[int64]bool{},
+		cfg:                    cfg,
+		privateKey:             priv,
+		downloadDir:            dl,
+		gopath:                 gopath,
+		statePath:              filepath.Join(cfg.Root, "low-state.json"),
+		state:                  LowState{Sequences: map[string]int64{}},
+		streamLocks:            map[string]*sync.Mutex{},
+		watchTick:              cfg.WatchInterval,
+		watchRunning:           map[int64]bool{},
+		containerRegistryBases: registryBases,
 	}
 	if err := ls.loadState(); err != nil {
 		return nil, err
@@ -473,6 +489,8 @@ func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool
 		res, err = s.HandleAptCollect(r.Context(), r)
 	case "/admin/rpm/collect":
 		res, err = s.HandleRpmCollect(r.Context(), r)
+	case "/admin/containers/collect":
+		res, err = s.HandleContainerCollect(r.Context(), r)
 	default:
 		return false
 	}
@@ -1557,6 +1575,9 @@ func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.serveRpm(w, r) {
 		return
 	}
+	if s.serveContainers(w, r) {
+		return
+	}
 	if s.serveUI(w, r) {
 		return
 	}
@@ -2084,6 +2105,7 @@ func validateManifestCompleteness(m BundleManifest) error {
 		{m.Maven != nil && len(m.Maven.Artifacts) > 0, func(s map[string]bool) error { return validateMavenArtifacts(m.Maven.Artifacts, s) }},
 		{m.Apt != nil && len(m.Apt.Mirrors) > 0, func(s map[string]bool) error { return validateAptMirrors(m.Apt.Mirrors, s) }},
 		{m.Rpm != nil && len(m.Rpm.Mirrors) > 0, func(s map[string]bool) error { return validateRpmMirrors(m.Rpm.Mirrors, s) }},
+		{m.Containers != nil && len(m.Containers.Repos) > 0, func(s map[string]bool) error { return validateContainerRepos(m.Containers.Repos, s, m.Files) }},
 	}
 	matched := false
 	for _, e := range ecosystems {
@@ -2096,7 +2118,7 @@ func validateManifestCompleteness(m BundleManifest) error {
 		}
 	}
 	if !matched {
-		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, or rpm mirrors")
+		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, or container repos")
 	}
 	return nil
 }
@@ -2147,6 +2169,9 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 		return err
 	}
 	if err := s.publishRpm(manifest.Rpm); err != nil {
+		return err
+	}
+	if err := s.publishContainers(manifest.Containers); err != nil {
 		return err
 	}
 	// Complete markers are written only after all files are installed.

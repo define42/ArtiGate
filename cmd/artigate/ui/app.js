@@ -10,6 +10,7 @@ const VIEW_TITLES = {
     maven: "Maven artifacts",
     apt: "APT packages",
     rpm: "RPM packages",
+    containers: "Container images",
 };
 let currentView = "overview";
 let selectedLeaf = null;
@@ -48,6 +49,7 @@ const STREAM_LABELS = {
     maven: "Maven",
     apt: "APT",
     rpm: "RPM",
+    containers: "Containers",
 };
 function streamLabel(name) {
     return STREAM_LABELS[name] ?? name;
@@ -263,7 +265,8 @@ async function loadTree() {
     const tree = byId("tree");
     byId("treeTitle").textContent = VIEW_TITLES[currentView];
     // APT/RPM set up per repository, so the top "Set me up" button is hidden and
-    // each repo node carries its own instead.
+    // each repo node carries its own instead. (Containers group by upstream
+    // registry at the top level, so they keep the whole-ecosystem button.)
     const perRepo = currentView === "apt" || currentView === "rpm";
     byId("guideBtn").hidden = perRepo;
     clearDetail();
@@ -529,8 +532,35 @@ function renderGuideSections(container, sections) {
 function guideDialog() {
     return byId("guide");
 }
-// openGuide shows the whole-ecosystem setup for Go/Python/Maven (one config for
-// the mirror). APT/RPM set up per repository instead, via openRepoGuide.
+// containersGuideSection shows how to pull from the mirrored OCI registry.
+// Pull names embed the upstream registry (docker.io/..., ghcr.io/...), so the
+// example commands are built from what is actually mirrored.
+function containersGuideSection(repos) {
+    const host = window.location.host;
+    const pullName = (r) => `${host}/${r.name}${r.tags && r.tags.length ? `:${r.tags[0]}` : ""}`;
+    const pulls = repos
+        .slice(0, 8)
+        .map((r) => `docker pull ${pullName(r)}`)
+        .join("\n");
+    return {
+        heading: "Container images",
+        body: "This mirror is a read-only OCI registry (linux/amd64 only). Each " +
+            "upstream registry keeps its own namespace, so the pull name is " +
+            "<this-host>/<upstream-registry>/<repository>:<tag>.",
+        blocks: [
+            {
+                label: "Pull (docker / podman)",
+                code: pulls || `docker pull ${host}/docker.io/library/alpine:3.20`,
+            },
+        ],
+        note: "Docker requires HTTPS for remote registries: enable TLS on the high side, " +
+            'or add this host to "insecure-registries" in /etc/docker/daemon.json ' +
+            "(podman: an insecure [[registry]] entry in registries.conf).",
+    };
+}
+// openGuide shows the whole-ecosystem setup for Go/Python/Maven/containers
+// (one config for the mirror). APT/RPM set up per repository instead, via
+// openRepoGuide.
 function openGuide() {
     const dialog = guideDialog();
     const body = byId("guideBody");
@@ -538,12 +568,30 @@ function openGuide() {
     byId("guideTitle").textContent = `Set up ${VIEW_TITLES[currentView]}`;
     body.textContent = "";
     body.appendChild(guideIntro(currentView, base));
-    const section = currentView === "python"
-        ? pythonGuideSection(base)
-        : currentView === "maven"
-            ? mavenGuideSection(base)
-            : goGuideSection(base);
-    renderGuideSections(body, [section]);
+    if (currentView === "containers") {
+        // Built from the live repo list so the pull commands are copy-paste ready.
+        const loading = document.createElement("p");
+        loading.className = "empty";
+        loading.textContent = "Loading…";
+        body.appendChild(loading);
+        fetchRepos("containers")
+            .then((repos) => {
+            loading.remove();
+            renderGuideSections(body, [containersGuideSection(repos)]);
+        })
+            .catch(() => {
+            loading.remove();
+            renderGuideSections(body, [containersGuideSection([])]);
+        });
+    }
+    else {
+        const section = currentView === "python"
+            ? pythonGuideSection(base)
+            : currentView === "maven"
+                ? mavenGuideSection(base)
+                : goGuideSection(base);
+        renderGuideSections(body, [section]);
+    }
     if (!dialog.open) {
         dialog.showModal();
     }
@@ -571,7 +619,11 @@ async function openRepoGuide(eco, repoName) {
             renderGuideSections(body, []);
             return;
         }
-        const section = eco === "apt" ? aptGuideSection(base, repo) : rpmGuideSection(base, repo);
+        const section = eco === "apt"
+            ? aptGuideSection(base, repo)
+            : eco === "rpm"
+                ? rpmGuideSection(base, repo)
+                : containersGuideSection([repo]);
         renderGuideSections(body, [section]);
     }
     catch (err) {
