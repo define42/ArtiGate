@@ -80,6 +80,19 @@ const lowUIHTML = `<!DOCTYPE html>
   td.mono { font-family: ui-monospace, monospace; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .empty { color: #8b93a5; font-style: italic; }
+  .sched { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; padding-top: .9rem; border-top: 1px solid #2a2f3a; }
+  .sched-label { color: #8b93a5; font-size: .85rem; }
+  button.secondary { background: #2a2f3a; color: #c7cedb; border: 1px solid #3a4150; border-radius: 6px; padding: .5rem 1rem; cursor: pointer; font: inherit; }
+  .watchlist { margin-top: .8rem; }
+  .every { display: flex; gap: .4rem; align-items: center; }
+  .every input[type=number] { width: 5rem; background: #0f1115; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .55rem .6rem; font: inherit; }
+  .pill { display: inline-block; border-radius: 999px; padding: .05rem .5rem; font-size: .72rem; font-weight: 600; }
+  .pill.ok { background: #10281a; border: 1px solid #1f6f43; color: #7ee2a8; }
+  .pill.warn { background: #2e1416; border: 1px solid #7f2a30; color: #ff9ea3; }
+  .wmsg { color: #8b93a5; font-size: .75rem; }
+  .wactions { white-space: nowrap; }
+  .wactions button { background: #2a2f3a; color: #c7cedb; border: 1px solid #3a4150; border-radius: 5px; padding: .25rem .55rem; margin-left: .3rem; cursor: pointer; font: inherit; font-size: .78rem; }
+  .wactions button:first-child { margin-left: 0; }
 </style>
 </head>
 <body>
@@ -98,18 +111,27 @@ const lowUIHTML = `<!DOCTYPE html>
 <main>
   <section class="view" id="view-go">
   <div class="card">
-    <h2>Mirror a Go project (go.mod)</h2>
-    <p class="hint">Upload a project's <code>go.mod</code> (optionally its <code>go.sum</code>). ArtiGate resolves and fetches exactly the module graph that project builds and writes it to a signed bundle &mdash; the same as POSTing the file to <code>/admin/go/collect</code>. This is the closest to &ldquo;download everything needed to build this project offline&rdquo;.</p>
+    <h2>Mirror Go modules</h2>
+    <p class="hint">List modules to fetch &mdash; one per line: <code>module@v1.2.3</code> to pin, or just <code>module</code> (or <code>module@latest</code>) for the newest version, e.g. <code>github.com/caddyserver/certmagic</code>. Each listed module is fetched together with its full dependency graph. <em>Or</em> upload a project's <code>go.mod</code> to mirror exactly that project's module graph. Same as POSTing to <code>/admin/go/collect</code>.</p>
     <form class="gomod-form" onsubmit="collectGoMod(event)">
-      <label class="filelabel">go.mod
-        <input id="gomod" type="file" accept=".mod,text/plain" required>
+      <label class="filelabel">Modules <span class="opt">&mdash; one per line; a bare path fetches the newest version, with dependencies</span>
+        <textarea id="gomods" rows="3" placeholder="github.com/caddyserver/certmagic&#10;golang.org/x/text@v0.14.0" autocomplete="off"></textarea>
       </label>
-      <label class="filelabel">go.sum <span class="opt">&mdash; optional, pins the exact versions</span>
+      <label class="filelabel">&hellip;or upload a go.mod <span class="opt">&mdash; mirrors exactly that project's graph</span>
+        <input id="gomod" type="file" accept=".mod,text/plain">
+      </label>
+      <label class="filelabel">go.sum <span class="opt">&mdash; optional, with go.mod; pins the exact versions</span>
         <input id="gosum" type="file" accept=".sum,text/plain">
       </label>
       <button class="primary" type="submit" id="goBtn">Collect &amp; export</button>
     </form>
     <div id="goResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="goEvery" type="number" min="1" value="1" autocomplete="off"> <select id="goUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleGo()">Add schedule</button>
+    </div>
+    <div id="goWatches" class="watchlist"></div>
   </div>
   </section>
 
@@ -138,6 +160,12 @@ const lowUIHTML = `<!DOCTYPE html>
       <button class="primary" type="submit" id="pyBtn">Collect &amp; export</button>
     </form>
     <div id="pyResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule these requirements:</span>
+      <span class="every"><input id="pyEvery" type="number" min="1" value="1" autocomplete="off"> <select id="pyUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="schedulePython()">Add schedule</button>
+    </div>
+    <div id="pyWatches" class="watchlist"></div>
   </div>
   </section>
 
@@ -155,6 +183,12 @@ const lowUIHTML = `<!DOCTYPE html>
       <button class="primary" type="submit" id="mvnBtn">Collect &amp; export</button>
     </form>
     <div id="mvnResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule these coordinates/pom:</span>
+      <span class="every"><input id="mvnEvery" type="number" min="1" value="1" autocomplete="off"> <select id="mvnUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleMaven()">Add schedule</button>
+    </div>
+    <div id="mvnWatches" class="watchlist"></div>
   </div>
   </section>
 
@@ -172,6 +206,12 @@ const lowUIHTML = `<!DOCTYPE html>
       <button class="primary" type="submit" id="aptBtn">Collect &amp; export</button>
     </form>
     <div id="aptResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule this source:</span>
+      <span class="every"><input id="aptEvery" type="number" min="1" value="1" autocomplete="off"> <select id="aptUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleApt()">Add schedule</button>
+    </div>
+    <div id="aptWatches" class="watchlist"></div>
   </div>
   </section>
 
@@ -189,6 +229,12 @@ const lowUIHTML = `<!DOCTYPE html>
       <button class="primary" type="submit" id="rpmBtn">Collect &amp; export</button>
     </form>
     <div id="rpmResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule this repo:</span>
+      <span class="every"><input id="rpmEvery" type="number" min="1" value="1" autocomplete="off"> <select id="rpmUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleRpm()">Add schedule</button>
+    </div>
+    <div id="rpmWatches" class="watchlist"></div>
   </div>
   </section>
 
@@ -230,6 +276,9 @@ function formatBytes(n){
 
 // setView shows one ecosystem (or the status) page and hides the rest, matching
 // the active nav button. The status page is refreshed each time it is opened.
+// VIEW_STREAM maps a nav view to its backend stream (the Java page is the maven
+// stream). Views without a stream (status) are absent.
+const VIEW_STREAM={go:'go',python:'python',java:'maven',apt:'apt',rpm:'rpm'};
 function setView(view){
   for(const v of ['go','python','java','apt','rpm','status']){
     document.getElementById('view-'+v).hidden = (v!==view);
@@ -238,6 +287,7 @@ function setView(view){
     b.classList.toggle('active', b.dataset.view===view);
   });
   if(view==='status') loadStatus();
+  if(VIEW_STREAM[view]) loadWatchesInto(VIEW_STREAM[view]);
 }
 
 function showResult(cls, html){
@@ -271,21 +321,36 @@ function showGoResult(cls, html){
   el.innerHTML=html;
 }
 
+// goSpec builds the /admin/go/collect payload from the Go page inputs: a module
+// list (a bare path fetches the newest version) or an uploaded go.mod (with an
+// optional go.sum). Returns {spec, label}, or null when nothing is entered.
+async function goSpec(){
+  const modFile=document.getElementById('gomod').files[0];
+  if(modFile){
+    const go_mod=await modFile.text();
+    const sumFile=document.getElementById('gosum').files[0];
+    const go_sum=sumFile ? await sumFile.text() : '';
+    return {spec:{go_mod:go_mod, go_sum:go_sum}, label:'Go: '+modFile.name};
+  }
+  const mods=document.getElementById('gomods').value.split(/\r?\n/)
+    .map(s=>s.replace(/\s+#.*$/,'').trim()).filter(l=>l && l.charAt(0)!=='#');
+  if(mods.length){
+    // Always fetch the full dependency graph of the listed modules.
+    return {spec:{modules:mods, resolve_deps:true}, label:'Go: '+mods.slice(0,3).join(', ')};
+  }
+  return null;
+}
+
 async function collectGoMod(ev){
   ev.preventDefault();
-  const modInput=document.getElementById('gomod');
-  const sumInput=document.getElementById('gosum');
-  const modFile=modInput.files && modInput.files[0];
-  if(!modFile){ showGoResult('err','Choose a go.mod file to upload.'); return; }
+  const built=await goSpec();
+  if(!built){ showGoResult('err','List at least one module, or upload a go.mod.'); return; }
   const btn=document.getElementById('goBtn');
   const label=btn.textContent;
   btn.disabled=true; btn.textContent='Collecting…';
   showGoResult('busy','Resolving and fetching the module graph… this can take a while for a large project.');
   try{
-    const go_mod=await modFile.text();
-    const sumFile=sumInput.files && sumInput.files[0];
-    const go_sum=sumFile ? await sumFile.text() : '';
-    const r=await fetch('/admin/go/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({go_mod:go_mod, go_sum:go_sum})});
+    const r=await fetch('/admin/go/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(built.spec)});
     const text=await r.text();
     if(!r.ok){ showGoResult('err','Error: '+esc(text.trim())); return; }
     const d=JSON.parse(text);
@@ -495,7 +560,122 @@ async function loadStatus(){
     document.getElementById('meta').textContent='Failed to load status: '+e.message;
   }
 }
+
+// ---- Schedules (watches) ----
+// Each ecosystem page schedules a recurring collect from its own inputs, so the
+// spec built here is exactly what that page's collect button would POST.
+const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',apt:'aptWatches',rpm:'rpmWatches'};
+const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,apt:showAptResult,rpm:showRpmResult};
+
+function intervalSeconds(everyId, unitId){
+  const n=parseInt(document.getElementById(everyId).value,10);
+  const unit=parseInt(document.getElementById(unitId).value,10);
+  return (n>0)?n*unit:0;
+}
+
+async function createWatch(stream, label, spec, everyId, unitId, showFn){
+  const sec=intervalSeconds(everyId, unitId);
+  if(!sec){ showFn('err','Enter a positive schedule interval.'); return; }
+  try{
+    const r=await fetch('/admin/watches',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({stream:stream, label:label, interval_seconds:sec, spec:spec})});
+    const t=await r.text();
+    if(!r.ok){ showFn('err','Error: '+esc(t.trim())); return; }
+    showFn('ok','&#10003; Schedule added: '+esc(label)+'.');
+    loadWatchesInto(stream);
+  }catch(e){ showFn('err','Request failed: '+esc(e.message)); }
+}
+
+async function scheduleGo(){
+  const built=await goSpec();
+  if(!built){ showGoResult('err','List at least one module, or upload a go.mod, to schedule.'); return; }
+  createWatch('go', built.label, built.spec, 'goEvery','goUnit', showGoResult);
+}
+
+async function schedulePython(){
+  const parsed=parseRequirements(document.getElementById('pyreqs').value);
+  if(!parsed.reqs.length){ showPyResult('err','Enter at least one requirement to schedule.'); return; }
+  const spec={requirements:parsed.reqs};
+  const target=pyTarget(); if(target) spec.target=target;
+  createWatch('python','Python: '+parsed.reqs.slice(0,3).join(', '), spec, 'pyEvery','pyUnit', showPyResult);
+}
+
+async function scheduleMaven(){
+  const pomFile=document.getElementById('mvnpom').files[0];
+  let spec, label;
+  if(pomFile){ spec={pom_xml: await pomFile.text()}; label='Maven: '+pomFile.name; }
+  else {
+    const coords=document.getElementById('mvncoords').value.split(/\r?\n/).map(s=>s.replace(/\s+#.*$/,'').trim()).filter(l=>l && l.charAt(0)!=='#');
+    if(!coords.length){ showMvnResult('err','Enter Maven coordinates or upload a pom.xml to schedule.'); return; }
+    spec={coordinates:coords}; label='Maven: '+coords[0];
+  }
+  createWatch('maven', label, spec, 'mvnEvery','mvnUnit', showMvnResult);
+}
+
+async function scheduleApt(){
+  const src=document.getElementById('aptsrc').value.trim();
+  if(!src){ showAptResult('err','Paste a deb822 source to schedule.'); return; }
+  const m=src.match(/URIs:\s*(\S+)/i);
+  createWatch('apt','APT: '+(m?m[1]:'source'), {source_list:src}, 'aptEvery','aptUnit', showAptResult);
+}
+
+async function scheduleRpm(){
+  const repo=document.getElementById('rpmrepo').value.trim();
+  if(!repo){ showRpmResult('err','Paste a .repo stanza to schedule.'); return; }
+  const m=repo.match(/^\s*\[([^\]]+)\]/m);
+  createWatch('rpm','RPM: '+(m?m[1]:'repo'), {repo_file:repo}, 'rpmEvery','rpmUnit', showRpmResult);
+}
+
+function fmtEvery(sec){
+  if(sec%86400===0) return (sec/86400)+' day(s)';
+  if(sec%3600===0) return (sec/3600)+' hour(s)';
+  return Math.round(sec/60)+' min';
+}
+function fmtTime(s){ if(!s) return '&mdash;'; const d=new Date(s); return isNaN(d.getTime())?esc(s):esc(d.toLocaleString()); }
+
+function watchRow(wt){
+  const status=wt.last_status==='error'?'<span class="pill warn">error</span>'
+    :wt.last_status==='ok'?'<span class="pill ok">ok</span>':'&mdash;';
+  const toggle=wt.enabled
+    ? '<button onclick="watchAction(\'disable\','+wt.id+',\''+wt.stream+'\')">Disable</button>'
+    : '<button onclick="watchAction(\'enable\','+wt.id+',\''+wt.stream+'\')">Enable</button>';
+  return '<tr><td>'+esc(wt.label)+'</td><td>'+esc(fmtEvery(wt.interval_seconds))+'</td>'+
+    '<td>'+(wt.enabled?'yes':'no')+'</td><td>'+fmtTime(wt.last_run_at)+'</td>'+
+    '<td>'+status+(wt.last_message?'<br><span class="wmsg">'+esc(wt.last_message)+'</span>':'')+'</td>'+
+    '<td>'+fmtTime(wt.next_run_at)+'</td>'+
+    '<td class="wactions"><button onclick="watchAction(\'run\','+wt.id+',\''+wt.stream+'\')">Run now</button>'+
+    toggle+'<button onclick="watchAction(\'delete\','+wt.id+',\''+wt.stream+'\')">Delete</button></td></tr>';
+}
+
+// loadWatchesInto renders the schedules for one stream into that ecosystem's
+// page (blank when the stream has none).
+async function loadWatchesInto(stream){
+  const box=document.getElementById(WATCH_CONTAINERS[stream]);
+  if(!box) return;
+  try{
+    const r=await fetch('/admin/watches',{cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const list=((await r.json()).watches||[]).filter(w=>w.stream===stream);
+    if(!list.length){ box.innerHTML=''; return; }
+    box.innerHTML='<table><thead><tr><th>Schedule</th><th>Every</th><th>Enabled</th>'+
+      '<th>Last run</th><th>Status</th><th>Next run</th><th>Actions</th></tr></thead><tbody>'+
+      list.map(watchRow).join('')+'</tbody></table>';
+  }catch(e){ box.textContent='Failed to load schedules: '+e.message; }
+}
+
+async function watchAction(action, id, stream){
+  if(action==='delete' && !confirm('Delete this schedule?')) return;
+  const show=WATCH_SHOW[stream]||function(){};
+  try{
+    const r=await fetch('/admin/watches/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
+    if(!r.ok){ const t=await r.text(); show('err','Error: '+esc(t.trim())); return; }
+    if(action==='run') show('ok','&#10003; Run started; the schedule updates when it finishes.');
+    loadWatchesInto(stream);
+  }catch(e){ show('err','Request failed: '+esc(e.message)); }
+}
+
 loadStatus();
+loadWatchesInto('go');
 </script>
 </body>
 </html>

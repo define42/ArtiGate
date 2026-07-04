@@ -102,6 +102,7 @@ func newFakeLowServerWithGo(t *testing.T, goBin string) (*LowServer, ed25519.Pri
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = ls.Close() })
 	return ls, priv
 }
 
@@ -458,6 +459,24 @@ func TestCollectGoModToleratesToolchainStderr(t *testing.T) {
 	}
 	if res.ExportedModules < 1 || res.BundleID != "go-bundle-000001" {
 		t.Errorf("unexpected result: %+v", res)
+	}
+}
+
+// TestCollectGoBareModuleResolvesLatest proves a bare module path (no @version)
+// — how the UI's "newest of <module>" input arrives — resolves to the newest
+// version and is fetched.
+func TestCollectGoBareModuleResolvesLatest(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	res, err := ls.CollectGo(context.Background(), GoCollectRequest{Modules: []string{"example.com/foo/bar"}})
+	if err != nil {
+		t.Fatalf("CollectGo: %v", err)
+	}
+	if res.ExportedModules != 1 {
+		t.Fatalf("expected 1 module, got %+v", res)
+	}
+	// The fake upstream's newest example.com/foo/bar is v1.1.0.
+	if !fileExists(filepath.Join(ls.downloadDir, "example.com", "foo", "bar", "@v", "v1.1.0.info")) {
+		t.Error("bare module did not resolve to the newest version (v1.1.0)")
 	}
 }
 

@@ -12,7 +12,7 @@ It contains two modes in one binary:
 - `low`: internet-side exporter. On request — a `go.mod`/module list, a Python requirements list, Maven coordinates, an APT source, or a `.repo` file — it fetches the artifacts from upstream (`proxy.golang.org`, `direct` VCS/GitHub, PyPI, Maven, distro mirrors) using normal `go`/`git`/`pip`/`mvn` credentials and writes signed, numbered bundle files. It is not a module proxy; every ecosystem is driven the same way, by submitting a spec.
 - `high`: air-gapped, read-only GOPROXY server. It imports signed bundles in sequence — independently per ecosystem stream — verifies all hashes, quarantines out-of-order future bundles until gaps are filled, and serves only complete module versions.
 
-The implementation intentionally uses only the Go standard library. The low side invokes the installed `go` command to produce canonical `.info`, `.mod`, and `.zip` files in the normal Go module cache layout.
+The implementation uses only the Go standard library, with a single exception: the low side stores scheduled pulls ("watches") in a SQLite database via the pure-Go [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) driver (no cgo, so builds stay simple). Everything else — bundles, manifests, signing, per-stream sequence state — remains stdlib and JSON. The low side invokes the installed `go` command to produce canonical `.info`, `.mod`, and `.zip` files in the normal Go module cache layout.
 
 ## Build
 
@@ -223,13 +223,40 @@ The low side serves a self-contained web UI at its root:
 http://low-exporter:8080/
 ```
 
-It provides a form to **re-transmit a bundle number or range** the high side is
-missing (e.g. `42`, `45-47`, or `42,45-47`) — pick the stream, then the same
-operation as `/admin/reexport`, but point-and-click — and shows the current
-export status: the next sequence **per stream**, pending Go modules, and a table
-of exported bundles across all streams indicating whether each bundle's files
-are still present in the export directory. The status is also available as JSON
-at `/ui/api/status`.
+The dashboard has a page per ecosystem (Go, Python, Java, APT, RPM) for one-off
+collects and scheduling (below), plus a **Status** page. Status shows the next
+sequence **per stream** and a table of exported bundles across all streams (with
+sizes), indicating whether each bundle's files are still present in the export
+directory; it also drives the **re-transmit a bundle number or range** form (pick
+the stream + range, e.g. `42`, `45-47`, or `42,45-47` — the point-and-click form
+of `/admin/reexport`). Status is also available as JSON at `/ui/api/status`.
+
+### Scheduled pulls (watches)
+
+Each ecosystem page can turn its own inputs into a **recurring pull**: below the
+collect form, set an interval (hours or days) and click **Add schedule**. It uses
+exactly the inputs already on that page — e.g. on the Go page, upload a `go.mod`
+(and optional `go.sum`) and schedule it, so ArtiGate re-resolves and re-exports
+that project's module graph every day; on the Python page, schedule a
+requirements list; and so on for Maven, APT, and RPM. Each page lists its own
+schedules with run-now / enable / disable / delete actions.
+
+Watches are stored in a SQLite database and re-run on schedule. The scheduler
+checks for due watches every `--watch-interval` (default `60s`; set `0` to
+disable auto-running). Each watch records its last run time, status, and next
+run. Watches are also managed over HTTP, where `spec` is exactly the JSON body
+the matching `/admin/<eco>/collect` endpoint accepts:
+
+```text
+GET  /admin/watches          list
+POST /admin/watches          create {stream, label, interval_seconds, spec}
+POST /admin/watches/run      run once now, in the background {id}
+POST /admin/watches/enable   {id}
+POST /admin/watches/disable  {id}
+POST /admin/watches/delete   {id}
+```
+
+Each run currently re-resolves and re-bundles the full spec (see Notes and limitations).
 
 Protect the admin endpoints (and the UI) with firewall rules, a local-only listener, or a reverse proxy with authentication.
 
@@ -704,7 +731,7 @@ Use ArtiGate's high-side key. If the mirror is unsigned, set `repo_gpgcheck=0`
 
 - This is a production-oriented starter implementation, not a full artifact-management product.
 - It does not implement sumdb mirroring. On the high side use `GOSUMDB=off` and rely on committed `go.sum`, signed bundles, and manifest hashes.
-- It uses JSON state files to keep the implementation dependency-free. Use SQLite/PostgreSQL if you need multiple writers or a larger approval workflow.
+- Sequence/bundle state is kept in JSON files; scheduled pulls ("watches") are kept in a SQLite database (`<root>/watches.db`, via pure-Go `modernc.org/sqlite`). Each watch run currently re-resolves and re-bundles its full spec — the high side dedups identical artifacts by hash on import (so repos never bloat), but a frequent watch re-sends unchanged content across the diode; a low-side content-delta index is the planned follow-up.
 - Admin endpoints are unauthenticated. Bind to localhost or protect them.
 - High-side gaps and out-of-order future bundles are quarantined, not rejected. Check `/admin/missing` and re-export the requested range from the low side with `/admin/reexport`.
 - Low-side exports are serialized **per stream**, not globally: a long-running mirror (a large APT or RPM repo, say) does not block collects for other ecosystems (Go, Python, Maven), which run concurrently. Two collects on the *same* stream still serialize, so that stream's bundle sequence numbers stay unique and gap-free.

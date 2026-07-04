@@ -243,6 +243,7 @@ type LowConfig struct {
 	GoToolchain     string
 	PipBinary       string
 	MavenBinary     string
+	WatchInterval   time.Duration
 }
 
 type LowState struct {
@@ -279,6 +280,13 @@ type LowServer struct {
 	streamLocks   map[string]*sync.Mutex
 	mu            sync.Mutex
 	state         LowState
+	// watches holds scheduled recurring collects (SQLite-backed); watchTick is
+	// how often the scheduler checks for due ones; watchRunning guards against a
+	// watch running concurrently with itself (a tick overlapping a run-now).
+	watches        *WatchStore
+	watchTick      time.Duration
+	watchRunningMu sync.Mutex
+	watchRunning   map[int64]bool
 }
 
 func runLow(args []string) {
@@ -298,6 +306,7 @@ func runLow(args []string) {
 	fs.StringVar(&cfg.GoToolchain, "gotoolchain", "auto", "GOTOOLCHAIN for the low-side fetcher; \"auto\" lets go download a newer toolchain when a module requires one, \"local\" pins the installed toolchain")
 	fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
 	fs.StringVar(&cfg.MavenBinary, "maven", "mvn", "maven command used to resolve Java/Maven artifacts")
+	fs.DurationVar(&cfg.WatchInterval, "watch-interval", 60*time.Second, "how often the scheduler checks for due watches; 0 disables scheduled watches")
 	_ = fs.Parse(args)
 
 	if cfg.PrivateKeyPath == "" {
@@ -308,6 +317,11 @@ func runLow(args []string) {
 
 	ls, err := NewLowServer(cfg, priv)
 	must(err)
+	defer func() { _ = ls.Close() }()
+
+	if cfg.WatchInterval > 0 {
+		go ls.watchLoop(context.Background())
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/", ls)
@@ -335,18 +349,30 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 		return nil, err
 	}
 	ls := &LowServer{
-		cfg:         cfg,
-		privateKey:  priv,
-		downloadDir: dl,
-		gopath:      gopath,
-		statePath:   filepath.Join(cfg.Root, "low-state.json"),
-		state:       LowState{Sequences: map[string]int64{}},
-		streamLocks: map[string]*sync.Mutex{},
+		cfg:          cfg,
+		privateKey:   priv,
+		downloadDir:  dl,
+		gopath:       gopath,
+		statePath:    filepath.Join(cfg.Root, "low-state.json"),
+		state:        LowState{Sequences: map[string]int64{}},
+		streamLocks:  map[string]*sync.Mutex{},
+		watchTick:    cfg.WatchInterval,
+		watchRunning: map[int64]bool{},
 	}
 	if err := ls.loadState(); err != nil {
 		return nil, err
 	}
+	store, err := OpenWatchStore(filepath.Join(cfg.Root, "watches.db"))
+	if err != nil {
+		return nil, err
+	}
+	ls.watches = store
 	return ls, nil
+}
+
+// Close releases the low server's resources (currently the watch database).
+func (s *LowServer) Close() error {
+	return s.watches.Close()
 }
 
 func (s *LowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -365,6 +391,9 @@ func (s *LowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // whether it has written a response for the request.
 func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if s.serveLowCollect(w, r) {
+		return true
+	}
+	if s.serveLowWatches(w, r) {
 		return true
 	}
 	switch {

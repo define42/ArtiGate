@@ -78,6 +78,7 @@ func newMavenLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = ls.Close() })
 	return ls, priv
 }
 

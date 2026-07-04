@@ -57,7 +57,12 @@ func TestLowServerUIPage(t *testing.T) {
 		// Top menu splits each ecosystem onto its own view/page.
 		"function setView(", `data-view="go"`, `data-view="java"`, `data-view="status"`,
 		`id="view-go"`, `id="view-java"`, `id="view-status"`,
-		"Mirror a Go project", `id="gomod"`, `id="gosum"`, "collectGoMod", "/admin/go/collect",
+		// Scheduling lives on each ecosystem page, reusing that page's inputs.
+		"/admin/watches", "loadWatchesInto", "Add schedule",
+		"scheduleGo()", `id="goEvery"`, `id="goWatches"`,
+		"schedulePython()", "scheduleApt()", "scheduleRpm()", "scheduleMaven()",
+		"Mirror Go modules", `id="gomods"`, `id="gomod"`, `id="gosum"`, "collectGoMod", "/admin/go/collect",
+
 		"Mirror Python packages", `id="pyreqs"`, "collectPython", "/admin/python/collect",
 		"Mirror Java/Maven artifacts", `id="mvncoords"`, `id="mvnpom"`, "collectMaven", "/admin/maven/collect",
 		"Mirror an APT (deb) repository", `id="aptsrc"`, `id="aptfile"`, "loadAptFile", "collectApt", "/admin/apt/collect",
