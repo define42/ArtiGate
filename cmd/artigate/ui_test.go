@@ -269,6 +269,9 @@ func TestHighServerUIReposApt(t *testing.T) {
 		len(r.Architectures) != 1 || r.Architectures[0] != "amd64" {
 		t.Errorf("apt repo = %+v", r)
 	}
+	if r.Signed { // this test's high server has no signing key
+		t.Error("apt repo reported signed, but the high server has no signing key")
+	}
 
 	// rpm has no mirror here → empty list (not an error); unknown eco → 400.
 	if code, _ := httpGet(t, srv.URL+"/ui/api/repos?eco=rpm"); code != http.StatusOK {

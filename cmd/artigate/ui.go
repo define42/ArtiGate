@@ -133,12 +133,14 @@ func (s *HighServer) handleUIOverview(w http.ResponseWriter) {
 }
 
 // UIRepo describes one mirrored APT/RPM repository for the "Set me up" guide.
-// The APT fields are empty for RPM.
+// The APT fields are empty for RPM. Signed is true when the high side publishes
+// the repository with its own GPG signature (so clients should verify it).
 type UIRepo struct {
 	Name          string   `json:"name"`
 	Suite         string   `json:"suite,omitempty"`
 	Components    []string `json:"components,omitempty"`
 	Architectures []string `json:"architectures,omitempty"`
+	Signed        bool     `json:"signed"`
 }
 
 // UIReposResponse is the body of GET /ui/api/repos.

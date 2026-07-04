@@ -1142,6 +1142,8 @@ func (s *HighServer) aptRepoList() ([]UIRepo, error) {
 			Suite:         m.Suite,
 			Components:    m.Components,
 			Architectures: m.Architectures,
+			// Signed when the high side clearsigned InRelease for this suite.
+			Signed: fileExists(filepath.Join(s.aptDir(), e.Name(), "dists", m.Suite, "InRelease")),
 		})
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })

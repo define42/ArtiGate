@@ -414,6 +414,7 @@ interface UIRepo {
   suite?: string;
   components?: string[];
   architectures?: string[];
+  signed?: boolean;
 }
 
 async function fetchRepos(eco: View): Promise<UIRepo[]> {
@@ -487,6 +488,8 @@ function aptGuideSection(base: string, repo: UIRepo): GuideSection {
   const suite = repo.suite || "<suite>";
   const comps = repo.components && repo.components.length ? repo.components.join(" ") : "<components>";
   const arches = repo.architectures && repo.architectures.length ? repo.architectures.join(" ") : "<arch>";
+  // Signed repos are verified with ArtiGate's key; unsigned repos are trusted directly.
+  const trust = repo.signed ? "Signed-By: /usr/share/keyrings/artigate-apt.gpg" : "Trusted: yes";
   return {
     heading: repo.name,
     body: "Point apt at this mirrored repository (deb822 .sources format).",
@@ -499,17 +502,22 @@ function aptGuideSection(base: string, repo: UIRepo): GuideSection {
           `Suites: ${suite}\n` +
           `Components: ${comps}\n` +
           `Architectures: ${arches}\n` +
-          "Signed-By: /usr/share/keyrings/artigate-apt.gpg",
+          trust,
       },
     ],
-    note:
-      "Use ArtiGate's high-side APT key (Signed-By), not the upstream vendor key. " +
-      "If this repository is published unsigned, use [trusted=yes] instead.",
+    note: repo.signed
+      ? "Use ArtiGate's high-side APT key (Signed-By), not the upstream vendor key."
+      : "This repository is served unsigned, so apt trusts it directly (Trusted: yes). To verify instead, sign it with --apt-gpg-key on the high side.",
   };
 }
 
 // rpmGuideSection builds setup for one mirrored RPM repository.
 function rpmGuideSection(base: string, repo: UIRepo): GuideSection {
+  // Signed repos verify repomd.xml against ArtiGate's key; unsigned repos turn
+  // signature checks off (there is no key to verify against).
+  const gpg = repo.signed
+    ? "gpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate"
+    : "gpgcheck=0\nrepo_gpgcheck=0";
   return {
     heading: repo.name,
     body: "Point dnf/yum at this mirrored repository.",
@@ -520,13 +528,13 @@ function rpmGuideSection(base: string, repo: UIRepo): GuideSection {
           `[artigate-${repo.name}]\n` +
           `name=ArtiGate ${repo.name}\n` +
           `baseurl=${base}/rpm/${repo.name}\n` +
-          "enabled=1\ngpgcheck=1\nrepo_gpgcheck=1\n" +
-          "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate",
+          "enabled=1\n" +
+          gpg,
       },
     ],
-    note:
-      "repo_gpgcheck=1 verifies repomd.xml against ArtiGate's high-side key; set " +
-      "repo_gpgcheck=0 if this repository is published unsigned.",
+    note: repo.signed
+      ? "repo_gpgcheck=1 verifies repomd.xml against ArtiGate's high-side key."
+      : "This repository is served unsigned, so signature checks are off. To verify instead, sign it with --rpm-gpg-key on the high side.",
   };
 }
 

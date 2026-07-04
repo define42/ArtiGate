@@ -1164,7 +1164,11 @@ func (s *HighServer) rpmRepoList() ([]UIRepo, error) {
 		if _, err := s.loadRpmIndex(e.Name()); err != nil {
 			continue
 		}
-		repos = append(repos, UIRepo{Name: e.Name()})
+		repos = append(repos, UIRepo{
+			Name: e.Name(),
+			// Signed when the high side wrote a repomd.xml.asc for this repo.
+			Signed: fileExists(filepath.Join(s.rpmDir(), e.Name(), "repodata", "repomd.xml.asc")),
+		})
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
 	return repos, nil
