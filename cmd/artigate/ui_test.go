@@ -244,6 +244,41 @@ func TestGoTreeChildren(t *testing.T) {
 	}
 }
 
+// TestHighServerUIReposApt checks the per-repo data the "Set me up" guide uses:
+// an imported APT mirror is listed with the suite/components/architectures it was
+// mirrored with, so the generated client .sources is exact.
+func TestHighServerUIReposApt(t *testing.T) {
+	hs, _, _ := collectAndImportApt(t)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	code, body := httpGet(t, srv.URL+"/ui/api/repos?eco=apt")
+	if code != http.StatusOK {
+		t.Fatalf("apt repos status = %d", code)
+	}
+	var resp UIReposResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Repos) != 1 {
+		t.Fatalf("apt repos = %+v, want 1", resp.Repos)
+	}
+	r := resp.Repos[0]
+	if r.Name != "microsoft-code" || r.Suite != "stable" ||
+		len(r.Components) != 1 || r.Components[0] != "main" ||
+		len(r.Architectures) != 1 || r.Architectures[0] != "amd64" {
+		t.Errorf("apt repo = %+v", r)
+	}
+
+	// rpm has no mirror here → empty list (not an error); unknown eco → 400.
+	if code, _ := httpGet(t, srv.URL+"/ui/api/repos?eco=rpm"); code != http.StatusOK {
+		t.Errorf("rpm repos status = %d, want 200", code)
+	}
+	if code, _ := httpGet(t, srv.URL+"/ui/api/repos?eco=go"); code != http.StatusBadRequest {
+		t.Errorf("go repos status = %d, want 400", code)
+	}
+}
+
 func TestHighServerUIPage(t *testing.T) {
 	pub, _ := newTestKeys(t)
 	hs := newTestHighServer(t, pub)
@@ -303,7 +338,7 @@ func TestHighServerUIAppJS(t *testing.T) {
 	}
 	// The compiled bundle drives the lazy tree fetch, the view switch, the
 	// detail panel, and the "Set me up" client-setup guide.
-	for _, want := range []string{"/ui/api/tree", "/ui/api/detail", "fetchChildren", "selectLeaf", "renderDetail", "buildGuide", "showModal", "GOPROXY", "index-url", "Maven artifacts"} {
+	for _, want := range []string{"/ui/api/tree", "/ui/api/detail", "/ui/api/repos", "fetchChildren", "selectLeaf", "renderDetail", "openGuide", "openRepoGuide", "aptGuideSection", "fetchRepos", "showModal", "GOPROXY", "index-url"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("app.js missing %q", want)
 		}

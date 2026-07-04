@@ -1118,6 +1118,36 @@ func (s *HighServer) serveApt(w http.ResponseWriter, r *http.Request) bool {
 // listAptMirrors reads each mirror's persistent index and returns UIModule
 // entries keyed by "<mirror>/<package>", so the generic segment-tree builder
 // renders mirror -> package -> versions.
+// aptRepoList returns each mirrored APT repository with the fields a client
+// needs (name, suite, components, architectures), for the "Set me up" guide.
+func (s *HighServer) aptRepoList() ([]UIRepo, error) {
+	entries, err := os.ReadDir(s.aptDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var repos []UIRepo
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		m, err := s.loadAptIndex(e.Name())
+		if err != nil {
+			continue
+		}
+		repos = append(repos, UIRepo{
+			Name:          e.Name(),
+			Suite:         m.Suite,
+			Components:    m.Components,
+			Architectures: m.Architectures,
+		})
+	}
+	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
+	return repos, nil
+}
+
 func (s *HighServer) listAptMirrors() ([]UIModule, error) {
 	entries, err := os.ReadDir(s.aptDir())
 	if errors.Is(err, os.ErrNotExist) {

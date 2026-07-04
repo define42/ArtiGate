@@ -119,14 +119,17 @@ function setMessage(container, text) {
     p.textContent = text;
     container.appendChild(p);
 }
-function renderNodes(container, nodes) {
+// renderNodes renders a level of the tree. repoEco is set only for the top level
+// of the APT/RPM views, where each node is a mirrored repository that gets its
+// own "Set me up" button.
+function renderNodes(container, nodes, repoEco) {
     container.textContent = "";
     if (nodes.length === 0) {
         setMessage(container, "empty");
         return;
     }
     for (const node of nodes) {
-        container.appendChild(node.expandable ? expandableNode(node) : leafNode(node));
+        container.appendChild(node.expandable ? expandableNode(node, repoEco) : leafNode(node));
     }
 }
 function leafNode(node) {
@@ -204,7 +207,21 @@ function clearDetail() {
     selectedLeaf = null;
     setMessage(byId("detail"), "Select a version to see its details.");
 }
-function expandableNode(node) {
+// repoGuideButton is the per-repository "Set me up" button shown on an APT/RPM
+// top-level node; it opens the guide for just that repository.
+function repoGuideButton(eco, repoName) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "guide-toggle repo-guide";
+    btn.textContent = "Set me up";
+    btn.addEventListener("click", (ev) => {
+        ev.preventDefault(); // don't toggle the enclosing <details>
+        ev.stopPropagation();
+        void openRepoGuide(eco, repoName);
+    });
+    return btn;
+}
+function expandableNode(node, repoEco) {
     const details = document.createElement("details");
     const summary = document.createElement("summary");
     summary.textContent = node.label;
@@ -214,6 +231,9 @@ function expandableNode(node) {
         count.className = "count";
         count.textContent = `${node.count} ${unit}`;
         summary.appendChild(count);
+    }
+    if (repoEco) {
+        summary.appendChild(repoGuideButton(repoEco, node.label));
     }
     details.appendChild(summary);
     const children = document.createElement("div");
@@ -241,11 +261,15 @@ function menuButtons() {
 async function loadTree() {
     const tree = byId("tree");
     byId("treeTitle").textContent = VIEW_TITLES[currentView];
+    // APT/RPM set up per repository, so the top "Set me up" button is hidden and
+    // each repo node carries its own instead.
+    const perRepo = currentView === "apt" || currentView === "rpm";
+    byId("guideBtn").hidden = perRepo;
     clearDetail();
     setMessage(tree, "loading…");
     try {
         const nodes = await fetchChildren(currentView, "");
-        renderNodes(tree, nodes);
+        renderNodes(tree, nodes, perRepo ? currentView : undefined);
     }
     catch (err) {
         setMessage(tree, `Failed to load tree: ${err.message}`);
@@ -283,111 +307,102 @@ function refresh() {
 function serverBase() {
     return window.location.origin; // e.g. https://artigate-high.local (no trailing slash)
 }
-function guideSections(base) {
-    return [
-        {
-            heading: "Go modules",
-            body: "Point the Go toolchain at this mirror as its module proxy. The trailing " +
-                "“,off” means Go builds only from what this mirror has imported and " +
-                "never reaches out to the internet.",
-            blocks: [
-                {
-                    label: "Configure the client",
-                    code: `go env -w GOPROXY=${base},off\ngo env -w GOSUMDB=off`,
-                },
-                {
-                    label: "Reproducible builds (CI)",
-                    code: "go build -mod=readonly ./...\ngo test -mod=readonly ./...",
-                },
-            ],
-            note: "GOSUMDB is off because the public checksum database is unreachable when " +
-                "air-gapped — rely on your committed go.sum. The mirror serves only " +
-                "versions whose hashes were verified when their signed bundle was imported.",
-        },
-        {
-            heading: "Python packages",
-            body: "Use this mirror as pip's only index. Wheels-only is recommended for " +
-                "air-gapped builds — no compilers or build backends are needed.",
-            blocks: [
-                {
-                    label: "/etc/pip.conf  (or ~/.config/pip/pip.conf)",
-                    code: `[global]\nindex-url = ${base}/simple/\ndisable-pip-version-check = true`,
-                },
-                {
-                    label: "Install",
-                    code: "pip install --only-binary=:all: -r requirements.txt",
-                },
-            ],
-            note: "Do not add --extra-index-url: mixing in another index reopens " +
-                "dependency-confusion risk. This mirror is the single source of truth.",
-        },
-        {
-            heading: "Java (Maven / Gradle)",
-            body: "Point Maven or Gradle at this mirror as the only repository. It serves " +
-                "a standard Maven 2 repository under /maven/.",
-            blocks: [
-                {
-                    label: "~/.m2/settings.xml (Maven)",
-                    code: "<settings>\n" +
-                        "  <mirrors>\n" +
-                        "    <mirror>\n" +
-                        "      <id>artigate</id>\n" +
-                        "      <mirrorOf>*</mirrorOf>\n" +
-                        `      <url>${base}/maven/</url>\n` +
-                        "    </mirror>\n" +
-                        "  </mirrors>\n" +
-                        "</settings>",
-                },
-                {
-                    label: "build.gradle(.kts) (Gradle)",
-                    code: `repositories {\n    maven { url = uri("${base}/maven/") }\n}`,
-                },
-            ],
-            note: "Do not add mavenCentral() or other external repositories — ArtiGate is " +
-                "the single source of truth. Pin exact versions; SNAPSHOTs and ranges are " +
-                "not mirrored.",
-        },
-        {
-            heading: "APT (Debian / Ubuntu)",
-            body: "Point apt at a mirrored repository using the deb822 .sources format. " +
-                "Replace <mirror>/<suite>/<component>/<arch> with the values shown in the " +
-                "APT packages tab.",
-            blocks: [
-                {
-                    label: "/etc/apt/sources.list.d/artigate.sources",
-                    code: "Types: deb\n" +
-                        `URIs: ${base}/apt/<mirror>\n` +
-                        "Suites: <suite>\n" +
-                        "Components: <component>\n" +
-                        "Architectures: <arch>\n" +
-                        "Signed-By: /usr/share/keyrings/artigate-apt.gpg",
-                },
-            ],
-            note: "Use ArtiGate's high-side APT key (Signed-By), not the upstream vendor " +
-                "key. If the mirror is published unsigned, use [trusted=yes] instead of " +
-                "Signed-By.",
-        },
-        {
-            heading: "RPM (Fedora / RHEL)",
-            body: "Point dnf/yum at a mirrored repository. Replace <mirror> with the value " +
-                "from the RPM packages tab.",
-            blocks: [
-                {
-                    label: "/etc/yum.repos.d/artigate.repo",
-                    code: "[artigate]\n" +
-                        "name=ArtiGate mirror\n" +
-                        `baseurl=${base}/rpm/<mirror>\n` +
-                        "enabled=1\n" +
-                        "gpgcheck=1\n" +
-                        "repo_gpgcheck=1\n" +
-                        "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate",
-                },
-            ],
-            note: "repo_gpgcheck=1 verifies repomd.xml against ArtiGate's high-side key. If " +
-                "the mirror is published unsigned, set repo_gpgcheck=0 (package gpgcheck " +
-                "still applies to signed .rpms).",
-        },
-    ];
+async function fetchRepos(eco) {
+    const resp = await fetch(`/ui/api/repos?eco=${encodeURIComponent(eco)}`, { cache: "no-store" });
+    if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+    }
+    const data = (await resp.json());
+    return data.repos ?? [];
+}
+function goGuideSection(base) {
+    return {
+        heading: "Go modules",
+        body: "Point the Go toolchain at this mirror as its module proxy. The trailing " +
+            "“,off” means Go builds only from what this mirror has imported and never " +
+            "reaches out to the internet.",
+        blocks: [
+            { label: "Configure the client", code: `go env -w GOPROXY=${base},off\ngo env -w GOSUMDB=off` },
+            { label: "Reproducible builds (CI)", code: "go build -mod=readonly ./...\ngo test -mod=readonly ./..." },
+        ],
+        note: "GOSUMDB is off because the public checksum database is unreachable when " +
+            "air-gapped — rely on your committed go.sum. The mirror serves only " +
+            "versions whose hashes were verified when their signed bundle was imported.",
+    };
+}
+function pythonGuideSection(base) {
+    return {
+        heading: "Python packages",
+        body: "Use this mirror as pip's only index. Wheels-only is recommended for " +
+            "air-gapped builds — no compilers or build backends are needed.",
+        blocks: [
+            { label: "/etc/pip.conf  (or ~/.config/pip/pip.conf)", code: `[global]\nindex-url = ${base}/simple/\ndisable-pip-version-check = true` },
+            { label: "Install", code: "pip install --only-binary=:all: -r requirements.txt" },
+        ],
+        note: "Do not add --extra-index-url: mixing in another index reopens " +
+            "dependency-confusion risk. This mirror is the single source of truth.",
+    };
+}
+function mavenGuideSection(base) {
+    return {
+        heading: "Java (Maven / Gradle)",
+        body: "Point Maven or Gradle at this mirror as the only repository. It serves a " +
+            "standard Maven 2 repository under /maven/.",
+        blocks: [
+            {
+                label: "~/.m2/settings.xml (Maven)",
+                code: "<settings>\n  <mirrors>\n    <mirror>\n      <id>artigate</id>\n      <mirrorOf>*</mirrorOf>\n" +
+                    `      <url>${base}/maven/</url>\n` +
+                    "    </mirror>\n  </mirrors>\n</settings>",
+            },
+            { label: "build.gradle(.kts) (Gradle)", code: `repositories {\n    maven { url = uri("${base}/maven/") }\n}` },
+        ],
+        note: "Do not add mavenCentral() or other external repositories — ArtiGate is the " +
+            "single source of truth. Pin exact versions; SNAPSHOTs and ranges are not mirrored.",
+    };
+}
+// aptGuideSection builds setup for one mirrored APT repository, filling in the
+// suite/components/architectures it was actually mirrored with.
+function aptGuideSection(base, repo) {
+    const suite = repo.suite || "<suite>";
+    const comps = repo.components && repo.components.length ? repo.components.join(" ") : "<components>";
+    const arches = repo.architectures && repo.architectures.length ? repo.architectures.join(" ") : "<arch>";
+    return {
+        heading: repo.name,
+        body: "Point apt at this mirrored repository (deb822 .sources format).",
+        blocks: [
+            {
+                label: "/etc/apt/sources.list.d/artigate.sources",
+                code: "Types: deb\n" +
+                    `URIs: ${base}/apt/${repo.name}\n` +
+                    `Suites: ${suite}\n` +
+                    `Components: ${comps}\n` +
+                    `Architectures: ${arches}\n` +
+                    "Signed-By: /usr/share/keyrings/artigate-apt.gpg",
+            },
+        ],
+        note: "Use ArtiGate's high-side APT key (Signed-By), not the upstream vendor key. " +
+            "If this repository is published unsigned, use [trusted=yes] instead.",
+    };
+}
+// rpmGuideSection builds setup for one mirrored RPM repository.
+function rpmGuideSection(base, repo) {
+    return {
+        heading: repo.name,
+        body: "Point dnf/yum at this mirrored repository.",
+        blocks: [
+            {
+                label: `/etc/yum.repos.d/artigate-${repo.name}.repo`,
+                code: `[artigate-${repo.name}]\n` +
+                    `name=ArtiGate ${repo.name}\n` +
+                    `baseurl=${base}/rpm/${repo.name}\n` +
+                    "enabled=1\ngpgcheck=1\nrepo_gpgcheck=1\n" +
+                    "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate",
+            },
+        ],
+        note: "repo_gpgcheck=1 verifies repomd.xml against ArtiGate's high-side key; set " +
+            "repo_gpgcheck=0 if this repository is published unsigned.",
+    };
 }
 function flashButton(btn, text) {
     if (btn.dataset["label"] === undefined) {
@@ -460,18 +475,31 @@ function guideSectionEl(section) {
     }
     return el;
 }
-function buildGuide(container) {
-    const base = serverBase();
-    container.textContent = "";
+function guideIntro(view, base) {
     const intro = document.createElement("p");
     intro.className = "guide-intro";
     intro.innerHTML =
-        `Server address: <code>${esc(base)}</code>. Run these on any machine that ` +
-            "should pull Go modules or Python wheels from this air-gapped mirror.";
-    container.appendChild(intro);
+        `Server address: <code>${esc(base)}</code>. Configure a client to pull ` +
+            `${esc(VIEW_TITLES[view])} from this air-gapped mirror.`;
+    return intro;
+}
+// renderGuideSections appends the sections: one full-width, several in two
+// columns, or an empty note when there is nothing to show.
+function renderGuideSections(container, sections) {
+    if (sections.length === 0) {
+        const p = document.createElement("p");
+        p.className = "empty";
+        p.textContent = "Nothing mirrored here yet.";
+        container.appendChild(p);
+        return;
+    }
+    if (sections.length === 1) {
+        container.appendChild(guideSectionEl(sections[0]));
+        return;
+    }
     const cols = document.createElement("div");
     cols.className = "guide-cols";
-    for (const section of guideSections(base)) {
+    for (const section of sections) {
         cols.appendChild(guideSectionEl(section));
     }
     container.appendChild(cols);
@@ -479,14 +507,53 @@ function buildGuide(container) {
 function guideDialog() {
     return byId("guide");
 }
+// openGuide shows the whole-ecosystem setup for Go/Python/Maven (one config for
+// the mirror). APT/RPM set up per repository instead, via openRepoGuide.
 function openGuide() {
     const dialog = guideDialog();
-    if (dialog.dataset["built"] !== "1") {
-        buildGuide(byId("guideBody")); // lazily built on first open
-        dialog.dataset["built"] = "1";
-    }
+    const body = byId("guideBody");
+    const base = serverBase();
+    byId("guideTitle").textContent = `Set up ${VIEW_TITLES[currentView]}`;
+    body.textContent = "";
+    body.appendChild(guideIntro(currentView, base));
+    const section = currentView === "python"
+        ? pythonGuideSection(base)
+        : currentView === "maven"
+            ? mavenGuideSection(base)
+            : goGuideSection(base);
+    renderGuideSections(body, [section]);
     if (!dialog.open) {
         dialog.showModal();
+    }
+}
+// openRepoGuide shows setup for a single mirrored APT/RPM repository, fetched
+// live so the URL and (for APT) suite/components/arch are exact.
+async function openRepoGuide(eco, repoName) {
+    const dialog = guideDialog();
+    const body = byId("guideBody");
+    const base = serverBase();
+    byId("guideTitle").textContent = `Set up ${streamLabel(eco)} — ${repoName}`;
+    body.textContent = "";
+    body.appendChild(guideIntro(eco, base));
+    const loading = document.createElement("p");
+    loading.className = "empty";
+    loading.textContent = "Loading…";
+    body.appendChild(loading);
+    if (!dialog.open) {
+        dialog.showModal();
+    }
+    try {
+        const repo = (await fetchRepos(eco)).find((r) => r.name === repoName);
+        loading.remove();
+        if (!repo) {
+            renderGuideSections(body, []);
+            return;
+        }
+        const section = eco === "apt" ? aptGuideSection(base, repo) : rpmGuideSection(base, repo);
+        renderGuideSections(body, [section]);
+    }
+    catch (err) {
+        loading.textContent = `Failed to load repository: ${err.message}`;
     }
 }
 menuButtons().forEach((btn) => {

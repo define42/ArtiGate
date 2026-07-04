@@ -1146,6 +1146,30 @@ func (s *HighServer) serveRpm(w http.ResponseWriter, r *http.Request) bool {
 // High side: dashboard tree/detail
 // -----------------------------------------------------------------------------
 
+// rpmRepoList returns each mirrored RPM repository's name, for the "Set me up"
+// guide (a client only needs the baseurl, which is derived from the name).
+func (s *HighServer) rpmRepoList() ([]UIRepo, error) {
+	entries, err := os.ReadDir(s.rpmDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var repos []UIRepo
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := s.loadRpmIndex(e.Name()); err != nil {
+			continue
+		}
+		repos = append(repos, UIRepo{Name: e.Name()})
+	}
+	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
+	return repos, nil
+}
+
 func (s *HighServer) listRpmMirrors() ([]UIModule, error) {
 	entries, err := os.ReadDir(s.rpmDir())
 	if errors.Is(err, os.ErrNotExist) {

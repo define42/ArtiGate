@@ -26,6 +26,8 @@
   .pill.ok { background: #10281a; border: 1px solid #1f6f43; color: #7ee2a8; }
   .pill.warn { background: #2e1416; border: 1px solid #7f2a30; color: #ff9ea3; }
   section h2 { font-size: 1rem; border-bottom: 1px solid #2a2f3a; padding-bottom: .4rem; }
+  .tree-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; border-bottom: 1px solid #2a2f3a; margin-bottom: .5rem; }
+  .tree-head h2 { border-bottom: none; margin: 0; padding-bottom: .4rem; }
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
   @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
   details { border-left: 1px solid #2a2f3a; margin: .1rem 0; padding: 0 0 0 .1rem; }
@@ -46,6 +48,7 @@
   .detail dd.mono { font-family: ui-monospace, monospace; }
   .detail pre { background: #0f1115; border: 1px solid #2a2f3a; border-radius: 6px; padding: .6rem .7rem; overflow: auto; font-size: .8rem; max-height: 340px; }
   .guide-toggle { background: #1f6f43; color: #eafff2; border: 1px solid #2b8f59; border-radius: 6px; padding: .4rem .9rem; cursor: pointer; font: inherit; }
+  .repo-guide { margin-left: .6rem; padding: .1rem .5rem; font-size: .72rem; font-weight: 400; vertical-align: middle; }
   .guide-modal { padding: 0; border: 1px solid #2a2f3a; border-radius: 10px; background: #161a22; color: #e6e6e6; width: min(880px, calc(100% - 3rem)); max-height: calc(100dvh - 4rem); overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
   .guide-modal::backdrop { background: rgba(6,8,12,.62); }
   .guide-inner { padding: 1.15rem 1.35rem 1.4rem; max-height: calc(100dvh - 4rem); overflow-y: auto; }
@@ -86,7 +89,6 @@
     <button type="button" data-view="apt">APT packages</button>
     <button type="button" data-view="rpm">RPM packages</button>
   </nav>
-  <button type="button" class="guide-toggle" id="guideBtn" aria-haspopup="dialog" aria-controls="guide">Set me up</button>
   <button type="button" class="refresh" id="refresh">Refresh</button>
 </header>
 <main>
@@ -94,7 +96,10 @@
   <div id="meta" class="meta"></div>
   <div class="layout">
     <section>
-      <h2 id="treeTitle"></h2>
+      <div class="tree-head">
+        <h2 id="treeTitle"></h2>
+        <button type="button" class="guide-toggle" id="guideBtn" aria-haspopup="dialog" aria-controls="guide">Set me up</button>
+      </div>
       <div id="tree"></div>
     </section>
     <aside id="detail" class="detail">
@@ -104,7 +109,7 @@
   <dialog id="guide" class="guide-modal" aria-label="How to use this mirror from your clients">
     <div class="guide-inner">
       <div class="guide-head">
-        <h2>Use this mirror from your clients</h2>
+        <h2 id="guideTitle">Use this mirror from your clients</h2>
         <button type="button" class="guide-close" id="guideClose" aria-label="Close">&times;</button>
       </div>
       <div id="guideBody"></div>

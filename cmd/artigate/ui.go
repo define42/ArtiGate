@@ -107,6 +107,12 @@ func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		s.handleUIDetail(w, r)
+	case "/ui/api/repos":
+		if !isReadMethod(r) {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		s.handleUIRepos(w, r)
 	default:
 		return false
 	}
@@ -124,6 +130,43 @@ func (s *HighServer) handleUIOverview(w http.ResponseWriter) {
 		return
 	}
 	writeJSON(w, UIOverview{Status: status})
+}
+
+// UIRepo describes one mirrored APT/RPM repository for the "Set me up" guide.
+// The APT fields are empty for RPM.
+type UIRepo struct {
+	Name          string   `json:"name"`
+	Suite         string   `json:"suite,omitempty"`
+	Components    []string `json:"components,omitempty"`
+	Architectures []string `json:"architectures,omitempty"`
+}
+
+// UIReposResponse is the body of GET /ui/api/repos.
+type UIReposResponse struct {
+	Repos []UIRepo `json:"repos"`
+}
+
+// handleUIRepos lists the mirrored repositories of an ecosystem so the "Set me
+// up" guide can render correct per-repository client config.
+func (s *HighServer) handleUIRepos(w http.ResponseWriter, r *http.Request) {
+	var (
+		repos []UIRepo
+		err   error
+	)
+	switch r.URL.Query().Get("eco") {
+	case "apt":
+		repos, err = s.aptRepoList()
+	case "rpm":
+		repos, err = s.rpmRepoList()
+	default:
+		http.Error(w, "repos are only available for apt and rpm", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, UIReposResponse{Repos: repos})
 }
 
 // handleUITree returns the immediate children of a node in a package tree.
