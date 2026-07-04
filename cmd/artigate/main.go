@@ -124,6 +124,8 @@ TLS (env, both low and high):
 Auth (env, low side only):
   ARTIGATE_LOW_AUTH=user:<argon2id-hash>[;user2:<hash>...]   (generate hashes with 'hashpw')
   When set, the low-side dashboard requires a form login (session cookie); the high side is never authenticated.
+  ARTIGATE_LOW_COOKIE_SECURE=auto|true|false   (default auto: Secure follows ArtiGate's own TLS)
+  Set to 'true' when ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy.
 
 `)
 }
@@ -355,7 +357,9 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 	var handler http.Handler = mux
 	if len(users) > 0 {
 		ls.authEnabled = true
-		am, err := newAuthManager(users, filepath.Join(cfg.Root, "session.key"), tc.Mode != tlsUnencrypted)
+		secure, err := cookieSecure(tc.Mode != tlsUnencrypted, os.Getenv("ARTIGATE_LOW_COOKIE_SECURE"))
+		must(err)
+		am, err := newAuthManager(users, filepath.Join(cfg.Root, "session.key"), secure)
 		must(err)
 		handler = am.middleware(handler)
 	}

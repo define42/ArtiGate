@@ -116,6 +116,15 @@ restart (the cookie keys are persisted to `<root>/session.key`). The `/healthz`
 probe stays open so container health checks keep working. The **high side is
 never authenticated** — it serves only already-verified public mirror content.
 
+**When `ARTIGATE_LOW_AUTH` is unset the low-side dashboard is unauthenticated** —
+including the mutating `/admin/*` endpoints — so bind it to localhost or a trusted
+network, or set credentials.
+
+The session cookie's `Secure` flag defaults to whether ArtiGate itself terminates
+TLS. If ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy, set
+`ARTIGATE_LOW_COOKIE_SECURE=true` so the cookie is still marked `Secure` (values:
+`auto` (default), `true`, `false`).
+
 > In `docker-compose.yml`, remember that Compose treats `$` as a variable
 > reference, so every `$` in the hash must be written `$$` (see the `low`
 > service). This does not apply to shell `export`s with single quotes.
@@ -270,9 +279,10 @@ signature check (`repo_gpgcheck=0`, `[trusted=yes]`, etc.).
 ## Notes and limitations
 
 - The **low-side dashboard** can require a session login (`ARTIGATE_LOW_AUTH`, see
-  above); the **high-side dashboard** is unauthenticated — it serves only
-  already-verified public mirror content, so bind it to localhost or a trusted
-  network.
+  above) but is **unauthenticated by default** — until you set credentials, bind it
+  to localhost or a trusted network. The **high-side dashboard** is always
+  unauthenticated — it serves only already-verified public mirror content, so bind
+  it to localhost or a trusted network too.
 - **Go**: no sumdb mirroring — use `GOSUMDB=off` on the high side and rely on your
   committed `go.sum` plus the signed bundles.
 - **Python**: wheels only (no sdists).

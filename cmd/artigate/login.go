@@ -23,13 +23,20 @@ const (
 	sessionMaxAge      = 12 * 60 * 60 // seconds a login stays valid (12h)
 	sessionHashKeyLen  = 64           // HMAC key length for securecookie
 	sessionBlockKeyLen = 32           // AES-256 key length for securecookie
+
+	// maxConcurrentLogins bounds how many argon2id verifications run at once.
+	// Each verification allocates ~64 MiB, and POST /login is unauthenticated, so
+	// without a cap a flood of login attempts could exhaust memory and OOM the
+	// process; excess attempts queue on cheap goroutines instead.
+	maxConcurrentLogins = 4
 )
 
 // authManager holds the credential set and the session-cookie codec.
 type authManager struct {
-	users  map[string]string // username -> argon2id hash
-	sc     *securecookie.SecureCookie
-	secure bool // set the cookie's Secure flag (true when serving over TLS)
+	users     map[string]string // username -> argon2id hash
+	sc        *securecookie.SecureCookie
+	secure    bool          // set the cookie's Secure flag (true when serving over TLS)
+	verifySem chan struct{} // bounds concurrent (memory-heavy) argon2 verifications
 }
 
 // newAuthManager builds the session manager, loading (or creating) the cookie
@@ -41,7 +48,38 @@ func newAuthManager(users map[string]string, keyPath string, secure bool) (*auth
 	}
 	sc := securecookie.New(hashKey, blockKey)
 	sc.MaxAge(sessionMaxAge)
-	return &authManager{users: users, sc: sc, secure: secure}, nil
+	return &authManager{
+		users:     users,
+		sc:        sc,
+		secure:    secure,
+		verifySem: make(chan struct{}, maxConcurrentLogins),
+	}, nil
+}
+
+// checkCredential verifies user/pass, allowing at most maxConcurrentLogins
+// argon2 verifications to run concurrently so the unauthenticated login endpoint
+// cannot be turned into a memory-exhaustion DoS.
+func (a *authManager) checkCredential(user, pass string) bool {
+	a.verifySem <- struct{}{}
+	defer func() { <-a.verifySem }()
+	return credentialOK(a.users, user, pass)
+}
+
+// cookieSecure decides the session cookie's Secure attribute. By default it
+// follows whether ArtiGate itself terminates TLS, but ARTIGATE_LOW_COOKIE_SECURE
+// overrides it — set it to "true" when ArtiGate speaks plain HTTP behind a
+// TLS-terminating reverse proxy, so the cookie is still marked Secure.
+func cookieSecure(tlsSecure bool, override string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(override)) {
+	case "", "auto":
+		return tlsSecure, nil
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid ARTIGATE_LOW_COOKIE_SECURE %q (want auto, true, or false)", override)
+	}
 }
 
 // loadOrCreateSessionKeys returns the HMAC and AES keys for the session codec,
@@ -122,7 +160,7 @@ func (a *authManager) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeHTML(w, loginPage(r.URL.Query().Get("e") == "1"))
 	case http.MethodPost:
 		_ = r.ParseForm()
-		if !credentialOK(a.users, r.PostFormValue("username"), r.PostFormValue("password")) {
+		if !a.checkCredential(r.PostFormValue("username"), r.PostFormValue("password")) {
 			http.Redirect(w, r, "/login?e=1", http.StatusSeeOther)
 			return
 		}

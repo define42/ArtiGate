@@ -184,6 +184,56 @@ func TestLoginPage(t *testing.T) {
 	}
 }
 
+func TestCookieSecure(t *testing.T) {
+	cases := []struct {
+		override  string
+		tlsSecure bool
+		want      bool
+		wantErr   bool
+	}{
+		{"", false, false, false},    // default follows TLS mode (plain HTTP)
+		{"", true, true, false},      // default follows TLS mode (TLS on)
+		{"auto", true, true, false},  // explicit auto == default
+		{"true", false, true, false}, // force Secure behind a TLS proxy
+		{"on", false, true, false},
+		{"false", true, false, false}, // force off even when serving TLS
+		{"0", true, false, false},
+		{"maybe", false, false, true}, // unrecognised value is an error
+	}
+	for _, c := range cases {
+		got, err := cookieSecure(c.tlsSecure, c.override)
+		if (err != nil) != c.wantErr {
+			t.Errorf("cookieSecure(%v, %q) err = %v, wantErr = %v", c.tlsSecure, c.override, err, c.wantErr)
+		}
+		if err == nil && got != c.want {
+			t.Errorf("cookieSecure(%v, %q) = %v, want %v", c.tlsSecure, c.override, got, c.want)
+		}
+	}
+}
+
+func TestCheckCredentialConcurrent(t *testing.T) {
+	am := newTestAuth(t) // single user alice/pw
+	// Correct results under concurrent load, and the semaphore must not deadlock
+	// when more callers than maxConcurrentLogins run at once.
+	const n = maxConcurrentLogins * 4
+	results := make(chan bool, n)
+	for i := 0; i < n; i++ {
+		go func() { results <- am.checkCredential("alice", "pw") }()
+		go func() { results <- am.checkCredential("alice", "wrong") }()
+	}
+	good, bad := 0, 0
+	for i := 0; i < 2*n; i++ {
+		if <-results {
+			good++
+		} else {
+			bad++
+		}
+	}
+	if good != n || bad != n {
+		t.Errorf("good = %d, bad = %d; want %d each", good, bad, n)
+	}
+}
+
 func TestWantsHTML(t *testing.T) {
 	nav := httptest.NewRequest(http.MethodGet, "/", nil)
 	nav.Header.Set("Accept", "text/html,application/xhtml+xml")
