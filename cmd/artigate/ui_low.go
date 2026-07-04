@@ -47,22 +47,27 @@ const lowUIHTML = `<!DOCTYPE html>
   form { display: flex; gap: .6rem; flex-wrap: wrap; }
   input[type=text] { flex: 1; min-width: 240px; background: #0f1115; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .55rem .7rem; font-family: ui-monospace, monospace; }
   button.primary { background: #1f6f43; color: #eafff2; border: 1px solid #2b8f59; border-radius: 6px; padding: .55rem 1.1rem; cursor: pointer; font-weight: 600; }
-  #result { margin-top: .9rem; padding: .7rem .9rem; border-radius: 6px; display: none; }
-  #result.ok { display: block; background: #10281a; border: 1px solid #1f6f43; color: #7ee2a8; }
-  #result.err { display: block; background: #2e1416; border: 1px solid #7f2a30; color: #ff9ea3; }
+  .rbox { margin-top: .9rem; padding: .7rem .9rem; border-radius: 6px; display: none; }
+  .rbox.busy { display: block; background: #12161f; border: 1px solid #3a4150; color: #a9b2c3; }
+  .rbox.ok { display: block; background: #10281a; border: 1px solid #1f6f43; color: #7ee2a8; }
+  .rbox.warn { display: block; background: #2a2410; border: 1px solid #6b5320; color: #d8b26a; }
+  .rbox.err { display: block; background: #2e1416; border: 1px solid #7f2a30; color: #ff9ea3; }
+  .rbox ul { margin: .4rem 0 0; padding-left: 1.1rem; }
+  .rbox code { font-family: ui-monospace, monospace; }
   .gomod-form { flex-direction: column; align-items: stretch; }
   .filelabel { display: flex; flex-direction: column; gap: .3rem; font-size: .85rem; color: #c7cedb; }
   .filelabel .opt { color: #8b93a5; font-weight: 400; }
   .filelabel input[type=file] { font: inherit; color: #a9b2c3; background: #0f1115; border: 1px dashed #3a4150; border-radius: 6px; padding: .5rem .6rem; cursor: pointer; }
+  .filelabel textarea { color: #e6e6e6; background: #0f1115; border: 1px solid #3a4150; border-radius: 6px; padding: .5rem .6rem; font-family: ui-monospace, monospace; font-size: .82rem; resize: vertical; }
   .gomod-form button.primary { align-self: flex-start; }
   button.primary:disabled { opacity: .6; cursor: progress; }
-  #goResult { margin-top: .9rem; padding: .7rem .9rem; border-radius: 6px; display: none; }
-  #goResult.busy { display: block; background: #12161f; border: 1px solid #3a4150; color: #a9b2c3; }
-  #goResult.ok { display: block; background: #10281a; border: 1px solid #1f6f43; color: #7ee2a8; }
-  #goResult.warn { display: block; background: #2a2410; border: 1px solid #6b5320; color: #d8b26a; }
-  #goResult.err { display: block; background: #2e1416; border: 1px solid #7f2a30; color: #ff9ea3; }
-  #goResult ul { margin: .4rem 0 0; padding-left: 1.1rem; }
-  #goResult code { font-family: ui-monospace, monospace; }
+  .pytarget { border: 1px solid #2a2f3a; border-radius: 6px; padding: .2rem .7rem; }
+  .pytarget summary { cursor: pointer; color: #c7cedb; font-size: .85rem; padding: .35rem 0; }
+  .pytarget-check { display: flex; align-items: center; gap: .45rem; font-size: .82rem; color: #c7cedb; margin: .5rem 0 .2rem; }
+  .pytarget-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .6rem; margin: .6rem 0 .2rem; }
+  .pytarget-grid label { display: flex; flex-direction: column; gap: .25rem; font-size: .8rem; color: #a9b2c3; }
+  .pytarget-grid input[type=text] { min-width: 0; font-size: .8rem; padding: .4rem .55rem; }
+  @media (max-width: 620px) { .pytarget-grid { grid-template-columns: 1fr; } }
   .meta { display: flex; flex-wrap: wrap; gap: 1.25rem; font-size: .9rem; color: #a9b2c3; margin-bottom: 1rem; }
   .meta b { color: #e6e6e6; }
   table { width: 100%; border-collapse: collapse; font-size: .85rem; }
@@ -90,7 +95,33 @@ const lowUIHTML = `<!DOCTYPE html>
       </label>
       <button class="primary" type="submit" id="goBtn">Collect &amp; export</button>
     </form>
-    <div id="goResult"></div>
+    <div id="goResult" class="rbox"></div>
+  </div>
+
+  <div class="card">
+    <h2>Mirror Python packages (requirements)</h2>
+    <p class="hint">List packages to mirror &mdash; one requirement per line, requirements.txt format (e.g. <code>requests==2.32.4</code>). ArtiGate runs <code>pip download</code> and writes the wheels into a signed bundle, the same as POSTing to <code>/admin/python/collect</code>. Lines starting with <code>#</code> are ignored; pip option lines (<code>-r</code>, <code>--hash</code>, &hellip;) are skipped.</p>
+    <form class="gomod-form" onsubmit="collectPython(event)">
+      <label class="filelabel">Requirements <span class="opt">&mdash; one per line</span>
+        <textarea id="pyreqs" rows="5" placeholder="requests==2.32.4" autocomplete="off"></textarea>
+      </label>
+      <label class="filelabel">&hellip;or load a requirements.txt
+        <input id="pyfile" type="file" accept=".txt,text/plain" onchange="loadPyFile()">
+      </label>
+      <details class="pytarget">
+        <summary>Cross-target for a different interpreter (optional)</summary>
+        <label class="pytarget-check"><input id="pyonly" type="checkbox"> Wheels only (recommended for air-gapped builds)</label>
+        <div class="pytarget-grid">
+          <label>Python version<input id="pyver" type="text" placeholder="3.12" autocomplete="off"></label>
+          <label>Implementation<input id="pyimpl" type="text" placeholder="cp" autocomplete="off"></label>
+          <label>ABI<input id="pyabi" type="text" placeholder="cp312" autocomplete="off"></label>
+          <label>Platforms (comma-separated)<input id="pyplat" type="text" placeholder="manylinux_2_28_x86_64, manylinux_2_34_x86_64" autocomplete="off"></label>
+        </div>
+        <p class="hint">Set these to download wheels for the high-side interpreter rather than this host; any of them forces <code>--only-binary=:all:</code>.</p>
+      </details>
+      <button class="primary" type="submit" id="pyBtn">Collect &amp; export</button>
+    </form>
+    <div id="pyResult" class="rbox"></div>
   </div>
 
   <div class="card">
@@ -100,7 +131,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <input id="seq" type="text" placeholder="42,45-47" autocomplete="off" autofocus>
       <button class="primary" type="submit">Re-export</button>
     </form>
-    <div id="result"></div>
+    <div id="result" class="rbox"></div>
   </div>
 
   <div class="card">
@@ -114,7 +145,7 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 
 function showResult(cls, html){
   const el=document.getElementById('result');
-  el.className=cls;
+  el.className='rbox '+cls;
   el.innerHTML=html;
 }
 
@@ -138,7 +169,7 @@ async function reexport(ev){
 
 function showGoResult(cls, html){
   const el=document.getElementById('goResult');
-  el.className=cls;
+  el.className='rbox '+cls;
   el.innerHTML=html;
 }
 
@@ -171,6 +202,77 @@ async function collectGoMod(ev){
     }
     loadStatus();
   }catch(e){ showGoResult('err','Request failed: '+esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent=label; }
+}
+
+function showPyResult(cls, html){
+  const el=document.getElementById('pyResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function loadPyFile(){
+  const f=document.getElementById('pyfile');
+  const file=f.files && f.files[0];
+  if(!file) return;
+  file.text().then(t=>{ document.getElementById('pyreqs').value=t; });
+}
+
+// parseRequirements turns requirements.txt text into a list of specifiers,
+// dropping blank lines and comments and setting aside pip option lines (which
+// the collector does not accept as requirements).
+function parseRequirements(text){
+  const reqs=[], skipped=[];
+  for(const raw of text.split(/\r?\n/)){
+    let line=raw.replace(/\s+#.*$/,'');
+    line=line.replace(/\\\s*$/,'').trim();
+    if(!line || line.charAt(0)==='#') continue;
+    if(line.charAt(0)==='-'){ skipped.push(line); continue; }
+    reqs.push(line);
+  }
+  return {reqs:reqs, skipped:skipped};
+}
+
+function pyTarget(){
+  const g=id=>document.getElementById(id).value.trim();
+  const ver=g('pyver'), impl=g('pyimpl'), abi=g('pyabi'), platRaw=g('pyplat');
+  const onlyBin=document.getElementById('pyonly').checked;
+  const plats=platRaw?platRaw.split(',').map(s=>s.trim()).filter(Boolean):[];
+  if(!ver && !impl && !abi && !plats.length && !onlyBin) return null;
+  const t={};
+  if(onlyBin) t.only_binary=true;
+  if(ver) t.python_version=ver;
+  if(impl) t.implementation=impl;
+  if(abi) t.abi=abi;
+  if(plats.length) t.platforms=plats;
+  return t;
+}
+
+async function collectPython(ev){
+  ev.preventDefault();
+  const parsed=parseRequirements(document.getElementById('pyreqs').value);
+  if(!parsed.reqs.length){ showPyResult('err','Enter at least one requirement (one per line).'); return; }
+  const btn=document.getElementById('pyBtn');
+  const label=btn.textContent;
+  btn.disabled=true; btn.textContent='Collecting…';
+  showPyResult('busy','Running pip download for '+esc(parsed.reqs.length)+' requirement(s)… this can take a while.');
+  try{
+    const body={requirements:parsed.reqs};
+    const target=pyTarget();
+    if(target) body.target=target;
+    const r=await fetch('/admin/python/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const text=await r.text();
+    if(!r.ok){ showPyResult('err','Error: '+esc(text.trim())); return; }
+    const d=JSON.parse(text);
+    let msg='&#10003; Collected '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
+    if(parsed.skipped.length){
+      msg+='<br>&#9888; Skipped '+esc(parsed.skipped.length)+' pip option line(s) not supported here (e.g. <code>'+esc(parsed.skipped[0])+'</code>).';
+      showPyResult('warn', msg);
+    } else {
+      showPyResult('ok', msg);
+    }
+    loadStatus();
+  }catch(e){ showPyResult('err','Request failed: '+esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent=label; }
 }
 

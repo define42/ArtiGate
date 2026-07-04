@@ -50,10 +50,44 @@ func TestLowServerUIPage(t *testing.T) {
 		"<title>ArtiGate low-side</title>",
 		"/admin/reexport", "Re-transmit bundles", "/ui/api/status",
 		"Mirror a Go project", `id="gomod"`, `id="gosum"`, "collectGoMod", "/admin/go/collect",
+		"Mirror Python packages", `id="pyreqs"`, "collectPython", "/admin/python/collect",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("low-side index page missing %q", want)
 		}
+	}
+}
+
+// TestLowServerUIPythonCollectFlow drives the request the requirements form
+// issues: POST {requirements, target} to /admin/python/collect and confirm the
+// wheels are packed into a signed bundle.
+func TestLowServerUIPythonCollectFlow(t *testing.T) {
+	ls, _ := newPyLowServer(t)
+	srv := httptest.NewServer(ls)
+	defer srv.Close()
+
+	reqBody, err := json.Marshal(map[string]any{
+		"requirements": []string{"requests==2.32.4", "urllib3"},
+		"target":       map[string]any{"only_binary": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Post(srv.URL+"/admin/python/collect", "application/json", strings.NewReader(string(reqBody))) //nolint:noctx // test request
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("python collect status = %d", resp.StatusCode)
+	}
+	var res ExportResult
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if res.BundleID != "go-bundle-000001" || res.ExportedModules < 1 {
+		t.Errorf("unexpected python collect result: %+v", res)
 	}
 }
 
