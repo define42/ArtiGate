@@ -562,6 +562,12 @@ SHA256 chain from Release to each `.deb` is always enforced). The fields can
 also be sent explicitly as `{"uri","suite","components","architectures",
 "signed_by","name"}`.
 
+To mirror several repositories at once, include multiple deb822 stanzas
+(blank-line separated) in `source_list`. Each is mirrored into its **own**
+namespace `/apt/<mirror>/` — repositories are never merged into one index, and
+each keeps its own `Release`/`Packages` and signature. Mirror names must be
+distinct (they default to a slug of the URI).
+
 ### High side: serve /apt/&lt;mirror&gt;/
 
 After import the high side serves a standard APT repository:

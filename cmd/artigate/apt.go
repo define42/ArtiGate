@@ -183,7 +183,7 @@ func (s *LowServer) HandleAptCollect(ctx context.Context, r *http.Request) (Expo
 
 // CollectApt mirrors one upstream APT repository into a signed bundle.
 func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (ExportResult, error) {
-	cfg, err := resolveAptMirror(req)
+	configs, err := resolveAptMirrors(req)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -200,16 +200,31 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 	}
 	defer os.RemoveAll(stageRoot)
 
-	mirror, files, err := s.mirrorAptRepo(ctx, cfg, stageRoot)
-	if err != nil {
-		return ExportResult{}, err
+	// Each source is mirrored into its own namespace (apt/<name>/...); one
+	// bundle can carry several mirrors, which the high side publishes as
+	// separate repositories on import.
+	var mirrors []AptMirror
+	var files []ManifestFile
+	seenFile := map[string]bool{}
+	for _, cfg := range configs {
+		mirror, mf, err := s.mirrorAptRepo(ctx, cfg, stageRoot)
+		if err != nil {
+			return ExportResult{}, err
+		}
+		for _, f := range mf {
+			if !seenFile[f.Path] {
+				files = append(files, f)
+				seenFile[f.Path] = true
+			}
+		}
+		mirrors = append(mirrors, mirror)
 	}
 	if len(files) == 0 {
 		return ExportResult{}, errors.New("apt mirror produced no packages")
 	}
 
 	seq := s.peekSequence()
-	res, err := s.writeAptBundle(seq, stageRoot, files, mirror)
+	res, err := s.writeAptBundle(seq, stageRoot, files, mirrors)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -417,7 +432,7 @@ func splitStanzaBlocks(data []byte) []string {
 	return blocks
 }
 
-func (s *LowServer) writeAptBundle(seq int64, stageRoot string, files []ManifestFile, mirror AptMirror) (ExportResult, error) {
+func (s *LowServer) writeAptBundle(seq int64, stageRoot string, files []ManifestFile, mirrors []AptMirror) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	bundleID := bundleIDForSequence(seq)
 	manifest := BundleManifest{
@@ -428,7 +443,7 @@ func (s *LowServer) writeAptBundle(seq int64, stageRoot string, files []Manifest
 		Generator:        hostnameOrDefault(),
 		BundleID:         bundleID,
 		Ecosystems:       []string{"apt"},
-		Apt:              &AptManifest{Mirrors: []AptMirror{mirror}},
+		Apt:              &AptManifest{Mirrors: mirrors},
 		Files:            files,
 	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
@@ -439,7 +454,11 @@ func (s *LowServer) writeAptBundle(seq int64, stageRoot string, files []Manifest
 	if err := s.writeBundleArtifacts(bundleID, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
-	return ExportResult{Sequence: seq, ExportedModules: len(mirror.Packages), BundleID: bundleID}, nil
+	total := 0
+	for _, m := range mirrors {
+		total += len(m.Packages)
+	}
+	return ExportResult{Sequence: seq, ExportedModules: total, BundleID: bundleID}, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -542,39 +561,64 @@ func runGPGVerify(ctx context.Context, keyring string, data, sig []byte) error {
 // Config resolution + deb822 source parsing
 // -----------------------------------------------------------------------------
 
-func resolveAptMirror(req AptCollectRequest) (aptMirrorConfig, error) {
-	cfg := aptMirrorConfig{
-		Name: req.Name, URI: req.URI, Suite: req.Suite,
-		Components: req.Components, Architectures: req.Architectures, SignedBy: req.SignedBy,
-	}
+// resolveAptMirrors returns the validated set of mirrors to collect. A
+// source_list may contain several deb822 stanzas (several repositories);
+// otherwise the explicit request fields describe a single mirror. Mirror names
+// must be distinct so each keeps its own namespace on the high side.
+func resolveAptMirrors(req AptCollectRequest) ([]aptMirrorConfig, error) {
+	var configs []aptMirrorConfig
 	if strings.TrimSpace(req.SourceList) != "" {
-		parsed, err := parseAptSource(req.SourceList)
+		parsed, err := parseAptSources(req.SourceList)
 		if err != nil {
-			return aptMirrorConfig{}, err
+			return nil, err
 		}
-		// Explicit fields win over parsed ones when both are present.
-		cfg = mergeAptConfig(parsed, cfg)
+		configs = parsed
+	} else {
+		configs = []aptMirrorConfig{{
+			Name: req.Name, URI: req.URI, Suite: req.Suite,
+			Components: req.Components, Architectures: req.Architectures, SignedBy: req.SignedBy,
+		}}
 	}
-	return validateAptMirrorConfig(cfg)
+	names := map[string]bool{}
+	out := make([]aptMirrorConfig, 0, len(configs))
+	for _, c := range configs {
+		vc, err := validateAptMirrorConfig(c)
+		if err != nil {
+			return nil, err
+		}
+		if names[vc.Name] {
+			return nil, fmt.Errorf("duplicate mirror name %q; give each source a distinct name", vc.Name)
+		}
+		names[vc.Name] = true
+		out = append(out, vc)
+	}
+	return out, nil
 }
 
-// parseAptSource parses a deb822 (.sources) stanza into a mirror config.
-func parseAptSource(text string) (aptMirrorConfig, error) {
+// parseAptSources parses every deb822 (.sources) stanza in text into a mirror
+// config, so a multi-repository sources file mirrors each repository.
+func parseAptSources(text string) ([]aptMirrorConfig, error) {
 	stanzas := parseDeb822([]byte(text))
-	if len(stanzas) == 0 {
-		return aptMirrorConfig{}, errors.New("empty source stanza")
+	var out []aptMirrorConfig
+	for _, m := range stanzas {
+		if m["URIs"] == "" && m["Suites"] == "" {
+			continue // not a source stanza (e.g. a comment-only block)
+		}
+		if types := m["Types"]; types != "" && !containsField(types, "deb") {
+			return nil, fmt.Errorf("unsupported source Types %q (need binary \"deb\")", types)
+		}
+		out = append(out, aptMirrorConfig{
+			URI:           firstField(m["URIs"]),
+			Suite:         firstField(m["Suites"]),
+			Components:    strings.Fields(m["Components"]),
+			Architectures: strings.Fields(m["Architectures"]),
+			SignedBy:      strings.TrimSpace(m["Signed-By"]),
+		})
 	}
-	m := stanzas[0]
-	if types := m["Types"]; types != "" && !containsField(types, "deb") {
-		return aptMirrorConfig{}, fmt.Errorf("unsupported source Types %q (need binary \"deb\")", types)
+	if len(out) == 0 {
+		return nil, errors.New("no deb source stanzas found")
 	}
-	return aptMirrorConfig{
-		URI:           firstField(m["URIs"]),
-		Suite:         firstField(m["Suites"]),
-		Components:    strings.Fields(m["Components"]),
-		Architectures: strings.Fields(m["Architectures"]),
-		SignedBy:      strings.TrimSpace(m["Signed-By"]),
-	}, nil
+	return out, nil
 }
 
 // firstField returns the first whitespace-separated token of s (deb822 list
@@ -596,28 +640,6 @@ func containsField(s, want string) bool {
 		}
 	}
 	return false
-}
-
-func mergeAptConfig(base, over aptMirrorConfig) aptMirrorConfig {
-	if over.Name != "" {
-		base.Name = over.Name
-	}
-	if over.URI != "" {
-		base.URI = over.URI
-	}
-	if over.Suite != "" {
-		base.Suite = over.Suite
-	}
-	if len(over.Components) > 0 {
-		base.Components = over.Components
-	}
-	if len(over.Architectures) > 0 {
-		base.Architectures = over.Architectures
-	}
-	if over.SignedBy != "" {
-		base.SignedBy = over.SignedBy
-	}
-	return base
 }
 
 func validateAptMirrorConfig(cfg aptMirrorConfig) (aptMirrorConfig, error) {
