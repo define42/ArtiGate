@@ -29,6 +29,12 @@ const (
 	argonParallelism = 1
 	argonSaltLen     = 16
 	argonKeyLen      = 32
+
+	// Sanity bounds enforced when verifying a stored hash's embedded parameters,
+	// to reject malformed values that would crash argon2.IDKey or trigger an
+	// absurd allocation. Generous enough to accommodate stronger future presets.
+	maxArgonMemory     = 1 << 20 // 1 GiB in KiB
+	maxArgonIterations = 1 << 20
 )
 
 // parseLowAuth parses ARTIGATE_LOW_AUTH into a username->hash map. Entries are
@@ -53,6 +59,12 @@ func parseLowAuth(s string) (map[string]string, error) {
 			return nil, fmt.Errorf("credential for %q is not an argon2id hash", user)
 		}
 		users[user] = hash
+	}
+	// A non-empty value that yields no credentials (e.g. ";" or whitespace from an
+	// env/compose quoting slip) must not silently disable auth: fail closed so the
+	// operator who tried to enable auth is not left with an open dashboard.
+	if len(users) == 0 && s != "" {
+		return nil, errors.New("ARTIGATE_LOW_AUTH is set but contains no valid credentials")
 	}
 	return users, nil
 }
@@ -99,6 +111,17 @@ func verifyArgon2(password, phc string) bool {
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil {
+		return false
+	}
+	// The parameters and digest come straight from the stored hash, so guard
+	// against malformed values before handing them to argon2.IDKey: t=0 or
+	// p=0/p>255 make it panic, a huge or negative m triggers an enormous
+	// allocation, and an empty digest would make the ConstantTimeCompare below
+	// succeed for any password (an auth bypass).
+	if iterations < 1 || iterations > maxArgonIterations ||
+		parallelism < 1 || parallelism > 255 ||
+		memory < 8 || memory > maxArgonMemory ||
+		len(want) == 0 {
 		return false
 	}
 	got := argon2.IDKey([]byte(password), salt, uint32(iterations), uint32(memory), uint8(parallelism), uint32(len(want)))

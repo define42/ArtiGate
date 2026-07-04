@@ -47,6 +47,11 @@ func TestVerifyArgon2Rejects(t *testing.T) {
 		"$argon2id$v=19$m=65536,t=3,p=1$!!!$aGFzaA",    // bad salt base64
 		"$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$!!!",    // bad hash base64
 		valid[:len(valid)-4],                           // truncated
+		"$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$",       // empty digest — must not bypass (empty==empty compare)
+		"$argon2id$v=19$m=-1,t=3,p=1$c2FsdA$aGFzaA",    // negative memory — must not attempt a huge alloc
+		"$argon2id$v=19$m=65536,t=0,p=1$c2FsdA$aGFzaA", // zero iterations — argon2.IDKey would panic
+		"$argon2id$v=19$m=65536,t=3,p=256$c2FsdA$aGFzaA", // parallelism overflows uint8 — would panic
+		"$argon2id$v=19$m=1,t=3,p=1$c2FsdA$aGFzaA",       // memory below argon2 minimum
 	}
 	for _, h := range bad {
 		if verifyArgon2("pw", h) {
@@ -100,6 +105,10 @@ func TestParseLowAuthRejects(t *testing.T) {
 		"empty username":    ":" + alice,
 		"empty hash":        "alice:",
 		"wrong hash scheme": "alice:$2y$10$abcdefg",
+		// Set-but-content-free values must fail closed, not silently disable auth.
+		"whitespace only": "   ",
+		"separators only": " ; ; ",
+		"newline only":    "\n",
 	}
 	for name, env := range bad {
 		if _, err := parseLowAuth(env); err == nil {

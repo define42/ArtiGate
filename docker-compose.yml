@@ -43,13 +43,15 @@ services:
       - --export-dir=/var/spool/diode-out
       - --private-key=/keys/low.ed25519
       - --upstream-goproxy=https://proxy.golang.org,direct
-    environment:
-      # Optional low-side login (username: user). Generate a hash with
-      #   ./artigate hashpw --user user
-      # NOTE: Compose treats a single "$" as a variable reference, so every "$"
-      # in the argon2 hash MUST be doubled to "$$" here (it reaches the container
-      # as a single "$"). Remove this line to disable authentication.
-      - ARTIGATE_LOW_AUTH=user:$$argon2id$$v=19$$m=65536,t=3,p=1$$5ba6Q+p3TKhi2kXkU+OtIw$$lg4sRrA78xnKtlOiNCMOAPtaHAG0KoTNzUV8xStZSes
+    # Optional low-side login. DISABLED by default — uncomment the block below to
+    # require a login, and replace the hash with your own. Generate one with:
+    #   ./artigate hashpw --user user
+    # NOTE: Compose treats a single "$" as a variable reference, so every "$" in
+    # the argon2 hash MUST be doubled to "$$" here (it reaches the container as a
+    # single "$"). The example hash below is the password "password" — do NOT ship
+    # it; generate your own.
+    # environment:
+    #   - ARTIGATE_LOW_AUTH=user:$$argon2id$$v=19$$m=65536,t=3,p=1$$5ba6Q+p3TKhi2kXkU+OtIw$$lg4sRrA78xnKtlOiNCMOAPtaHAG0KoTNzUV8xStZSes
     ports:
       - "8080:8080"
     volumes:
