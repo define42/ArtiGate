@@ -165,6 +165,9 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">Source (deb822)
         <textarea id="aptsrc" rows="6" placeholder="Types: deb&#10;URIs: https://packages.microsoft.com/repos/code&#10;Suites: stable&#10;Components: main&#10;Architectures: amd64&#10;Signed-By: /usr/share/keyrings/microsoft.gpg" autocomplete="off"></textarea>
       </label>
+      <label class="filelabel">&hellip;or load a .sources file
+        <input id="aptfile" type="file" accept=".sources,.list,text/plain" onchange="loadAptFile()">
+      </label>
       <button class="primary" type="submit" id="aptBtn">Collect &amp; export</button>
     </form>
     <div id="aptResult" class="rbox"></div>
@@ -176,8 +179,11 @@ const lowUIHTML = `<!DOCTYPE html>
     <h2>Mirror an RPM (yum/dnf) repository</h2>
     <p class="hint">Paste a yum/dnf <code>.repo</code> stanza. ArtiGate downloads and verifies <code>repomd.xml</code> and the <code>primary</code> index, mirrors every referenced <code>.rpm</code>, and writes a signed bundle. The high side regenerates <code>repodata</code> and (optionally) re-signs it. This is <code>/admin/rpm/collect</code>. <code>baseurl</code> must be concrete (no <code>$releasever</code>/<code>$basearch</code>).</p>
     <form class="gomod-form" onsubmit="collectRpm(event)">
-      <label class="filelabel">Repo file (.repo)
+      <label class="filelabel">Repo definition (.repo)
         <textarea id="rpmrepo" rows="6" placeholder="[code]&#10;name=Visual Studio Code&#10;baseurl=https://packages.microsoft.com/yumrepos/vscode&#10;enabled=1&#10;gpgcheck=1&#10;gpgkey=https://packages.microsoft.com/keys/microsoft.asc" autocomplete="off"></textarea>
+      </label>
+      <label class="filelabel">&hellip;or load a .repo file
+        <input id="rpmfile" type="file" accept=".repo,text/plain" onchange="loadRpmFile()">
       </label>
       <button class="primary" type="submit" id="rpmBtn">Collect &amp; export</button>
     </form>
@@ -300,6 +306,20 @@ function loadPyFile(){
   const file=f.files && f.files[0];
   if(!file) return;
   file.text().then(t=>{ document.getElementById('pyreqs').value=t; });
+}
+
+function loadAptFile(){
+  const f=document.getElementById('aptfile');
+  const file=f.files && f.files[0];
+  if(!file) return;
+  file.text().then(t=>{ document.getElementById('aptsrc').value=t; });
+}
+
+function loadRpmFile(){
+  const f=document.getElementById('rpmfile');
+  const file=f.files && f.files[0];
+  if(!file) return;
+  file.text().then(t=>{ document.getElementById('rpmrepo').value=t; });
 }
 
 // parseRequirements turns requirements.txt text into a list of specifiers,

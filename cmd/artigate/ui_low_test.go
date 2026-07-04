@@ -56,8 +56,8 @@ func TestLowServerUIPage(t *testing.T) {
 		"Mirror a Go project", `id="gomod"`, `id="gosum"`, "collectGoMod", "/admin/go/collect",
 		"Mirror Python packages", `id="pyreqs"`, "collectPython", "/admin/python/collect",
 		"Mirror Java/Maven artifacts", `id="mvncoords"`, `id="mvnpom"`, "collectMaven", "/admin/maven/collect",
-		"Mirror an APT (deb) repository", `id="aptsrc"`, "collectApt", "/admin/apt/collect",
-		"Mirror an RPM (yum/dnf) repository", `id="rpmrepo"`, "collectRpm", "/admin/rpm/collect",
+		"Mirror an APT (deb) repository", `id="aptsrc"`, `id="aptfile"`, "loadAptFile", "collectApt", "/admin/apt/collect",
+		"Mirror an RPM (yum/dnf) repository", `id="rpmrepo"`, `id="rpmfile"`, "loadRpmFile", "collectRpm", "/admin/rpm/collect",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("low-side index page missing %q", want)
