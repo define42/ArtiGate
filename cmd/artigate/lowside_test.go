@@ -65,6 +65,10 @@ esac
 `
 
 func writeFakeGo(t *testing.T) string {
+	return writeFakeGoWith(t, fakeGoScript)
+}
+
+func writeFakeGoWith(t *testing.T, script string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("fake go shell script is not portable to Windows")
@@ -73,20 +77,24 @@ func writeFakeGo(t *testing.T) string {
 		t.Skip("bash not available for fake go script")
 	}
 	p := filepath.Join(t.TempDir(), "go")
-	if err := os.WriteFile(p, []byte(fakeGoScript), 0o755); err != nil {
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return p
 }
 
 func newFakeLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
+	return newFakeLowServerWithGo(t, writeFakeGo(t))
+}
+
+func newFakeLowServerWithGo(t *testing.T, goBin string) (*LowServer, ed25519.PrivateKey) {
 	t.Helper()
 	_, priv := newTestKeys(t)
 	cfg := LowConfig{
 		Root:            t.TempDir(),
 		ExportDir:       filepath.Join(t.TempDir(), "out"),
 		AutoApprove:     true,
-		GoBinary:        writeFakeGo(t),
+		GoBinary:        goBin,
 		UpstreamGOPROXY: "off",
 		GOSUMDB:         "off",
 	}
@@ -96,6 +104,34 @@ func newFakeLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
 	}
 	return ls, priv
 }
+
+// poisonGoScript is a fake `go` that materializes modules normally but makes
+// any module whose path contains "poison" unfetchable, like a version that was
+// retracted or deleted upstream after it was first recorded.
+const poisonGoScript = `#!/usr/bin/env bash
+set -eu
+dldir="${GOMODCACHE}/cache/download"
+last=""
+for a in "$@"; do last="$a"; done
+case "$*" in
+  *"download"*)
+    mod="${last%@*}"; ver="${last##*@}"
+    case "$mod" in
+      *poison*)
+        echo "${mod}@${ver}: reading ${mod}: 404 Not Found" >&2
+        exit 1
+        ;;
+    esac
+    d="${dldir}/${mod}/@v"
+    mkdir -p "$d"
+    printf '{"Version":"%s","Time":"2020-01-01T00:00:00Z"}' "$ver" > "${d}/${ver}.info"
+    printf 'module %s\n' "$mod" > "${d}/${ver}.mod"
+    printf 'fake-zip-bytes' > "${d}/${ver}.zip"
+    printf '{"Path":"%s","Version":"%s","Info":"%s","GoMod":"%s","Zip":"%s"}\n' \
+      "$mod" "$ver" "${d}/${ver}.info" "${d}/${ver}.mod" "${d}/${ver}.zip"
+    ;;
+esac
+`
 
 func TestLowServerGoListAndLatest(t *testing.T) {
 	ls, _ := newFakeLowServer(t)
@@ -322,6 +358,81 @@ func assertBundleSigned(t *testing.T, dir, bundleID string, pub ed25519.PublicKe
 	}
 	if !ed25519.Verify(pub, manifestBytes, sig) {
 		t.Errorf("bundle %s signature does not verify", bundleID)
+	}
+}
+
+// exportedSeq returns the recorded export sequence for a module@version (0 if
+// still pending), reading state under the lock.
+func (s *LowServer) exportedSeq(module, version string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec := s.state.Requests[module+"@"+version]; rec != nil {
+		return rec.ExportedSeq
+	}
+	return -1
+}
+
+// TestLowServerExportSkipsUnfetchableModule proves one unfetchable module no
+// longer poisons the whole batch: the healthy modules still export, the bad one
+// is reported and left pending for retry, and the sequence stream keeps moving.
+func TestLowServerExportSkipsUnfetchableModule(t *testing.T) {
+	ls, priv := newFakeLowServerWithGo(t, writeFakeGoWith(t, poisonGoScript))
+	pub := priv.Public().(ed25519.PublicKey)
+	ctx := context.Background()
+
+	ls.recordRequest("example.com/good/one", "v1.0.0")
+	ls.recordRequest("example.com/poison/gone", "v2.0.0")
+
+	res, err := ls.ExportPending(ctx)
+	if err != nil {
+		t.Fatalf("ExportPending must succeed despite one unfetchable module: %v", err)
+	}
+	if res.Sequence != 1 || res.BundleID != "go-bundle-000001" || res.ExportedModules != 1 {
+		t.Fatalf("export = %+v, want seq 1 / go-bundle-000001 / 1 module", res)
+	}
+	if len(res.SkippedModules) != 1 || res.SkippedModules[0].Module != "example.com/poison/gone" {
+		t.Fatalf("SkippedModules = %+v, want the poison module", res.SkippedModules)
+	}
+
+	// Healthy module marked exported; poison one left pending (not lost).
+	if got := ls.exportedSeq("example.com/good/one", "v1.0.0"); got != 1 {
+		t.Errorf("healthy module ExportedSeq = %d, want 1", got)
+	}
+	if got := ls.exportedSeq("example.com/poison/gone", "v2.0.0"); got != 0 {
+		t.Errorf("poison module ExportedSeq = %d, want 0 (still pending)", got)
+	}
+	assertBundleSigned(t, ls.cfg.ExportDir, "go-bundle-000001", pub)
+
+	// The stream keeps flowing: a new healthy module exports as sequence 2 while
+	// the poison one is retried and skipped again.
+	ls.recordRequest("example.com/good/two", "v1.0.0")
+	res2, err := ls.ExportPending(ctx)
+	if err != nil {
+		t.Fatalf("second ExportPending failed: %v", err)
+	}
+	if res2.Sequence != 2 || res2.ExportedModules != 1 || len(res2.SkippedModules) != 1 {
+		t.Errorf("second export = %+v, want seq 2 / 1 module / 1 skipped", res2)
+	}
+}
+
+// TestLowServerExportAllUnfetchableDoesNotBurnSequence proves that when every
+// pending module is unfetchable, no empty bundle is written and the sequence
+// number is not advanced (which would make the high side wait forever).
+func TestLowServerExportAllUnfetchableDoesNotBurnSequence(t *testing.T) {
+	ls, _ := newFakeLowServerWithGo(t, writeFakeGoWith(t, poisonGoScript))
+	ctx := context.Background()
+
+	ls.recordRequest("example.com/poison/a", "v1.0.0")
+	ls.recordRequest("example.com/poison/b", "v1.0.0")
+
+	if _, err := ls.ExportPending(ctx); err == nil {
+		t.Fatal("ExportPending should error when every module is unfetchable")
+	}
+	if got := ls.peekSequence(); got != 1 {
+		t.Errorf("NextSequence = %d, want 1 (no sequence burned)", got)
+	}
+	if entries, _ := os.ReadDir(ls.cfg.ExportDir); len(entries) != 0 {
+		t.Errorf("export dir should have no bundle files, found %d entries", len(entries))
 	}
 }
 

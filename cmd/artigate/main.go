@@ -647,26 +647,29 @@ func (s *LowServer) exportLoop() {
 }
 
 type ExportResult struct {
-	Sequence        int64  `json:"sequence,omitempty"`
-	ExportedModules int    `json:"exported_modules"`
-	BundleID        string `json:"bundle_id,omitempty"`
-	Message         string `json:"message,omitempty"`
+	Sequence        int64          `json:"sequence,omitempty"`
+	ExportedModules int            `json:"exported_modules"`
+	BundleID        string         `json:"bundle_id,omitempty"`
+	Message         string         `json:"message,omitempty"`
+	SkippedModules  []FailedModule `json:"skipped_modules,omitempty"`
+}
+
+// FailedModule records a module that could not be fetched at export time. Such
+// modules are skipped so the rest of the batch still exports — one unfetchable
+// version (e.g. retracted or deleted upstream) must never block the whole
+// bundle stream. In the demand-driven export they stay pending, so a transient
+// failure is retried on the next export.
+type FailedModule struct {
+	Module  string `json:"module"`
+	Version string `json:"version"`
+	Error   string `json:"error"`
 }
 
 func (s *LowServer) ExportPending(ctx context.Context) (ExportResult, error) {
 	s.exportMu.Lock()
 	defer s.exportMu.Unlock()
 
-	s.mu.Lock()
-	var pending []RequestRecord
-	seq := s.state.NextSequence
-	for _, rec := range s.state.Requests {
-		if rec.Approved && rec.ExportedSeq == 0 {
-			pending = append(pending, *rec)
-		}
-	}
-	s.mu.Unlock()
-
+	pending, seq := s.pendingForExport()
 	if len(pending) == 0 {
 		return ExportResult{ExportedModules: 0, Message: "no pending modules"}, nil
 	}
@@ -676,10 +679,50 @@ func (s *LowServer) ExportPending(ctx context.Context) (ExportResult, error) {
 		return ExportResult{}, err
 	}
 
+	if err := s.commitExport(pending, seq, res.SkippedModules); err != nil {
+		return ExportResult{}, err
+	}
+
+	if len(res.SkippedModules) > 0 {
+		log.Printf("export sequence=%d skipped %d unfetchable module(s), left pending for retry: %s",
+			seq, len(res.SkippedModules), summarizeFailures(res.SkippedModules))
+	}
+
+	return res, nil
+}
+
+// pendingForExport snapshots the approved, not-yet-exported records and the
+// sequence number the next bundle would use.
+func (s *LowServer) pendingForExport() ([]RequestRecord, int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var pending []RequestRecord
+	for _, rec := range s.state.Requests {
+		if rec.Approved && rec.ExportedSeq == 0 {
+			pending = append(pending, *rec)
+		}
+	}
+	return pending, s.state.NextSequence
+}
+
+// commitExport marks the modules that actually made it into the bundle as
+// exported at seq and advances the sequence counter. Modules in skipped failed
+// to fetch and are left pending, so a later export retries them and they never
+// block the ones that did succeed.
+func (s *LowServer) commitExport(pending []RequestRecord, seq int64, skipped []FailedModule) error {
+	skippedKeys := make(map[string]bool, len(skipped))
+	for _, f := range skipped {
+		skippedKeys[f.Module+"@"+f.Version] = true
+	}
+
 	now := time.Now().UTC()
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, rec := range pending {
 		key := rec.Module + "@" + rec.Version
+		if skippedKeys[key] {
+			continue
+		}
 		if cur := s.state.Requests[key]; cur != nil && cur.ExportedSeq == 0 {
 			cur.ExportedSeq = seq
 			cur.ExportedAt = now
@@ -688,13 +731,7 @@ func (s *LowServer) ExportPending(ctx context.Context) (ExportResult, error) {
 	if s.state.NextSequence <= seq {
 		s.state.NextSequence = seq + 1
 	}
-	err = s.saveStateLocked()
-	s.mu.Unlock()
-	if err != nil {
-		return ExportResult{}, err
-	}
-
-	return res, nil
+	return s.saveStateLocked()
 }
 
 // GoCollectRequest is the body of POST /admin/go/collect.
@@ -951,9 +988,14 @@ func (s *LowServer) writeBundle(ctx context.Context, seq int64, records []Reques
 	}
 	sortRequestRecords(records)
 
-	mods, files, err := s.fetchBundleContent(ctx, records)
+	mods, files, failed, err := s.fetchBundleContent(ctx, records)
 	if err != nil {
 		return ExportResult{}, err
+	}
+	if len(mods) == 0 {
+		// Every requested module failed to fetch. Do not write an empty bundle
+		// or burn a sequence number the high side would then wait on forever.
+		return ExportResult{}, fmt.Errorf("no modules could be fetched for sequence %d: %s", seq, summarizeFailures(failed))
 	}
 
 	bundleID := bundleIDForSequence(seq)
@@ -979,22 +1021,40 @@ func (s *LowServer) writeBundle(ctx context.Context, seq int64, records []Reques
 		return ExportResult{}, err
 	}
 
-	return ExportResult{Sequence: seq, ExportedModules: len(mods), BundleID: bundleID}, nil
+	return ExportResult{Sequence: seq, ExportedModules: len(mods), BundleID: bundleID, SkippedModules: failed}, nil
+}
+
+// summarizeFailures renders a compact, bounded description of skipped modules
+// for an error message or log line.
+func summarizeFailures(failed []FailedModule) string {
+	const limit = 5
+	parts := make([]string, 0, len(failed))
+	for i, f := range failed {
+		if i == limit {
+			parts = append(parts, fmt.Sprintf("(+%d more)", len(failed)-limit))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s@%s: %s", f.Module, f.Version, f.Error))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // fetchBundleContent fetches every record's module and returns the module
-// manifests plus the de-duplicated set of files they reference.
-func (s *LowServer) fetchBundleContent(ctx context.Context, records []RequestRecord) ([]ManifestMod, []ManifestFile, error) {
-	var mods []ManifestMod
-	var files []ManifestFile
+// manifests plus the de-duplicated set of files they reference. A record that
+// cannot be fetched (or whose cache files are incomplete) is collected into the
+// returned failures rather than aborting the batch, so one unfetchable version
+// never blocks every other module from being exported.
+func (s *LowServer) fetchBundleContent(ctx context.Context, records []RequestRecord) (mods []ManifestMod, files []ManifestFile, failed []FailedModule, err error) {
 	seenFile := map[string]bool{}
 	for _, rec := range records {
-		if err := s.fetchVersion(ctx, rec.Module, rec.Version); err != nil {
-			return nil, nil, fmt.Errorf("fetch %s@%s: %w", rec.Module, rec.Version, err)
+		if ferr := s.fetchVersion(ctx, rec.Module, rec.Version); ferr != nil {
+			failed = append(failed, FailedModule{Module: rec.Module, Version: rec.Version, Error: ferr.Error()})
+			continue
 		}
-		mf, err := s.manifestForModule(rec.Module, rec.Version)
-		if err != nil {
-			return nil, nil, err
+		mf, merr := s.manifestForModule(rec.Module, rec.Version)
+		if merr != nil {
+			failed = append(failed, FailedModule{Module: rec.Module, Version: rec.Version, Error: merr.Error()})
+			continue
 		}
 		mods = append(mods, mf)
 		for _, f := range mf.Files {
@@ -1004,7 +1064,7 @@ func (s *LowServer) fetchBundleContent(ctx context.Context, records []RequestRec
 			}
 		}
 	}
-	return mods, files, nil
+	return mods, files, failed, nil
 }
 
 // bundleSuffixes returns the three file suffixes that make up one transferable
