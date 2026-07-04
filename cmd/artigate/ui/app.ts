@@ -42,7 +42,13 @@ interface Detail {
   go_mod?: string;
 }
 
-type View = "go" | "python";
+type View = "go" | "python" | "maven";
+
+const VIEW_TITLES: Record<View, string> = {
+  go: "Go modules",
+  python: "Python packages",
+  maven: "Maven artifacts",
+};
 
 let currentView: View = "go";
 let selectedLeaf: HTMLElement | null = null;
@@ -255,7 +261,7 @@ function menuButtons(): NodeListOf<HTMLButtonElement> {
 
 async function loadTree(): Promise<void> {
   const tree = byId("tree");
-  byId("treeTitle").textContent = currentView === "go" ? "Go modules" : "Python packages";
+  byId("treeTitle").textContent = VIEW_TITLES[currentView];
   clearDetail();
   setMessage(tree, "loading…");
   try {
@@ -361,6 +367,35 @@ function guideSections(base: string): GuideSection[] {
       note:
         "Do not add --extra-index-url: mixing in another index reopens " +
         "dependency-confusion risk. This mirror is the single source of truth.",
+    },
+    {
+      heading: "Java (Maven / Gradle)",
+      body:
+        "Point Maven or Gradle at this mirror as the only repository. It serves " +
+        "a standard Maven 2 repository under /maven/.",
+      blocks: [
+        {
+          label: "~/.m2/settings.xml (Maven)",
+          code:
+            "<settings>\n" +
+            "  <mirrors>\n" +
+            "    <mirror>\n" +
+            "      <id>artigate</id>\n" +
+            "      <mirrorOf>*</mirrorOf>\n" +
+            `      <url>${base}/maven/</url>\n` +
+            "    </mirror>\n" +
+            "  </mirrors>\n" +
+            "</settings>",
+        },
+        {
+          label: "build.gradle(.kts) (Gradle)",
+          code: `repositories {\n    maven { url = uri("${base}/maven/") }\n}`,
+        },
+      ],
+      note:
+        "Do not add mavenCentral() or other external repositories — ArtiGate is " +
+        "the single source of truth. Pin exact versions; SNAPSHOTs and ranges are " +
+        "not mirrored.",
     },
   ];
 }

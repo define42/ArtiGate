@@ -116,6 +116,7 @@ type BundleManifest struct {
 	Ecosystems       []string        `json:"ecosystems,omitempty"`
 	Modules          []ManifestMod   `json:"modules,omitempty"`
 	Python           *PythonManifest `json:"python,omitempty"`
+	Maven            *MavenManifest  `json:"maven,omitempty"`
 	Files            []ManifestFile  `json:"files"`
 }
 
@@ -227,6 +228,7 @@ type LowConfig struct {
 	GoBinary        string
 	GoToolchain     string
 	PipBinary       string
+	MavenBinary     string
 }
 
 type LowState struct {
@@ -279,6 +281,7 @@ func runLow(args []string) {
 	fs.StringVar(&cfg.GoBinary, "go", "go", "go command path")
 	fs.StringVar(&cfg.GoToolchain, "gotoolchain", "auto", "GOTOOLCHAIN for the low-side fetcher; \"auto\" lets go download a newer toolchain when a module requires one, \"local\" pins the installed toolchain")
 	fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
+	fs.StringVar(&cfg.MavenBinary, "maven", "mvn", "maven command used to resolve Java/Maven artifacts")
 	_ = fs.Parse(args)
 
 	if cfg.PrivateKeyPath == "" {
@@ -367,6 +370,9 @@ func (s *LowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // serveLowAdmin handles the health check and /admin/* routes. It reports
 // whether it has written a response for the request.
 func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.serveLowCollect(w, r) {
+		return true
+	}
 	switch {
 	case r.URL.Path == "/healthz":
 		_, _ = w.Write([]byte("ok\n"))
@@ -378,18 +384,36 @@ func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 		return respondJSONOrError(w, http.StatusBadRequest, res, err)
 	case r.URL.Path == "/admin/bundles" && r.Method == http.MethodGet:
 		writeJSON(w, s.BundleStatus())
-	case r.URL.Path == "/admin/go/collect" && r.Method == http.MethodPost:
-		res, err := s.HandleGoCollect(r.Context(), r)
-		return respondJSONOrError(w, http.StatusBadRequest, res, err)
-	case r.URL.Path == "/admin/python/collect" && r.Method == http.MethodPost:
-		res, err := s.HandlePythonCollect(r.Context(), r)
-		return respondJSONOrError(w, http.StatusBadRequest, res, err)
 	case strings.HasPrefix(r.URL.Path, "/admin/"):
 		http.Error(w, "not found", http.StatusNotFound)
 	default:
 		return false
 	}
 	return true
+}
+
+// serveLowCollect dispatches the per-ecosystem collect endpoints. It reports
+// whether it handled the request (false for non-POST or unmatched paths, so the
+// caller can fall through to its own routing).
+func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	var (
+		res ExportResult
+		err error
+	)
+	switch r.URL.Path {
+	case "/admin/go/collect":
+		res, err = s.HandleGoCollect(r.Context(), r)
+	case "/admin/python/collect":
+		res, err = s.HandlePythonCollect(r.Context(), r)
+	case "/admin/maven/collect":
+		res, err = s.HandleMavenCollect(r.Context(), r)
+	default:
+		return false
+	}
+	return respondJSONOrError(w, http.StatusBadRequest, res, err)
 }
 
 // respondJSONOrError writes err as an HTTP error with the given status, or res
@@ -1582,6 +1606,9 @@ func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.servePython(w, r) {
 		return
 	}
+	if s.serveMaven(w, r) {
+		return
+	}
 	if s.serveUI(w, r) {
 		return
 	}
@@ -2023,8 +2050,9 @@ func validateManifestCompleteness(m BundleManifest) error {
 	}
 	hasGo := len(m.Modules) > 0
 	hasPython := m.Python != nil && len(m.Python.Projects) > 0
-	if !hasGo && !hasPython {
-		return errors.New("manifest contains no modules or python projects")
+	hasMaven := m.Maven != nil && len(m.Maven.Artifacts) > 0
+	if !hasGo && !hasPython && !hasMaven {
+		return errors.New("manifest contains no modules, python projects, or maven artifacts")
 	}
 	if hasGo {
 		if err := validateManifestModules(m.Modules, seen); err != nil {
@@ -2033,6 +2061,11 @@ func validateManifestCompleteness(m BundleManifest) error {
 	}
 	if hasPython {
 		if err := validatePythonProjects(m.Python.Projects, seen); err != nil {
+			return err
+		}
+	}
+	if hasMaven {
+		if err := validateMavenArtifacts(m.Maven.Artifacts, seen); err != nil {
 			return err
 		}
 	}

@@ -125,6 +125,21 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
 
   <div class="card">
+    <h2>Mirror Java/Maven artifacts</h2>
+    <p class="hint">List Maven coordinates (one <code>groupId:artifactId:version</code> per line) or upload a <code>pom.xml</code>. ArtiGate runs <code>mvn dependency:go-offline</code> to resolve the full closure (including plugins) and writes it to a signed bundle, the same as POSTing to <code>/admin/maven/collect</code>. Release versions only &mdash; SNAPSHOTs and version ranges are rejected.</p>
+    <form class="gomod-form" onsubmit="collectMaven(event)">
+      <label class="filelabel">Coordinates <span class="opt">&mdash; groupId:artifactId:version, one per line</span>
+        <textarea id="mvncoords" rows="4" placeholder="org.slf4j:slf4j-api:2.0.16" autocomplete="off"></textarea>
+      </label>
+      <label class="filelabel">&hellip;or upload a pom.xml <span class="opt">&mdash; takes precedence over the list</span>
+        <input id="mvnpom" type="file" accept=".xml,text/xml">
+      </label>
+      <button class="primary" type="submit" id="mvnBtn">Collect &amp; export</button>
+    </form>
+    <div id="mvnResult" class="rbox"></div>
+  </div>
+
+  <div class="card">
     <h2>Re-transmit bundles</h2>
     <p class="hint">Enter a bundle number or range that the high side is missing, e.g. <code>42</code>, <code>45-47</code>, or <code>42,45-47</code>. The bundle files are regenerated in the export directory to be sent through the diode again.</p>
     <form onsubmit="reexport(event)">
@@ -273,6 +288,36 @@ async function collectPython(ev){
     }
     loadStatus();
   }catch(e){ showPyResult('err','Request failed: '+esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent=label; }
+}
+
+function showMvnResult(cls, html){
+  const el=document.getElementById('mvnResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+async function collectMaven(ev){
+  ev.preventDefault();
+  const pomInput=document.getElementById('mvnpom');
+  const pomFile=pomInput.files && pomInput.files[0];
+  const coords=document.getElementById('mvncoords').value.split(/\r?\n/)
+    .map(s=>s.replace(/\s+#.*$/,'').trim())
+    .filter(l=>l && l.charAt(0)!=='#');
+  if(!pomFile && !coords.length){ showMvnResult('err','Enter Maven coordinates or upload a pom.xml.'); return; }
+  const btn=document.getElementById('mvnBtn');
+  const label=btn.textContent;
+  btn.disabled=true; btn.textContent='Collecting…';
+  showMvnResult('busy','Running mvn dependency:go-offline to resolve the closure… this can take a while.');
+  try{
+    const body = pomFile ? {pom_xml: await pomFile.text()} : {coordinates: coords};
+    const r=await fetch('/admin/maven/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const text=await r.text();
+    if(!r.ok){ showMvnResult('err','Error: '+esc(text.trim())); return; }
+    const d=JSON.parse(text);
+    showMvnResult('ok','&#10003; Collected '+esc(d.exported_modules)+' artifact(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').');
+    loadStatus();
+  }catch(e){ showMvnResult('err','Request failed: '+esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent=label; }
 }
 

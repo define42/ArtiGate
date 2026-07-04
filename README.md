@@ -2,7 +2,8 @@
 
 [![codecov](https://codecov.io/gh/define42/ArtiGate/graph/badge.svg?token=RBKT8U26R8)](https://codecov.io/gh/define42/ArtiGate)
 
-`ArtiGate` is a Go dependency mirror for one-way data-diode environments.
+`ArtiGate` is a multi-ecosystem dependency mirror — Go modules, Python (PyPI)
+wheels, and Java (Maven 2) artifacts — for one-way data-diode environments.
 
 It contains two modes in one binary:
 
@@ -48,6 +49,10 @@ curl -XPOST localhost:8080/admin/go/collect \
 # Python wheels
 curl -XPOST localhost:8080/admin/python/collect \
   -d '{"requirements":["requests"]}'
+
+# Java/Maven artifacts (release versions only)
+curl -XPOST localhost:8080/admin/maven/collect \
+  -d '{"coordinates":["org.slf4j:slf4j-api:2.0.16"]}'
 ```
 
 A one-time `keygen` service generates the signing key pair into a shared volume,
@@ -306,15 +311,17 @@ http://high-proxy:8080/
 
 The front page shows the import status — prominently flagging **missing bundles**
 (the ranges the repository is blocked on) alongside the last-imported, next-expected,
-highest-seen, and quarantined sequences. A top menu switches between **Go modules**
-and **Python packages**.
+highest-seen, and quarantined sequences. A top menu switches between **Go modules**,
+**Python packages**, and **Maven artifacts**.
 
 Below that is a **lazily loaded tree**. Go modules are grouped hierarchically by
 their import path — everything under `github.com` sits beneath a single
 `github.com` node, then the org, then the module, then its versions — so large
 mirrors stay navigable. Each level is fetched from `/ui/api/tree` only when you
 expand its parent, so the initial page transfers just the top-level nodes rather
-than the whole catalog. Python projects expand to their wheels the same way.
+than the whole catalog. Python projects expand to their wheels, and Maven
+artifacts group by their `groupId`/`artifactId` path down to each version, the
+same way.
 
 Selecting a leaf (a Go module version or a Python wheel) opens a **detail panel**
 on the right. For a Go version it shows the published time, zip size, zip
@@ -423,6 +430,88 @@ Wheels-only is the recommended mode for air-gapped builds: the high side then
 needs no compilers, C headers, Rust, build backends, or network access for build
 dependencies. Source-distribution (sdist) mirroring is not implemented.
 
+## Java (Maven) support
+
+ArtiGate mirrors Java/JVM dependencies through the same numbered, signed bundle
+pipeline and serves them as a **Maven 2 repository**. Maven, Gradle, SBT,
+Kotlin, Scala, and Spring Boot all resolve from Maven-compatible repositories,
+so one adapter covers the JVM ecosystem. Go, Python, and Maven share the same
+global sequence stream, so a bundle may carry any mix of the three.
+
+The low side delegates to `mvn dependency:go-offline`, which resolves a
+project's full dependency **and plugin** closure into an isolated local
+repository; ArtiGate packs that repository (already in Maven 2 layout) into a
+signed bundle. The high side serves the artifacts as static Maven 2 paths and
+generates `maven-metadata.xml` on demand from the versions actually present —
+never trusting a transferred metadata file.
+
+**Release versions only.** SNAPSHOT builds and dynamic/range versions (`1.+`,
+`[1.0,2.0)`, `LATEST`, `RELEASE`) are rejected: they do not resolve
+reproducibly, which defeats an air-gapped mirror.
+
+### Low side: collect artifacts
+
+By coordinate list (`groupId:artifactId:version` each):
+
+```bash
+curl -XPOST http://127.0.0.1:8080/admin/maven/collect \
+  -H 'Content-Type: application/json' \
+  -d '{"coordinates":["org.slf4j:slf4j-api:2.0.16","com.google.guava:guava:33.3.1-jre"]}'
+```
+
+Or send a project's own `pom.xml` to mirror exactly what it builds (plugins
+included). When `pom_xml` is set, `coordinates` is ignored:
+
+```bash
+curl -XPOST http://127.0.0.1:8080/admin/maven/collect \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -Rs '{pom_xml: .}' < pom.xml)"
+```
+
+Set the Maven command with `--maven` (default `mvn`); the low-side Docker image
+ships Maven and a JRE.
+
+### High side: serve /maven/
+
+After import, the high side serves a Maven 2 repository:
+
+```text
+/maven/<groupPath>/<artifactId>/<version>/<artifactId>-<version>.pom
+/maven/<groupPath>/<artifactId>/<version>/<artifactId>-<version>.jar
+/maven/<groupPath>/<artifactId>/maven-metadata.xml
+```
+
+`maven-metadata.xml` (and its `.sha1`/`.md5`) are computed from the mirrored
+versions; the `.pom`/`.jar`/`.module` files and their upstream checksums are
+served as stored. Gradle Module Metadata (`.module`) is mirrored when present.
+
+High-side Maven clients — point at ArtiGate and mirror everything:
+
+```xml
+<!-- ~/.m2/settings.xml -->
+<settings>
+  <mirrors>
+    <mirror>
+      <id>artigate</id>
+      <mirrorOf>*</mirrorOf>
+      <url>https://artigate-high.local/maven/</url>
+    </mirror>
+  </mirrors>
+</settings>
+```
+
+High-side Gradle clients:
+
+```kotlin
+repositories {
+    maven { url = uri("https://artigate-high.local/maven/") }
+}
+```
+
+Do not add `mavenCentral()` or other external repositories on the high side;
+ArtiGate is the single source of truth. For reproducibility, pin exact versions
+and use Gradle dependency locking (`gradle/verification-metadata.xml`, lockfiles).
+
 ## Notes and limitations
 
 - This is a production-oriented starter implementation, not a full artifact-management product.
@@ -430,7 +519,8 @@ dependencies. Source-distribution (sdist) mirroring is not implemented.
 - It uses JSON state files to keep the implementation dependency-free. Use SQLite/PostgreSQL if you need multiple writers or a larger approval workflow.
 - Admin endpoints are unauthenticated. Bind to localhost or protect them.
 - High-side gaps and out-of-order future bundles are quarantined, not rejected. Check `/admin/missing` and re-export the requested range from the low side with `/admin/reexport`.
-- Low-side fetching depends on the installed Go toolchain and Git/VCS tools, and (for Python) on `pip`.
-- High side never invokes `go` or `pip` and has no upstream fetcher.
+- Low-side fetching depends on the installed Go toolchain and Git/VCS tools, on `pip` (Python), and on `mvn` + a JDK (Java/Maven).
+- High side never invokes `go`, `pip`, or `mvn` and has no upstream fetcher.
+- Java support mirrors release Maven artifacts only; SNAPSHOT and dynamic/range versions are rejected. SBT/Ivy-only repositories and the Gradle Plugin Portal are not specially handled beyond their Maven-compatible endpoints.
 - Python support mirrors wheels only; sdists and PyPI metadata (`requires-python`, yank status) beyond the manifest are not yet surfaced.
 - Re-export (`/admin/reexport`) replays any produced bundle — Go proxy, `/admin/go/collect`, or `/admin/python/collect` — from the persistent archive under `<root>/bundles/`. The archive grows over time; prune old sequences if disk is a concern (they can be re-collected).

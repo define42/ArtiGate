@@ -51,6 +51,7 @@ func TestLowServerUIPage(t *testing.T) {
 		"/admin/reexport", "Re-transmit bundles", "/ui/api/status",
 		"Mirror a Go project", `id="gomod"`, `id="gosum"`, "collectGoMod", "/admin/go/collect",
 		"Mirror Python packages", `id="pyreqs"`, "collectPython", "/admin/python/collect",
+		"Mirror Java/Maven artifacts", `id="mvncoords"`, `id="mvnpom"`, "collectMaven", "/admin/maven/collect",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("low-side index page missing %q", want)

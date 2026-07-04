@@ -3,6 +3,11 @@
 // loaded lazily, one level at a time, from /ui/api/tree. Expanding a node fetches
 // only that node's immediate children, so nothing large is transferred or
 // rendered up front. The top menu switches between the Go and Python trees.
+const VIEW_TITLES = {
+    go: "Go modules",
+    python: "Python packages",
+    maven: "Maven artifacts",
+};
 let currentView = "go";
 let selectedLeaf = null;
 function esc(value) {
@@ -191,7 +196,7 @@ function menuButtons() {
 }
 async function loadTree() {
     const tree = byId("tree");
-    byId("treeTitle").textContent = currentView === "go" ? "Go modules" : "Python packages";
+    byId("treeTitle").textContent = VIEW_TITLES[currentView];
     clearDetail();
     setMessage(tree, "loading…");
     try {
@@ -271,6 +276,32 @@ function guideSections(base) {
             ],
             note: "Do not add --extra-index-url: mixing in another index reopens " +
                 "dependency-confusion risk. This mirror is the single source of truth.",
+        },
+        {
+            heading: "Java (Maven / Gradle)",
+            body: "Point Maven or Gradle at this mirror as the only repository. It serves " +
+                "a standard Maven 2 repository under /maven/.",
+            blocks: [
+                {
+                    label: "~/.m2/settings.xml (Maven)",
+                    code: "<settings>\n" +
+                        "  <mirrors>\n" +
+                        "    <mirror>\n" +
+                        "      <id>artigate</id>\n" +
+                        "      <mirrorOf>*</mirrorOf>\n" +
+                        `      <url>${base}/maven/</url>\n` +
+                        "    </mirror>\n" +
+                        "  </mirrors>\n" +
+                        "</settings>",
+                },
+                {
+                    label: "build.gradle(.kts) (Gradle)",
+                    code: `repositories {\n    maven { url = uri("${base}/maven/") }\n}`,
+                },
+            ],
+            note: "Do not add mavenCentral() or other external repositories — ArtiGate is " +
+                "the single source of truth. Pin exact versions; SNAPSHOTs and ranges are " +
+                "not mirrored.",
         },
     ];
 }
