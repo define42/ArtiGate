@@ -116,8 +116,9 @@ func verifyArgon2(password, phc string) bool {
 	// The parameters and digest come straight from the stored hash, so guard
 	// against malformed values before handing them to argon2.IDKey: t=0 or
 	// p=0/p>255 make it panic, a huge or negative m triggers an enormous
-	// allocation, and an empty digest would make the ConstantTimeCompare below
-	// succeed for any password (an auth bypass).
+	// allocation, and an empty digest makes argon2.IDKey(keyLen=0) panic
+	// (blake2b.New(0) returns a nil hash). Each of these would crash the login
+	// request rather than reject the credential; reject them up front.
 	if iterations < 1 || iterations > maxArgonIterations ||
 		parallelism < 1 || parallelism > 255 ||
 		memory < 8 || memory > maxArgonMemory ||

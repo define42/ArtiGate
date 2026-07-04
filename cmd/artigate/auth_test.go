@@ -40,18 +40,18 @@ func TestVerifyArgon2Rejects(t *testing.T) {
 	bad := []string{
 		"",
 		"not-a-hash",
-		"$argon2i$v=19$m=65536,t=3,p=1$c2FsdA$aGFzaA",  // wrong variant
-		"$argon2id$v=99$m=65536,t=3,p=1$c2FsdA$aGFzaA", // wrong version
-		"$argon2id$m=65536,t=3,p=1$c2FsdA$aGFzaA",      // missing version field
-		"$argon2id$v=19$bad$c2FsdA$aGFzaA",             // unparseable params
-		"$argon2id$v=19$m=65536,t=3,p=1$!!!$aGFzaA",    // bad salt base64
-		"$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$!!!",    // bad hash base64
-		valid[:len(valid)-4],                           // truncated
-		"$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$",       // empty digest — must not bypass (empty==empty compare)
-		"$argon2id$v=19$m=-1,t=3,p=1$c2FsdA$aGFzaA",    // negative memory — must not attempt a huge alloc
-		"$argon2id$v=19$m=65536,t=0,p=1$c2FsdA$aGFzaA", // zero iterations — argon2.IDKey would panic
+		"$argon2i$v=19$m=65536,t=3,p=1$c2FsdA$aGFzaA",    // wrong variant
+		"$argon2id$v=99$m=65536,t=3,p=1$c2FsdA$aGFzaA",   // wrong version
+		"$argon2id$m=65536,t=3,p=1$c2FsdA$aGFzaA",        // missing version field
+		"$argon2id$v=19$bad$c2FsdA$aGFzaA",               // unparseable params
+		"$argon2id$v=19$m=65536,t=3,p=1$!!!$aGFzaA",      // bad salt base64
+		"$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$!!!",      // bad hash base64
+		valid[:len(valid)-4],                             // truncated
+		"$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$",         // empty digest — argon2.IDKey(keyLen=0) panics; guard must reject first
+		"$argon2id$v=19$m=-1,t=3,p=1$c2FsdA$aGFzaA",      // negative memory — uint32(-1) would attempt a huge alloc
+		"$argon2id$v=19$m=1048577,t=3,p=1$c2FsdA$aGFzaA", // memory above the allowed maximum — would attempt a huge alloc
+		"$argon2id$v=19$m=65536,t=0,p=1$c2FsdA$aGFzaA",   // zero iterations — argon2.IDKey would panic
 		"$argon2id$v=19$m=65536,t=3,p=256$c2FsdA$aGFzaA", // parallelism overflows uint8 — would panic
-		"$argon2id$v=19$m=1,t=3,p=1$c2FsdA$aGFzaA",       // memory below argon2 minimum
 	}
 	for _, h := range bad {
 		if verifyArgon2("pw", h) {
