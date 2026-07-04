@@ -231,8 +231,161 @@ function refresh() {
     void loadStatus();
     void loadTree();
 }
+function serverBase() {
+    return window.location.origin; // e.g. https://artigate-high.local (no trailing slash)
+}
+function guideSections(base) {
+    return [
+        {
+            heading: "Go modules",
+            body: "Point the Go toolchain at this mirror as its module proxy. The trailing " +
+                "“,off” means Go builds only from what this mirror has imported and " +
+                "never reaches out to the internet.",
+            blocks: [
+                {
+                    label: "Configure the client",
+                    code: `go env -w GOPROXY=${base},off\ngo env -w GOSUMDB=off`,
+                },
+                {
+                    label: "Reproducible builds (CI)",
+                    code: "go build -mod=readonly ./...\ngo test -mod=readonly ./...",
+                },
+            ],
+            note: "GOSUMDB is off because the public checksum database is unreachable when " +
+                "air-gapped — rely on your committed go.sum. The mirror serves only " +
+                "versions whose hashes were verified when their signed bundle was imported.",
+        },
+        {
+            heading: "Python packages",
+            body: "Use this mirror as pip's only index. Wheels-only is recommended for " +
+                "air-gapped builds — no compilers or build backends are needed.",
+            blocks: [
+                {
+                    label: "/etc/pip.conf  (or ~/.config/pip/pip.conf)",
+                    code: `[global]\nindex-url = ${base}/simple/\ndisable-pip-version-check = true`,
+                },
+                {
+                    label: "Install",
+                    code: "pip install --only-binary=:all: -r requirements.txt",
+                },
+            ],
+            note: "Do not add --extra-index-url: mixing in another index reopens " +
+                "dependency-confusion risk. This mirror is the single source of truth.",
+        },
+    ];
+}
+function flashButton(btn, text) {
+    if (btn.dataset["label"] === undefined) {
+        btn.dataset["label"] = btn.textContent ?? "Copy";
+    }
+    btn.textContent = text;
+    window.setTimeout(() => {
+        btn.textContent = btn.dataset["label"] ?? "Copy";
+    }, 1200);
+}
+function selectText(el) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+}
+async function copyCode(text, codeEl, btn) {
+    try {
+        if (!navigator.clipboard) {
+            throw new Error("clipboard unavailable");
+        }
+        await navigator.clipboard.writeText(text);
+        flashButton(btn, "Copied ✓");
+    }
+    catch {
+        selectText(codeEl); // insecure context: let the user copy manually
+        flashButton(btn, "Press Ctrl+C");
+    }
+}
+function codeBlock(block) {
+    const wrap = document.createElement("div");
+    wrap.className = "code";
+    if (block.label) {
+        const lbl = document.createElement("div");
+        lbl.className = "code-label";
+        lbl.textContent = block.label;
+        wrap.appendChild(lbl);
+    }
+    const pre = document.createElement("pre");
+    const codeEl = document.createElement("code");
+    codeEl.textContent = block.code;
+    pre.appendChild(codeEl);
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "copy";
+    copy.textContent = "Copy";
+    copy.addEventListener("click", () => void copyCode(block.code, codeEl, copy));
+    pre.appendChild(copy);
+    wrap.appendChild(pre);
+    return wrap;
+}
+function guideSectionEl(section) {
+    const el = document.createElement("div");
+    el.className = "guide-section";
+    const h3 = document.createElement("h3");
+    h3.textContent = section.heading;
+    el.appendChild(h3);
+    const body = document.createElement("p");
+    body.textContent = section.body;
+    el.appendChild(body);
+    for (const block of section.blocks) {
+        el.appendChild(codeBlock(block));
+    }
+    if (section.note) {
+        const note = document.createElement("p");
+        note.className = "note";
+        note.textContent = section.note;
+        el.appendChild(note);
+    }
+    return el;
+}
+function buildGuide(container) {
+    const base = serverBase();
+    container.textContent = "";
+    const intro = document.createElement("p");
+    intro.className = "guide-intro";
+    intro.innerHTML =
+        `Server address: <code>${esc(base)}</code>. Run these on any machine that ` +
+            "should pull Go modules or Python wheels from this air-gapped mirror.";
+    container.appendChild(intro);
+    const cols = document.createElement("div");
+    cols.className = "guide-cols";
+    for (const section of guideSections(base)) {
+        cols.appendChild(guideSectionEl(section));
+    }
+    container.appendChild(cols);
+}
+function guideDialog() {
+    return byId("guide");
+}
+function openGuide() {
+    const dialog = guideDialog();
+    if (dialog.dataset["built"] !== "1") {
+        buildGuide(byId("guideBody")); // lazily built on first open
+        dialog.dataset["built"] = "1";
+    }
+    if (!dialog.open) {
+        dialog.showModal();
+    }
+}
 menuButtons().forEach((btn) => {
     btn.addEventListener("click", () => setView(btn.dataset["view"]));
 });
 byId("refresh").addEventListener("click", refresh);
+const guide = guideDialog();
+byId("guideBtn").addEventListener("click", openGuide);
+byId("guideClose").addEventListener("click", () => guide.close());
+guide.addEventListener("click", (ev) => {
+    // Content sits in .guide-inner, so a click whose target is the dialog itself
+    // landed on the backdrop — dismiss. (Escape is handled natively.)
+    if (ev.target === guide) {
+        guide.close();
+    }
+});
 refresh();

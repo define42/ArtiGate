@@ -253,13 +253,18 @@ func TestHighServerUIPage(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("index status = %d", code)
 	}
-	// The page shell has the title, the top menu (Go / Python), and loads the JS.
+	// The page shell has the title, the top menu (Go / Python), the "Set me up"
+	// guide toggle and its container, and loads the JS.
 	for _, want := range []string{
 		"<title>ArtiGate</title>",
 		`data-view="go"`,
 		`data-view="python"`,
 		"Go modules",
 		"Python packages",
+		`id="guideBtn"`,
+		"Set me up",
+		`<dialog id="guide"`,
+		`id="guideClose"`,
 		`src="/ui/app.js"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -289,9 +294,9 @@ func TestHighServerUIAppJS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The compiled bundle drives the lazy tree fetch, the view switch, and the
-	// detail panel.
-	for _, want := range []string{"/ui/api/tree", "/ui/api/detail", "fetchChildren", "selectLeaf", "renderDetail"} {
+	// The compiled bundle drives the lazy tree fetch, the view switch, the
+	// detail panel, and the "Set me up" client-setup guide.
+	for _, want := range []string{"/ui/api/tree", "/ui/api/detail", "fetchChildren", "selectLeaf", "renderDetail", "buildGuide", "showModal", "GOPROXY", "index-url"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("app.js missing %q", want)
 		}

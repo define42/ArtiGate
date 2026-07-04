@@ -39,6 +39,34 @@
   .detail dd { margin: 0; word-break: break-all; }
   .detail dd.mono { font-family: ui-monospace, monospace; }
   .detail pre { background: #0f1115; border: 1px solid #2a2f3a; border-radius: 6px; padding: .6rem .7rem; overflow: auto; font-size: .8rem; max-height: 340px; }
+  .guide-toggle { background: #1f6f43; color: #eafff2; border: 1px solid #2b8f59; border-radius: 6px; padding: .4rem .9rem; cursor: pointer; font: inherit; }
+  .guide-modal { padding: 0; border: 1px solid #2a2f3a; border-radius: 10px; background: #161a22; color: #e6e6e6; width: min(880px, calc(100% - 3rem)); max-height: calc(100dvh - 4rem); overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+  .guide-modal::backdrop { background: rgba(6,8,12,.62); }
+  .guide-inner { padding: 1.15rem 1.35rem 1.4rem; max-height: calc(100dvh - 4rem); overflow-y: auto; }
+  .guide-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: .1rem; }
+  .guide-head h2 { margin: 0; font-size: 1.1rem; }
+  .guide-close { flex: none; background: #2a2f3a; color: #c7cedb; border: 1px solid #3a4150; border-radius: 6px; width: 1.9rem; height: 1.9rem; font-size: 1.15rem; line-height: 1; cursor: pointer; }
+  .guide-close:hover { background: #333a48; }
+  .guide-close:focus-visible { outline: 2px solid #2b8f59; outline-offset: 2px; }
+  .guide-intro { color: #a9b2c3; font-size: .88rem; margin: .2rem 0 1rem; }
+  .guide-intro code { font-family: ui-monospace, monospace; color: #e6e6e6; background: #0f1115; border: 1px solid #2a2f3a; border-radius: 4px; padding: .05rem .3rem; }
+  @media (prefers-reduced-motion: no-preference) {
+    .guide-modal[open] { animation: guidePop .16s ease-out; }
+    .guide-modal[open]::backdrop { animation: guideFade .16s ease-out; }
+  }
+  @keyframes guidePop { from { opacity: 0; transform: translateY(8px) scale(.985); } }
+  @keyframes guideFade { from { opacity: 0; } }
+  .guide-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.75rem; align-items: start; }
+  @media (max-width: 760px) { .guide-cols { grid-template-columns: 1fr; } }
+  .guide-section h3 { font-size: .95rem; margin: 0 0 .35rem; }
+  .guide-section > p { color: #a9b2c3; font-size: .84rem; margin: .15rem 0 .7rem; }
+  .guide-section .note { color: #d8b26a; font-size: .8rem; margin: .6rem 0 0; border-left: 2px solid #6b5320; padding-left: .6rem; }
+  .code { margin: .55rem 0; }
+  .code-label { color: #8b93a5; font-size: .74rem; margin-bottom: .22rem; }
+  .code pre { position: relative; background: #0f1115; border: 1px solid #2a2f3a; border-radius: 6px; padding: .6rem 4.4rem .6rem .7rem; overflow-x: auto; margin: 0; }
+  .code code { font-family: ui-monospace, monospace; white-space: pre; font-size: .8rem; color: #c7cedb; }
+  .copy { position: absolute; top: .4rem; right: .4rem; background: #2a2f3a; color: #c7cedb; border: 1px solid #3a4150; border-radius: 5px; padding: .22rem .55rem; font-size: .72rem; cursor: pointer; font-family: system-ui, sans-serif; }
+  .copy:hover { background: #333a48; }
 </style>
 <script type="module" src="/ui/app.js"></script>
 </head>
@@ -49,6 +77,7 @@
     <button type="button" data-view="go" class="active">Go modules</button>
     <button type="button" data-view="python">Python packages</button>
   </nav>
+  <button type="button" class="guide-toggle" id="guideBtn" aria-haspopup="dialog" aria-controls="guide">Set me up</button>
   <button type="button" class="refresh" id="refresh">Refresh</button>
 </header>
 <main>
@@ -63,6 +92,15 @@
       <p class="empty">Select a version to see its details.</p>
     </aside>
   </div>
+  <dialog id="guide" class="guide-modal" aria-label="How to use this mirror from your clients">
+    <div class="guide-inner">
+      <div class="guide-head">
+        <h2>Use this mirror from your clients</h2>
+        <button type="button" class="guide-close" id="guideClose" aria-label="Close">&times;</button>
+      </div>
+      <div id="guideBody"></div>
+    </div>
+  </dialog>
 </main>
 </body>
 </html>
