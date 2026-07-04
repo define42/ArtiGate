@@ -155,7 +155,14 @@ type AptCollectRequest struct {
 	Architectures []string `json:"architectures"`
 	SignedBy      string   `json:"signed_by"`
 	SourceList    string   `json:"source_list"`
+	// NewestOnly keeps only the highest version of each package (default true
+	// when the field is absent); set it false to mirror every version in the
+	// index.
+	NewestOnly *bool `json:"newest_only,omitempty"`
 }
+
+// defaultTrue resolves an optional bool flag that defaults to true when absent.
+func defaultTrue(p *bool) bool { return p == nil || *p }
 
 // aptMirrorConfig is the resolved, validated mirror to collect.
 type aptMirrorConfig struct {
@@ -187,6 +194,7 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 	if err != nil {
 		return ExportResult{}, err
 	}
+	newest := defaultTrue(req.NewestOnly)
 	// Hold only the apt stream's lock across the whole mirror->write->commit, so
 	// a long APT fetch does not block Python/Go/Maven/RPM collects.
 	mu := s.streamLock(streamApt)
@@ -210,7 +218,7 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 	var files []ManifestFile
 	seenFile := map[string]bool{}
 	for _, cfg := range configs {
-		mirror, mf, err := s.mirrorAptRepo(ctx, cfg, stageRoot)
+		mirror, mf, err := s.mirrorAptRepo(ctx, cfg, stageRoot, newest)
 		if err != nil {
 			return ExportResult{}, err
 		}
@@ -240,7 +248,7 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 // mirrorAptRepo downloads and verifies the Release, indexes, and every .deb for
 // one mirror, staging the .deb files under stageRoot and returning the mirror
 // metadata plus the manifest file list.
-func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stageRoot string) (AptMirror, []ManifestFile, error) {
+func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stageRoot string, newestOnly bool) (AptMirror, []ManifestFile, error) {
 	base := strings.TrimRight(cfg.URI, "/")
 	distBase := base + "/dists/" + cfg.Suite
 
@@ -263,7 +271,7 @@ func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stag
 
 	for _, comp := range cfg.Components {
 		for _, arch := range cfg.Architectures {
-			cf, pkgs, err := s.collectAptIndex(ctx, base, distBase, cfg.Name, comp, arch, checksums, stageRoot, seenFile)
+			cf, pkgs, err := s.collectAptIndex(ctx, base, distBase, cfg.Name, comp, arch, checksums, stageRoot, seenFile, newestOnly)
 			if err != nil {
 				return AptMirror{}, nil, err
 			}
@@ -277,10 +285,13 @@ func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stag
 // collectAptIndex fetches one component/architecture Packages index and
 // downloads every referenced .deb, returning the new manifest files (deduped
 // via seenFile) and the parsed package records.
-func (s *LowServer) collectAptIndex(ctx context.Context, base, distBase, name, comp, arch string, checksums map[string]aptChecksum, stageRoot string, seenFile map[string]bool) ([]ManifestFile, []AptPackage, error) {
+func (s *LowServer) collectAptIndex(ctx context.Context, base, distBase, name, comp, arch string, checksums map[string]aptChecksum, stageRoot string, seenFile map[string]bool, newestOnly bool) ([]ManifestFile, []AptPackage, error) {
 	pkgs, err := s.fetchAptPackagesIndex(ctx, distBase, comp, arch, checksums)
 	if err != nil {
 		return nil, nil, err
+	}
+	if newestOnly {
+		pkgs = filterNewestApt(pkgs)
 	}
 	var files []ManifestFile
 	for _, pkg := range pkgs {
@@ -411,6 +422,147 @@ func parseAptPackages(data []byte, comp string) []AptPackage {
 		})
 	}
 	return pkgs
+}
+
+// filterNewestApt keeps only the highest-versioned package per (Package,
+// Architecture), by Debian version ordering. The first occurrence position of
+// each kept package is preserved.
+func filterNewestApt(pkgs []AptPackage) []AptPackage {
+	idx := map[string]int{}
+	out := make([]AptPackage, 0, len(pkgs))
+	for _, p := range pkgs {
+		key := p.Package + "\x00" + p.Architecture
+		if i, ok := idx[key]; ok {
+			if debVersionCompare(p.Version, out[i].Version) > 0 {
+				out[i] = p
+			}
+			continue
+		}
+		idx[key] = len(out)
+		out = append(out, p)
+	}
+	return out
+}
+
+// debVersionCompare compares two Debian package versions, returning -1, 0, or 1.
+// It follows dpkg's ordering: numeric epoch first, then upstream version, then
+// the Debian revision, each compared with debVerRevCmp.
+func debVersionCompare(a, b string) int {
+	ea, ua, ra := splitDebVersion(a)
+	eb, ub, rb := splitDebVersion(b)
+	if ea != eb {
+		return cmpSign(ea - eb)
+	}
+	if c := debVerRevCmp(ua, ub); c != 0 {
+		return c
+	}
+	return debVerRevCmp(ra, rb)
+}
+
+// splitDebVersion splits "[epoch:]upstream[-revision]". A missing epoch is 0 and
+// a missing revision is empty.
+func splitDebVersion(v string) (epoch int, upstream, revision string) {
+	v = strings.TrimSpace(v)
+	if i := strings.IndexByte(v, ':'); i >= 0 {
+		if e, err := strconv.Atoi(v[:i]); err == nil {
+			epoch = e
+			v = v[i+1:]
+		}
+	}
+	if i := strings.LastIndexByte(v, '-'); i >= 0 {
+		return epoch, v[:i], v[i+1:]
+	}
+	return epoch, v, ""
+}
+
+// debCharOrder maps a byte to its dpkg sort weight: '~' sorts before everything
+// (including end-of-string, weight 0), letters keep ASCII order, and any other
+// non-digit sorts after letters. Digits are handled separately (weight 0).
+func debCharOrder(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return 0
+	case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
+		return int(c)
+	case c == '~':
+		return -1
+	default:
+		return int(c) + 256
+	}
+}
+
+// debOrderAt returns the sort weight of a[i], or the end-of-string weight (0).
+func debOrderAt(a string, i int) int {
+	if i >= len(a) {
+		return 0
+	}
+	return debCharOrder(a[i])
+}
+
+// debVerRevCmp compares two version parts with dpkg's verrevcmp algorithm.
+func debVerRevCmp(a, b string) int {
+	ai, bi := 0, 0
+	for ai < len(a) || bi < len(b) {
+		if c := debCmpNonDigits(a, b, &ai, &bi); c != 0 {
+			return c
+		}
+		if c := debCmpDigits(a, b, &ai, &bi); c != 0 {
+			return c
+		}
+	}
+	return 0
+}
+
+// debCmpNonDigits advances over the leading non-digit run of both strings,
+// comparing by dpkg order, and returns non-zero on the first difference.
+func debCmpNonDigits(a, b string, ai, bi *int) int {
+	for (*ai < len(a) && !asciiDigit(a[*ai])) || (*bi < len(b) && !asciiDigit(b[*bi])) {
+		if ac, bc := debOrderAt(a, *ai), debOrderAt(b, *bi); ac != bc {
+			return cmpSign(ac - bc)
+		}
+		*ai++
+		*bi++
+	}
+	return 0
+}
+
+// debCmpDigits compares the leading digit run of both strings: leading zeros are
+// skipped, then the longer number wins, else the first differing digit.
+func debCmpDigits(a, b string, ai, bi *int) int {
+	for *ai < len(a) && a[*ai] == '0' {
+		*ai++
+	}
+	for *bi < len(b) && b[*bi] == '0' {
+		*bi++
+	}
+	firstDiff := 0
+	for *ai < len(a) && asciiDigit(a[*ai]) && *bi < len(b) && asciiDigit(b[*bi]) {
+		if firstDiff == 0 {
+			firstDiff = int(a[*ai]) - int(b[*bi])
+		}
+		*ai++
+		*bi++
+	}
+	if *ai < len(a) && asciiDigit(a[*ai]) {
+		return 1
+	}
+	if *bi < len(b) && asciiDigit(b[*bi]) {
+		return -1
+	}
+	return cmpSign(firstDiff)
+}
+
+func asciiDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+func cmpSign(n int) int {
+	switch {
+	case n < 0:
+		return -1
+	case n > 0:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // splitStanzaBlocks splits deb822 text into raw stanza blocks on blank lines,

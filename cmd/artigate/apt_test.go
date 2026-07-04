@@ -72,6 +72,52 @@ func newAptLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
 	return ls, priv
 }
 
+func TestDebVersionCompare(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"1.0", "1.0", 0},
+		{"1.10", "1.9", 1}, // numeric, not lexical
+		{"2.0", "1.0", 1},
+		{"1:0", "2.0", 1},          // epoch dominates
+		{"1.0~rc1", "1.0", -1},     // tilde sorts before release
+		{"1.0~rc1", "1.0~rc2", -1}, // both pre-releases
+		{"1.0-1", "1.0-2", -1},     // debian revision
+		{"1.0-1", "1.0-1.1", -1},
+		{"1.0a", "1.0", 1}, // trailing letter beats end-of-string
+		{"1.0", "1.00", 0}, // leading zeros within a segment are equal
+		{"1.100.0", "1.99.0", 1},
+		{"1.101.2", "1.100.0", 1},
+	}
+	for _, tt := range tests {
+		if got := debVersionCompare(tt.a, tt.b); got != tt.want {
+			t.Errorf("debVersionCompare(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+		if got := debVersionCompare(tt.b, tt.a); got != -tt.want { // antisymmetry
+			t.Errorf("debVersionCompare(%q, %q) = %d, want %d", tt.b, tt.a, got, -tt.want)
+		}
+	}
+}
+
+func TestFilterNewestApt(t *testing.T) {
+	pkgs := []AptPackage{
+		{Package: "code", Version: "1.100.0", Architecture: "amd64", Filename: "pool/c/code_1.100.0.deb"},
+		{Package: "code", Version: "1.101.2", Architecture: "amd64", Filename: "pool/c/code_1.101.2.deb"},
+		{Package: "code", Version: "1.99.0", Architecture: "amd64", Filename: "pool/c/code_1.99.0.deb"},
+		{Package: "code", Version: "1.101.2", Architecture: "arm64", Filename: "pool/c/code_1.101.2_arm64.deb"},
+	}
+	got := filterNewestApt(pkgs)
+	if len(got) != 2 { // newest amd64 + newest arm64
+		t.Fatalf("kept %d packages, want 2: %+v", len(got), got)
+	}
+	for _, p := range got {
+		if p.Version != "1.101.2" {
+			t.Errorf("kept non-newest %s/%s = %s", p.Package, p.Architecture, p.Version)
+		}
+	}
+}
+
 func TestParseAptSource(t *testing.T) {
 	src := "Types: deb\n" +
 		"URIs: https://packages.microsoft.com/repos/code\n" +

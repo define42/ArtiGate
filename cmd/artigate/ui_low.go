@@ -203,6 +203,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or load a .sources file
         <input id="aptfile" type="file" accept=".sources,.list,text/plain" onchange="loadAptFile()">
       </label>
+      <label class="pytarget-check"><input id="aptnewest" type="checkbox" checked> Newest version of each package only (uncheck to mirror every version)</label>
       <button class="primary" type="submit" id="aptBtn">Collect &amp; export</button>
     </form>
     <div id="aptResult" class="rbox"></div>
@@ -226,6 +227,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or load a .repo file
         <input id="rpmfile" type="file" accept=".repo,text/plain" onchange="loadRpmFile()">
       </label>
+      <label class="pytarget-check"><input id="rpmnewest" type="checkbox" checked> Newest version of each package only (uncheck to mirror every version)</label>
       <button class="primary" type="submit" id="rpmBtn">Collect &amp; export</button>
     </form>
     <div id="rpmResult" class="rbox"></div>
@@ -498,7 +500,7 @@ async function collectApt(ev){
   btn.disabled=true; btn.textContent='Mirroring…';
   showAptResult('busy','Downloading and verifying the upstream Release, Packages index, and every .deb… this can take a while.');
   try{
-    const r=await fetch('/admin/apt/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_list:src})});
+    const r=await fetch('/admin/apt/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_list:src, newest_only:document.getElementById('aptnewest').checked})});
     const text=await r.text();
     if(!r.ok){ showAptResult('err','Error: '+esc(text.trim())); return; }
     const d=JSON.parse(text);
@@ -523,7 +525,7 @@ async function collectRpm(ev){
   btn.disabled=true; btn.textContent='Mirroring…';
   showRpmResult('busy','Downloading and verifying repomd.xml, the primary index, and every .rpm… this can take a while.');
   try{
-    const r=await fetch('/admin/rpm/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repo_file:repo})});
+    const r=await fetch('/admin/rpm/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repo_file:repo, newest_only:document.getElementById('rpmnewest').checked})});
     const text=await r.text();
     if(!r.ok){ showRpmResult('err','Error: '+esc(text.trim())); return; }
     const d=JSON.parse(text);
@@ -616,14 +618,14 @@ async function scheduleApt(){
   const src=document.getElementById('aptsrc').value.trim();
   if(!src){ showAptResult('err','Paste a deb822 source to schedule.'); return; }
   const m=src.match(/URIs:\s*(\S+)/i);
-  createWatch('apt','APT: '+(m?m[1]:'source'), {source_list:src}, 'aptEvery','aptUnit', showAptResult);
+  createWatch('apt','APT: '+(m?m[1]:'source'), {source_list:src, newest_only:document.getElementById('aptnewest').checked}, 'aptEvery','aptUnit', showAptResult);
 }
 
 async function scheduleRpm(){
   const repo=document.getElementById('rpmrepo').value.trim();
   if(!repo){ showRpmResult('err','Paste a .repo stanza to schedule.'); return; }
   const m=repo.match(/^\s*\[([^\]]+)\]/m);
-  createWatch('rpm','RPM: '+(m?m[1]:'repo'), {repo_file:repo}, 'rpmEvery','rpmUnit', showRpmResult);
+  createWatch('rpm','RPM: '+(m?m[1]:'repo'), {repo_file:repo, newest_only:document.getElementById('rpmnewest').checked}, 'rpmEvery','rpmUnit', showRpmResult);
 }
 
 function fmtEvery(sec){

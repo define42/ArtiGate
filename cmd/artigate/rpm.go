@@ -38,6 +38,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -73,6 +74,7 @@ type RpmData struct {
 
 type RpmPackage struct {
 	Name     string `json:"name"`
+	Epoch    string `json:"epoch,omitempty"`
 	Version  string `json:"version"`
 	Arch     string `json:"arch"`
 	Location string `json:"location"`
@@ -132,8 +134,9 @@ type rpmPrimaryPackage struct {
 	Name    string `xml:"name"`
 	Arch    string `xml:"arch"`
 	Version struct {
-		Ver string `xml:"ver,attr"`
-		Rel string `xml:"rel,attr"`
+		Epoch string `xml:"epoch,attr"`
+		Ver   string `xml:"ver,attr"`
+		Rel   string `xml:"rel,attr"`
 	} `xml:"version"`
 	Checksum struct {
 		Type  string `xml:"type,attr"`
@@ -162,6 +165,7 @@ func parseRpmPrimary(data []byte) ([]RpmPackage, error) {
 		}
 		out = append(out, RpmPackage{
 			Name:     p.Name,
+			Epoch:    p.Version.Epoch,
 			Version:  version,
 			Arch:     p.Arch,
 			Location: p.Location.Href,
@@ -170,6 +174,322 @@ func parseRpmPrimary(data []byte) ([]RpmPackage, error) {
 		})
 	}
 	return out, nil
+}
+
+// filterNewestRpm keeps only the highest-EVR package per (Name, Arch). The first
+// occurrence position of each kept package is preserved.
+func filterNewestRpm(pkgs []RpmPackage) []RpmPackage {
+	idx := map[string]int{}
+	out := make([]RpmPackage, 0, len(pkgs))
+	for _, p := range pkgs {
+		key := p.Name + "\x00" + p.Arch
+		if i, ok := idx[key]; ok {
+			if rpmEVRCompare(p, out[i]) > 0 {
+				out[i] = p
+			}
+			continue
+		}
+		idx[key] = len(out)
+		out = append(out, p)
+	}
+	return out
+}
+
+// rpmEVRCompare compares two packages by RPM EVR ordering: numeric epoch first
+// (missing = 0), then version, then release, each via rpmVerCmp.
+func rpmEVRCompare(a, b RpmPackage) int {
+	if ea, eb := rpmEpoch(a.Epoch), rpmEpoch(b.Epoch); ea != eb {
+		return cmpSign(ea - eb)
+	}
+	va, ra := splitRpmVerRel(a.Version)
+	vb, rb := splitRpmVerRel(b.Version)
+	if c := rpmVerCmp(va, vb); c != 0 {
+		return c
+	}
+	return rpmVerCmp(ra, rb)
+}
+
+func rpmEpoch(e string) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(e)); err == nil {
+		return n
+	}
+	return 0
+}
+
+// splitRpmVerRel splits the stored "ver[-rel]"; RPM versions and releases never
+// contain '-', so the last '-' is the separator.
+func splitRpmVerRel(v string) (ver, rel string) {
+	if i := strings.LastIndexByte(v, '-'); i >= 0 {
+		return v[:i], v[i+1:]
+	}
+	return v, ""
+}
+
+func asciiAlpha(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
+func asciiAlnum(c byte) bool { return asciiDigit(c) || asciiAlpha(c) }
+func isRpmSep(c byte) bool   { return !asciiAlnum(c) && c != '~' && c != '^' }
+
+func byteAt(s string, i int) byte {
+	if i < len(s) {
+		return s[i]
+	}
+	return 0
+}
+
+// rpmVerCmp compares two RPM version (or release) strings, returning -1, 0, or 1.
+// It implements rpm's rpmvercmp, including the '~' (pre-release) and '^'
+// (post-release) separators.
+func rpmVerCmp(a, b string) int {
+	if a == b {
+		return 0
+	}
+	ai, bi := 0, 0
+	for ai < len(a) || bi < len(b) {
+		ai, bi = skipRpmSeps(a, ai), skipRpmSeps(b, bi)
+		r, decided, advanced := rpmCmpSep(a, b, &ai, &bi)
+		if decided {
+			return r
+		}
+		if advanced {
+			continue
+		}
+		if ai >= len(a) || bi >= len(b) {
+			break
+		}
+		if c := rpmCmpSegment(a, b, &ai, &bi); c != 0 {
+			return c
+		}
+	}
+	return rpmLeftover(len(a)-ai, len(b)-bi)
+}
+
+// skipRpmSeps advances past a run of separator bytes starting at i.
+func skipRpmSeps(s string, i int) int {
+	for i < len(s) && isRpmSep(s[i]) {
+		i++
+	}
+	return i
+}
+
+// rpmLeftover resolves the comparison once one string is exhausted: whichever
+// still has characters left is the newer.
+func rpmLeftover(aLeft, bLeft int) int {
+	switch {
+	case aLeft <= 0 && bLeft <= 0:
+		return 0
+	case aLeft > 0:
+		return 1
+	default:
+		return -1
+	}
+}
+
+// rpmCmpSep handles the '~' and '^' separators at the current positions. It
+// returns a decisive result (decided=true), or reports that a matching separator
+// was consumed on both sides (advanced=true) so the caller re-loops.
+func rpmCmpSep(a, b string, ai, bi *int) (result int, decided, advanced bool) {
+	if r, d, adv := rpmCmpTilde(a, b, ai, bi); d || adv {
+		return r, d, adv
+	}
+	return rpmCmpCaret(a, b, ai, bi)
+}
+
+// rpmCmpTilde handles the '~' separator, which sorts before everything.
+func rpmCmpTilde(a, b string, ai, bi *int) (result int, decided, advanced bool) {
+	ac, bc := byteAt(a, *ai), byteAt(b, *bi)
+	if ac != '~' && bc != '~' {
+		return 0, false, false
+	}
+	if ac != '~' {
+		return 1, true, false
+	}
+	if bc != '~' {
+		return -1, true, false
+	}
+	*ai++
+	*bi++
+	return 0, false, true
+}
+
+// rpmCmpCaret handles the '^' separator: like '~', but if one side has ended the
+// side carrying the caret is the newer (post-release).
+func rpmCmpCaret(a, b string, ai, bi *int) (result int, decided, advanced bool) {
+	ac, bc := byteAt(a, *ai), byteAt(b, *bi)
+	if ac != '^' && bc != '^' {
+		return 0, false, false
+	}
+	if *ai >= len(a) {
+		return -1, true, false
+	}
+	if *bi >= len(b) {
+		return 1, true, false
+	}
+	if ac != '^' {
+		return 1, true, false
+	}
+	if bc != '^' {
+		return -1, true, false
+	}
+	*ai++
+	*bi++
+	return 0, false, true
+}
+
+// rpmCmpSegment compares the next all-numeric or all-alpha segment of both
+// strings, advancing past it. A numeric segment outranks an alpha one.
+func rpmCmpSegment(a, b string, ai, bi *int) int {
+	numeric := asciiDigit(a[*ai])
+	sa := scanRpmSegment(a, ai, numeric)
+	sb := scanRpmSegment(b, bi, numeric)
+	if sb == "" { // b's segment is the other class: numeric beats alpha
+		if numeric {
+			return 1
+		}
+		return -1
+	}
+	if numeric {
+		sa = strings.TrimLeft(sa, "0")
+		sb = strings.TrimLeft(sb, "0")
+		if len(sa) != len(sb) {
+			return cmpSign(len(sa) - len(sb))
+		}
+	}
+	return cmpSign(strings.Compare(sa, sb))
+}
+
+// scanRpmSegment consumes and returns the run at *i of the requested class
+// (numeric or alpha), advancing *i past it.
+func scanRpmSegment(s string, i *int, numeric bool) string {
+	start := *i
+	for *i < len(s) && ((numeric && asciiDigit(s[*i])) || (!numeric && asciiAlpha(s[*i]))) {
+		*i++
+	}
+	return s[start:*i]
+}
+
+// rpmPkgidSet returns the set of package checksums (pkgids) to keep.
+func rpmPkgidSet(pkgs []RpmPackage) map[string]bool {
+	set := make(map[string]bool, len(pkgs))
+	for _, p := range pkgs {
+		set[strings.ToLower(p.SHA256)] = true
+	}
+	return set
+}
+
+// filterPrimaryXML rewrites a primary.xml, keeping only <package> elements whose
+// pkgid is in keep, and updates the root packages="N" count. Each kept package's
+// XML is preserved verbatim, so no metadata fields are lost.
+func filterPrimaryXML(plain []byte, keep map[string]bool) []byte {
+	s := string(plain)
+	const open, closeTag = "<package", "</package>"
+	first := strings.Index(s, open)
+	if first < 0 {
+		return plain
+	}
+	var kept []string
+	i, lastEnd := first, first
+	for {
+		start := strings.Index(s[i:], open)
+		if start < 0 {
+			break
+		}
+		start += i
+		rel := strings.Index(s[start:], closeTag)
+		if rel < 0 {
+			break
+		}
+		end := start + rel + len(closeTag)
+		block := s[start:end]
+		if id := primaryPkgid(block); id == "" || keep[id] {
+			kept = append(kept, block)
+		}
+		i, lastEnd = end, end
+	}
+	return []byte(setPrimaryCount(s[:first], len(kept)) + strings.Join(kept, "") + s[lastEnd:])
+}
+
+// primaryPkgid extracts a <package> block's pkgid (its own SHA256), lowercased.
+func primaryPkgid(block string) string {
+	i := strings.Index(block, `pkgid="YES"`)
+	if i < 0 {
+		return ""
+	}
+	gt := strings.IndexByte(block[i:], '>')
+	if gt < 0 {
+		return ""
+	}
+	rest := block[i+gt+1:]
+	lt := strings.IndexByte(rest, '<')
+	if lt < 0 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(rest[:lt]))
+}
+
+// setPrimaryCount replaces the packages="N" attribute in a primary.xml header.
+func setPrimaryCount(header string, n int) string {
+	const key = `packages="`
+	i := strings.Index(header, key)
+	if i < 0 {
+		return header
+	}
+	j := i + len(key)
+	end := strings.IndexByte(header[j:], '"')
+	if end < 0 {
+		return header
+	}
+	return header[:j] + strconv.Itoa(n) + header[j+end:]
+}
+
+// applyRpmNewestOnly filters pkgs to the newest EVR per (name, arch); when that
+// drops any package, it rewrites the staged primary index (and its manifest and
+// repodata entries) so the served repo advertises only the kept packages.
+func applyRpmNewestOnly(stageRoot, name, primaryRel string, primaryPlain []byte, pkgs []RpmPackage, files []ManifestFile, repodata []RpmData) ([]RpmPackage, error) {
+	kept := filterNewestRpm(pkgs)
+	if len(kept) == len(pkgs) {
+		return pkgs, nil
+	}
+	newPlain := filterPrimaryXML(primaryPlain, rpmPkgidSet(kept))
+	if err := restagePrimary(stageRoot, name, primaryRel, newPlain, files, repodata); err != nil {
+		return nil, err
+	}
+	return kept, nil
+}
+
+// restagePrimary overwrites the staged primary index with the rewritten XML
+// (recompressed to match the original href) and updates the matching manifest
+// file and the primary <data> entry to the rewritten file's checksums/sizes, so
+// the bundle manifest and the high side's regenerated repomd stay consistent.
+func restagePrimary(stageRoot, name, primaryRel string, newPlain []byte, files []ManifestFile, repodata []RpmData) error {
+	compressed, err := compressByExt(primaryRel, newPlain)
+	if err != nil {
+		return err
+	}
+	rel := rpmFileRel(name, primaryRel)
+	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
+	if err := os.WriteFile(abs, compressed, 0o644); err != nil {
+		return fmt.Errorf("write rewritten primary: %w", err)
+	}
+	sum, size := sha256Hex(compressed), int64(len(compressed))
+	openSum, openSize := sha256Hex(newPlain), int64(len(newPlain))
+	for i := range files {
+		if files[i].Path == rel {
+			files[i].SHA256, files[i].Size = sum, size
+		}
+	}
+	for i := range repodata {
+		if repodata[i].Type == "primary" {
+			repodata[i].ChecksumType, repodata[i].Checksum = "sha256", sum
+			repodata[i].OpenChecksumType, repodata[i].OpenChecksum = "sha256", openSum
+			if repodata[i].Size > 0 {
+				repodata[i].Size = size
+			}
+			if repodata[i].OpenSize > 0 {
+				repodata[i].OpenSize = openSize
+			}
+		}
+	}
+	return nil
 }
 
 // -----------------------------------------------------------------------------
@@ -183,6 +503,9 @@ type RpmCollectRequest struct {
 	BaseURL  string `json:"base_url"`
 	GPGKey   string `json:"gpg_key"` // local keyring path for gpgv (optional)
 	RepoFile string `json:"repo_file"`
+	// NewestOnly keeps only the highest EVR of each package (default true when
+	// absent); set it false to mirror every version in the index.
+	NewestOnly *bool `json:"newest_only,omitempty"`
 }
 
 type rpmMirrorConfig struct {
@@ -211,6 +534,7 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	if err != nil {
 		return ExportResult{}, err
 	}
+	newest := defaultTrue(req.NewestOnly)
 	// Hold only the rpm stream's lock across the whole mirror->write->commit, so
 	// a long RPM fetch does not block Python/Go/Maven/APT collects.
 	mu := s.streamLock(streamRpm)
@@ -231,7 +555,7 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	var files []ManifestFile
 	seenFile := map[string]bool{}
 	for _, cfg := range configs {
-		mirror, mf, err := s.mirrorRpmRepo(ctx, cfg, stageRoot)
+		mirror, mf, err := s.mirrorRpmRepo(ctx, cfg, stageRoot, newest)
 		if err != nil {
 			return ExportResult{}, err
 		}
@@ -260,7 +584,29 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 
 // mirrorRpmRepo downloads and verifies repomd, every metadata file it lists, and
 // every .rpm, staging them under stageRoot.
-func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stageRoot string) (RpmMirror, []ManifestFile, error) {
+// downloadRpmMetadata downloads and verifies every metadata file repomd
+// references, returning the manifest files, the <data> entries, and the primary
+// index's href.
+func (s *LowServer) downloadRpmMetadata(ctx context.Context, base, name string, data []rpmRepomdData, stageRoot string) ([]ManifestFile, []RpmData, string, error) {
+	var files []ManifestFile
+	var repodata []RpmData
+	var primaryRel string
+	for _, d := range data {
+		entry := d.toRpmData()
+		mf, err := s.downloadRpmFile(ctx, base, name, entry.Href, entry.ChecksumType, entry.Checksum, stageRoot)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("metadata %s: %w", entry.Type, err)
+		}
+		files = append(files, mf)
+		repodata = append(repodata, entry)
+		if entry.Type == "primary" {
+			primaryRel = entry.Href
+		}
+	}
+	return files, repodata, primaryRel, nil
+}
+
+func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stageRoot string, newestOnly bool) (RpmMirror, []ManifestFile, error) {
 	base := strings.TrimRight(cfg.BaseURL, "/")
 
 	repomdRaw, err := s.fetchRepomd(ctx, base, cfg.GPGKey)
@@ -273,22 +619,11 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 	}
 
 	mirror := RpmMirror{Name: cfg.Name, BaseURL: base, GPGKey: filepath.Base(cfg.GPGKey)}
-	var files []ManifestFile
-
-	// Download and verify every metadata file repomd references.
-	var primaryRel string
-	for _, d := range md.Data {
-		entry := d.toRpmData()
-		mf, err := s.downloadRpmFile(ctx, base, cfg.Name, entry.Href, entry.ChecksumType, entry.Checksum, stageRoot)
-		if err != nil {
-			return RpmMirror{}, nil, fmt.Errorf("metadata %s: %w", entry.Type, err)
-		}
-		files = append(files, mf)
-		mirror.Repodata = append(mirror.Repodata, entry)
-		if entry.Type == "primary" {
-			primaryRel = entry.Href
-		}
+	files, repodata, primaryRel, err := s.downloadRpmMetadata(ctx, base, cfg.Name, md.Data, stageRoot)
+	if err != nil {
+		return RpmMirror{}, nil, err
 	}
+	mirror.Repodata = repodata
 	if primaryRel == "" {
 		return RpmMirror{}, nil, errors.New("repomd.xml has no primary metadata")
 	}
@@ -301,6 +636,12 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 	pkgs, err := parseRpmPrimary(primaryPlain)
 	if err != nil {
 		return RpmMirror{}, nil, err
+	}
+	if newestOnly {
+		pkgs, err = applyRpmNewestOnly(stageRoot, cfg.Name, primaryRel, primaryPlain, pkgs, files, mirror.Repodata)
+		if err != nil {
+			return RpmMirror{}, nil, err
+		}
 	}
 	mirror.Packages = pkgs
 	for _, pkg := range pkgs {
@@ -446,6 +787,34 @@ func xzDecompress(data []byte) ([]byte, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("xz decompress: %w", err)
+	}
+	return out, nil
+}
+
+// compressByExt recompresses plain to match an href's extension: .gz via the
+// standard library, .xz by shelling to xz, plain otherwise. Zchunk (.zck) cannot
+// be produced, so newest-only rewriting is unsupported for a zchunk-only index.
+func compressByExt(href string, plain []byte) ([]byte, error) {
+	switch {
+	case strings.HasSuffix(href, ".gz"):
+		return gzipBytes(plain)
+	case strings.HasSuffix(href, ".xz"):
+		return xzCompress(plain)
+	case strings.HasSuffix(href, ".zck"):
+		return nil, fmt.Errorf("cannot rewrite zchunk (.zck) index %s for newest-only; disable newest-only for this repo", href)
+	default:
+		return plain, nil
+	}
+}
+
+func xzCompress(data []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "xz", "--compress", "--stdout")
+	cmd.Stdin = strings.NewReader(string(data))
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("xz compress: %w", err)
 	}
 	return out, nil
 }

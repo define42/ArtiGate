@@ -84,6 +84,173 @@ func newRpmLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
 	return ls, priv
 }
 
+func TestRpmVerCmp(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"1.0", "1.0", 0},
+		{"1.10", "1.9", 1}, // numeric, not lexical
+		{"1.0", "1.0.1", -1},
+		{"2.0", "1.0", 1},
+		{"1.0", "1.0a", -1},    // longer (alpha-suffixed) wins
+		{"fc38", "fc39", -1},   // alpha then numeric segment
+		{"1.0~rc1", "1.0", -1}, // tilde sorts before
+		{"1.0~rc1", "1.0~rc2", -1},
+		{"1.0", "1.0^20240101", -1}, // caret sorts after (post-release)
+		{"1.0^a", "1.0", 1},
+		{"01", "1", 0}, // leading zeros
+	}
+	for _, tt := range tests {
+		if got := rpmVerCmp(tt.a, tt.b); got != tt.want {
+			t.Errorf("rpmVerCmp(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+		if got := rpmVerCmp(tt.b, tt.a); got != -tt.want { // antisymmetry
+			t.Errorf("rpmVerCmp(%q, %q) = %d, want %d", tt.b, tt.a, got, -tt.want)
+		}
+	}
+}
+
+func TestFilterNewestRpm(t *testing.T) {
+	pkgs := []RpmPackage{
+		{Name: "code", Version: "1.100.0-1", Arch: "x86_64", Location: "Packages/code-1.100.0-1.rpm"},
+		{Name: "code", Version: "1.101.2-1", Arch: "x86_64", Location: "Packages/code-1.101.2-1.rpm"},
+		{Name: "code", Epoch: "1", Version: "1.0.0-1", Arch: "x86_64", Location: "Packages/code-1.0.0-1.rpm"},
+		{Name: "code", Version: "1.101.2-1", Arch: "aarch64", Location: "Packages/code-1.101.2-1.aarch64.rpm"},
+	}
+	got := filterNewestRpm(pkgs)
+	if len(got) != 2 { // newest x86_64 + newest aarch64
+		t.Fatalf("kept %d packages, want 2: %+v", len(got), got)
+	}
+	for _, p := range got {
+		// The epoch-1 build is newest for x86_64 despite its lower version number.
+		if p.Arch == "x86_64" && p.Epoch != "1" {
+			t.Errorf("x86_64 newest should be the epoch-1 build, got %+v", p)
+		}
+	}
+}
+
+func TestFilterPrimaryXML(t *testing.T) {
+	primary := `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+		`<metadata xmlns="http://linux.duke.edu/metadata/common" packages="2">` + "\n" +
+		`<package type="rpm"><name>code</name><arch>x86_64</arch><version epoch="0" ver="1.100.0" rel="1"/>` +
+		`<checksum type="sha256" pkgid="YES">aaa111</checksum><location href="Packages/code-1.100.0-1.x86_64.rpm"/></package>` + "\n" +
+		`<package type="rpm"><name>code</name><arch>x86_64</arch><version epoch="0" ver="1.101.2" rel="1"/>` +
+		`<checksum type="sha256" pkgid="YES">bbb222</checksum><location href="Packages/code-1.101.2-1.x86_64.rpm"/></package>` + "\n" +
+		`</metadata>` + "\n"
+	got := string(filterPrimaryXML([]byte(primary), map[string]bool{"bbb222": true}))
+	if strings.Contains(got, "aaa111") || strings.Contains(got, "1.100.0") {
+		t.Errorf("filtered primary still contains the dropped version:\n%s", got)
+	}
+	if !strings.Contains(got, "bbb222") || !strings.Contains(got, "1.101.2") {
+		t.Errorf("filtered primary missing the kept version:\n%s", got)
+	}
+	if !strings.Contains(got, `packages="1"`) {
+		t.Errorf("packages count not updated to 1:\n%s", got)
+	}
+	if !strings.Contains(got, "</metadata>") {
+		t.Errorf("footer lost:\n%s", got)
+	}
+}
+
+// registerRpmRepoVersions serves a repo whose primary lists several versions of
+// one package, each with its own .rpm — for newest-only tests.
+func registerRpmRepoVersions(t *testing.T, mux *http.ServeMux, prefix, pkg string, vers [][2]string) {
+	t.Helper()
+	var pkgBlocks, flBlocks []string
+	for _, vr := range vers {
+		ver, rel := vr[0], vr[1]
+		body := []byte("FAKE-RPM-" + pkg + "-" + ver + "-" + rel)
+		sha := aptSHA256(body)
+		loc := fmt.Sprintf("Packages/%s-%s-%s.x86_64.rpm", pkg, ver, rel)
+		pkgBlocks = append(pkgBlocks, fmt.Sprintf(`<package type="rpm"><name>%s</name><arch>x86_64</arch>`+
+			`<version epoch="0" ver="%s" rel="%s"/><checksum type="sha256" pkgid="YES">%s</checksum>`+
+			`<size package="%d"/><location href="%s"/></package>`, pkg, ver, rel, sha, len(body), loc))
+		flBlocks = append(flBlocks, fmt.Sprintf(`<package pkgid="%s" name="%s" arch="x86_64"><version epoch="0" ver="%s" rel="%s"/></package>`, sha, pkg, ver, rel))
+		mux.HandleFunc(prefix+"/"+loc, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
+	}
+	primary := []byte(fmt.Sprintf(
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"+
+			"<metadata xmlns=\"http://linux.duke.edu/metadata/common\" packages=\"%d\">\n%s\n</metadata>\n",
+		len(vers), strings.Join(pkgBlocks, "\n")))
+	filelists := []byte(fmt.Sprintf(
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"+
+			"<filelists xmlns=\"http://linux.duke.edu/metadata/filelists\" packages=\"%d\">\n%s\n</filelists>\n",
+		len(vers), strings.Join(flBlocks, "\n")))
+	data := func(typ string, plain []byte) string {
+		gz, err := gzipBytes(plain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		href := "repodata/" + typ + ".xml.gz"
+		mux.HandleFunc(prefix+"/"+href, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(gz) })
+		return fmt.Sprintf("  <data type=%q>\n    <checksum type=\"sha256\">%s</checksum>\n"+
+			"    <open-checksum type=\"sha256\">%s</open-checksum>\n    <location href=%q/>\n"+
+			"    <size>%d</size>\n    <open-size>%d</open-size>\n  </data>\n",
+			typ, aptSHA256(gz), aptSHA256(plain), href, len(gz), len(plain))
+	}
+	repomd := `<?xml version="1.0" encoding="UTF-8"?>` + "\n<repomd xmlns=\"http://linux.duke.edu/metadata/repo\">\n  <revision>1</revision>\n" +
+		data("primary", primary) + data("filelists", filelists) + "</repomd>\n"
+	mux.HandleFunc(prefix+"/repodata/repomd.xml", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(repomd)) })
+}
+
+// TestCollectRpmNewestOnly mirrors a repo that lists two versions of one package
+// with newest-only (the default): only the newest .rpm is bundled, and the
+// high side serves a primary index that advertises just that version. Importing
+// the bundle also validates that the rewritten primary's checksums match the
+// manifest.
+func TestCollectRpmNewestOnly(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRpmRepoVersions(t, mux, "/yumrepos/vscode", "code", [][2]string{{"1.100.0", "1"}, {"1.101.2", "1"}})
+	up := httptest.NewServer(mux)
+	defer up.Close()
+
+	ls, priv := newRpmLowServer(t)
+	res, err := ls.CollectRpm(context.Background(), RpmCollectRequest{Name: "vscode", BaseURL: up.URL + "/yumrepos/vscode"})
+	if err != nil {
+		t.Fatalf("CollectRpm: %v", err)
+	}
+	if res.ExportedModules != 1 { // only the newest .rpm
+		t.Fatalf("newest-only bundled %d packages, want 1", res.ExportedModules)
+	}
+
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
+		name := res.BundleID + suffix
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, name), b)
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("import of newest-only rpm bundle failed (rewritten primary checksums must match manifest): %v", err)
+	}
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	base := srv.URL + "/rpm/vscode"
+	// The served (regenerated) primary advertises only the newest version.
+	assertServed(t, base+"/repodata/primary.xml.gz", "")
+	assertServed(t, base+"/Packages/code-1.101.2-1.x86_64.rpm", "FAKE-RPM-code-1.101.2-1")
+	if code, _ := httpGet(t, base+"/Packages/code-1.100.0-1.x86_64.rpm"); code == http.StatusOK {
+		t.Error("old version should not be mirrored under newest-only")
+	}
+
+	// With newest-only disabled, every version is mirrored.
+	no := false
+	all, err := ls.CollectRpm(context.Background(), RpmCollectRequest{
+		Name: "vscode", BaseURL: up.URL + "/yumrepos/vscode", NewestOnly: &no,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.ExportedModules != 2 {
+		t.Errorf("all-versions bundled %d packages, want 2", all.ExportedModules)
+	}
+}
+
 func TestParseRepoFile(t *testing.T) {
 	repo := "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\nenabled=1\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc\n"
 	cfgs, err := parseRepoFile(repo)
