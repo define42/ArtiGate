@@ -112,6 +112,11 @@ Useful admin endpoints:
   high: GET  /admin/missing
   high: GET  /admin/status
 
+TLS (env, both low and high):
+  ARTIGATE_TLS_MODE=unencrypted|acme|own-certificate|auto-generate-certificate
+  acme:            ARTIGATE_TLS_DOMAINS, ARTIGATE_ACME_EMAIL, ARTIGATE_ACME_DIRECTORY, ARTIGATE_ACME_CA_ROOT
+  own-certificate: ARTIGATE_TLS_CERT, ARTIGATE_TLS_KEY
+
 `)
 }
 
@@ -323,12 +328,15 @@ func runLow(args []string) {
 		go ls.watchLoop(context.Background())
 	}
 
+	tc, err := tlsConfigFromEnv()
+	must(err)
+
 	mux := http.NewServeMux()
 	mux.Handle("/", ls)
-	log.Printf("low-side exporter listening on %s", cfg.Listen)
+	log.Printf("low-side exporter listening on %s (TLS: %s)", cfg.Listen, tc.Mode)
 	log.Printf("low-side go module cache: %s", ls.downloadDir)
 	log.Printf("low-side export dir: %s", cfg.ExportDir)
-	must(http.ListenAndServe(cfg.Listen, logHTTP(mux)))
+	must(listenAndServe(tc, cfg.Listen, cfg.Root, logHTTP(mux)))
 }
 
 func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
@@ -1456,13 +1464,16 @@ func runHigh(args []string) {
 		go hs.importLoop()
 	}
 
+	tc, err := tlsConfigFromEnv()
+	must(err)
+
 	mux := http.NewServeMux()
 	mux.Handle("/", hs)
-	log.Printf("high-side repository listening on %s", cfg.Listen)
+	log.Printf("high-side repository listening on %s (TLS: %s)", cfg.Listen, tc.Mode)
 	log.Printf("high-side repo: %s", hs.downloadDir)
 	log.Printf("high-side landing: %s", cfg.Landing)
 	log.Printf("high-side quarantine: %s", hs.cfg.Quarantine)
-	must(http.ListenAndServe(cfg.Listen, logHTTP(mux)))
+	must(listenAndServe(tc, cfg.Listen, cfg.Root, logHTTP(mux)))
 }
 
 func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {

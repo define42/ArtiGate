@@ -54,6 +54,41 @@ at the high side (see below).
 
 Keep the private key on the low side only; install the public key on the high side.
 
+## TLS / HTTPS
+
+Both servers serve plain HTTP by default. Enable HTTPS entirely through environment
+variables (no flags) — the same set applies to `low` and `high`.
+`ARTIGATE_TLS_MODE` selects one of:
+
+- `unencrypted` (default) — plain HTTP.
+- `acme` — obtain and renew certificates automatically via ACME (certmagic).
+- `own-certificate` — use a certificate and key you provide.
+- `auto-generate-certificate` — a self-signed certificate made at startup (handy
+  for testing; clients must trust it or skip verification).
+
+| Variable | Modes | Meaning |
+|---|---|---|
+| `ARTIGATE_TLS_MODE` | all | `unencrypted` / `acme` / `own-certificate` / `auto-generate-certificate` |
+| `ARTIGATE_TLS_DOMAINS` | acme, auto-generate | comma-separated domains/IPs (ACME cert names; self-signed SANs) |
+| `ARTIGATE_TLS_CERT`, `ARTIGATE_TLS_KEY` | own-certificate | PEM certificate and private-key paths |
+| `ARTIGATE_ACME_EMAIL` | acme | account email |
+| `ARTIGATE_ACME_DIRECTORY` | acme | ACME server directory URL (defaults to Let's Encrypt) |
+| `ARTIGATE_ACME_CA_ROOT` | acme | PEM root CA to trust, for a private ACME server |
+| `ARTIGATE_ACME_STORAGE` | acme | certificate cache directory (default `<root>/acme`) |
+
+Example against a private ACME server (e.g. step-ca):
+
+```bash
+export ARTIGATE_TLS_MODE=acme
+export ARTIGATE_TLS_DOMAINS=mirror.internal
+export ARTIGATE_ACME_EMAIL=ops@internal
+export ARTIGATE_ACME_DIRECTORY=https://ca.internal/acme/acme/directory
+export ARTIGATE_ACME_CA_ROOT=/etc/artigate/ca-root.pem
+```
+
+ACME uses the TLS-ALPN-01 challenge on the server's own listen port, so that port
+must be reachable by the ACME server as the configured domain.
+
 ## Low side
 
 ```bash
