@@ -6,7 +6,10 @@ package main
 // diode, and shows the current export/bundle status. Re-export itself is done
 // by POSTing to the existing /admin/reexport endpoint.
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 func (s *LowServer) serveLowUI(w http.ResponseWriter, r *http.Request) bool {
 	switch r.URL.Path {
@@ -15,7 +18,7 @@ func (s *LowServer) serveLowUI(w http.ResponseWriter, r *http.Request) bool {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return true
 		}
-		writeHTML(w, lowUIHTML)
+		writeHTML(w, s.renderLowUI())
 	case "/ui/api/status":
 		if !isReadMethod(r) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -26,6 +29,16 @@ func (s *LowServer) serveLowUI(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// renderLowUI fills in the dashboard's optional bits: the "Log out" button is
+// only shown when authentication is enabled.
+func (s *LowServer) renderLowUI() string {
+	logout := ""
+	if s.authEnabled {
+		logout = `<form method="post" action="/logout" style="margin:0"><button type="submit" class="refresh">Log out</button></form>`
+	}
+	return strings.Replace(lowUIHTML, "{{LOGOUT}}", logout, 1)
 }
 
 const lowUIHTML = `<!DOCTYPE html>
@@ -108,6 +121,7 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="status" onclick="setView('status')">Status</button>
   </nav>
   <button type="button" class="refresh" onclick="loadStatus();loadAllWatches()">Refresh</button>
+  {{LOGOUT}}
 </header>
 <main>
   <section class="view" id="view-overview">
@@ -275,6 +289,8 @@ const lowUIHTML = `<!DOCTYPE html>
   </section>
 </main>
 <script>
+// If the session has expired, any API call returns 401; bounce to the login page.
+(function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',apt:'APT',rpm:'RPM'})[name]||name;}
 function formatBytes(n){

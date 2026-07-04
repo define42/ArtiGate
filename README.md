@@ -89,6 +89,37 @@ export ARTIGATE_ACME_CA_ROOT=/etc/artigate/ca-root.pem
 ACME uses the TLS-ALPN-01 challenge on the server's own listen port, so that port
 must be reachable by the ACME server as the configured domain.
 
+## Authentication (low side)
+
+The low-side dashboard can require a login. It is off by default and enabled
+through a single environment variable, `ARTIGATE_LOW_AUTH`, holding one or more
+credentials. Passwords are stored as argon2id hashes, never in plaintext —
+generate one with the `hashpw` subcommand (it reads the password from stdin so it
+never appears in your shell history):
+
+```bash
+./artigate hashpw --user alice
+# prompts on stdin, then prints:  alice:$argon2id$v=19$m=65536,t=3,p=1$...$...
+```
+
+Put one or more `username:hash` credentials in the variable, separated by `;` or
+newlines (not commas — the argon2 parameters inside a hash contain commas):
+
+```bash
+export ARTIGATE_LOW_AUTH='alice:$argon2id$v=19$...;bob:$argon2id$v=19$...'
+```
+
+When set, the dashboard presents a sign-in page and, after a successful login,
+carries the session in an encrypted, signed cookie (gorilla/securecookie); a
+**Log out** button in the header clears it. Sessions last 12 hours and survive a
+restart (the cookie keys are persisted to `<root>/session.key`). The `/healthz`
+probe stays open so container health checks keep working. The **high side is
+never authenticated** — it serves only already-verified public mirror content.
+
+> In `docker-compose.yml`, remember that Compose treats `$` as a variable
+> reference, so every `$` in the hash must be written `$$` (see the `low`
+> service). This does not apply to shell `export`s with single quotes.
+
 ## Low side
 
 ```bash
@@ -238,8 +269,10 @@ signature check (`repo_gpgcheck=0`, `[trusted=yes]`, etc.).
 
 ## Notes and limitations
 
-- The dashboards are **unauthenticated** — bind to localhost or put them behind a
-  firewall / authenticating reverse proxy.
+- The **low-side dashboard** can require a session login (`ARTIGATE_LOW_AUTH`, see
+  above); the **high-side dashboard** is unauthenticated — it serves only
+  already-verified public mirror content, so bind it to localhost or a trusted
+  network.
 - **Go**: no sumdb mirroring — use `GOSUMDB=off` on the high side and rely on your
   committed `go.sum` plus the signed bundles.
 - **Python**: wheels only (no sdists).

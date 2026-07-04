@@ -74,6 +74,8 @@ func main() {
 		runLow(os.Args[2:])
 	case "high":
 		runHigh(os.Args[2:])
+	case "hashpw":
+		runHashpw(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -83,6 +85,8 @@ func main() {
 func usage() {
 	fmt.Fprintf(os.Stderr, `Usage:
   artigate keygen --private low.ed25519 --public high.ed25519.pub
+
+  artigate hashpw --user alice        # argon2id hash for ARTIGATE_LOW_AUTH (reads password from stdin)
 
   artigate low \
     --listen :8080 \
@@ -116,6 +120,10 @@ TLS (env, both low and high):
   ARTIGATE_TLS_MODE=unencrypted|acme|own-certificate|auto-generate-certificate
   acme:            ARTIGATE_TLS_DOMAINS, ARTIGATE_ACME_EMAIL, ARTIGATE_ACME_DIRECTORY, ARTIGATE_ACME_CA_ROOT
   own-certificate: ARTIGATE_TLS_CERT, ARTIGATE_TLS_KEY
+
+Auth (env, low side only):
+  ARTIGATE_LOW_AUTH=user:<argon2id-hash>[;user2:<hash>...]   (generate hashes with 'hashpw')
+  When set, the low-side dashboard requires a form login (session cookie); the high side is never authenticated.
 
 `)
 }
@@ -292,6 +300,9 @@ type LowServer struct {
 	watchTick      time.Duration
 	watchRunningMu sync.Mutex
 	watchRunning   map[int64]bool
+	// authEnabled is set when ARTIGATE_LOW_AUTH is configured; it makes the UI
+	// render a "Log out" button.
+	authEnabled bool
 }
 
 func runLow(args []string) {
@@ -328,15 +339,31 @@ func runLow(args []string) {
 		go ls.watchLoop(context.Background())
 	}
 
+	serveLow(cfg, ls)
+}
+
+// serveLow wires up TLS, optional low-side authentication, and the HTTP handler,
+// then serves until the process stops.
+func serveLow(cfg LowConfig, ls *LowServer) {
 	tc, err := tlsConfigFromEnv()
+	must(err)
+	users, err := parseLowAuth(os.Getenv("ARTIGATE_LOW_AUTH"))
 	must(err)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", ls)
-	log.Printf("low-side exporter listening on %s (TLS: %s)", cfg.Listen, tc.Mode)
+	var handler http.Handler = mux
+	if len(users) > 0 {
+		ls.authEnabled = true
+		am, err := newAuthManager(users, filepath.Join(cfg.Root, "session.key"), tc.Mode != tlsUnencrypted)
+		must(err)
+		handler = am.middleware(handler)
+	}
+
+	log.Printf("low-side exporter listening on %s (TLS: %s, auth: %s)", cfg.Listen, tc.Mode, authStatus(users))
 	log.Printf("low-side go module cache: %s", ls.downloadDir)
 	log.Printf("low-side export dir: %s", cfg.ExportDir)
-	must(listenAndServe(tc, cfg.Listen, cfg.Root, logHTTP(mux)))
+	must(listenAndServe(tc, cfg.Listen, cfg.Root, logHTTP(handler)))
 }
 
 func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {

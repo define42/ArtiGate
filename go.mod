@@ -4,6 +4,8 @@ go 1.25.0
 
 require (
 	github.com/caddyserver/certmagic v0.25.4
+	github.com/gorilla/securecookie v1.1.2
+	golang.org/x/crypto v0.51.0
 	modernc.org/sqlite v1.53.0
 )
 
@@ -22,7 +24,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
