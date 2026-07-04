@@ -249,8 +249,15 @@ type LowServer struct {
 	downloadDir string // $GOPATH/pkg/mod/cache/download
 	gopath      string
 	statePath   string
-	mu          sync.Mutex
-	state       LowState
+	// exportMu serializes bundle production (sequence allocate -> write ->
+	// commit) across every export path, so two concurrent exporters can never
+	// claim the same sequence number and clobber each other's bundle. It is
+	// deliberately separate from mu: mu guards state for fast readers/writers
+	// (the proxy hot path, status endpoints) that must not block for the
+	// minutes a bundle write can take.
+	exportMu sync.Mutex
+	mu       sync.Mutex
+	state    LowState
 }
 
 func runLow(args []string) {
@@ -647,6 +654,9 @@ type ExportResult struct {
 }
 
 func (s *LowServer) ExportPending(ctx context.Context) (ExportResult, error) {
+	s.exportMu.Lock()
+	defer s.exportMu.Unlock()
+
 	s.mu.Lock()
 	var pending []RequestRecord
 	seq := s.state.NextSequence
@@ -727,6 +737,11 @@ func (s *LowServer) HandleGoCollect(ctx context.Context, r *http.Request) (Expor
 // the Python collector. The modules can come from an explicit list (optionally
 // with their transitive graph) or from a project's own go.mod.
 func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (ExportResult, error) {
+	// Hold exportMu for the whole allocate->write->commit so a concurrent
+	// exporter cannot claim the same sequence number between peek and commit.
+	s.exportMu.Lock()
+	defer s.exportMu.Unlock()
+
 	records, err := s.resolveGoCollectRecords(ctx, req)
 	if err != nil {
 		return ExportResult{}, err
@@ -904,6 +919,8 @@ func parseGoModDownload(out []byte) ([]RequestRecord, error) {
 }
 
 // peekSequence returns the next sequence number to write without advancing it.
+// Callers must hold exportMu across the matching peek/write/commitSequence so
+// two exporters cannot observe and write the same sequence.
 func (s *LowServer) peekSequence() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1161,6 +1178,12 @@ func (s *LowServer) ReexportSequences(ctx context.Context, ranges []SequenceRang
 }
 
 func (s *LowServer) ExportSequence(ctx context.Context, seq int64) (ExportResult, error) {
+	// Serialize against the sequence-allocating export paths so a re-export can
+	// never write a bundle file concurrently with a fresh export of the same
+	// sequence.
+	s.exportMu.Lock()
+	defer s.exportMu.Unlock()
+
 	// Prefer replaying the exact archived bundle. This works for every ecosystem
 	// (Go proxy, Go collect, Python collect) and needs no re-signing.
 	res, ok, err := s.replayArchivedBundle(seq)

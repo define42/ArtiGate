@@ -318,6 +318,11 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 	if len(req.Requirements) == 0 {
 		return ExportResult{}, errors.New("no python requirements provided")
 	}
+	// Hold exportMu for the whole download->write->commit so a concurrent
+	// exporter cannot claim the same sequence number between peek and commit.
+	s.exportMu.Lock()
+	defer s.exportMu.Unlock()
+
 	stagingBase := filepath.Join(s.cfg.Root, "python", "staging")
 	if err := os.MkdirAll(stagingBase, 0o755); err != nil {
 		return ExportResult{}, err

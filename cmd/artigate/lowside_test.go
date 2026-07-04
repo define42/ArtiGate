@@ -5,13 +5,16 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -240,6 +243,85 @@ func TestLowServerGoCollect(t *testing.T) {
 	// An empty module list is rejected.
 	if _, err := ls.CollectGo(ctx, GoCollectRequest{}); err == nil {
 		t.Error("empty CollectGo should error")
+	}
+}
+
+// TestLowServerConcurrentExportsUniqueSequences guards the export-sequence
+// serialization. Before exportMu wrapped the whole allocate->write->commit,
+// two concurrent exporters could peek the same NextSequence, both write the
+// same go-bundle-NNNNNN.* files, and both advance the counter — silently
+// dropping one exporter's modules or pairing a manifest with the other's
+// signature (which permanently blocks the high side). Each concurrent export
+// must instead receive a distinct sequence with an intact, verifiable bundle.
+func TestLowServerConcurrentExportsUniqueSequences(t *testing.T) {
+	ls, priv := newFakeLowServer(t)
+	pub := priv.Public().(ed25519.PublicKey)
+	ctx := context.Background()
+
+	const n = 12
+	seqs := make([]int64, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			res, err := ls.CollectGo(ctx, GoCollectRequest{
+				Modules: []string{fmt.Sprintf("example.com/mod%02d@v1.0.0", i)},
+			})
+			errs[i], seqs[i] = err, res.Sequence
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent CollectGo %d failed: %v", i, err)
+		}
+	}
+
+	// The assigned sequences must be exactly 1..n — no duplicates, no gaps.
+	sorted := append([]int64(nil), seqs...)
+	sort.Slice(sorted, func(a, b int) bool { return sorted[a] < sorted[b] })
+	for i, seq := range sorted {
+		if seq != int64(i+1) {
+			t.Fatalf("sequences are not a clean 1..%d permutation: %v", n, sorted)
+		}
+	}
+
+	// Every bundle must be present and its signature must verify; a torn
+	// manifest/signature pair from interleaved writers would fail here.
+	for seq := int64(1); seq <= n; seq++ {
+		assertBundleSigned(t, ls.cfg.ExportDir, bundleIDForSequence(seq), pub)
+	}
+
+	// The counter must have advanced exactly past the last sequence.
+	if got := ls.peekSequence(); got != int64(n+1) {
+		t.Errorf("NextSequence after %d concurrent collects = %d, want %d", n, got, n+1)
+	}
+}
+
+// assertBundleSigned checks that a bundle's three files exist in dir and that
+// its signature verifies against pub over the manifest bytes.
+func assertBundleSigned(t *testing.T, dir, bundleID string, pub ed25519.PublicKey) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(dir, bundleID+".tar.gz")); err != nil {
+		t.Errorf("bundle %s archive missing: %v", bundleID, err)
+	}
+	manifestBytes, err := os.ReadFile(filepath.Join(dir, bundleID+".manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest %s: %v", bundleID, err)
+	}
+	sigB64, err := os.ReadFile(filepath.Join(dir, bundleID+".manifest.json.sig"))
+	if err != nil {
+		t.Fatalf("read sig %s: %v", bundleID, err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigB64)))
+	if err != nil {
+		t.Fatalf("decode sig %s: %v", bundleID, err)
+	}
+	if !ed25519.Verify(pub, manifestBytes, sig) {
+		t.Errorf("bundle %s signature does not verify", bundleID)
 	}
 }
 
