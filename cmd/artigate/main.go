@@ -8,6 +8,7 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/ed25519"
@@ -498,11 +499,21 @@ func (s *LowServer) runGoDir(ctx context.Context, dir string, args ...string) ([
 	cmd := exec.CommandContext(ctx, s.cfg.GoBinary, args...)
 	cmd.Env = s.goEnv()
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return out, fmt.Errorf("go %s failed: %w\n%s", strings.Join(args, " "), err, string(out))
+	// Keep stdout and stderr separate. Callers parse stdout as JSON (go's
+	// `-json` output), while go writes progress and toolchain-download notices
+	// ("go: downloading go1.X ...") to stderr; merging them would splice a
+	// non-JSON "go: ..." line into the stream and break parsing.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = strings.TrimSpace(stdout.String())
+		}
+		return stdout.Bytes(), fmt.Errorf("go %s failed: %w\n%s", strings.Join(args, " "), err, detail)
 	}
-	return out, nil
+	return stdout.Bytes(), nil
 }
 
 type goListVersionsJSON struct {

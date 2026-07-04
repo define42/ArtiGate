@@ -46,10 +46,49 @@ func TestLowServerUIPage(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("index status = %d", code)
 	}
-	for _, want := range []string{"<title>ArtiGate low-side</title>", "/admin/reexport", "Re-transmit bundles", "/ui/api/status"} {
+	for _, want := range []string{
+		"<title>ArtiGate low-side</title>",
+		"/admin/reexport", "Re-transmit bundles", "/ui/api/status",
+		"Mirror a Go project", `id="gomod"`, `id="gosum"`, "collectGoMod", "/admin/go/collect",
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("low-side index page missing %q", want)
 		}
+	}
+}
+
+// TestLowServerUIGoModCollectFlow drives the exact request the go.mod upload
+// form issues: POST {go_mod, go_sum} to /admin/go/collect and confirm the
+// project's module graph is resolved into a signed bundle.
+func TestLowServerUIGoModCollectFlow(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	srv := httptest.NewServer(ls)
+	defer srv.Close()
+
+	goMod := "module example.com/myapp\n\ngo 1.22\n\n" +
+		"require (\n" +
+		"\texample.com/foo/bar v1.0.0\n" +
+		"\texample.com/foo/baz v1.1.0 // indirect\n" +
+		")\n"
+	reqBody, err := json.Marshal(map[string]string{"go_mod": goMod, "go_sum": ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Post(srv.URL+"/admin/go/collect", "application/json", strings.NewReader(string(reqBody))) //nolint:noctx // test request
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("collect status = %d", resp.StatusCode)
+	}
+	var res ExportResult
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if res.BundleID != "go-bundle-000001" || res.ExportedModules < 2 {
+		t.Errorf("unexpected collect result: %+v", res)
 	}
 }
 

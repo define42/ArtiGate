@@ -454,6 +454,27 @@ func TestCollectGoRejectsFlagInjection(t *testing.T) {
 	}
 }
 
+// TestCollectGoModToleratesToolchainStderr reproduces the go.mod upload failure
+// where GOTOOLCHAIN=auto writes "go: downloading go1.X ..." to stderr while the
+// module-graph JSON goes to stdout. Merging the two streams spliced that "go:"
+// line into the JSON and broke parsing ("invalid character 'g'"); runGoDir must
+// read stdout alone.
+func TestCollectGoModToleratesToolchainStderr(t *testing.T) {
+	noisy := strings.Replace(fakeGoScript, "set -eu\n",
+		"set -eu\necho 'go: downloading go1.26.3 (linux/amd64)' >&2\n", 1)
+	ls, _ := newFakeLowServerWithGo(t, writeFakeGoWith(t, noisy))
+
+	goMod := "module example.com/authbroker\n\ngo 1.26.3\n\n" +
+		"require example.com/foo/bar v1.0.0\n"
+	res, err := ls.CollectGo(context.Background(), GoCollectRequest{GoMod: goMod})
+	if err != nil {
+		t.Fatalf("CollectGo must tolerate toolchain-download stderr noise: %v", err)
+	}
+	if res.ExportedModules < 1 || res.BundleID != "go-bundle-000001" {
+		t.Errorf("unexpected result: %+v", res)
+	}
+}
+
 func TestLowServerGoCollectWithDeps(t *testing.T) {
 	ls, priv := newFakeLowServer(t)
 	ctx := context.Background()

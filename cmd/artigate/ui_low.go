@@ -50,6 +50,19 @@ const lowUIHTML = `<!DOCTYPE html>
   #result { margin-top: .9rem; padding: .7rem .9rem; border-radius: 6px; display: none; }
   #result.ok { display: block; background: #10281a; border: 1px solid #1f6f43; color: #7ee2a8; }
   #result.err { display: block; background: #2e1416; border: 1px solid #7f2a30; color: #ff9ea3; }
+  .gomod-form { flex-direction: column; align-items: stretch; }
+  .filelabel { display: flex; flex-direction: column; gap: .3rem; font-size: .85rem; color: #c7cedb; }
+  .filelabel .opt { color: #8b93a5; font-weight: 400; }
+  .filelabel input[type=file] { font: inherit; color: #a9b2c3; background: #0f1115; border: 1px dashed #3a4150; border-radius: 6px; padding: .5rem .6rem; cursor: pointer; }
+  .gomod-form button.primary { align-self: flex-start; }
+  button.primary:disabled { opacity: .6; cursor: progress; }
+  #goResult { margin-top: .9rem; padding: .7rem .9rem; border-radius: 6px; display: none; }
+  #goResult.busy { display: block; background: #12161f; border: 1px solid #3a4150; color: #a9b2c3; }
+  #goResult.ok { display: block; background: #10281a; border: 1px solid #1f6f43; color: #7ee2a8; }
+  #goResult.warn { display: block; background: #2a2410; border: 1px solid #6b5320; color: #d8b26a; }
+  #goResult.err { display: block; background: #2e1416; border: 1px solid #7f2a30; color: #ff9ea3; }
+  #goResult ul { margin: .4rem 0 0; padding-left: 1.1rem; }
+  #goResult code { font-family: ui-monospace, monospace; }
   .meta { display: flex; flex-wrap: wrap; gap: 1.25rem; font-size: .9rem; color: #a9b2c3; margin-bottom: 1rem; }
   .meta b { color: #e6e6e6; }
   table { width: 100%; border-collapse: collapse; font-size: .85rem; }
@@ -65,6 +78,21 @@ const lowUIHTML = `<!DOCTYPE html>
   <button onclick="loadStatus()">Refresh</button>
 </header>
 <main>
+  <div class="card">
+    <h2>Mirror a Go project (go.mod)</h2>
+    <p class="hint">Upload a project's <code>go.mod</code> (optionally its <code>go.sum</code>). ArtiGate resolves and fetches exactly the module graph that project builds and writes it to a signed bundle &mdash; the same as POSTing the file to <code>/admin/go/collect</code>. This is the closest to &ldquo;download everything needed to build this project offline&rdquo;.</p>
+    <form class="gomod-form" onsubmit="collectGoMod(event)">
+      <label class="filelabel">go.mod
+        <input id="gomod" type="file" accept=".mod,text/plain" required>
+      </label>
+      <label class="filelabel">go.sum <span class="opt">&mdash; optional, pins the exact versions</span>
+        <input id="gosum" type="file" accept=".sum,text/plain">
+      </label>
+      <button class="primary" type="submit" id="goBtn">Collect &amp; export</button>
+    </form>
+    <div id="goResult"></div>
+  </div>
+
   <div class="card">
     <h2>Re-transmit bundles</h2>
     <p class="hint">Enter a bundle number or range that the high side is missing, e.g. <code>42</code>, <code>45-47</code>, or <code>42,45-47</code>. The bundle files are regenerated in the export directory to be sent through the diode again.</p>
@@ -106,6 +134,44 @@ async function reexport(ev){
     showResult(failed.length?'err':'ok', msg);
     loadStatus();
   }catch(e){ showResult('err','Request failed: '+esc(e.message)); }
+}
+
+function showGoResult(cls, html){
+  const el=document.getElementById('goResult');
+  el.className=cls;
+  el.innerHTML=html;
+}
+
+async function collectGoMod(ev){
+  ev.preventDefault();
+  const modInput=document.getElementById('gomod');
+  const sumInput=document.getElementById('gosum');
+  const modFile=modInput.files && modInput.files[0];
+  if(!modFile){ showGoResult('err','Choose a go.mod file to upload.'); return; }
+  const btn=document.getElementById('goBtn');
+  const label=btn.textContent;
+  btn.disabled=true; btn.textContent='Collecting…';
+  showGoResult('busy','Resolving and fetching the module graph… this can take a while for a large project.');
+  try{
+    const go_mod=await modFile.text();
+    const sumFile=sumInput.files && sumInput.files[0];
+    const go_sum=sumFile ? await sumFile.text() : '';
+    const r=await fetch('/admin/go/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({go_mod:go_mod, go_sum:go_sum})});
+    const text=await r.text();
+    if(!r.ok){ showGoResult('err','Error: '+esc(text.trim())); return; }
+    const d=JSON.parse(text);
+    let msg='&#10003; Collected '+esc(d.exported_modules)+' module(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
+    const skipped=d.skipped_modules||[];
+    if(skipped.length){
+      msg+='<br>&#9888; Skipped '+esc(skipped.length)+' unfetchable module(s); they stay pending for retry:<ul>'+
+        skipped.map(m=>'<li><code>'+esc(m.module)+'@'+esc(m.version)+'</code></li>').join('')+'</ul>';
+      showGoResult('warn', msg);
+    } else {
+      showGoResult('ok', msg);
+    }
+    loadStatus();
+  }catch(e){ showGoResult('err','Request failed: '+esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent=label; }
 }
 
 async function loadStatus(){
