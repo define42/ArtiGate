@@ -1540,7 +1540,10 @@ func (s *HighServer) containerDetail(spec string) (UIDetail, error) {
 		// The first blob is the config; the rest are layers.
 		UIDetailField{Label: "Layers", Value: fmt.Sprint(max(0, len(img.Blobs)-1))},
 		UIDetailField{Label: "Total blob size", Value: formatBytes(total)},
-		UIDetailField{Label: "Pull name", Value: name + refSuffix(img), Mono: true},
+		// The full reference to pull from this ArtiGate: the frontend prepends
+		// the dashboard host to <registry>/<repository>:<tag>, so the value is
+		// exactly what `docker pull` / `podman pull` takes. Copyable in one click.
+		UIDetailField{Label: "Pull reference", Value: name + refSuffix(img), Mono: true, Copy: true, HostPrefix: true},
 	)
 	subtitle := img.Tag
 	if subtitle == "" {

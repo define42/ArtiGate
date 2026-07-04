@@ -302,8 +302,20 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate
 # Containers — the pull name embeds the upstream registry
 docker pull artigate-high.local/docker.io/library/alpine:3.20
 docker pull artigate-high.local/ghcr.io/org/app:v1
-# docker/podman require HTTPS: enable TLS on the high side, or add the host to
-# "insecure-registries" in /etc/docker/daemon.json.
+```
+
+Docker/podman require HTTPS for remote registries — enable TLS on the high side,
+or, for a plain-HTTP mirror, trust it explicitly (then `systemctl restart docker`).
+The high-side **"Set me up"** guide renders this block ready to copy, with the
+actual host and port filled in:
+
+```json
+// /etc/docker/daemon.json
+{
+  "insecure-registries": [
+    "artigate-high.local:8081"
+  ]
+}
 ```
 
 On the high side, use **only** ArtiGate as the source — don't add

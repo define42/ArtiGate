@@ -166,13 +166,8 @@ function renderDetail(detail) {
     for (const field of detail.fields ?? []) {
         const dt = document.createElement("dt");
         dt.textContent = field.label;
-        const dd = document.createElement("dd");
-        dd.textContent = field.value;
-        if (field.mono) {
-            dd.className = "mono";
-        }
         dl.appendChild(dt);
-        dl.appendChild(dd);
+        dl.appendChild(detailValue(field));
     }
     panel.appendChild(dl);
     if (detail.go_mod) {
@@ -185,6 +180,33 @@ function renderDetail(detail) {
         panel.appendChild(label);
         panel.appendChild(pre);
     }
+}
+// detailValue builds one <dd> for the detail panel. A host_prefix field shows
+// the value qualified by this dashboard's host (e.g. the full container pull
+// reference); a copy field gets a small copy-to-clipboard button.
+function detailValue(field) {
+    const dd = document.createElement("dd");
+    if (field.mono) {
+        dd.className = "mono";
+    }
+    const value = field.host_prefix ? `${window.location.host}/${field.value}` : field.value;
+    if (!field.copy) {
+        dd.textContent = value;
+        return dd;
+    }
+    dd.classList.add("copyable");
+    const text = document.createElement("span");
+    text.className = "copy-value";
+    text.textContent = value;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-field";
+    btn.textContent = "Copy";
+    btn.title = "Copy to clipboard";
+    btn.addEventListener("click", () => void copyCode(value, text, btn));
+    dd.appendChild(text);
+    dd.appendChild(btn);
+    return dd;
 }
 async function selectLeaf(el, node) {
     if (selectedLeaf) {
@@ -534,28 +556,47 @@ function guideDialog() {
 }
 // containersGuideSection shows how to pull from the mirrored OCI registry.
 // Pull names embed the upstream registry (docker.io/..., ghcr.io/...), so the
-// example commands are built from what is actually mirrored.
+// example commands are built from what is actually mirrored. When the mirror
+// is served over plain HTTP it also renders the exact /etc/docker/daemon.json
+// insecure-registries block, with this host and port filled in.
 function containersGuideSection(repos) {
-    const host = window.location.host;
+    const host = window.location.host; // host:port, honoring any reverse proxy
+    const secure = window.location.protocol === "https:";
     const pullName = (r) => `${host}/${r.name}${r.tags && r.tags.length ? `:${r.tags[0]}` : ""}`;
     const pulls = repos
         .slice(0, 8)
         .map((r) => `docker pull ${pullName(r)}`)
         .join("\n");
+    // The full daemon.json Docker needs to trust a plain-HTTP registry. Built
+    // with JSON.stringify so it is always valid JSON with the live host:port.
+    const daemonJSON = JSON.stringify({ "insecure-registries": [host] }, null, 2);
+    const blocks = [
+        {
+            label: "Pull (docker / podman)",
+            code: pulls || `docker pull ${host}/docker.io/library/alpine:3.20`,
+        },
+        {
+            label: "/etc/docker/daemon.json  — then: sudo systemctl restart docker",
+            code: daemonJSON,
+        },
+        {
+            label: "Podman — /etc/containers/registries.conf.d/artigate.conf",
+            code: `[[registry]]\nlocation = "${host}"\ninsecure = true`,
+        },
+    ];
     return {
         heading: "Container images",
         body: "This mirror is a read-only OCI registry (linux/amd64 only). Each " +
             "upstream registry keeps its own namespace, so the pull name is " +
             "<this-host>/<upstream-registry>/<repository>:<tag>.",
-        blocks: [
-            {
-                label: "Pull (docker / podman)",
-                code: pulls || `docker pull ${host}/docker.io/library/alpine:3.20`,
-            },
-        ],
-        note: "Docker requires HTTPS for remote registries: enable TLS on the high side, " +
-            'or add this host to "insecure-registries" in /etc/docker/daemon.json ' +
-            "(podman: an insecure [[registry]] entry in registries.conf).",
+        blocks,
+        note: secure
+            ? "This host serves HTTPS, so no insecure-registries entry is needed — the " +
+                "daemon.json above is only for a plain-HTTP mirror. Restart the Docker " +
+                "daemon after editing daemon.json."
+            : "Docker rejects plain-HTTP registries unless the host is listed in " +
+                "insecure-registries (above); restart the daemon after editing. Serve the " +
+                "high side over TLS to drop this entirely.",
     };
 }
 // openGuide shows the whole-ecosystem setup for Go/Python/Maven/containers

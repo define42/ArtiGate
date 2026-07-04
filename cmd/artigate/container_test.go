@@ -521,11 +521,29 @@ func TestContainerDashboardAndDetail(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(got, `"docker.io"`) || !strings.Contains(got, `"ghcr.io"`) {
 		t.Fatalf("containers tree root: %d %q", code, got)
 	}
-	// Detail for a tag leaf.
+	// Detail for a tag leaf, including a copyable, host-prefixed pull reference
+	// (the full <host>/<registry>/<repo>:<tag> a client pulls; the host is
+	// prepended client-side, so the value here is host-relative).
 	code, got = httpGet(t, srv.URL+"/ui/api/detail?eco=containers&path="+
 		"docker.io%2Flibrary%2Falpine%403.20")
 	if code != http.StatusOK || !strings.Contains(got, "linux/amd64") {
 		t.Fatalf("container detail: %d %q", code, got)
+	}
+	var detail UIDetail
+	if err := json.Unmarshal([]byte(got), &detail); err != nil {
+		t.Fatal(err)
+	}
+	var pull *UIDetailField
+	for i := range detail.Fields {
+		if detail.Fields[i].Label == "Pull reference" {
+			pull = &detail.Fields[i]
+		}
+	}
+	if pull == nil {
+		t.Fatalf("detail has no Pull reference field: %+v", detail.Fields)
+	}
+	if pull.Value != "docker.io/library/alpine:3.20" || !pull.Copy || !pull.HostPrefix {
+		t.Fatalf("pull reference field = %+v", *pull)
 	}
 	// Repos for the "Set me up" guide.
 	code, got = httpGet(t, srv.URL+"/ui/api/repos?eco=containers")
