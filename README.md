@@ -286,7 +286,7 @@ and serves only complete versions.
 
 ```bash
 # Go
-go env -w GOPROXY=https://artigate-high.local,off
+go env -w GOPROXY=https://artigate-high.local/go,off
 go env -w GOSUMDB=off
 ```
 

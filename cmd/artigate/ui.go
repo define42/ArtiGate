@@ -376,38 +376,26 @@ func pythonTreeChildren(projects []UIProject, path string) []UITreeNode {
 	return []UITreeNode{}
 }
 
-// isNonGoRepoTree reports whether an escaped module path is really another
-// ecosystem's subtree of the shared repository root, which the Go module walk
-// must skip.
-func isNonGoRepoTree(moduleEsc string) bool {
-	for _, eco := range []string{"python", "maven", "apt", "rpm", "containers", "npm"} {
-		if moduleEsc == eco || strings.HasPrefix(moduleEsc, eco+"/") {
-			return true
-		}
-	}
-	return false
-}
-
-// listGoModules walks the module cache and returns every module that has at
+// listGoModules walks the go/ subtree and returns every module that has at
 // least one complete version, with its versions sorted ascending.
 func (s *HighServer) listGoModules() ([]UIModule, error) {
+	root := s.goModuleDir()
+	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+		return nil, nil // no Go modules mirrored yet
+	}
 	var mods []UIModule
-	err := filepath.WalkDir(s.downloadDir, func(p string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if !d.IsDir() || d.Name() != "@v" {
 			return nil
 		}
-		rel, relErr := filepath.Rel(s.downloadDir, filepath.Dir(p))
+		rel, relErr := filepath.Rel(root, filepath.Dir(p))
 		if relErr != nil {
 			return nil
 		}
-		moduleEsc := filepath.ToSlash(rel)
-		if isNonGoRepoTree(moduleEsc) {
-			return filepath.SkipDir
-		}
-		if mod, ok := s.goModuleAt(moduleEsc); ok {
+		if mod, ok := s.goModuleAt(filepath.ToSlash(rel)); ok {
 			mods = append(mods, mod)
 		}
 		return filepath.SkipDir
@@ -545,8 +533,8 @@ func (s *HighServer) goDetail(spec string) (UIDetail, error) {
 	if strings.ContainsRune(versionEsc, '/') || strings.Contains(versionEsc, "..") {
 		return UIDetail{}, errors.New("invalid version")
 	}
-	base := filepath.Join(s.downloadDir, filepath.FromSlash(moduleEsc), "@v")
-	if !safeJoin(s.downloadDir, base) {
+	base := filepath.Join(s.goModuleDir(), filepath.FromSlash(moduleEsc), "@v")
+	if !safeJoin(s.goModuleDir(), base) {
 		return UIDetail{}, errors.New("unsafe path")
 	}
 	if !s.isComplete(moduleEsc, versionEsc) {
@@ -566,7 +554,7 @@ func (s *HighServer) goDetail(spec string) (UIDetail, error) {
 	if sum, err := sha256File(filepath.Join(base, versionEsc+".zip")); err == nil {
 		fields = append(fields, UIDetailField{Label: "Zip SHA-256", Value: sum, Mono: true})
 	}
-	fields = append(fields, UIDetailField{Label: "Proxy path", Value: "/" + moduleEsc + "/@v/" + versionEsc + ".zip", Mono: true})
+	fields = append(fields, UIDetailField{Label: "Proxy path", Value: "/go/" + moduleEsc + "/@v/" + versionEsc + ".zip", Mono: true})
 
 	goMod, _ := os.ReadFile(filepath.Join(base, versionEsc+".mod"))
 	return UIDetail{Title: module, Subtitle: version, Fields: fields, GoMod: string(goMod)}, nil

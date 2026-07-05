@@ -623,7 +623,7 @@ func TestLowToHighPipeline(t *testing.T) {
 
 	srv := httptest.NewServer(hs)
 	defer srv.Close()
-	if code, body := httpGet(t, srv.URL+"/example.com/foo/bar/@v/list"); code != http.StatusOK || !strings.Contains(body, "v1.0.0") {
+	if code, body := httpGet(t, srv.URL+"/go/example.com/foo/bar/@v/list"); code != http.StatusOK || !strings.Contains(body, "v1.0.0") {
 		t.Errorf("high list after pipeline: status %d body %q", code, body)
 	}
 }

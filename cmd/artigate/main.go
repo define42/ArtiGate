@@ -109,7 +109,7 @@ func usage() {
     --import-interval 10s
 
 High-side clients:
-  GOPROXY=http://high-proxy:8080,off
+  GOPROXY=http://high-proxy:8080/go,off
   GOSUMDB=off
 
 Useful admin endpoints:
@@ -1642,28 +1642,38 @@ func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
 }
 
 func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Each ecosystem's server claims its own URL space and reports whether it
-	// handled the request; anything unclaimed falls through to the GOPROXY.
+	// Each ecosystem claims its own URL space — Go under /go/, like every other
+	// ecosystem under its own prefix — and reports whether it handled the
+	// request; anything unclaimed is not found.
 	for _, serve := range []func(http.ResponseWriter, *http.Request) bool{
-		s.serveHighAdmin, s.servePython, s.serveMaven, s.serveApt,
+		s.serveHighAdmin, s.serveGo, s.servePython, s.serveMaven, s.serveApt,
 		s.serveRpm, s.serveContainers, s.serveNpm, s.serveUI,
 	} {
 		if serve(w, r) {
 			return
 		}
 	}
+	http.Error(w, "not found", http.StatusNotFound)
+}
 
+// serveGo handles the GOPROXY routes under /go/. It strips the /go prefix and
+// reuses the standard proxy request parser, so Go modules occupy their own URL
+// namespace (and on-disk subtree, goModuleDir) just like every other ecosystem.
+// Clients set GOPROXY=<base>/go,off. It reports whether it wrote a response.
+func (s *HighServer) serveGo(w http.ResponseWriter, r *http.Request) bool {
+	p := r.URL.Path
+	if p != "/go" && !strings.HasPrefix(p, "/go/") {
+		return false
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+		return true
 	}
-
-	req, err := parseProxyRequest(r.URL.Path)
+	req, err := parseProxyRequest(strings.TrimPrefix(p, "/go"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return true
 	}
-
 	switch req.Kind {
 	case proxyList:
 		s.handleHighList(w, r, req)
@@ -1674,6 +1684,14 @@ func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case proxyUnknown:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+	return true
+}
+
+// goModuleDir is the high-side subtree holding the mirrored Go module cache
+// (GOPROXY layout), namespaced under the download root like the other
+// ecosystems (python/, npm/, …) rather than spread across the root.
+func (s *HighServer) goModuleDir() string {
+	return filepath.Join(s.downloadDir, "go")
 }
 
 // serveHighAdmin handles the health check and /admin/* routes. It reports
@@ -1741,8 +1759,8 @@ func (s *HighServer) handleHighVersionFile(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "version not found", http.StatusNotFound)
 		return
 	}
-	abs := filepath.Join(s.downloadDir, filepath.FromSlash(req.RelativePath))
-	if !safeJoin(s.downloadDir, abs) {
+	abs := filepath.Join(s.goModuleDir(), filepath.FromSlash(req.RelativePath))
+	if !safeJoin(s.goModuleDir(), abs) {
 		http.Error(w, "unsafe path", http.StatusBadRequest)
 		return
 	}
@@ -1762,7 +1780,7 @@ func (s *HighServer) completeVersions(moduleEsc string) ([]string, error) {
 }
 
 func (s *HighServer) completeInfos(moduleEsc string) ([]ModuleInfo, error) {
-	base := filepath.Join(s.downloadDir, filepath.FromSlash(moduleEsc), "@v")
+	base := filepath.Join(s.goModuleDir(), filepath.FromSlash(moduleEsc), "@v")
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		return nil, err
@@ -1793,7 +1811,7 @@ func (s *HighServer) completeInfos(moduleEsc string) ([]ModuleInfo, error) {
 }
 
 func (s *HighServer) isComplete(moduleEsc, versionEsc string) bool {
-	base := filepath.Join(s.downloadDir, filepath.FromSlash(moduleEsc), "@v")
+	base := filepath.Join(s.goModuleDir(), filepath.FromSlash(moduleEsc), "@v")
 	marker := filepath.Join(base, versionEsc+completeExt)
 	if !fileExists(marker) {
 		return false
@@ -2232,7 +2250,7 @@ func validateManifestModules(mods []ManifestMod, seen map[string]bool) error {
 }
 
 func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManifest) error {
-	if err := s.installVerifiedFiles(staging, manifest.Files); err != nil {
+	if err := s.installVerifiedFiles(staging, manifest.Files, goFilePaths(manifest.Modules)); err != nil {
 		return err
 	}
 	// Regenerate APT repository metadata from the accumulated stanzas of the
@@ -2255,34 +2273,62 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 	return s.writeCompleteMarkers(manifest.Modules)
 }
 
+// goFilePaths collects the manifest paths that belong to Go modules, so the
+// importer can place them under the go/ subtree while the other ecosystems keep
+// their already-namespaced paths.
+func goFilePaths(mods []ManifestMod) map[string]bool {
+	if len(mods) == 0 {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, m := range mods {
+		for _, f := range m.Files {
+			set[f.Path] = true
+		}
+	}
+	return set
+}
+
 // installVerifiedFiles copies every verified file into the accumulated
-// repository, refusing to overwrite an existing immutable file with different
-// content.
-func (s *HighServer) installVerifiedFiles(staging string, files []ManifestFile) error {
+// repository. Go module files (bare module paths, listed in goFiles) are placed
+// under the go/ subtree; every other ecosystem's paths already carry their own
+// prefix and install at the download root.
+func (s *HighServer) installVerifiedFiles(staging string, files []ManifestFile, goFiles map[string]bool) error {
 	for _, f := range files {
-		src := filepath.Join(staging, filepath.FromSlash(f.Path))
-		dst := filepath.Join(s.downloadDir, filepath.FromSlash(f.Path))
-		if !safeJoin(s.downloadDir, dst) {
-			return fmt.Errorf("unsafe destination %s", f.Path)
+		base := s.downloadDir
+		if goFiles[f.Path] {
+			base = s.goModuleDir()
 		}
-		if fileExists(dst) {
-			existing, err := sha256File(dst)
-			if err != nil {
-				return err
-			}
-			if existing != f.SHA256 {
-				return fmt.Errorf("immutable file conflict for %s", f.Path)
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		if err := copyFileAtomic(src, dst, 0o644); err != nil {
+		if err := installVerifiedFile(staging, base, f); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// installVerifiedFile copies one verified file from staging into base, refusing
+// to overwrite an existing immutable file with different content. An existing
+// file whose content already matches is a no-op, so re-imports are idempotent.
+func installVerifiedFile(staging, base string, f ManifestFile) error {
+	src := filepath.Join(staging, filepath.FromSlash(f.Path))
+	dst := filepath.Join(base, filepath.FromSlash(f.Path))
+	if !safeJoin(base, dst) {
+		return fmt.Errorf("unsafe destination %s", f.Path)
+	}
+	if fileExists(dst) {
+		existing, err := sha256File(dst)
+		if err != nil {
+			return err
+		}
+		if existing != f.SHA256 {
+			return fmt.Errorf("immutable file conflict for %s", f.Path)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return copyFileAtomic(src, dst, 0o644)
 }
 
 // writeCompleteMarkers writes a .complete marker for each module once all of
@@ -2295,7 +2341,7 @@ func (s *HighServer) writeCompleteMarkers(mods []ManifestMod) error {
 		if err != nil {
 			return err
 		}
-		marker := filepath.Join(s.downloadDir, filepath.FromSlash(moduleEsc), "@v", versionEsc+completeExt)
+		marker := filepath.Join(s.goModuleDir(), filepath.FromSlash(moduleEsc), "@v", versionEsc+completeExt)
 		if err := writeBytesAtomic(marker, []byte(time.Now().UTC().Format(time.RFC3339Nano)+"\n"), 0o644); err != nil {
 			return err
 		}

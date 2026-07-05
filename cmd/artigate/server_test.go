@@ -201,10 +201,10 @@ func TestHighServerImportAndServe(t *testing.T) {
 		path    string
 		wantSub string
 	}{
-		{"/github.com/foo/bar/@v/list", "v1.0.0"},
-		{"/github.com/foo/bar/@v/v1.0.0.info", `"Version":"v1.0.0"`},
-		{"/github.com/foo/bar/@v/v1.0.0.mod", "github.com/foo/bar v1.0.0 mod"},
-		{"/github.com/foo/bar/@v/v1.0.0.zip", "github.com/foo/bar v1.0.0 zip"},
+		{"/go/github.com/foo/bar/@v/list", "v1.0.0"},
+		{"/go/github.com/foo/bar/@v/v1.0.0.info", `"Version":"v1.0.0"`},
+		{"/go/github.com/foo/bar/@v/v1.0.0.mod", "github.com/foo/bar v1.0.0 mod"},
+		{"/go/github.com/foo/bar/@v/v1.0.0.zip", "github.com/foo/bar v1.0.0 zip"},
 	}
 	for _, c := range cases {
 		code, body := httpGet(t, srv.URL+c.path)
@@ -216,7 +216,7 @@ func TestHighServerImportAndServe(t *testing.T) {
 		}
 	}
 
-	code, body := httpGet(t, srv.URL+"/github.com/foo/bar/@latest")
+	code, body := httpGet(t, srv.URL+"/go/github.com/foo/bar/@latest")
 	if code != http.StatusOK {
 		t.Fatalf("GET @latest: status %d", code)
 	}
@@ -229,8 +229,12 @@ func TestHighServerImportAndServe(t *testing.T) {
 	}
 
 	// Unknown module 404s rather than erroring.
-	if code, _ := httpGet(t, srv.URL+"/github.com/does/notexist/@v/list"); code != http.StatusNotFound {
+	if code, _ := httpGet(t, srv.URL+"/go/github.com/does/notexist/@v/list"); code != http.StatusNotFound {
 		t.Errorf("unknown module list: status %d, want 404", code)
+	}
+	// Go is served only under /go/ now; the old root path is not found.
+	if code, _ := httpGet(t, srv.URL+"/github.com/foo/bar/@v/list"); code == http.StatusOK {
+		t.Error("Go module served at the root path; expected only under /go/")
 	}
 }
 

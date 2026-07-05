@@ -449,7 +449,7 @@ function goGuideSection(base) {
             "“,off” means Go builds only from what this mirror has imported and never " +
             "reaches out to the internet.",
         blocks: [
-            { label: "Configure the client", code: `go env -w GOPROXY=${base},off\ngo env -w GOSUMDB=off` },
+            { label: "Configure the client", code: `go env -w GOPROXY=${base}/go,off\ngo env -w GOSUMDB=off` },
             { label: "Reproducible builds (CI)", code: "go build -mod=readonly ./...\ngo test -mod=readonly ./..." },
         ],
         note: "GOSUMDB is off because the public checksum database is unreachable when " +
