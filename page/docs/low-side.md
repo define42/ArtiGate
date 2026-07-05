@@ -86,7 +86,7 @@ A buffered (non-streaming) collect responds with a JSON `ExportResult`:
 }
 ```
 
-A dedup skip instead returns `{"stream":"go","skipped":true,"message":"no new content since the last export"}`.
+A dedup skip instead returns `{"stream":"go","exported_modules":0,"skipped":true,"message":"no new content since the last export"}`.
 
 ### What lands in the export dir
 
@@ -164,7 +164,7 @@ Re-export takes the same per-stream lock as a fresh export (so it cannot collide
   "stream": "python",
   "requested_ranges": ["7", "10-12"],
   "sequences": [7, 10, 11, 12],
-  "reexported": [{"stream":"python","sequence":7,"bundle_id":"python-bundle-000007","message":"re-exported from archive"}],
+  "reexported": [{"stream":"python","sequence":7,"exported_modules":1,"bundle_id":"python-bundle-000007","message":"re-exported from archive"}],
   "failed": ["11: no archived bundle for python-bundle-000011"]
 }
 ```

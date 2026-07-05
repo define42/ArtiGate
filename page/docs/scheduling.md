@@ -46,7 +46,7 @@ curl -X POST http://localhost:8080/admin/watches \
         "stream": "python",
         "label": "requests hourly",
         "interval_seconds": 3600,
-        "spec": { "requirements": "requests==2.32.3" }
+        "spec": { "requirements": ["requests==2.32.3"] }
       }'
 ```
 
@@ -111,7 +111,7 @@ Each watch tracks the outcome of its last run and when it will next fire. These 
 | Field | JSON | Meaning |
 |---|---|---|
 | Last run | `last_run_at` | When the watch last executed. Omitted until the first run. |
-| Status | `last_status` | `"ok"` or `"error"` (empty string before the first run). |
+| Status | `last_status` | `"ok"` or `"error"` (omitted from the JSON, like `last_message`, until the first run — the stored DB value defaults to an empty string). |
 | Message | `last_message` | Human-readable outcome (bundle summary, "skipped", or the error string). |
 | Next run | `next_run_at` | When the scheduler will next fire it. Always set. |
 
@@ -204,7 +204,7 @@ curl http://localhost:8080/admin/watches
       "id": 1,
       "stream": "python",
       "label": "requests hourly",
-      "spec": "{\"requirements\":\"requests==2.32.3\"}",
+      "spec": "{\"requirements\":[\"requests==2.32.3\"]}",
       "interval_seconds": 3600,
       "enabled": true,
       "created_at": "2026-07-05T09:00:00Z",

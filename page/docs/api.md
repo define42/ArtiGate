@@ -14,7 +14,7 @@ ArtiGate is a single binary with two roles that never share routes: `artigate lo
 
 ---
 
-# LOW side
+## LOW side
 
 `LowServer.ServeHTTP` tries `serveLowAdmin`, then `serveLowUI`, else `404 not found`.
 
@@ -29,11 +29,11 @@ ArtiGate is a single binary with two roles that never share routes: `artigate lo
 | `/`, `/ui`, `/ui/` | GET/HEAD | Dashboard HTML |
 | `/ui/api/status` | GET/HEAD | Same payload as `/admin/bundles` |
 
-## Collect endpoints
+### Collect endpoints
 
 Every ecosystem exposes `POST /admin/{eco}/collect`. The dispatch is POST-only; a non-POST request falls through to UI routing. Without `?stream=1` the handler returns a single buffered JSON `ExportResult` on success, or `http.Error` at **400** on failure. An empty body is JSON-valid but every collector then rejects it for missing required fields.
 
-### Shared response — `ExportResult`
+#### Shared response — `ExportResult`
 
 ```json
 {
@@ -63,11 +63,11 @@ Every ecosystem exposes `POST /admin/{eco}/collect`. The dispatch is POST-only; 
     A dedup skip writes no bundle and burns no sequence number. The [high side](high-side.md) must not wait on a sequence that was never produced.
 
 !!! note "Which collectors populate `skipped_modules`"
-    Only **Go** and **containers** report per-item failures; the rest either fully succeed or return a top-level error. If *all* items fail, the whole request errors at 400 (e.g. Go `"no modules could be fetched: …"`, containers `"no images could be fetched: …"`) rather than writing an empty bundle.
+    **Go**, **containers**, **Python** (source-only distributions that cannot be mirrored under the wheels-only policy), and **NPM** (git-URL / otherwise-unfetchable packages) report per-item failures here. **APT**, **RPM**, and **Maven** never populate the field — they either fully succeed or return a single top-level error. If *all* items fail, the whole request errors at 400 (e.g. Go `"no modules could be fetched: …"`, containers `"no images could be fetched: …"`) rather than writing an empty bundle.
 
 ---
 
-### Go — `POST /admin/go/collect`
+#### Go — `POST /admin/go/collect`
 
 `GoCollectRequest`. Body limit **8 MiB**. See [Go modules](ecosystems/go.md).
 
@@ -96,7 +96,7 @@ Content-Type: application/json
 
 ---
 
-### Python — `POST /admin/python/collect`
+#### Python — `POST /admin/python/collect`
 
 `PythonCollectRequest`. Body limit **1 MiB**. See [Python (PyPI)](ecosystems/python.md).
 
@@ -128,7 +128,7 @@ Content-Type: application/json
 
 ---
 
-### Maven — `POST /admin/maven/collect`
+#### Maven — `POST /admin/maven/collect`
 
 `MavenCollectRequest`. Body limit **8 MiB**. See [Java (Maven)](ecosystems/maven.md).
 
@@ -145,7 +145,7 @@ Both empty → error `"no maven coordinates or pom_xml provided"`. SNAPSHOT arti
 
 ---
 
-### NPM — `POST /admin/npm/collect`
+#### NPM — `POST /admin/npm/collect`
 
 `NpmCollectRequest`. Body limit **8 MiB**. See [NPM](ecosystems/npm.md).
 
@@ -167,7 +167,7 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 
 ---
 
-### APT — `POST /admin/apt/collect`
+#### APT — `POST /admin/apt/collect`
 
 `AptCollectRequest`. Body limit **1 MiB**. See [APT (Debian/Ubuntu)](ecosystems/apt.md).
 
@@ -197,7 +197,7 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 
 ---
 
-### RPM — `POST /admin/rpm/collect`
+#### RPM — `POST /admin/rpm/collect`
 
 `RpmCollectRequest`. Body limit **1 MiB**. See [RPM (RHEL/Fedora)](ecosystems/rpm.md).
 
@@ -221,7 +221,7 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 
 ---
 
-### Containers — `POST /admin/containers/collect`
+#### Containers — `POST /admin/containers/collect`
 
 `ContainerCollectRequest`. Body limit **1 MiB**. See [Container images (OCI)](ecosystems/containers.md).
 
@@ -238,7 +238,7 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 
 ---
 
-## Streaming variant — `?stream=1`
+### Streaming variant — `?stream=1`
 
 Append `?stream=1` to any `/admin/{eco}/collect` to receive live progress as **NDJSON** (one JSON object per line). This is what the dashboard's "Collect & export" modal uses.
 
@@ -273,7 +273,7 @@ curl -N -X POST 'http://localhost:8080/admin/go/collect?stream=1' \
 
 ---
 
-## Re-export — `POST /admin/reexport`
+### Re-export — `POST /admin/reexport`
 
 Re-transmits already-produced bundles by replaying the **exact archived signed bytes** from `<root>/bundles` back into the export dir — no re-collect, no re-sign. Works for any ecosystem. Errors return **400**.
 
@@ -322,11 +322,11 @@ Response — `ReexportResult`:
 
 ---
 
-## Watches — `/admin/watches*`
+### Watches — `/admin/watches*`
 
 SQLite-backed recurring collects (`<root>/watches.db`). The scheduler tick is `--watch-interval` (default `60s`; `0` disables it), and the minimum interval floor is **1 minute**. See [Scheduling (watches)](scheduling.md).
 
-### `GET /admin/watches` — list
+#### `GET /admin/watches` — list
 
 Returns `WatchListResponse`:
 
@@ -350,7 +350,7 @@ Returns `WatchListResponse`:
 
 `Watch` fields: `id`, `stream`, `label`, `spec` (the collect payload as a JSON string), `interval_seconds`, `enabled`, `created_at`, `last_run_at` (omitempty), `last_status` (omitempty, `"ok"`/`"error"`), `last_message` (omitempty, e.g. `"no new content since last export; skipped"`), `next_run_at`.
 
-### `POST /admin/watches` — create
+#### `POST /admin/watches` — create
 
 Body `createWatchRequest`. Body limit **8 MiB**. Validation errors → **400**.
 
@@ -372,7 +372,7 @@ Body `createWatchRequest`. Body limit **8 MiB**. Validation errors → **400**.
 
 Returns the created `Watch`.
 
-### Act on a watch by id
+#### Act on a watch by id
 
 `POST /admin/watches/run`, `.../enable`, `.../disable`, `.../delete` all take a `watchIDRequest` body (limit 64 KiB):
 
@@ -389,7 +389,7 @@ Returns the created `Watch`.
 
 ---
 
-## Bundle status — `GET /admin/bundles` and `GET /ui/api/status`
+### Bundle status — `GET /admin/bundles` and `GET /ui/api/status`
 
 Both return the identical `LowBundleStatus` payload.
 
@@ -423,18 +423,18 @@ Both return the identical `LowBundleStatus` payload.
 | `exported_sequences[].in_outbound` | bool | Still staged in the export dir; **goes false once forwarded across the diode — the normal "sent" state, not an error** |
 | `exported_sequences[].size_bytes` | int64 | Sum of the archive + manifest + signature |
 
-## Health & dashboard
+### Health & dashboard
 
 - `GET /healthz` → body `ok\n`, no JSON.
 - `GET /`, `/ui`, `/ui/` → the self-contained HTML dashboard (tabs: Overview / Go / Python / Maven / NPM / APT / RPM / Containers). Non-read methods → **405**.
 
 ---
 
-# HIGH side
+## HIGH side
 
 `HighServer.ServeHTTP` tries, in order: `serveHighAdmin`, `serveGo`, `servePython`, `serveMaven`, `serveApt`, `serveRpm`, `serveContainers`, `serveNpm`, `serveUI`; unclaimed → `404`. Every ecosystem handler is **read-only** (GET/HEAD; others → `405`, or a registry error for containers). The high side never fetches upstream and never invokes toolchains — it serves imported bundle contents from disk. See [High side](high-side.md).
 
-## Admin & health
+### Admin & health
 
 | Route | Method | Returns |
 |---|---|---|
@@ -484,11 +484,11 @@ Both return the identical `LowBundleStatus` payload.
 
 ---
 
-## Serving endpoints
+### Serving endpoints
 
 Each ecosystem owns a URL prefix. Point clients at the high-side base URL; see the per-ecosystem pages for full client configuration.
 
-### Go (GOPROXY) — prefix `/go`
+#### Go (GOPROXY) — prefix `/go`
 
 Client: `GOPROXY=<base>/go,off`, `GOSUMDB=off`. Standard GOPROXY protocol. See [Go modules](ecosystems/go.md).
 
@@ -503,7 +503,7 @@ Client: `GOPROXY=<base>/go,off`, `GOSUMDB=off`. Standard GOPROXY protocol. See [
 
 Only these extensions are served; anything else → `404`.
 
-### Python (PEP 503 simple index) — prefixes `/simple`, `/packages/`
+#### Python (PEP 503 simple index) — prefixes `/simple`, `/packages/`
 
 Client: `pip install --index-url <base>/simple <pkg>`. See [Python (PyPI)](ecosystems/python.md).
 
@@ -513,25 +513,25 @@ Client: `pip install --index-url <base>/simple <pkg>`. See [Python (PyPI)](ecosy
 | `/simple/<project>/` | HTML "Links for `<project>`" with `<a href="/packages/<file>#sha256=<hash>">` per wheel/sdist |
 | `/packages/<filename>` | The file (no slashes allowed in `<filename>`) |
 
-### Maven — prefix `/maven`
+#### Maven — prefix `/maven`
 
 Client: use `<base>/maven/` as a repository URL. See [Java (Maven)](ecosystems/maven.md).
 
 Serves the Maven-2 layout directly: `/maven/<group/as/path>/<artifact>/<version>/<file>`. `maven-metadata.xml` (and its `.sha1`/`.md5`) is **computed on the fly** for the enclosing group/artifact directory.
 
-### APT — prefix `/apt`
+#### APT — prefix `/apt`
 
 Client `sources.list` URI: `<base>/apt/<mirror-name>`. See [APT (Debian/Ubuntu)](ecosystems/apt.md).
 
 Static serving of the mirrored `dists/`, `pool/`, `Release`, `InRelease`, `Packages*`, etc.
 
-### RPM — prefix `/rpm`
+#### RPM — prefix `/rpm`
 
 Client `baseurl=<base>/rpm/<repo-name>`. See [RPM (RHEL/Fedora)](ecosystems/rpm.md).
 
 Static serving of `repodata/` plus the RPMs.
 
-### Containers (OCI / Docker Registry v2) — prefix `/v2`
+#### Containers (OCI / Docker Registry v2) — prefix `/v2`
 
 Client: `docker pull <high-side-host>/<repo>:<tag>`. See [Container images (OCI)](ecosystems/containers.md).
 
@@ -545,7 +545,7 @@ Client: `docker pull <high-side-host>/<repo>:<tag>`. See [Container images (OCI)
 
 Non-read methods reply with a registry-style error `UNSUPPORTED "read-only registry"`; invalid names → `NAME_INVALID`.
 
-### NPM — prefix `/npm`
+#### NPM — prefix `/npm`
 
 Client: `npm config set registry <base>/npm/`. See [NPM](ecosystems/npm.md).
 
@@ -557,11 +557,11 @@ Client: `npm config set registry <base>/npm/`. See [NPM](ecosystems/npm.md).
 
 ---
 
-## Dashboard JSON — `/ui/api/*`
+### Dashboard JSON — `/ui/api/*`
 
 `serveUI` handles `/`, `/ui`, `/ui/` (dashboard HTML), `/ui/app.js`, and the four JSON endpoints below. All are GET/HEAD only (else **405**).
 
-### `GET /ui/api/overview` → `UIOverview`
+#### `GET /ui/api/overview` → `UIOverview`
 
 ```json
 { "status": { "streams": [ /* ...ImportStatus... */ ] } }
@@ -569,7 +569,7 @@ Client: `npm config set registry <base>/npm/`. See [NPM](ecosystems/npm.md).
 
 Just the import status; the package trees are fetched lazily.
 
-### `GET /ui/api/tree?eco=<eco>&path=<path>`
+#### `GET /ui/api/tree?eco=<eco>&path=<path>`
 
 `eco` ∈ `go` (default), `python`, `maven`, `apt`, `rpm`, `containers`, `npm`. `path` is the parent node path (empty for root); children are returned one level at a time.
 
@@ -587,7 +587,7 @@ Just the import status; the package trees are fetched lazily.
 
 Inventory is memoized for **3 seconds**, so freshly imported content appears within that window.
 
-### `GET /ui/api/detail?eco=<eco>&path=<path>` → `UIDetail`
+#### `GET /ui/api/detail?eco=<eco>&path=<path>` → `UIDetail`
 
 `path` = `module@version` for Go, a wheel filename for Python, a coordinate/ref per ecosystem. Not found → **404**.
 
@@ -611,7 +611,7 @@ Inventory is memoized for **3 seconds**, so freshly imported content appears wit
 | `copy_ref` | string | omitempty; a host-relative container pull ref the client prepends its host to |
 | `layers` | `[]UIImageLayer` | omitempty; container build history — `{command, size, digest, empty}` |
 
-### `GET /ui/api/repos?eco=<eco>` → `UIReposResponse`
+#### `GET /ui/api/repos?eco=<eco>` → `UIReposResponse`
 
 Valid only for `eco` ∈ `apt | rpm | containers`; anything else → **400** `"repos are only available for apt, rpm, and containers"`.
 

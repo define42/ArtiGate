@@ -3,7 +3,7 @@
 ArtiGate is a single Go binary that mirrors package ecosystems across a one-way data diode. This page is the deep model: how a low-side *exporter* turns upstream artifacts into signed, sequenced **bundles**, how those bundles cross the diode, and how a high-side *importer* verifies them and rebuilds every repository index from the artifacts themselves — trusting nothing that was transferred except bytes that pass an Ed25519 signature and a SHA-256 hash.
 
 !!! note "Two design constraints drive everything below"
-    - **Stdlib-only**, with exactly two dependencies: pure-Go SQLite (`modernc.org/sqlite`) for the [watch scheduler](scheduling.md) and the export-dedup index, and `hashicorp/go-version` for [container](ecosystems/containers.md) tag constraints.
+    - **Lean on the stdlib.** The core mirroring pipeline uses only two third-party dependencies: pure-Go SQLite (`modernc.org/sqlite`) for the [watch scheduler](scheduling.md) and the export-dedup index, and `hashicorp/go-version` for [container](ecosystems/containers.md) tag constraints. The optional TLS and login/auth features add three more: `caddyserver/certmagic` for automatic HTTPS, `gorilla/securecookie` for login sessions, and `golang.org/x/crypto` for argon2id auth hashes — five direct dependencies in all, linked into the single binary.
     - **The low side delegates fetching** to the installed `go` / `git` / `pip` / `mvn` / `npm` toolchains. **The high side never invokes them and never reaches upstream.** It only serves what crossed the diode.
 
 ## The big picture
@@ -275,7 +275,7 @@ This is the heart of ArtiGate. The high side treats **the artifacts themselves a
 
 ## On-disk layout: content-addressed container blob store
 
-The [container store](ecosystems/containers.md) is a good illustration of the on-disk model. Blobs are **content-addressed and shared across all repositories** — a layer used by ten images is stored once — using **3-character sharding** so no single directory holds millions of entries (`16³ = 4096` shard dirs, the same scheme Docker's registry and git use):
+The [container store](ecosystems/containers.md) is a good illustration of the on-disk model. Blobs are **content-addressed and shared across all repositories** — a layer used by ten images is stored once — using **3-character sharding** so no single directory holds millions of entries (`16³ = 4096` shard dirs — the same prefix-sharding idea git and Docker's registry use, though they shard on the first two hex chars while ArtiGate uses three):
 
 ```text
 <root>/cache/download/containers/

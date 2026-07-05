@@ -7,7 +7,7 @@ ArtiGate is a single Go binary with four subcommands (`keygen`, `low`, `high`, `
 
 ## Build from source
 
-ArtiGate has **no third-party runtime dependencies** beyond the Go standard library (with two small pure-Go exceptions vendored for SQLite watches and container tag constraints), so a build is quick.
+ArtiGate leans heavily on the Go standard library, with a handful of small pure-Go modules: `modernc.org/sqlite` for watches, `hashicorp/go-version` for container tag constraints, `caddyserver/certmagic` for ACME/TLS, `gorilla/securecookie` for login sessions, and `golang.org/x/crypto` for argon2id password hashing. These are ordinary `go.mod` requires (no `vendor/` directory), so a build is quick.
 
 ```bash
 # The default make target builds the binary into ./artigate
@@ -67,7 +67,7 @@ A one-shot `keygen` service runs first and creates the Ed25519 signing key pair 
 artigate keygen --private /keys/low.ed25519 --public /keys/high.ed25519.pub
 ```
 
-It is **idempotent** (guarded by `test -f`, so it never overwrites existing keys). The low side mounts the private key read-only and signs bundles with it; the high side mounts only the public key read-only and verifies with it. `make stop` keeps the `keys` volume so a later `make run` continues the same sequence chain; `make reset` wipes it for a clean start.
+It is **idempotent** (guarded by `test -f`, so it never overwrites existing keys). The low side mounts the private key read-only and signs bundles with it; the high side is given only the public key via `--public-key` and verifies with it. (For convenience the demo shares one `keys` volume read-only across both services, so the private key is physically present in the high container too but never referenced; a real physically-separated deployment copies only the `.pub` across.) `make stop` keeps the `keys` volume so a later `make run` continues the same sequence chain; `make reset` wipes it for a clean start.
 
 !!! note "The high side is never authenticated"
     Only the low-side dashboard can require a login (via `ARTIGATE_LOW_AUTH`, disabled by default in the demo). The high side has no auth of its own — protect it with network placement or a fronting proxy. See [Security & trust](security.md).

@@ -134,7 +134,7 @@ Reported skips appear in the collect result's `SkippedModules` with a per-module
 
 ## Low side: download and integrity verification
 
-Each resolved entry's tarball is downloaded over plain HTTP from its `resolved` URL and stored at `npm/packages/<name>/<base>-<version>.tgz` (scoped names keep the `@scope/` directory).
+Each resolved entry's tarball is downloaded over HTTP(S) from its `resolved` URL and stored at `npm/packages/<name>/<base>-<version>.tgz` (scoped names keep the `@scope/` directory).
 
 - **Per-tarball timeout: 10 minutes.** Non-200 responses fail with `GET <url>: HTTP <code>`.
 - **Per-tarball size cap: 2 GiB.**

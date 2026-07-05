@@ -77,7 +77,7 @@ There are **two distinct mechanisms** — do not conflate them.
 
 ### 1. Serving-side hard rule (always on)
 
-During collection ArtiGate walks pip's download directory: `*.whl` files are hashed and bundled; **anything else is treated as a source distribution and recorded as skipped**, never bundled:
+During collection ArtiGate walks pip's download directory: `*.whl` files are hashed and bundled; **a recognized source-distribution archive (`.tar.gz`, `.tgz`, `.tar.bz2`, `.tar.xz`, `.zip`) is recorded as skipped**, never bundled:
 
 ```text
 no wheel available (source distribution only); not mirrored
@@ -192,7 +192,7 @@ Served as legacy PEP 503 **HTML** with `Content-Type: text/html; charset=utf-8` 
 
 ### Project page — `/simple/<project>/`
 
-The path segment is PEP 503-normalized, so lookups are **case- and separator-insensitive**: `/simple/Requests/`, `/simple/requests/`, and `/simple/req.uests/` all resolve to the same project. If no wheel matches, it returns `404 not found`.
+The path segment is PEP 503-normalized (lowercase; runs of `-`, `_`, `.` collapse to a single `-`), so lookups are **case- and separator-insensitive**: `/simple/typing_extensions/`, `/simple/Typing-Extensions/`, and `/simple/typing.extensions/` all resolve to the same project (`typing-extensions`). If no wheel matches, it returns `404 not found`.
 
 Each link's `href` includes the SHA-256 as a URL fragment (the PEP 503 hash), computed live from the file on disk:
 
