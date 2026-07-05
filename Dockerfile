@@ -21,17 +21,18 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/artigate ./cmd/art
 # Runtime stage.
 #
 # The `low` mode shells out to `go` and `git` (Go modules), `pip` (Python
-# wheels), `mvn` (Java/Maven artifacts), `gpgv` (verifying upstream APT/RPM
-# repositories), and `xz` (decompressing some RPM indexes), so the runtime image
-# ships the Go toolchain, git, python3/pip, Maven + a JDK, gnupg, and xz. APT and
-# RPM package files are fetched over HTTP with the Go standard library. The
+# wheels), `mvn` (Java/Maven artifacts), `npm` (NPM dependency resolution),
+# `gpgv` (verifying upstream APT/RPM repositories), and `xz` (decompressing
+# some RPM indexes), so the runtime image ships the Go toolchain, git,
+# python3/pip, Maven + a JDK, nodejs/npm, gnupg, and xz. APT, RPM, NPM, and
+# container files are fetched over HTTP with the Go standard library. The
 # `high` mode uses gnupg only when signing regenerated APT/RPM repositories
 # (--apt-gpg-key / --rpm-gpg-key); otherwise it needs none of them, so a
 # high-only deployment can use a slimmer image with just the binary + gnupg.
 # -----------------------------------------------------------------------------
 FROM golang:1.25-alpine
 
-RUN apk add --no-cache git ca-certificates openssh-client python3 py3-pip maven openjdk17-jre-headless gnupg xz \
+RUN apk add --no-cache git ca-certificates openssh-client python3 py3-pip maven openjdk17-jre-headless nodejs npm gnupg xz \
     && addgroup -S artigate \
     && adduser -S -G artigate -h /home/artigate artigate
 

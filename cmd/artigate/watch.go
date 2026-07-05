@@ -337,6 +337,8 @@ func (s *LowServer) runWatchCollect(ctx context.Context, stream, spec string) (E
 		return decodeAndCollect(ctx, b, s.CollectRpm)
 	case streamContainers:
 		return decodeAndCollect(ctx, b, s.CollectContainers)
+	case streamNpm:
+		return decodeAndCollect(ctx, b, s.CollectNpm)
 	default:
 		return ExportResult{}, fmt.Errorf("unknown stream %q", stream)
 	}

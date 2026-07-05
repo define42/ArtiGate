@@ -116,6 +116,7 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="go" onclick="setView('go')">Go</button>
     <button type="button" data-view="python" onclick="setView('python')">Python</button>
     <button type="button" data-view="java" onclick="setView('java')">Java</button>
+    <button type="button" data-view="npm" onclick="setView('npm')">NPM</button>
     <button type="button" data-view="apt" onclick="setView('apt')">APT</button>
     <button type="button" data-view="rpm" onclick="setView('rpm')">RPM</button>
     <button type="button" data-view="containers" onclick="setView('containers')">Containers</button>
@@ -216,6 +217,32 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   </section>
 
+  <section class="view" id="view-npm" hidden>
+  <div class="card">
+    <h2>Mirror NPM packages</h2>
+    <p class="hint">List packages to mirror &mdash; one per line: <code>lodash@4.17.21</code> to pin, a bare <code>lodash</code> (or <code>lodash@latest</code>) for the newest version, or a semver range like <code>react@^18.2</code>; scoped names (<code>@types/node</code>) work too. The full dependency graph is resolved with <code>npm</code> (scripts never run) and every registry tarball is bundled. <em>Or</em> upload a project's <code>package.json</code> to mirror exactly what that project resolves. Same as POSTing to <code>/admin/npm/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectNpm(event)">
+      <label class="filelabel">Packages <span class="opt">&mdash; one per line; name, name@version, or name@range</span>
+        <textarea id="npmpkgs" rows="4" placeholder="lodash@4.17.21&#10;@types/node&#10;react@^18.2" autocomplete="off"></textarea>
+      </label>
+      <label class="filelabel">&hellip;or upload a package.json <span class="opt">&mdash; mirrors exactly that project's graph</span>
+        <input id="npmjson" type="file" accept=".json,application/json">
+      </label>
+      <label class="filelabel">package-lock.json <span class="opt">&mdash; optional, with package.json; pins the exact resolved versions</span>
+        <input id="npmlock" type="file" accept=".json,application/json">
+      </label>
+      <button class="primary" type="submit" id="npmBtn">Collect &amp; export</button>
+    </form>
+    <div id="npmResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="npmEvery" type="number" min="1" value="1" autocomplete="off"> <select id="npmUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleNpm()">Add schedule</button>
+    </div>
+    <div id="npmWatches" class="watchlist"></div>
+  </div>
+  </section>
+
   <section class="view" id="view-apt" hidden>
   <div class="card">
     <h2>Mirror an APT (deb) repository</h2>
@@ -293,6 +320,7 @@ const lowUIHTML = `<!DOCTYPE html>
         <option value="go">Go</option>
         <option value="python">Python</option>
         <option value="maven">Maven</option>
+        <option value="npm">NPM</option>
         <option value="apt">APT</option>
         <option value="rpm">RPM</option>
         <option value="containers">Containers</option>
@@ -314,7 +342,7 @@ const lowUIHTML = `<!DOCTYPE html>
 // If the session has expired, any API call returns 401; bounce to the login page.
 (function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',apt:'APT',rpm:'RPM',containers:'Containers'})[name]||name;}
+function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers'})[name]||name;}
 function formatBytes(n){
   n=Number(n)||0;
   const u=['B','KiB','MiB','GiB','TiB'];
@@ -327,9 +355,9 @@ function formatBytes(n){
 // the active nav button. The status page is refreshed each time it is opened.
 // VIEW_STREAM maps a nav view to its backend stream (the Java page is the maven
 // stream). Views without a stream (status) are absent.
-const VIEW_STREAM={go:'go',python:'python',java:'maven',apt:'apt',rpm:'rpm',containers:'containers'};
+const VIEW_STREAM={go:'go',python:'python',java:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers'};
 function setView(view){
-  for(const v of ['overview','go','python','java','apt','rpm','containers','status']){
+  for(const v of ['overview','go','python','java','npm','apt','rpm','containers','status']){
     document.getElementById('view-'+v).hidden = (v!==view);
   }
   document.querySelectorAll('nav button[data-view]').forEach(b=>{
@@ -533,6 +561,64 @@ async function collectMaven(ev){
   finally{ btn.disabled=false; btn.textContent=label; }
 }
 
+function showNpmResult(cls, html){
+  const el=document.getElementById('npmResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+// npmSpec builds the /admin/npm/collect payload from the NPM page inputs: a
+// package list or an uploaded package.json (with an optional package-lock.json).
+// Returns {spec, label}, or null when nothing is entered.
+async function npmSpec(){
+  const jsonFile=document.getElementById('npmjson').files[0];
+  if(jsonFile){
+    const package_json=await jsonFile.text();
+    const lockFile=document.getElementById('npmlock').files[0];
+    const package_lock=lockFile ? await lockFile.text() : '';
+    return {spec:{package_json:package_json, package_lock:package_lock}, label:'NPM: '+jsonFile.name};
+  }
+  const pkgs=document.getElementById('npmpkgs').value.split(/\r?\n/)
+    .map(s=>s.replace(/\s+#.*$/,'').trim()).filter(l=>l && l.charAt(0)!=='#');
+  if(pkgs.length){
+    return {spec:{packages:pkgs}, label:'NPM: '+pkgs.slice(0,3).join(', ')};
+  }
+  return null;
+}
+
+async function collectNpm(ev){
+  ev.preventDefault();
+  const built=await npmSpec();
+  if(!built){ showNpmResult('err','List at least one package, or upload a package.json.'); return; }
+  const btn=document.getElementById('npmBtn');
+  const label=btn.textContent;
+  btn.disabled=true; btn.textContent='Collecting…';
+  showNpmResult('busy','Resolving the dependency graph with npm and downloading tarballs… this can take a while for a large project.');
+  try{
+    const r=await fetch('/admin/npm/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(built.spec)});
+    const text=await r.text();
+    if(!r.ok){ showNpmResult('err','Error: '+esc(text.trim())); return; }
+    const d=JSON.parse(text);
+    let msg='&#10003; Collected '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
+    const skipped=d.skipped_modules||[];
+    if(skipped.length){
+      msg+='<br>&#9888; Skipped '+esc(skipped.length)+' package(s) that could not be mirrored:<ul>'+
+        skipped.map(m=>'<li><code>'+esc(m.module)+'@'+esc(m.version)+'</code> &mdash; '+esc(m.error)+'</li>').join('')+'</ul>';
+      showNpmResult('warn', msg);
+    } else {
+      showNpmResult('ok', msg);
+    }
+    loadStatus();
+  }catch(e){ showNpmResult('err','Request failed: '+esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent=label; }
+}
+
+async function scheduleNpm(){
+  const built=await npmSpec();
+  if(!built){ showNpmResult('err','List at least one package, or upload a package.json, to schedule.'); return; }
+  createWatch('npm', built.label, built.spec, 'npmEvery','npmUnit', showNpmResult);
+}
+
 function showAptResult(cls, html){
   const el=document.getElementById('aptResult');
   el.className='rbox '+cls;
@@ -659,8 +745,8 @@ async function loadStatus(){
 // ---- Schedules (watches) ----
 // Each ecosystem page schedules a recurring collect from its own inputs, so the
 // spec built here is exactly what that page's collect button would POST.
-const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches'};
-const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult};
+const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',npm:'npmWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches'};
+const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,npm:showNpmResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult};
 
 function intervalSeconds(everyId, unitId){
   const n=parseInt(document.getElementById(everyId).value,10);

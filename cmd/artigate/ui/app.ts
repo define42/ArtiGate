@@ -64,7 +64,7 @@ interface Detail {
   layers?: ImageLayer[];
 }
 
-type View = "overview" | "go" | "python" | "maven" | "apt" | "rpm" | "containers";
+type View = "overview" | "go" | "python" | "maven" | "npm" | "apt" | "rpm" | "containers";
 
 // RepoEco are the views whose content is set up per mirrored repository (each
 // top-level tree node gets its own "Set me up" button).
@@ -75,6 +75,7 @@ const VIEW_TITLES: Record<View, string> = {
   go: "Go modules",
   python: "Python packages",
   maven: "Maven artifacts",
+  npm: "NPM packages",
   apt: "APT packages",
   rpm: "RPM packages",
   containers: "Container images",
@@ -119,6 +120,7 @@ const STREAM_LABELS: Record<string, string> = {
   go: "Go",
   python: "Python",
   maven: "Maven",
+  npm: "NPM",
   apt: "APT",
   rpm: "RPM",
   containers: "Containers",
@@ -612,6 +614,26 @@ function pythonGuideSection(base: string): GuideSection {
   };
 }
 
+function npmGuideSection(base: string): GuideSection {
+  return {
+    heading: "NPM packages",
+    body:
+      "Use this mirror as npm's only registry. It serves the npm registry API " +
+      "under /npm/, with integrity hashes regenerated from the imported tarballs.",
+    blocks: [
+      {
+        label: "~/.npmrc  (or /etc/npmrc, or per-project .npmrc)",
+        code: `registry=${base}/npm/\naudit=false\nfund=false\nupdate-notifier=false`,
+      },
+      { label: "Install", code: "npm install" },
+    ],
+    note:
+      "audit is off because the security-advisory endpoint needs the public " +
+      "registry. Do not mix in another registry — this mirror is the single " +
+      "source of truth. Only registry tarballs are mirrored (no git dependencies).",
+  };
+}
+
 function mavenGuideSection(base: string): GuideSection {
   return {
     heading: "Java (Maven / Gradle)",
@@ -887,7 +909,9 @@ function openGuide(): void {
         ? pythonGuideSection(base)
         : currentView === "maven"
           ? mavenGuideSection(base)
-          : goGuideSection(base);
+          : currentView === "npm"
+            ? npmGuideSection(base)
+            : goGuideSection(base);
     renderGuideSections(body, [section]);
   }
   if (!dialog.open) {

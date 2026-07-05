@@ -4,8 +4,8 @@
 // It intentionally sticks to the Go standard library (the only exceptions:
 // pure-Go SQLite for scheduled watches and hashicorp/go-version for container
 // tag constraints). The low side delegates fetching to the installed
-// `go`/`git`/`pip`/`mvn` tools; the high side never invokes them and never
-// fetches upstream.
+// `go`/`git`/`pip`/`mvn`/`npm` tools; the high side never invokes them and
+// never fetches upstream.
 package main
 
 import (
@@ -55,12 +55,13 @@ const (
 	streamApt        = "apt"
 	streamRpm        = "rpm"
 	streamContainers = "containers"
+	streamNpm        = "npm"
 )
 
 // knownStreams is the set of built-in ecosystem streams, shown in the low-side
 // status even before anything has been exported.
 func knownStreams() []string {
-	return []string{streamGo, streamPython, streamMaven, streamApt, streamRpm, streamContainers}
+	return []string{streamGo, streamPython, streamMaven, streamApt, streamRpm, streamContainers, streamNpm}
 }
 
 func main() {
@@ -112,7 +113,7 @@ High-side clients:
   GOSUMDB=off
 
 Useful admin endpoints:
-  low:  POST /admin/{go,python,maven,apt,rpm,containers}/collect
+  low:  POST /admin/{go,python,maven,apt,rpm,containers,npm}/collect
   low:  POST /admin/reexport?stream=go&sequences=42,45-47
   low:  GET  /admin/bundles
   high: POST /admin/import
@@ -152,6 +153,7 @@ type BundleManifest struct {
 	Apt              *AptManifest       `json:"apt,omitempty"`
 	Rpm              *RpmManifest       `json:"rpm,omitempty"`
 	Containers       *ContainerManifest `json:"containers,omitempty"`
+	Npm              *NpmManifest       `json:"npm,omitempty"`
 	Files            []ManifestFile     `json:"files"`
 }
 
@@ -262,7 +264,11 @@ type LowConfig struct {
 	GoToolchain     string
 	PipBinary       string
 	MavenBinary     string
-	WatchInterval   time.Duration
+	NpmBinary       string
+	// NpmRegistry optionally overrides the registry npm resolves against
+	// (passed as --registry); empty uses npm's configured default.
+	NpmRegistry   string
+	WatchInterval time.Duration
 	// ContainerRegistries optionally remaps container registry names to the
 	// endpoints they are fetched from, as comma-separated host=baseURL pairs.
 	ContainerRegistries string
@@ -334,6 +340,8 @@ func runLow(args []string) {
 	fs.StringVar(&cfg.GoToolchain, "gotoolchain", "auto", "GOTOOLCHAIN for the low-side fetcher; \"auto\" lets go download a newer toolchain when a module requires one, \"local\" pins the installed toolchain")
 	fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
 	fs.StringVar(&cfg.MavenBinary, "maven", "mvn", "maven command used to resolve Java/Maven artifacts")
+	fs.StringVar(&cfg.NpmBinary, "npm", "npm", "npm command used to resolve NPM package graphs")
+	fs.StringVar(&cfg.NpmRegistry, "npm-registry", "", "registry URL npm resolves against (default: npm's own configuration)")
 	fs.StringVar(&cfg.ContainerRegistries, "container-registry", "", "comma-separated host=baseURL overrides for container registries (e.g. docker.io=https://mirror.example.com)")
 	fs.DurationVar(&cfg.WatchInterval, "watch-interval", 60*time.Second, "how often the scheduler checks for due watches; 0 disables scheduled watches")
 	_ = fs.Parse(args)
@@ -491,6 +499,8 @@ func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool
 		res, err = s.HandleRpmCollect(r.Context(), r)
 	case "/admin/containers/collect":
 		res, err = s.HandleContainerCollect(r.Context(), r)
+	case "/admin/npm/collect":
+		res, err = s.HandleNpmCollect(r.Context(), r)
 	default:
 		return false
 	}
@@ -1560,26 +1570,15 @@ func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
 }
 
 func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if s.serveHighAdmin(w, r) {
-		return
-	}
-	if s.servePython(w, r) {
-		return
-	}
-	if s.serveMaven(w, r) {
-		return
-	}
-	if s.serveApt(w, r) {
-		return
-	}
-	if s.serveRpm(w, r) {
-		return
-	}
-	if s.serveContainers(w, r) {
-		return
-	}
-	if s.serveUI(w, r) {
-		return
+	// Each ecosystem's server claims its own URL space and reports whether it
+	// handled the request; anything unclaimed falls through to the GOPROXY.
+	for _, serve := range []func(http.ResponseWriter, *http.Request) bool{
+		s.serveHighAdmin, s.servePython, s.serveMaven, s.serveApt,
+		s.serveRpm, s.serveContainers, s.serveNpm, s.serveUI,
+	} {
+		if serve(w, r) {
+			return
+		}
 	}
 
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -2106,6 +2105,7 @@ func validateManifestCompleteness(m BundleManifest) error {
 		{m.Apt != nil && len(m.Apt.Mirrors) > 0, func(s map[string]bool) error { return validateAptMirrors(m.Apt.Mirrors, s) }},
 		{m.Rpm != nil && len(m.Rpm.Mirrors) > 0, func(s map[string]bool) error { return validateRpmMirrors(m.Rpm.Mirrors, s) }},
 		{m.Containers != nil && len(m.Containers.Repos) > 0, func(s map[string]bool) error { return validateContainerRepos(m.Containers.Repos, s, m.Files) }},
+		{m.Npm != nil && len(m.Npm.Packages) > 0, func(s map[string]bool) error { return validateNpmPackages(m.Npm.Packages, s) }},
 	}
 	matched := false
 	for _, e := range ecosystems {
@@ -2118,7 +2118,7 @@ func validateManifestCompleteness(m BundleManifest) error {
 		}
 	}
 	if !matched {
-		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, or container repos")
+		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, container repos, or npm packages")
 	}
 	return nil
 }
@@ -2172,6 +2172,11 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 		return err
 	}
 	if err := s.publishContainers(manifest.Containers); err != nil {
+		return err
+	}
+	// Regenerate the served npm metadata from each tarball's own embedded
+	// package.json (never trusting a transferred packument).
+	if err := s.publishNpm(manifest.Npm); err != nil {
 		return err
 	}
 	// Complete markers are written only after all files are installed.

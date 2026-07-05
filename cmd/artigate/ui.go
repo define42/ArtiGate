@@ -73,6 +73,7 @@ type treeCache struct {
 	apt        []UIModule
 	rpm        []UIModule
 	containers []UIModule
+	npm        []UIModule
 }
 
 func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
@@ -203,6 +204,10 @@ func (s *HighServer) handleUITree(w http.ResponseWriter, r *http.Request) {
 		nodes = goTreeChildren(lists.rpm, path)
 	case "containers":
 		nodes = goTreeChildren(lists.containers, path)
+	case "npm":
+		// npm names are flat (a scope is part of the name, not a directory), so
+		// the two-level package -> versions tree applies.
+		nodes = npmTreeChildren(lists.npm, path)
 	default:
 		nodes = goTreeChildren(lists.mods, path)
 	}
@@ -217,6 +222,7 @@ type ecoLists struct {
 	apt        []UIModule
 	rpm        []UIModule
 	containers []UIModule
+	npm        []UIModule
 }
 
 // cachedLists returns the mirrored inventory across ecosystems, memoized for a
@@ -225,7 +231,7 @@ func (s *HighServer) cachedLists() (ecoLists, error) {
 	s.tree.mu.Lock()
 	defer s.tree.mu.Unlock()
 	if time.Now().Before(s.tree.expiry) {
-		return ecoLists{mods: s.tree.mods, python: s.tree.python, maven: s.tree.maven, apt: s.tree.apt, rpm: s.tree.rpm, containers: s.tree.containers}, nil
+		return ecoLists{mods: s.tree.mods, python: s.tree.python, maven: s.tree.maven, apt: s.tree.apt, rpm: s.tree.rpm, containers: s.tree.containers, npm: s.tree.npm}, nil
 	}
 	mods, err := s.listGoModules()
 	if err != nil {
@@ -251,9 +257,13 @@ func (s *HighServer) cachedLists() (ecoLists, error) {
 	if err != nil {
 		return ecoLists{}, err
 	}
-	s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt, s.tree.rpm, s.tree.containers = mods, python, maven, apt, rpm, containers
+	npm, err := s.listNpmPackages()
+	if err != nil {
+		return ecoLists{}, err
+	}
+	s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt, s.tree.rpm, s.tree.containers, s.tree.npm = mods, python, maven, apt, rpm, containers, npm
 	s.tree.expiry = time.Now().Add(3 * time.Second)
-	return ecoLists{mods: mods, python: python, maven: maven, apt: apt, rpm: rpm, containers: containers}, nil
+	return ecoLists{mods: mods, python: python, maven: maven, apt: apt, rpm: rpm, containers: containers, npm: npm}, nil
 }
 
 // goTreeChildren returns the immediate children of prefix in the Go module path
@@ -370,7 +380,7 @@ func pythonTreeChildren(projects []UIProject, path string) []UITreeNode {
 // ecosystem's subtree of the shared repository root, which the Go module walk
 // must skip.
 func isNonGoRepoTree(moduleEsc string) bool {
-	for _, eco := range []string{"python", "maven", "apt", "rpm", "containers"} {
+	for _, eco := range []string{"python", "maven", "apt", "rpm", "containers", "npm"} {
 		if moduleEsc == eco || strings.HasPrefix(moduleEsc, eco+"/") {
 			return true
 		}
@@ -506,6 +516,8 @@ func (s *HighServer) handleUIDetail(w http.ResponseWriter, r *http.Request) {
 		detail, err = s.rpmDetail(path)
 	case "containers":
 		detail, err = s.containerDetail(path)
+	case "npm":
+		detail, err = s.npmDetail(path)
 	default:
 		detail, err = s.goDetail(path)
 	}

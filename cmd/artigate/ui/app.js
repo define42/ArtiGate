@@ -8,6 +8,7 @@ const VIEW_TITLES = {
     go: "Go modules",
     python: "Python packages",
     maven: "Maven artifacts",
+    npm: "NPM packages",
     apt: "APT packages",
     rpm: "RPM packages",
     containers: "Container images",
@@ -47,6 +48,7 @@ const STREAM_LABELS = {
     go: "Go",
     python: "Python",
     maven: "Maven",
+    npm: "NPM",
     apt: "APT",
     rpm: "RPM",
     containers: "Containers",
@@ -468,6 +470,23 @@ function pythonGuideSection(base) {
             "dependency-confusion risk. This mirror is the single source of truth.",
     };
 }
+function npmGuideSection(base) {
+    return {
+        heading: "NPM packages",
+        body: "Use this mirror as npm's only registry. It serves the npm registry API " +
+            "under /npm/, with integrity hashes regenerated from the imported tarballs.",
+        blocks: [
+            {
+                label: "~/.npmrc  (or /etc/npmrc, or per-project .npmrc)",
+                code: `registry=${base}/npm/\naudit=false\nfund=false\nupdate-notifier=false`,
+            },
+            { label: "Install", code: "npm install" },
+        ],
+        note: "audit is off because the security-advisory endpoint needs the public " +
+            "registry. Do not mix in another registry — this mirror is the single " +
+            "source of truth. Only registry tarballs are mirrored (no git dependencies).",
+    };
+}
 function mavenGuideSection(base) {
     return {
         heading: "Java (Maven / Gradle)",
@@ -719,7 +738,9 @@ function openGuide() {
             ? pythonGuideSection(base)
             : currentView === "maven"
                 ? mavenGuideSection(base)
-                : goGuideSection(base);
+                : currentView === "npm"
+                    ? npmGuideSection(base)
+                    : goGuideSection(base);
         renderGuideSections(body, [section]);
     }
     if (!dialog.open) {

@@ -3,20 +3,22 @@
 [![codecov](https://codecov.io/gh/define42/ArtiGate/graph/badge.svg?token=RBKT8U26R8)](https://codecov.io/gh/define42/ArtiGate)
 
 ArtiGate is a dependency mirror for **one-way data-diode networks**. It mirrors
-Go modules, Python (PyPI) wheels, Java (Maven) artifacts, APT (`.deb`) and RPM
-(`.rpm`) repositories, and container images (Docker/OCI, linux/amd64) from the
-internet into an air-gapped network, and serves them there in each ecosystem's
-native format.
+Go modules, Python (PyPI) wheels, Java (Maven) artifacts, NPM packages, APT
+(`.deb`) and RPM (`.rpm`) repositories, and container images (Docker/OCI,
+linux/amd64) from the internet into an air-gapped network, and serves them
+there in each ecosystem's native format.
 
 One binary, two modes:
 
 - **`low`** — runs on the internet side. From its web dashboard you give it a spec
-  (a `go.mod` or module list, a Python requirements list, Maven coordinates, an
-  APT source, a `.repo`, or a list of container images); it fetches the artifacts
-  from upstream and writes **signed, numbered bundle files**.
+  (a `go.mod` or module list, a Python requirements list, Maven coordinates, a
+  `package.json` or NPM package list, an APT source, a `.repo`, or a list of
+  container images); it fetches the artifacts from upstream and writes **signed,
+  numbered bundle files**.
 - **`high`** — runs air-gapped. It imports the bundles (in order, verifying every
   signature and hash) and serves them as a GOPROXY, a PyPI index, a Maven 2
-  repository, APT/RPM repositories, and a read-only OCI container registry.
+  repository, an NPM registry, APT/RPM repositories, and a read-only OCI
+  container registry.
 
 ```
   spec ──▶ [ low ] ──▶ signed bundles ──▶ ((diode)) ──▶ [ high ] ──▶ clients
@@ -148,9 +150,9 @@ the export directory (three files per bundle: `.tar.gz`, `.manifest.json`,
 `.manifest.json.sig`).
 
 Fetching uses the host's normal tools and credentials (`go`/`git`, `pip`, `mvn`,
-`gpgv`). For private Go modules, configure the service user's Git/SSH before
-starting. `--gotoolchain` (default `auto`) lets `go` download a newer toolchain
-when a module requires one.
+`npm`, `gpgv`). For private Go modules, configure the service user's Git/SSH
+before starting. `--gotoolchain` (default `auto`) lets `go` download a newer
+toolchain when a module requires one.
 
 ### What each page mirrors
 
@@ -164,6 +166,14 @@ when a module requires one.
 - **Java** — Maven coordinates (`groupId:artifactId:version`, one per line) or an
   uploaded `pom.xml`. Release versions only; SNAPSHOTs and version ranges are
   rejected.
+- **NPM** — package specs (one per line: `lodash@4.17.21`, a bare `lodash` for
+  the newest version, a range like `react@^18.2`, scoped `@types/node`), or an
+  uploaded `package.json` (with an optional `package-lock.json` pinning the
+  exact resolved graph). The full dependency graph is resolved with `npm`
+  (`--package-lock-only`, scripts never run) and every resolved registry
+  tarball is downloaded and verified against the lockfile's integrity hash.
+  Dependencies that resolve outside the registry (git/file URLs) are skipped
+  and reported. `--npm-registry` points resolution at a different registry.
 - **APT** — a deb822 source stanza (paste or upload a `.sources` file). An optional
   `Signed-By` keyring verifies the upstream release with `gpgv`; several stanzas
   mirror several repositories. Example:
@@ -278,6 +288,13 @@ index-url = https://artigate-high.local/simple/
 </mirror></mirrors></settings>
 ```
 
+```ini
+# NPM — ~/.npmrc (or /etc/npmrc)
+registry=https://artigate-high.local/npm/
+audit=false
+fund=false
+```
+
 ```text
 # APT — /etc/apt/sources.list.d/artigate.sources  (use ArtiGate's key, not the vendor's)
 Types: deb
@@ -335,6 +352,12 @@ signature check (`repo_gpgcheck=0`, `[trusted=yes]`, etc.).
 - **Python**: wheels only (no sdists).
 - **Java/Maven**: release versions only; SNAPSHOT and dynamic/range versions are
   rejected.
+- **NPM**: registry tarballs only — dependencies resolved to git or file URLs
+  are skipped (and reported). Resolution needs npm 7 or newer on the low side
+  (lockfile v2+). The high side regenerates all packument metadata from each
+  tarball's own embedded `package.json`; `dist-tags` carries only `latest`
+  (the highest mirrored release). Set `audit=false` in clients — the advisory
+  endpoint needs the public registry.
 - **APT/RPM**: mirror the newest version of each package by default; untick
   "Newest version only" to mirror every version. RPM `.zck`-only indexes aren't
   supported (use `.gz`/`.xz`). Each collect is a full re-sync.
