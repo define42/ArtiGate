@@ -14,7 +14,7 @@ ArtiGate is a single binary with two roles that never share routes: `artigate lo
 
 ---
 
-# LOW side
+## LOW side
 
 `LowServer.ServeHTTP` tries `serveLowAdmin`, then `serveLowUI`, else `404 not found`.
 
@@ -63,7 +63,7 @@ Every ecosystem exposes `POST /admin/{eco}/collect`. The dispatch is POST-only; 
     A dedup skip writes no bundle and burns no sequence number. The [high side](high-side.md) must not wait on a sequence that was never produced.
 
 !!! note "Which collectors populate `skipped_modules`"
-    Only **Go** and **containers** report per-item failures; the rest either fully succeed or return a top-level error. If *all* items fail, the whole request errors at 400 (e.g. Go `"no modules could be fetched: …"`, containers `"no images could be fetched: …"`) rather than writing an empty bundle.
+    **Go**, **containers**, **Python** (source-only distributions that cannot be mirrored under the wheels-only policy), and **NPM** (git-URL / otherwise-unfetchable packages) report per-item failures here. **APT**, **RPM**, and **Maven** never populate the field — they either fully succeed or return a single top-level error. If *all* items fail, the whole request errors at 400 (e.g. Go `"no modules could be fetched: …"`, containers `"no images could be fetched: …"`) rather than writing an empty bundle.
 
 ---
 
@@ -430,7 +430,7 @@ Both return the identical `LowBundleStatus` payload.
 
 ---
 
-# HIGH side
+## HIGH side
 
 `HighServer.ServeHTTP` tries, in order: `serveHighAdmin`, `serveGo`, `servePython`, `serveMaven`, `serveApt`, `serveRpm`, `serveContainers`, `serveNpm`, `serveUI`; unclaimed → `404`. Every ecosystem handler is **read-only** (GET/HEAD; others → `405`, or a registry error for containers). The high side never fetches upstream and never invokes toolchains — it serves imported bundle contents from disk. See [High side](high-side.md).
 
