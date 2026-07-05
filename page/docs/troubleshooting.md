@@ -197,10 +197,9 @@ docker pull artigate-high.local/ghcr.io/org/app:v1
 ```
 
 Either enable [TLS](tls.md) on the high side, or, for a plain-HTTP mirror, tell
-the daemon to trust it explicitly and restart:
+the daemon to trust it explicitly in `/etc/docker/daemon.json` and restart:
 
 ```json
-// /etc/docker/daemon.json
 {
   "insecure-registries": [
     "artigate-high.local:8081"
