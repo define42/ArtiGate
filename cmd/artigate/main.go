@@ -1368,11 +1368,18 @@ type LowStreamStatus struct {
 }
 
 type ExportedSequenceInfo struct {
-	Sequence     int64  `json:"sequence"`
-	BundleID     string `json:"bundle_id"`
-	FilesPresent bool   `json:"files_present"`
+	Sequence int64  `json:"sequence"`
+	BundleID string `json:"bundle_id"`
+	// InArchive is true when a retained copy is kept in the low-side archive
+	// (<root>/bundles), so the bundle can be re-transmitted on demand.
+	InArchive bool `json:"in_archive"`
+	// InOutbound is true when the bundle's files are still staged in the export
+	// directory. It goes false once the bundle has been forwarded across the
+	// diode (the transfer moves the files out) — that is the normal "sent" state,
+	// not an error.
+	InOutbound bool `json:"in_outbound"`
 	// SizeBytes is the bundle's total on-diode size (archive + manifest +
-	// signature), taken from the persistent archive copy.
+	// signature), taken from the retained copy (or the export dir if only there).
 	SizeBytes int64 `json:"size_bytes"`
 }
 
@@ -1395,9 +1402,11 @@ func (s *LowServer) BundleStatus() LowBundleStatus {
 	}
 	s.mu.Unlock()
 
-	// Exported bundles are the ones retained in the persistent archive, grouped
-	// by stream; this covers every ecosystem uniformly.
+	// A bundle can be in the persistent archive (<root>/bundles), still staged in
+	// the export directory, or both, so list the union of the two per stream: a
+	// forwarded bundle is archive-only, a not-yet-sent one is in both.
 	archived, _ := findBundleStreams(s.bundleArchiveDir())
+	exported, _ := findBundleStreams(s.cfg.ExportDir)
 	names := map[string]bool{}
 	for _, stream := range knownStreams() {
 		names[stream] = true
@@ -1405,8 +1414,10 @@ func (s *LowServer) BundleStatus() LowBundleStatus {
 	for stream := range next {
 		names[stream] = true
 	}
-	for stream := range archived {
-		names[stream] = true
+	for _, m := range []map[string][]int64{archived, exported} {
+		for stream := range m {
+			names[stream] = true
+		}
 	}
 	streams := make([]string, 0, len(names))
 	for stream := range names {
@@ -1421,17 +1432,39 @@ func (s *LowServer) BundleStatus() LowBundleStatus {
 			n = 1
 		}
 		ss := LowStreamStatus{Stream: stream, NextSequence: n}
-		for _, seq := range archived[stream] {
+		for _, seq := range mergeSequenceLists(archived[stream], exported[stream]) {
 			id := bundleIDFor(stream, seq)
+			size := bundleSizeInDir(s.bundleArchiveDir(), id)
+			if size == 0 {
+				size = bundleSizeInDir(s.cfg.ExportDir, id)
+			}
 			ss.ExportedSequences = append(ss.ExportedSequences, ExportedSequenceInfo{
-				Sequence:     seq,
-				BundleID:     id,
-				FilesPresent: bundleCompleteInDir(s.cfg.ExportDir, id),
-				SizeBytes:    bundleSizeInDir(s.bundleArchiveDir(), id),
+				Sequence:   seq,
+				BundleID:   id,
+				InArchive:  bundleCompleteInDir(s.bundleArchiveDir(), id),
+				InOutbound: bundleCompleteInDir(s.cfg.ExportDir, id),
+				SizeBytes:  size,
 			})
 		}
 		out.Streams = append(out.Streams, ss)
 	}
+	return out
+}
+
+// mergeSequenceLists returns the sorted union of two per-stream sequence lists.
+func mergeSequenceLists(a, b []int64) []int64 {
+	set := make(map[int64]bool, len(a)+len(b))
+	for _, x := range a {
+		set[x] = true
+	}
+	for _, x := range b {
+		set[x] = true
+	}
+	out := make([]int64, 0, len(set))
+	for x := range set {
+		out = append(out, x)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 

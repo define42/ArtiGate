@@ -360,6 +360,23 @@ function formatBytes(n){
   return (i===0 ? n : n.toFixed(n<10?1:0))+' '+u[i];
 }
 
+// archiveCell shows whether a retained copy is kept in the low-side archive, so
+// the bundle can be re-transmitted. A missing archive copy (only expected once
+// retention pruning exists) is flagged because it can no longer be re-exported.
+function archiveCell(inArchive){
+  return inArchive ? '✓ kept' : '<span style="color:#ff9ea3">&#10007; not kept</span>';
+}
+
+// outboundCell shows whether the bundle is still staged in the export directory
+// (waiting to be carried across the diode) or has already been forwarded. Both
+// are normal states, so neither is styled as an error — "sent" just means the
+// transfer has moved the files out of the export dir.
+function outboundCell(inOutbound){
+  return inOutbound
+    ? '<span style="color:#7ee2a8">staged</span>'
+    : '<span style="color:#8b93a5">sent</span>';
+}
+
 // setView shows one ecosystem (or the status) page and hides the rest, matching
 // the active nav button. The status page is refreshed each time it is opened.
 // VIEW_STREAM maps a nav view to its backend stream (the Java page is the maven
@@ -746,12 +763,13 @@ async function loadStatus(){
       for(const x of (st.exported_sequences||[])){
         rows.push('<tr><td>'+esc(streamLabel(st.stream))+'</td><td class="mono">#'+esc(x.sequence)+
           '</td><td class="mono">'+esc(x.bundle_id)+'</td><td class="num">'+esc(formatBytes(x.size_bytes))+
-          '</td><td>'+(x.files_present?'✓':'&#10007; missing')+'</td></tr>');
+          '</td><td>'+archiveCell(x.in_archive)+'</td><td>'+outboundCell(x.in_outbound)+'</td></tr>');
       }
     }
     const box=document.getElementById('bundles');
     if(!rows.length){ box.innerHTML='<p class="empty">No bundles exported yet.</p>'; return; }
-    box.innerHTML='<table><thead><tr><th>Stream</th><th>Sequence</th><th>Bundle</th><th class="num">Size</th><th>Files present</th></tr></thead><tbody>'+
+    box.innerHTML='<table><thead><tr><th>Stream</th><th>Sequence</th><th>Bundle</th><th class="num">Size</th>'+
+      '<th>Archive</th><th>Outbound</th></tr></thead><tbody>'+
       rows.join('')+'</tbody></table>';
   }catch(e){
     document.getElementById('meta').textContent='Failed to load status: '+e.message;

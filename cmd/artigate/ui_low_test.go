@@ -32,11 +32,28 @@ func TestLowServerUIStatus(t *testing.T) {
 	if len(goStream.ExportedSequences) != 1 || goStream.ExportedSequences[0].Sequence != 1 {
 		t.Fatalf("go exported sequences = %+v", goStream.ExportedSequences)
 	}
-	if !goStream.ExportedSequences[0].FilesPresent {
-		t.Error("exported bundle files should be present")
+	seq0 := goStream.ExportedSequences[0]
+	if !seq0.InArchive || !seq0.InOutbound {
+		t.Errorf("a fresh bundle should be both archived and staged, got %+v", seq0)
 	}
-	if goStream.ExportedSequences[0].SizeBytes <= 0 {
-		t.Errorf("exported bundle should report a nonzero size, got %d", goStream.ExportedSequences[0].SizeBytes)
+	if seq0.SizeBytes <= 0 {
+		t.Errorf("exported bundle should report a nonzero size, got %d", seq0.SizeBytes)
+	}
+
+	// Simulate forwarding across the diode: the transfer moves the bundle files
+	// out of the export dir. The bundle stays listed (still archived) but flips
+	// to "sent" (no longer outbound) rather than dropping off or erroring.
+	for _, suffix := range bundleSuffixes() {
+		if err := os.Remove(filepath.Join(ls.cfg.ExportDir, seq0.BundleID+suffix)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after := ls.BundleStatus().Stream(streamGo)
+	if len(after.ExportedSequences) != 1 {
+		t.Fatalf("bundle should still be listed from the archive after forwarding, got %+v", after.ExportedSequences)
+	}
+	if fwd := after.ExportedSequences[0]; !fwd.InArchive || fwd.InOutbound {
+		t.Errorf("after forwarding: want archived & not outbound, got %+v", fwd)
 	}
 }
 
