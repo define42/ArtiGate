@@ -72,8 +72,8 @@ func TestLowServerUIPage(t *testing.T) {
 		// Export-status table shows each bundle's size.
 		"formatBytes", "size_bytes", `<th class="num">Size</th>`,
 		// Top menu splits each ecosystem onto its own view/page.
-		"function setView(", `data-view="overview"`, `data-view="go"`, `data-view="java"`, `data-view="status"`,
-		`id="view-overview"`, `id="view-go"`, `id="view-java"`, `id="view-status"`,
+		"function setView(", `data-view="overview"`, `data-view="go"`, `data-view="maven"`, `data-view="status"`,
+		`id="view-overview"`, `id="view-go"`, `id="view-maven"`, `id="view-status"`,
 		// Overview page lists every schedule and whether it is working.
 		`id="allWatches"`, "loadAllWatches",
 		// Scheduling lives on each ecosystem page, reusing that page's inputs.
@@ -83,7 +83,7 @@ func TestLowServerUIPage(t *testing.T) {
 		"Mirror Go modules", `id="gomods"`, `id="gomod"`, `id="gosum"`, "collectGoMod", "/admin/go/collect",
 
 		"Mirror Python packages", `id="pyreqs"`, "collectPython", "/admin/python/collect",
-		"Mirror Java/Maven artifacts", `id="mvncoords"`, `id="mvnpom"`, "collectMaven", "/admin/maven/collect",
+		"Mirror Maven artifacts", `id="mvncoords"`, `id="mvnpom"`, "collectMaven", "/admin/maven/collect",
 		"Mirror an APT (deb) repository", `id="aptsrc"`, `id="aptfile"`, "loadAptFile", "collectApt", "/admin/apt/collect",
 		`id="aptnewest" type="checkbox" checked`, "newest_only",
 		"Mirror an RPM (yum/dnf) repository", `id="rpmrepo"`, `id="rpmfile"`, "loadRpmFile", "collectRpm", "/admin/rpm/collect",

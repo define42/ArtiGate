@@ -115,7 +115,7 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="overview" class="active" onclick="setView('overview')">Overview</button>
     <button type="button" data-view="go" onclick="setView('go')">Go</button>
     <button type="button" data-view="python" onclick="setView('python')">Python</button>
-    <button type="button" data-view="java" onclick="setView('java')">Java</button>
+    <button type="button" data-view="maven" onclick="setView('maven')">Maven</button>
     <button type="button" data-view="npm" onclick="setView('npm')">NPM</button>
     <button type="button" data-view="apt" onclick="setView('apt')">APT</button>
     <button type="button" data-view="rpm" onclick="setView('rpm')">RPM</button>
@@ -194,9 +194,9 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   </section>
 
-  <section class="view" id="view-java" hidden>
+  <section class="view" id="view-maven" hidden>
   <div class="card">
-    <h2>Mirror Java/Maven artifacts</h2>
+    <h2>Mirror Maven artifacts</h2>
     <p class="hint">List Maven coordinates (one <code>groupId:artifactId:version</code> per line) or upload a <code>pom.xml</code>. ArtiGate runs <code>mvn dependency:go-offline</code> to resolve the full closure (including plugins) and writes it to a signed bundle, the same as POSTing to <code>/admin/maven/collect</code>. Release versions only &mdash; SNAPSHOTs and version ranges are rejected.</p>
     <form class="gomod-form" onsubmit="collectMaven(event)">
       <label class="filelabel">Coordinates <span class="opt">&mdash; groupId:artifactId:version, one per line</span>
@@ -379,11 +379,12 @@ function outboundCell(inOutbound){
 
 // setView shows one ecosystem (or the status) page and hides the rest, matching
 // the active nav button. The status page is refreshed each time it is opened.
-// VIEW_STREAM maps a nav view to its backend stream (the Java page is the maven
-// stream). Views without a stream (status) are absent.
-const VIEW_STREAM={go:'go',python:'python',java:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers'};
+// VIEW_STREAM maps each ecosystem view to its backend stream (now identical
+// names); views without a stream (overview, status) are absent, so it doubles as
+// the "is this an ecosystem page" test.
+const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers'};
 function setView(view){
-  for(const v of ['overview','go','python','java','npm','apt','rpm','containers','status']){
+  for(const v of ['overview','go','python','maven','npm','apt','rpm','containers','status']){
     document.getElementById('view-'+v).hidden = (v!==view);
   }
   document.querySelectorAll('nav button[data-view]').forEach(b=>{
