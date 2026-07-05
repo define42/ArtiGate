@@ -571,15 +571,9 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 		return ExportResult{}, errors.New("rpm mirror produced no packages")
 	}
 
-	seq := s.peekSequence(streamRpm)
-	res, err := s.writeRpmBundle(seq, stageRoot, files, mirrors)
-	if err != nil {
-		return ExportResult{}, err
-	}
-	if err := s.commitSequence(streamRpm, seq); err != nil {
-		return ExportResult{}, err
-	}
-	return res, nil
+	return s.exportIfNew(streamRpm, files, func(seq int64) (ExportResult, error) {
+		return s.writeRpmBundle(seq, stageRoot, files, mirrors)
+	})
 }
 
 // mirrorRpmRepo downloads and verifies repomd, every metadata file it lists, and

@@ -343,6 +343,15 @@ const lowUIHTML = `<!DOCTYPE html>
 (function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers'})[name]||name;}
+// handleSkip renders the Tier-1 dedup no-op result: when a collect resolves only
+// content already forwarded, no bundle is produced. Returns true when it handled
+// the result so the caller can stop.
+function handleSkip(d, showFn){
+  if(!d || !d.skipped) return false;
+  showFn('ok','&#10003; No new content since the last export &mdash; nothing to send across the diode.');
+  loadStatus();
+  return true;
+}
 function formatBytes(n){
   n=Number(n)||0;
   const u=['B','KiB','MiB','GiB','TiB'];
@@ -432,6 +441,7 @@ async function collectGoMod(ev){
     const text=await r.text();
     if(!r.ok){ showGoResult('err','Error: '+esc(text.trim())); return; }
     const d=JSON.parse(text);
+    if(handleSkip(d, showGoResult)) return;
     let msg='&#10003; Collected '+esc(d.exported_modules)+' module(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
     const skipped=d.skipped_modules||[];
     if(skipped.length){
@@ -519,6 +529,7 @@ async function collectPython(ev){
     const text=await r.text();
     if(!r.ok){ showPyResult('err','Error: '+esc(text.trim())); return; }
     const d=JSON.parse(text);
+    if(handleSkip(d, showPyResult)) return;
     let msg='&#10003; Collected '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
     if(parsed.skipped.length){
       msg+='<br>&#9888; Skipped '+esc(parsed.skipped.length)+' pip option line(s) not supported here (e.g. <code>'+esc(parsed.skipped[0])+'</code>).';
@@ -555,6 +566,7 @@ async function collectMaven(ev){
     const text=await r.text();
     if(!r.ok){ showMvnResult('err','Error: '+esc(text.trim())); return; }
     const d=JSON.parse(text);
+    if(handleSkip(d, showMvnResult)) return;
     showMvnResult('ok','&#10003; Collected '+esc(d.exported_modules)+' artifact(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').');
     loadStatus();
   }catch(e){ showMvnResult('err','Request failed: '+esc(e.message)); }
@@ -599,6 +611,7 @@ async function collectNpm(ev){
     const text=await r.text();
     if(!r.ok){ showNpmResult('err','Error: '+esc(text.trim())); return; }
     const d=JSON.parse(text);
+    if(handleSkip(d, showNpmResult)) return;
     let msg='&#10003; Collected '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
     const skipped=d.skipped_modules||[];
     if(skipped.length){
@@ -638,6 +651,7 @@ async function collectApt(ev){
     const text=await r.text();
     if(!r.ok){ showAptResult('err','Error: '+esc(text.trim())); return; }
     const d=JSON.parse(text);
+    if(handleSkip(d, showAptResult)) return;
     showAptResult('ok','&#10003; Mirrored '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').');
     loadStatus();
   }catch(e){ showAptResult('err','Request failed: '+esc(e.message)); }
@@ -663,6 +677,7 @@ async function collectRpm(ev){
     const text=await r.text();
     if(!r.ok){ showRpmResult('err','Error: '+esc(text.trim())); return; }
     const d=JSON.parse(text);
+    if(handleSkip(d, showRpmResult)) return;
     showRpmResult('ok','&#10003; Mirrored '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').');
     loadStatus();
   }catch(e){ showRpmResult('err','Request failed: '+esc(e.message)); }
@@ -694,6 +709,7 @@ async function collectContainers(ev){
     const text=await r.text();
     if(!r.ok){ showCtrResult('err','Error: '+esc(text.trim())); return; }
     const d=JSON.parse(text);
+    if(handleSkip(d, showCtrResult)) return;
     let msg='&#10003; Collected '+esc(d.exported_modules)+' image(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
     const skipped=d.skipped_modules||[];
     if(skipped.length){

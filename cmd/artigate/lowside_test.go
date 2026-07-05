@@ -224,13 +224,17 @@ func TestLowServerGoCollect(t *testing.T) {
 		t.Error("collected modules not complete on high side")
 	}
 
-	// A second collect advances the sequence rather than reusing it.
+	// A second collect of already-forwarded content is a no-op: Tier-1 dedup
+	// produces no bundle and burns no sequence number.
 	res2, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{"example.com/foo/bar@v1.0.0"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res2.BundleID != "go-bundle-000002" {
-		t.Errorf("second collect bundle = %s, want go-bundle-000002", res2.BundleID)
+	if !res2.Skipped || res2.BundleID != "" {
+		t.Errorf("re-collect of forwarded content = %+v, want skipped with no bundle", res2)
+	}
+	if seq := ls.peekSequence(streamGo); seq != 2 {
+		t.Errorf("next go sequence = %d, want 2 (skip must not burn a number)", seq)
 	}
 
 	// An empty module list is rejected.

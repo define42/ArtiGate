@@ -498,15 +498,9 @@ func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (
 		return ExportResult{}, err
 	}
 
-	seq := s.peekSequence(streamMaven)
-	res, err := s.writeMavenBundle(seq, stageRoot, files, artifacts)
-	if err != nil {
-		return ExportResult{}, err
-	}
-	if err := s.commitSequence(streamMaven, seq); err != nil {
-		return ExportResult{}, err
-	}
-	return res, nil
+	return s.exportIfNew(streamMaven, files, func(seq int64) (ExportResult, error) {
+		return s.writeMavenBundle(seq, stageRoot, files, artifacts)
+	})
 }
 
 // mavenProjectPom returns the pom.xml to resolve: the caller's uploaded pom, or

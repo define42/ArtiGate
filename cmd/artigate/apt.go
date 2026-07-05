@@ -234,15 +234,9 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 		return ExportResult{}, errors.New("apt mirror produced no packages")
 	}
 
-	seq := s.peekSequence(streamApt)
-	res, err := s.writeAptBundle(seq, stageRoot, files, mirrors)
-	if err != nil {
-		return ExportResult{}, err
-	}
-	if err := s.commitSequence(streamApt, seq); err != nil {
-		return ExportResult{}, err
-	}
-	return res, nil
+	return s.exportIfNew(streamApt, files, func(seq int64) (ExportResult, error) {
+		return s.writeAptBundle(seq, stageRoot, files, mirrors)
+	})
 }
 
 // mirrorAptRepo downloads and verifies the Release, indexes, and every .deb for

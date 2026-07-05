@@ -234,6 +234,20 @@ Each ecosystem page can turn its inputs into a **recurring pull**: set an interv
 requirements list every day. Schedules run in the background and can be paused,
 run immediately, or deleted from the same page.
 
+### Export deduplication
+
+A collect only bundles content it has not already sent. Each stream keeps a
+permanent index of the content hashes it has forwarded (`<root>/exported-<stream>.json`);
+when a collect resolves to a file set that is *entirely* already-forwarded, no
+bundle is written and no bundle number is consumed — the dashboard (and a
+schedule's status) simply reports "no new content". So a daily schedule over an
+unchanged upstream stops re-sending bytes the high side already has. This runs
+after the fetch (a wheel's hash is only known once downloaded), so it saves diode
+bandwidth and low-side archive disk, not the upstream fetch itself. The index is
+independent of the re-export archive: re-transmitting a bundle never consults or
+updates it. (Partial-overlap collects still send the whole bundle for now; the
+high side dedups the already-present files by content hash on import.)
+
 ### Status and re-export
 
 The **Status** page shows each stream's next bundle number and the exported

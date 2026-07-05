@@ -308,6 +308,10 @@ type LowServer struct {
 	streamLocks   map[string]*sync.Mutex
 	mu            sync.Mutex
 	state         LowState
+	// exportIndexMu guards the read-modify-write of the per-stream
+	// exported-content indexes (Tier-1 dedup). Those live in their own files,
+	// separate from state, so this is distinct from mu.
+	exportIndexMu sync.Mutex
 	// watches holds scheduled recurring collects (SQLite-backed); watchTick is
 	// how often the scheduler checks for due ones; watchRunning guards against a
 	// watch running concurrently with itself (a tick overlapping a run-now).
@@ -719,12 +723,16 @@ func (s *LowServer) saveStateLocked() error {
 }
 
 type ExportResult struct {
-	Stream          string         `json:"stream,omitempty"`
-	Sequence        int64          `json:"sequence,omitempty"`
-	ExportedModules int            `json:"exported_modules"`
-	BundleID        string         `json:"bundle_id,omitempty"`
-	Message         string         `json:"message,omitempty"`
-	SkippedModules  []FailedModule `json:"skipped_modules,omitempty"`
+	Stream          string `json:"stream,omitempty"`
+	Sequence        int64  `json:"sequence,omitempty"`
+	ExportedModules int    `json:"exported_modules"`
+	BundleID        string `json:"bundle_id,omitempty"`
+	// Skipped is set when a collect produced no bundle because every resolved
+	// file had already been forwarded on this stream (Tier-1 dedup). No sequence
+	// number is consumed.
+	Skipped        bool           `json:"skipped,omitempty"`
+	Message        string         `json:"message,omitempty"`
+	SkippedModules []FailedModule `json:"skipped_modules,omitempty"`
 }
 
 // FailedModule records a module that could not be fetched during a collect.
@@ -790,17 +798,25 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 	if len(records) == 0 {
 		return ExportResult{}, errors.New("no go modules resolved")
 	}
-	// Peek the sequence, fetch+write, and only commit on success so a failed
-	// fetch never burns a sequence number and leaves a gap the high side would
-	// block on.
-	seq := s.peekSequence(streamGo)
-	res, err := s.writeBundle(ctx, streamGo, seq, records)
+	sortRequestRecords(records)
+	// Fetch before allocating a sequence so the resolved file set can be
+	// dedup-checked (Tier-1): a re-collect of already-forwarded modules skips.
+	mods, files, failed, err := s.fetchBundleContent(ctx, records)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	if err := s.commitSequence(streamGo, seq); err != nil {
+	if len(mods) == 0 {
+		// Every requested module failed to fetch. Do not write an empty bundle
+		// or burn a sequence number the high side would then wait on forever.
+		return ExportResult{}, fmt.Errorf("no modules could be fetched: %s", summarizeFailures(failed))
+	}
+	res, err := s.exportIfNew(streamGo, files, func(seq int64) (ExportResult, error) {
+		return s.writeGoBundle(streamGo, seq, mods, files)
+	})
+	if err != nil {
 		return ExportResult{}, err
 	}
+	res.SkippedModules = failed
 	return res, nil
 }
 
@@ -998,25 +1014,136 @@ func (s *LowServer) commitSequence(stream string, seq int64) error {
 	return s.saveStateLocked()
 }
 
-func (s *LowServer) writeBundle(ctx context.Context, stream string, seq int64, records []RequestRecord) (ExportResult, error) {
-	if seq <= 0 {
-		return ExportResult{}, fmt.Errorf("invalid sequence %d", seq)
+// exportIfNew runs the shared allocate -> write -> commit -> record steps for a
+// stream, but first applies Tier-1 dedup: when every file's content has already
+// been forwarded on this stream, it writes no bundle and burns no sequence
+// number, returning a skipped result. write builds and writes the bundle for
+// the allocated sequence. The caller must hold the stream lock (every collector
+// does) so the peek/commit stay race-free.
+func (s *LowServer) exportIfNew(stream string, files []ManifestFile, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
+	if s.allForwarded(stream, files) {
+		return ExportResult{Stream: stream, Skipped: true, Message: "no new content since the last export"}, nil
 	}
-	if len(records) == 0 {
-		return ExportResult{Stream: stream, Sequence: seq, ExportedModules: 0, Message: "no modules for sequence"}, nil
-	}
-	sortRequestRecords(records)
-
-	mods, files, failed, err := s.fetchBundleContent(ctx, records)
+	seq := s.peekSequence(stream)
+	res, err := write(seq)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	if len(mods) == 0 {
-		// Every requested module failed to fetch. Do not write an empty bundle
-		// or burn a sequence number the high side would then wait on forever.
-		return ExportResult{}, fmt.Errorf("no modules could be fetched for sequence %d: %s", seq, summarizeFailures(failed))
+	if err := s.commitSequence(stream, seq); err != nil {
+		return ExportResult{}, err
 	}
+	// Record only after the sequence is committed. If the commit fails the
+	// content is not durably part of the stream, so a retry must re-export it
+	// rather than see it as already forwarded and skip.
+	s.recordForwarded(stream, files)
+	return res, nil
+}
 
+// -----------------------------------------------------------------------------
+// Exported-content index (Tier-1 dedup)
+//
+// A permanent, append-only per-stream set of the content hashes already written
+// into a bundle — i.e. forwarded across the diode. A collect whose entire
+// resolved file set is already in the index produces no bundle, so a scheduled
+// re-pull of unchanged upstreams stops re-sending bytes the high side already
+// has. It is deliberately independent of the rolling bundle archive: rebuilding
+// it from archived manifests would let archive pruning forget shipped content
+// and re-ship it. Re-export never consults or updates it.
+// -----------------------------------------------------------------------------
+
+func (s *LowServer) exportedIndexPath(stream string) string {
+	return filepath.Join(s.cfg.Root, "exported-"+stream+".json")
+}
+
+type exportedContentIndex struct {
+	SHA256 []string `json:"sha256"`
+}
+
+// loadExportedIndex reads a stream's exported-content index as a set. A missing
+// index is an empty set (nothing forwarded yet).
+func (s *LowServer) loadExportedIndex(stream string) (map[string]bool, error) {
+	b, err := os.ReadFile(s.exportedIndexPath(stream))
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]bool{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var idx exportedContentIndex
+	if err := json.Unmarshal(b, &idx); err != nil {
+		return nil, err
+	}
+	set := make(map[string]bool, len(idx.SHA256))
+	for _, h := range idx.SHA256 {
+		set[h] = true
+	}
+	return set, nil
+}
+
+// allForwarded reports whether every file's content hash is already in the
+// stream's exported index, so this collect would add nothing new to the diode.
+// It fails safe: an empty file set or any index error returns false (never skip
+// when unsure), so content is never wrongly suppressed.
+func (s *LowServer) allForwarded(stream string, files []ManifestFile) bool {
+	if len(files) == 0 {
+		return false
+	}
+	s.exportIndexMu.Lock()
+	defer s.exportIndexMu.Unlock()
+	set, err := s.loadExportedIndex(stream)
+	if err != nil {
+		log.Printf("export index %s: %v; exporting without dedup", stream, err)
+		return false
+	}
+	for _, f := range files {
+		if !set[f.SHA256] {
+			return false
+		}
+	}
+	return true
+}
+
+// recordForwarded adds every file's content hash to the stream's permanent
+// exported index. It logs but does not fail on error: the bundle is already
+// committed, and a missed update only forgoes a future skip.
+func (s *LowServer) recordForwarded(stream string, files []ManifestFile) {
+	if len(files) == 0 {
+		return
+	}
+	s.exportIndexMu.Lock()
+	defer s.exportIndexMu.Unlock()
+	set, err := s.loadExportedIndex(stream)
+	if err != nil {
+		log.Printf("export index %s: %v; not recording %d file(s)", stream, err, len(files))
+		return
+	}
+	added := false
+	for _, f := range files {
+		if !set[f.SHA256] {
+			set[f.SHA256] = true
+			added = true
+		}
+	}
+	if !added {
+		return
+	}
+	hashes := make([]string, 0, len(set))
+	for h := range set {
+		hashes = append(hashes, h)
+	}
+	sort.Strings(hashes)
+	if err := writeJSONAtomic(s.exportedIndexPath(stream), exportedContentIndex{SHA256: hashes}, stateFileMode); err != nil {
+		log.Printf("export index %s: write failed: %v", stream, err)
+	}
+}
+
+// writeGoBundle builds, signs, and writes a Go bundle for already-fetched
+// modules at the allocated sequence. Fetching happens in CollectGo so the
+// resolved file set can be dedup-checked before a sequence is allocated.
+func (s *LowServer) writeGoBundle(stream string, seq int64, mods []ManifestMod, files []ManifestFile) (ExportResult, error) {
+	if seq <= 0 {
+		return ExportResult{}, fmt.Errorf("invalid sequence %d", seq)
+	}
 	id := bundleIDFor(stream, seq)
 	manifest := BundleManifest{
 		Type:             manifestType,
@@ -1041,7 +1168,7 @@ func (s *LowServer) writeBundle(ctx context.Context, stream string, seq int64, r
 		return ExportResult{}, err
 	}
 
-	return ExportResult{Stream: stream, Sequence: seq, ExportedModules: len(mods), BundleID: id, SkippedModules: failed}, nil
+	return ExportResult{Stream: stream, Sequence: seq, ExportedModules: len(mods), BundleID: id}, nil
 }
 
 // summarizeFailures renders a compact, bounded description of skipped modules

@@ -737,14 +737,13 @@ func (s *LowServer) CollectNpm(ctx context.Context, req NpmCollectRequest) (Expo
 		return ExportResult{}, fmt.Errorf("no npm packages could be fetched: %s", summarizeFailures(failed))
 	}
 
-	// Peek/commit the sequence around the write so a failed collection never
-	// burns a sequence number and leaves a gap the high side would block on.
-	seq := s.peekSequence(streamNpm)
-	res, err := s.writeNpmBundle(seq, stageRoot, files, pkgs)
+	// exportIfNew peeks/commits the sequence around the write (so a failed
+	// collection never burns a number) and skips entirely when every tarball was
+	// already forwarded.
+	res, err := s.exportIfNew(streamNpm, files, func(seq int64) (ExportResult, error) {
+		return s.writeNpmBundle(seq, stageRoot, files, pkgs)
+	})
 	if err != nil {
-		return ExportResult{}, err
-	}
-	if err := s.commitSequence(streamNpm, seq); err != nil {
 		return ExportResult{}, err
 	}
 	res.SkippedModules = failed

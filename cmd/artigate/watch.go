@@ -294,6 +294,9 @@ func (s *LowServer) runWatch(ctx context.Context, w Watch) {
 }
 
 func watchRunMessage(res ExportResult) string {
+	if res.Skipped {
+		return "no new content since last export; skipped"
+	}
 	if res.BundleID == "" {
 		return "no bundle produced"
 	}

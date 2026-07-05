@@ -834,12 +834,10 @@ func (s *LowServer) CollectContainers(ctx context.Context, req ContainerCollectR
 		return ExportResult{}, fmt.Errorf("no images could be fetched: %s", summarizeFailures(failed))
 	}
 
-	seq := s.peekSequence(streamContainers)
-	res, err := s.writeContainerBundle(seq, stageRoot, files, repos)
+	res, err := s.exportIfNew(streamContainers, files, func(seq int64) (ExportResult, error) {
+		return s.writeContainerBundle(seq, stageRoot, files, repos)
+	})
 	if err != nil {
-		return ExportResult{}, err
-	}
-	if err := s.commitSequence(streamContainers, seq); err != nil {
 		return ExportResult{}, err
 	}
 	res.SkippedModules = failed

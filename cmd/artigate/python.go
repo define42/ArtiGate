@@ -408,17 +408,12 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 		return ExportResult{}, errors.New("pip download produced no wheels")
 	}
 
-	// Peek/commit the sequence around the write so a failed collection never
-	// burns a sequence number and leaves a gap the high side would block on.
-	seq := s.peekSequence(streamPython)
-	res, err := s.writePythonBundle(seq, stageRoot, files, projects)
-	if err != nil {
-		return ExportResult{}, err
-	}
-	if err := s.commitSequence(streamPython, seq); err != nil {
-		return ExportResult{}, err
-	}
-	return res, nil
+	// exportIfNew peeks/commits the sequence around the write (so a failed
+	// collection never burns a number) and skips entirely when every wheel was
+	// already forwarded.
+	return s.exportIfNew(streamPython, files, func(seq int64) (ExportResult, error) {
+		return s.writePythonBundle(seq, stageRoot, files, projects)
+	})
 }
 
 // collectPythonDist scans a pip download directory and returns the manifest
