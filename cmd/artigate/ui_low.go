@@ -77,6 +77,7 @@ const lowUIHTML = `<!DOCTYPE html>
   .filelabel input[type=file] { font: inherit; color: #a9b2c3; background: #0f1115; border: 1px dashed #3a4150; border-radius: 6px; padding: .5rem .6rem; cursor: pointer; }
   .filelabel textarea { color: #e6e6e6; background: #0f1115; border: 1px solid #3a4150; border-radius: 6px; padding: .5rem .6rem; font-family: ui-monospace, monospace; font-size: .82rem; resize: vertical; }
   .gomod-form button.primary { align-self: flex-start; }
+  .btnrow { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
   button.primary:disabled { opacity: .6; cursor: progress; }
   .pytarget { border: 1px solid #2a2f3a; border-radius: 6px; padding: .2rem .7rem; }
   .pytarget summary { cursor: pointer; color: #c7cedb; font-size: .85rem; padding: .35rem 0; }
@@ -165,7 +166,10 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">go.sum <span class="opt">&mdash; optional, with go.mod; pins the exact versions</span>
         <input id="gosum" type="file" accept=".sum,text/plain">
       </label>
-      <button class="primary" type="submit" id="goBtn">Collect &amp; export</button>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="goBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('goResult')">Reset</button>
+      </div>
     </form>
     <div id="goResult" class="rbox"></div>
     <div class="sched">
@@ -199,7 +203,10 @@ const lowUIHTML = `<!DOCTYPE html>
         </div>
         <p class="hint">Set these to download wheels for the high-side interpreter rather than this host; any of them forces <code>--only-binary=:all:</code> (wheels only) regardless of the checkbox above.</p>
       </details>
-      <button class="primary" type="submit" id="pyBtn">Collect &amp; export</button>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="pyBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('pyResult')">Reset</button>
+      </div>
     </form>
     <div id="pyResult" class="rbox"></div>
     <div class="sched">
@@ -222,7 +229,10 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or upload a pom.xml <span class="opt">&mdash; takes precedence over the list</span>
         <input id="mvnpom" type="file" accept=".xml,text/xml">
       </label>
-      <button class="primary" type="submit" id="mvnBtn">Collect &amp; export</button>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="mvnBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('mvnResult')">Reset</button>
+      </div>
     </form>
     <div id="mvnResult" class="rbox"></div>
     <div class="sched">
@@ -248,7 +258,10 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">package-lock.json <span class="opt">&mdash; optional, with package.json; pins the exact resolved versions</span>
         <input id="npmlock" type="file" accept=".json,application/json">
       </label>
-      <button class="primary" type="submit" id="npmBtn">Collect &amp; export</button>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="npmBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('npmResult')">Reset</button>
+      </div>
     </form>
     <div id="npmResult" class="rbox"></div>
     <div class="sched">
@@ -272,7 +285,10 @@ const lowUIHTML = `<!DOCTYPE html>
         <input id="aptfile" type="file" accept=".sources,.list,text/plain" onchange="loadAptFile()">
       </label>
       <label class="pytarget-check"><input id="aptnewest" type="checkbox" checked> Newest version of each package only (uncheck to mirror every version)</label>
-      <button class="primary" type="submit" id="aptBtn">Collect &amp; export</button>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="aptBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('aptResult')">Reset</button>
+      </div>
     </form>
     <div id="aptResult" class="rbox"></div>
     <div class="sched">
@@ -296,7 +312,10 @@ const lowUIHTML = `<!DOCTYPE html>
         <input id="rpmfile" type="file" accept=".repo,text/plain" onchange="loadRpmFile()">
       </label>
       <label class="pytarget-check"><input id="rpmnewest" type="checkbox" checked> Newest version of each package only (uncheck to mirror every version)</label>
-      <button class="primary" type="submit" id="rpmBtn">Collect &amp; export</button>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="rpmBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('rpmResult')">Reset</button>
+      </div>
     </form>
     <div id="rpmResult" class="rbox"></div>
     <div class="sched">
@@ -316,7 +335,10 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">Images <span class="opt">&mdash; one per line; a missing tag means <code>latest</code>; scheduled pulls re-resolve constraints each run</span>
         <textarea id="ctrimages" rows="5" placeholder="alpine:3.20&#10;golang:1.26.x&#10;ghcr.io/org/app:v1" autocomplete="off"></textarea>
       </label>
-      <button class="primary" type="submit" id="ctrBtn">Collect &amp; export</button>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="ctrBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('ctrResult')">Reset</button>
+      </div>
     </form>
     <div id="ctrResult" class="rbox"></div>
     <div class="sched">
@@ -368,6 +390,9 @@ const lowUIHTML = `<!DOCTYPE html>
 (function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers'})[name]||name;}
+// clearResult hides an ecosystem's inline result box; the Reset button pairs it
+// with the form's native field reset (type="reset").
+function clearResult(id){const el=document.getElementById(id); if(el){ el.className='rbox'; el.innerHTML=''; }}
 // ---- Collect progress modal ----
 // Every "Collect & export" streams its progress into one shared modal: the
 // collect POST carries ?stream=1, and the server answers with newline-delimited
