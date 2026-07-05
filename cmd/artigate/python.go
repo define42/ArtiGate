@@ -396,6 +396,7 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 		return ExportResult{}, err
 	}
 
+	emitProgress(ctx, "Running pip download for %d requirement(s)…", len(req.Requirements))
 	if _, err := s.runPip(ctx, pipDownloadArgs(dest, req)...); err != nil {
 		return ExportResult{}, err
 	}
@@ -404,6 +405,7 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 	if err != nil {
 		return ExportResult{}, err
 	}
+	emitProgress(ctx, "Packing %d wheel file(s) into a signed bundle…", len(files))
 	if len(files) == 0 {
 		if len(skipped) > 0 {
 			return ExportResult{}, fmt.Errorf("no wheels to mirror; %d package(s) publish only a source distribution: %s",

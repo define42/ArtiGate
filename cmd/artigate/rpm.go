@@ -554,6 +554,7 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	var mirrors []RpmMirror
 	var files []ManifestFile
 	seenFile := map[string]bool{}
+	emitProgress(ctx, "Mirroring %d RPM repo(s)…", len(configs))
 	for _, cfg := range configs {
 		mirror, mf, err := s.mirrorRpmRepo(ctx, cfg, stageRoot, newest)
 		if err != nil {
@@ -571,6 +572,7 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 		return ExportResult{}, errors.New("rpm mirror produced no packages")
 	}
 
+	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 	return s.exportIfNew(streamRpm, files, func(seq int64) (ExportResult, error) {
 		return s.writeRpmBundle(seq, stageRoot, files, mirrors)
 	})
@@ -603,6 +605,7 @@ func (s *LowServer) downloadRpmMetadata(ctx context.Context, base, name string, 
 func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stageRoot string, newestOnly bool) (RpmMirror, []ManifestFile, error) {
 	base := strings.TrimRight(cfg.BaseURL, "/")
 
+	emitProgress(ctx, "→ %s: fetching repomd.xml and primary index…", cfg.Name)
 	repomdRaw, err := s.fetchRepomd(ctx, base, cfg.GPGKey)
 	if err != nil {
 		return RpmMirror{}, nil, err
@@ -638,11 +641,13 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 		}
 	}
 	mirror.Packages = pkgs
-	for _, pkg := range pkgs {
+	emitProgress(ctx, "  %s: %d package(s)", cfg.Name, len(pkgs))
+	for i, pkg := range pkgs {
 		mf, err := s.downloadRpmFile(ctx, base, cfg.Name, pkg.Location, "sha256", pkg.SHA256, stageRoot)
 		if err != nil {
 			return RpmMirror{}, nil, fmt.Errorf("package %s: %w", pkg.Name, err)
 		}
+		emitProgress(ctx, "    ↓ [%d/%d] %s (%s)", i+1, len(pkgs), path.Base(pkg.Location), formatBytes(mf.Size))
 		files = append(files, mf)
 	}
 	return mirror, files, nil

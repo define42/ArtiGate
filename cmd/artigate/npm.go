@@ -724,10 +724,12 @@ func (s *LowServer) CollectNpm(ctx context.Context, req NpmCollectRequest) (Expo
 	}
 	defer os.RemoveAll(stageRoot)
 
+	emitProgress(ctx, "Resolving the dependency graph with npm…")
 	entries, skipped, err := s.resolveNpmLock(ctx, stageRoot, req)
 	if err != nil {
 		return ExportResult{}, err
 	}
+	emitProgress(ctx, "Downloading %d tarball(s)…", len(entries))
 	pkgs, files, failed, err := s.downloadNpmPackages(ctx, stageRoot, entries)
 	if err != nil {
 		return ExportResult{}, err
@@ -736,6 +738,7 @@ func (s *LowServer) CollectNpm(ctx context.Context, req NpmCollectRequest) (Expo
 	if len(pkgs) == 0 {
 		return ExportResult{}, fmt.Errorf("no npm packages could be fetched: %s", summarizeFailures(failed))
 	}
+	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 
 	// exportIfNew peeks/commits the sequence around the write (so a failed
 	// collection never burns a number) and skips entirely when every tarball was
@@ -936,13 +939,15 @@ func (s *LowServer) downloadNpmPackages(ctx context.Context, stageRoot string, e
 	var pkgs []NpmPackage
 	var files []ManifestFile
 	var failed []FailedModule
-	for _, e := range entries {
+	for i, e := range entries {
+		emitProgress(ctx, "→ [%d/%d] %s@%s", i+1, len(entries), e.Name, e.Version)
 		rel := path.Join("npm", "packages", e.Name, npmTarballFilename(e.Name, e.Version))
 		abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 			return nil, nil, nil, err
 		}
 		if err := downloadNpmTarball(ctx, e.Resolved, e.Integrity, abs); err != nil {
+			emitProgress(ctx, "  ✗ %s@%s: %s", e.Name, e.Version, err)
 			failed = append(failed, FailedModule{Module: e.Name, Version: e.Version, Error: err.Error()})
 			continue
 		}

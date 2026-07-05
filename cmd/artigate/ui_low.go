@@ -106,6 +106,23 @@ const lowUIHTML = `<!DOCTYPE html>
   .wactions { white-space: nowrap; }
   .wactions button { background: #2a2f3a; color: #c7cedb; border: 1px solid #3a4150; border-radius: 5px; padding: .25rem .55rem; margin-left: .3rem; cursor: pointer; font: inherit; font-size: .78rem; }
   .wactions button:first-child { margin-left: 0; }
+  .cmodal { flex-direction: column; padding: 0; border: 1px solid #2a2f3a; border-radius: 10px; background: #161a22; color: #e6e6e6; width: min(760px, calc(100% - 3rem)); height: min(70vh, calc(100dvh - 4rem)); max-height: calc(100dvh - 4rem); overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+  /* A closed <dialog> is display:none by the UA stylesheet; only lay it out as a
+     flex column when actually open, or it would show on every page load. */
+  .cmodal[open] { display: flex; }
+  .cmodal::backdrop { background: rgba(6,8,12,.62); }
+  .cmodal-head { flex: 0 0 auto; display: flex; align-items: center; gap: .6rem; padding: .9rem 1.1rem; border-bottom: 1px solid #2a2f3a; }
+  .cmodal-head h3 { margin: 0; font-size: 1rem; }
+  .cmodal-spin { flex: 0 0 auto; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #3a4150; border-top-color: #7ee2a8; animation: cmspin .7s linear infinite; }
+  .cmodal[data-done="1"] .cmodal-spin { display: none; }
+  @keyframes cmspin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .cmodal-spin { animation: none; } }
+  .cmodal-log { flex: 1 1 auto; min-height: 6rem; margin: 0; padding: .8rem 1.1rem; overflow-y: auto; overflow-x: auto; font-family: ui-monospace, monospace; font-size: .8rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: #c7cedb; background: #0f1115; }
+  .cmodal-log .l-err { color: #ff9ea3; }
+  .cmodal-foot { flex: 0 0 auto; padding: .8rem 1.1rem; border-top: 1px solid #2a2f3a; }
+  .cmodal-foot .rbox { margin-top: 0; }
+  .cm-actions { display: flex; justify-content: flex-end; margin-top: .7rem; }
+  .cm-actions button:disabled { opacity: .5; cursor: default; }
 </style>
 </head>
 <body>
@@ -338,19 +355,113 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   </section>
 </main>
+<dialog id="collectModal" class="cmodal" aria-label="Collect progress">
+  <div class="cmodal-head"><span class="cmodal-spin" id="cmSpin" aria-hidden="true"></span><h3 id="cmTitle">Collecting</h3></div>
+  <pre class="cmodal-log" id="cmLog" aria-live="polite"></pre>
+  <div class="cmodal-foot">
+    <div id="cmResult" class="rbox"></div>
+    <div class="cm-actions"><button type="button" class="secondary" id="cmClose" onclick="closeCollectModal()">Close</button></div>
+  </div>
+</dialog>
 <script>
 // If the session has expired, any API call returns 401; bounce to the login page.
 (function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers'})[name]||name;}
-// handleSkip renders the Tier-1 dedup no-op result: when a collect resolves only
-// content already forwarded, no bundle is produced. Returns true when it handled
-// the result so the caller can stop.
-function handleSkip(d, showFn){
-  if(!d || !d.skipped) return false;
-  showFn('ok','&#10003; No new content since the last export &mdash; nothing to send across the diode.');
-  loadStatus();
-  return true;
+// ---- Collect progress modal ----
+// Every "Collect & export" streams its progress into one shared modal: the
+// collect POST carries ?stream=1, and the server answers with newline-delimited
+// JSON events ({type:"log"|"done"|"error"}) that this reader renders live.
+let cmRunning=false;
+
+function openCollectModal(title){
+  const m=document.getElementById('collectModal');
+  document.getElementById('cmTitle').textContent=title;
+  document.getElementById('cmLog').textContent='';
+  const rb=document.getElementById('cmResult'); rb.className='rbox'; rb.innerHTML='';
+  m.dataset.done=''; cmRunning=true;
+  document.getElementById('cmClose').disabled=true;
+  if(!m.open) m.showModal();
+}
+function appendCollectLog(msg, cls){
+  const log=document.getElementById('cmLog');
+  // Stick to the newest line unless the user has scrolled up to read history.
+  // The tolerance must exceed one line height so following never stalls.
+  const atBottom = log.scrollTop+log.clientHeight >= log.scrollHeight-24;
+  const span=document.createElement('span');
+  if(cls) span.className=cls;
+  span.textContent=msg+'\n';
+  log.appendChild(span);
+  if(atBottom) log.scrollTop=log.scrollHeight; // follow the tail unless scrolled up
+}
+function finishCollectModal(cls, html){
+  const m=document.getElementById('collectModal');
+  m.dataset.done='1'; cmRunning=false;
+  const rb=document.getElementById('cmResult'); rb.className='rbox '+cls; rb.innerHTML=html;
+  document.getElementById('cmClose').disabled=false;
+}
+function closeCollectModal(){
+  if(cmRunning) return; // ignore while a collect is still running
+  const m=document.getElementById('collectModal'); if(m.open) m.close();
+}
+
+// streamCollect POSTs a collect with ?stream=1 and consumes the NDJSON progress
+// stream, appending each log line to the modal. It resolves with the final
+// ExportResult, or throws with the server's error message.
+async function streamCollect(url, body){
+  const res=await fetch(url+'?stream=1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!res.ok || !res.body){
+    const t=await res.text().catch(()=>''); throw new Error((t&&t.trim())||('HTTP '+res.status));
+  }
+  const reader=res.body.getReader(), dec=new TextDecoder();
+  let buf='', result=null, errMsg=null;
+  const handle=line=>{
+    line=line.trim(); if(!line) return;
+    let ev; try{ ev=JSON.parse(line); }catch(_){ return; }
+    if(ev.type==='log') appendCollectLog(ev.message);
+    else if(ev.type==='done') result=ev.result||{};
+    else if(ev.type==='error'){ errMsg=ev.error||'collect failed'; appendCollectLog(errMsg,'l-err'); }
+  };
+  for(;;){
+    const {value,done}=await reader.read();
+    if(value) buf+=dec.decode(value,{stream:true});
+    let nl; while((nl=buf.indexOf('\n'))>=0){ handle(buf.slice(0,nl)); buf=buf.slice(nl+1); }
+    if(done) break;
+  }
+  buf+=dec.decode(); if(buf.trim()) handle(buf);
+  if(errMsg!=null) throw new Error(errMsg);
+  return result||{};
+}
+
+// runCollect wires one ecosystem's button to the progress modal: it disables the
+// button, streams the collect, then renders the per-ecosystem summary (o.render)
+// in both the modal and the page's inline result box. A Tier-1 dedup skip is
+// rendered uniformly here.
+async function runCollect(o){
+  const btn=document.getElementById(o.btnId), label=btn.textContent;
+  btn.disabled=true; btn.textContent=o.busyLabel||'Collecting…';
+  openCollectModal(o.title);
+  try{
+    const d=await streamCollect(o.url, o.body);
+    const out = (d && d.skipped)
+      ? {cls:'ok', msg:'&#10003; No new content since the last export &mdash; nothing to send across the diode.'}
+      : o.render(d);
+    finishCollectModal(out.cls, out.msg);
+    o.showFn(out.cls, out.msg);
+    loadStatus();
+  }catch(e){
+    finishCollectModal('err','Error: '+esc(e.message));
+    o.showFn('err','Error: '+esc(e.message));
+  }finally{ btn.disabled=false; btn.textContent=label; }
+}
+
+// collectedMsg / skippedListHTML build the shared success line and the optional
+// "skipped items" list each ecosystem appends to it.
+function collectedMsg(d, verb, noun){
+  return '&#10003; '+verb+' '+esc(d.exported_modules)+' '+noun+' into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
+}
+function skippedListHTML(intro, items, fmt){
+  return '<br>&#9888; '+intro+'<ul>'+items.map(m=>'<li>'+fmt(m)+'</li>').join('')+'</ul>';
 }
 function formatBytes(n){
   n=Number(n)||0;
@@ -450,28 +561,13 @@ async function collectGoMod(ev){
   ev.preventDefault();
   const built=await goSpec();
   if(!built){ showGoResult('err','List at least one module, or upload a go.mod.'); return; }
-  const btn=document.getElementById('goBtn');
-  const label=btn.textContent;
-  btn.disabled=true; btn.textContent='Collecting…';
-  showGoResult('busy','Resolving and fetching the module graph… this can take a while for a large project.');
-  try{
-    const r=await fetch('/admin/go/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(built.spec)});
-    const text=await r.text();
-    if(!r.ok){ showGoResult('err','Error: '+esc(text.trim())); return; }
-    const d=JSON.parse(text);
-    if(handleSkip(d, showGoResult)) return;
-    let msg='&#10003; Collected '+esc(d.exported_modules)+' module(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
-    const skipped=d.skipped_modules||[];
-    if(skipped.length){
-      msg+='<br>&#9888; Skipped '+esc(skipped.length)+' unfetchable module(s); re-run the collect to retry them:<ul>'+
-        skipped.map(m=>'<li><code>'+esc(m.module)+'@'+esc(m.version)+'</code></li>').join('')+'</ul>';
-      showGoResult('warn', msg);
-    } else {
-      showGoResult('ok', msg);
-    }
-    loadStatus();
-  }catch(e){ showGoResult('err','Request failed: '+esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent=label; }
+  runCollect({btnId:'goBtn', showFn:showGoResult, title:'Collecting Go modules',
+    url:'/admin/go/collect', body:built.spec, render:d=>{
+      const msg=collectedMsg(d,'Collected','module(s)');
+      const sk=d.skipped_modules||[];
+      if(sk.length) return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' unfetchable module(s); re-run the collect to retry them:', sk, m=>'<code>'+esc(m.module)+'@'+esc(m.version)+'</code>')};
+      return {cls:'ok', msg};
+    }});
 }
 
 function showPyResult(cls, html){
@@ -535,35 +631,16 @@ async function collectPython(ev){
   ev.preventDefault();
   const parsed=parseRequirements(document.getElementById('pyreqs').value);
   if(!parsed.reqs.length){ showPyResult('err','Enter at least one requirement (one per line).'); return; }
-  const btn=document.getElementById('pyBtn');
-  const label=btn.textContent;
-  btn.disabled=true; btn.textContent='Collecting…';
-  showPyResult('busy','Running pip download for '+esc(parsed.reqs.length)+' requirement(s)… this can take a while.');
-  try{
-    const body={requirements:parsed.reqs};
-    const target=pyTarget();
-    if(target) body.target=target;
-    const r=await fetch('/admin/python/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const text=await r.text();
-    if(!r.ok){ showPyResult('err','Error: '+esc(text.trim())); return; }
-    const d=JSON.parse(text);
-    if(handleSkip(d, showPyResult)) return;
-    let msg='&#10003; Collected '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
-    let warn=false;
-    const sdists=d.skipped_modules||[];
-    if(sdists.length){
-      warn=true;
-      msg+='<br>&#9888; '+esc(sdists.length)+' package(s) had no wheel (source distribution only) and were not mirrored &mdash; pin a version that ships a wheel, or exclude them:<ul>'+
-        sdists.map(m=>'<li><code>'+esc(m.module)+(m.version?' '+esc(m.version):'')+'</code></li>').join('')+'</ul>';
-    }
-    if(parsed.skipped.length){
-      warn=true;
-      msg+='<br>&#9888; Skipped '+esc(parsed.skipped.length)+' pip option line(s) not supported here (e.g. <code>'+esc(parsed.skipped[0])+'</code>).';
-    }
-    showPyResult(warn?'warn':'ok', msg);
-    loadStatus();
-  }catch(e){ showPyResult('err','Request failed: '+esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent=label; }
+  const body={requirements:parsed.reqs};
+  const target=pyTarget(); if(target) body.target=target;
+  runCollect({btnId:'pyBtn', showFn:showPyResult, title:'Collecting Python packages',
+    url:'/admin/python/collect', body:body, render:d=>{
+      let msg=collectedMsg(d,'Collected','package(s)'), warn=false;
+      const sd=d.skipped_modules||[];
+      if(sd.length){ warn=true; msg+=skippedListHTML(esc(sd.length)+' package(s) had no wheel (source distribution only) and were not mirrored &mdash; pin a version that ships a wheel, or exclude them:', sd, m=>'<code>'+esc(m.module)+(m.version?' '+esc(m.version):'')+'</code>'); }
+      if(parsed.skipped.length){ warn=true; msg+='<br>&#9888; Skipped '+esc(parsed.skipped.length)+' pip option line(s) not supported here (e.g. <code>'+esc(parsed.skipped[0])+'</code>).'; }
+      return {cls:warn?'warn':'ok', msg};
+    }});
 }
 
 function showMvnResult(cls, html){
@@ -580,21 +657,9 @@ async function collectMaven(ev){
     .map(s=>s.replace(/\s+#.*$/,'').trim())
     .filter(l=>l && l.charAt(0)!=='#');
   if(!pomFile && !coords.length){ showMvnResult('err','Enter Maven coordinates or upload a pom.xml.'); return; }
-  const btn=document.getElementById('mvnBtn');
-  const label=btn.textContent;
-  btn.disabled=true; btn.textContent='Collecting…';
-  showMvnResult('busy','Running mvn dependency:go-offline to resolve the closure… this can take a while.');
-  try{
-    const body = pomFile ? {pom_xml: await pomFile.text()} : {coordinates: coords};
-    const r=await fetch('/admin/maven/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const text=await r.text();
-    if(!r.ok){ showMvnResult('err','Error: '+esc(text.trim())); return; }
-    const d=JSON.parse(text);
-    if(handleSkip(d, showMvnResult)) return;
-    showMvnResult('ok','&#10003; Collected '+esc(d.exported_modules)+' artifact(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').');
-    loadStatus();
-  }catch(e){ showMvnResult('err','Request failed: '+esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent=label; }
+  const body = pomFile ? {pom_xml: await pomFile.text()} : {coordinates: coords};
+  runCollect({btnId:'mvnBtn', showFn:showMvnResult, title:'Collecting Maven artifacts',
+    url:'/admin/maven/collect', body:body, render:d=>({cls:'ok', msg:collectedMsg(d,'Collected','artifact(s)')})});
 }
 
 function showNpmResult(cls, html){
@@ -626,28 +691,13 @@ async function collectNpm(ev){
   ev.preventDefault();
   const built=await npmSpec();
   if(!built){ showNpmResult('err','List at least one package, or upload a package.json.'); return; }
-  const btn=document.getElementById('npmBtn');
-  const label=btn.textContent;
-  btn.disabled=true; btn.textContent='Collecting…';
-  showNpmResult('busy','Resolving the dependency graph with npm and downloading tarballs… this can take a while for a large project.');
-  try{
-    const r=await fetch('/admin/npm/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(built.spec)});
-    const text=await r.text();
-    if(!r.ok){ showNpmResult('err','Error: '+esc(text.trim())); return; }
-    const d=JSON.parse(text);
-    if(handleSkip(d, showNpmResult)) return;
-    let msg='&#10003; Collected '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
-    const skipped=d.skipped_modules||[];
-    if(skipped.length){
-      msg+='<br>&#9888; Skipped '+esc(skipped.length)+' package(s) that could not be mirrored:<ul>'+
-        skipped.map(m=>'<li><code>'+esc(m.module)+'@'+esc(m.version)+'</code> &mdash; '+esc(m.error)+'</li>').join('')+'</ul>';
-      showNpmResult('warn', msg);
-    } else {
-      showNpmResult('ok', msg);
-    }
-    loadStatus();
-  }catch(e){ showNpmResult('err','Request failed: '+esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent=label; }
+  runCollect({btnId:'npmBtn', showFn:showNpmResult, title:'Collecting NPM packages',
+    url:'/admin/npm/collect', body:built.spec, render:d=>{
+      const msg=collectedMsg(d,'Collected','package(s)');
+      const sk=d.skipped_modules||[];
+      if(sk.length) return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' package(s) that could not be mirrored:', sk, m=>'<code>'+esc(m.module)+'@'+esc(m.version)+'</code> &mdash; '+esc(m.error))};
+      return {cls:'ok', msg};
+    }});
 }
 
 async function scheduleNpm(){
@@ -666,20 +716,9 @@ async function collectApt(ev){
   ev.preventDefault();
   const src=document.getElementById('aptsrc').value.trim();
   if(!src){ showAptResult('err','Paste a deb822 source stanza.'); return; }
-  const btn=document.getElementById('aptBtn');
-  const label=btn.textContent;
-  btn.disabled=true; btn.textContent='Mirroring…';
-  showAptResult('busy','Downloading and verifying the upstream Release, Packages index, and every .deb… this can take a while.');
-  try{
-    const r=await fetch('/admin/apt/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_list:src, newest_only:document.getElementById('aptnewest').checked})});
-    const text=await r.text();
-    if(!r.ok){ showAptResult('err','Error: '+esc(text.trim())); return; }
-    const d=JSON.parse(text);
-    if(handleSkip(d, showAptResult)) return;
-    showAptResult('ok','&#10003; Mirrored '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').');
-    loadStatus();
-  }catch(e){ showAptResult('err','Request failed: '+esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent=label; }
+  runCollect({btnId:'aptBtn', busyLabel:'Mirroring…', showFn:showAptResult, title:'Mirroring APT repository',
+    url:'/admin/apt/collect', body:{source_list:src, newest_only:document.getElementById('aptnewest').checked},
+    render:d=>({cls:'ok', msg:collectedMsg(d,'Mirrored','package(s)')})});
 }
 
 function showRpmResult(cls, html){
@@ -692,20 +731,9 @@ async function collectRpm(ev){
   ev.preventDefault();
   const repo=document.getElementById('rpmrepo').value.trim();
   if(!repo){ showRpmResult('err','Paste a yum/dnf .repo stanza.'); return; }
-  const btn=document.getElementById('rpmBtn');
-  const label=btn.textContent;
-  btn.disabled=true; btn.textContent='Mirroring…';
-  showRpmResult('busy','Downloading and verifying repomd.xml, the primary index, and every .rpm… this can take a while.');
-  try{
-    const r=await fetch('/admin/rpm/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repo_file:repo, newest_only:document.getElementById('rpmnewest').checked})});
-    const text=await r.text();
-    if(!r.ok){ showRpmResult('err','Error: '+esc(text.trim())); return; }
-    const d=JSON.parse(text);
-    if(handleSkip(d, showRpmResult)) return;
-    showRpmResult('ok','&#10003; Mirrored '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').');
-    loadStatus();
-  }catch(e){ showRpmResult('err','Request failed: '+esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent=label; }
+  runCollect({btnId:'rpmBtn', busyLabel:'Mirroring…', showFn:showRpmResult, title:'Mirroring RPM repository',
+    url:'/admin/rpm/collect', body:{repo_file:repo, newest_only:document.getElementById('rpmnewest').checked},
+    render:d=>({cls:'ok', msg:collectedMsg(d,'Mirrored','package(s)')})});
 }
 
 function showCtrResult(cls, html){
@@ -724,28 +752,13 @@ async function collectContainers(ev){
   ev.preventDefault();
   const images=ctrImages();
   if(!images.length){ showCtrResult('err','List at least one image reference.'); return; }
-  const btn=document.getElementById('ctrBtn');
-  const label=btn.textContent;
-  btn.disabled=true; btn.textContent='Collecting…';
-  showCtrResult('busy','Resolving manifests and downloading layers for '+esc(images.length)+' image(s)… this can take a while.');
-  try{
-    const r=await fetch('/admin/containers/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({images:images})});
-    const text=await r.text();
-    if(!r.ok){ showCtrResult('err','Error: '+esc(text.trim())); return; }
-    const d=JSON.parse(text);
-    if(handleSkip(d, showCtrResult)) return;
-    let msg='&#10003; Collected '+esc(d.exported_modules)+' image(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
-    const skipped=d.skipped_modules||[];
-    if(skipped.length){
-      msg+='<br>&#9888; Skipped '+esc(skipped.length)+' unfetchable image(s):<ul>'+
-        skipped.map(m=>'<li><code>'+esc(m.module)+':'+esc(m.version)+'</code> &mdash; '+esc(m.error)+'</li>').join('')+'</ul>';
-      showCtrResult('warn', msg);
-    } else {
-      showCtrResult('ok', msg);
-    }
-    loadStatus();
-  }catch(e){ showCtrResult('err','Request failed: '+esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent=label; }
+  runCollect({btnId:'ctrBtn', showFn:showCtrResult, title:'Collecting container images',
+    url:'/admin/containers/collect', body:{images:images}, render:d=>{
+      const msg=collectedMsg(d,'Collected','image(s)');
+      const sk=d.skipped_modules||[];
+      if(sk.length) return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' unfetchable image(s):', sk, m=>'<code>'+esc(m.module)+':'+esc(m.version)+'</code> &mdash; '+esc(m.error))};
+      return {cls:'ok', msg};
+    }});
 }
 
 async function scheduleContainers(){
@@ -913,6 +926,9 @@ async function watchAction(action, id, stream){
     loadAllWatches();
   }catch(e){ show('err','Request failed: '+esc(e.message)); }
 }
+
+// Block Esc/backdrop dismissal while a collect is still streaming.
+document.getElementById('collectModal').addEventListener('cancel', e=>{ if(cmRunning) e.preventDefault(); });
 
 loadStatus();
 loadAllWatches();

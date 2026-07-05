@@ -88,6 +88,16 @@ func containerBlobShardHex(hex string) string {
 	return hex[:3]
 }
 
+// shortDigest abbreviates a "sha256:<hex>" digest to its first 12 hex
+// characters for progress lines, matching how docker displays layer IDs.
+func shortDigest(digest string) string {
+	hex := strings.TrimPrefix(digest, "sha256:")
+	if len(hex) > 12 {
+		return hex[:12]
+	}
+	return hex
+}
+
 // containerBlobRel returns the bundle/repository-relative path of a blob,
 // e.g. containers/blobs/sha256/ab1/ab12... The store is content-addressed and
 // shared across repositories, so identical layers are kept once; blobs are
@@ -764,6 +774,7 @@ func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRe
 	if err := writeVerifiedBlob(abs, resp.Body, desc.Size, mf.SHA256); err != nil {
 		return ManifestFile{}, fmt.Errorf("%s: blob %s: %w", ref, desc.Digest, err)
 	}
+	emitProgress(ctx, "    ↓ blob %s (%s)", shortDigest(desc.Digest), formatBytes(desc.Size))
 	seen[rel] = true
 	return mf, nil
 }
@@ -845,11 +856,13 @@ func (s *LowServer) CollectContainers(ctx context.Context, req ContainerCollectR
 	}
 	defer os.RemoveAll(stageRoot)
 
+	emitProgress(ctx, "Resolving %d image reference(s) (linux/amd64)…", len(refs))
 	repos, files, failed := s.mirrorContainerImages(ctx, refs, stageRoot)
 	if len(repos) == 0 {
 		return ExportResult{}, fmt.Errorf("no images could be fetched: %s", summarizeFailures(failed))
 	}
 
+	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 	res, err := s.exportIfNew(streamContainers, files, func(seq int64) (ExportResult, error) {
 		return s.writeContainerBundle(seq, stageRoot, files, repos)
 	})
@@ -901,11 +914,14 @@ func (s *LowServer) mirrorContainerImages(ctx context.Context, refs []imageRef, 
 	var failed []FailedModule
 
 	for _, ref := range refs {
+		emitProgress(ctx, "→ %s", ref)
 		img, mf, err := client.resolveAndMirrorImage(ctx, ref, stageRoot, staged)
 		if err != nil {
+			emitProgress(ctx, "  ✗ %s: %s", ref, err)
 			failed = append(failed, FailedModule{Module: ref.Registry + "/" + ref.Repository, Version: refVersionLabel(ref), Error: err.Error()})
 			continue
 		}
+		emitProgress(ctx, "  ✓ %s (%d blob(s))", ref, len(mf))
 		for _, f := range mf {
 			if !listed[f.Path] {
 				listed[f.Path] = true
@@ -953,6 +969,7 @@ func (c *containerClient) resolveAndMirrorImage(ctx context.Context, ref imageRe
 			return ContainerImage{}, nil, err
 		}
 		log.Printf("containers: %s resolved to tag %s", ref, tag)
+		emitProgress(ctx, "  %s resolved to tag %s", ref, tag)
 		ref.Tag, ref.Constraint = tag, ""
 	}
 	return c.mirrorContainerImage(ctx, ref, stageRoot, seenFile)

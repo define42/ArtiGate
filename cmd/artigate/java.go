@@ -482,6 +482,7 @@ func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (
 		return ExportResult{}, err
 	}
 
+	emitProgress(ctx, "Running mvn dependency:go-offline to resolve the closure…")
 	if _, err := s.runMaven(ctx, stageRoot, "-B", "-f", pomPath,
 		"dependency:go-offline", "-Dmaven.repo.local="+localRepo); err != nil {
 		return ExportResult{}, err
@@ -498,6 +499,7 @@ func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (
 		return ExportResult{}, err
 	}
 
+	emitProgress(ctx, "Packing %d artifact file(s) into a signed bundle…", len(files))
 	return s.exportIfNew(streamMaven, files, func(seq int64) (ExportResult, error) {
 		return s.writeMavenBundle(seq, stageRoot, files, artifacts)
 	})

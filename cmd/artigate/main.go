@@ -493,28 +493,34 @@ func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool
 	if r.Method != http.MethodPost {
 		return false
 	}
-	var (
-		res ExportResult
-		err error
-	)
+	// Each case binds the request to its handler; the collect itself runs below,
+	// either buffered (a single JSON result) or streamed (?stream=1, the
+	// dashboard's live progress modal). The handler re-reads r.Body when it runs,
+	// so streaming defers the collect into streamCollect's goroutine unchanged.
+	var run func(context.Context) (ExportResult, error)
 	switch r.URL.Path {
 	case "/admin/go/collect":
-		res, err = s.HandleGoCollect(r.Context(), r)
+		run = func(ctx context.Context) (ExportResult, error) { return s.HandleGoCollect(ctx, r) }
 	case "/admin/python/collect":
-		res, err = s.HandlePythonCollect(r.Context(), r)
+		run = func(ctx context.Context) (ExportResult, error) { return s.HandlePythonCollect(ctx, r) }
 	case "/admin/maven/collect":
-		res, err = s.HandleMavenCollect(r.Context(), r)
+		run = func(ctx context.Context) (ExportResult, error) { return s.HandleMavenCollect(ctx, r) }
 	case "/admin/apt/collect":
-		res, err = s.HandleAptCollect(r.Context(), r)
+		run = func(ctx context.Context) (ExportResult, error) { return s.HandleAptCollect(ctx, r) }
 	case "/admin/rpm/collect":
-		res, err = s.HandleRpmCollect(r.Context(), r)
+		run = func(ctx context.Context) (ExportResult, error) { return s.HandleRpmCollect(ctx, r) }
 	case "/admin/containers/collect":
-		res, err = s.HandleContainerCollect(r.Context(), r)
+		run = func(ctx context.Context) (ExportResult, error) { return s.HandleContainerCollect(ctx, r) }
 	case "/admin/npm/collect":
-		res, err = s.HandleNpmCollect(r.Context(), r)
+		run = func(ctx context.Context) (ExportResult, error) { return s.HandleNpmCollect(ctx, r) }
 	default:
 		return false
 	}
+	if wantsStreamingCollect(r) {
+		s.streamCollect(w, r, run)
+		return true
+	}
+	res, err := run(r.Context())
 	return respondJSONOrError(w, http.StatusBadRequest, res, err)
 }
 
@@ -798,6 +804,7 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 	mu.Lock()
 	defer mu.Unlock()
 
+	emitProgress(ctx, "Resolving the Go module graph…")
 	records, err := s.resolveGoCollectRecords(ctx, req)
 	if err != nil {
 		return ExportResult{}, err
@@ -806,6 +813,7 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 		return ExportResult{}, errors.New("no go modules resolved")
 	}
 	sortRequestRecords(records)
+	emitProgress(ctx, "Resolved %d module(s); fetching…", len(records))
 	// Fetch before allocating a sequence so the resolved file set can be
 	// dedup-checked (Tier-1): a re-collect of already-forwarded modules skips.
 	mods, files, failed, err := s.fetchBundleContent(ctx, records)
@@ -817,6 +825,7 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 		// or burn a sequence number the high side would then wait on forever.
 		return ExportResult{}, fmt.Errorf("no modules could be fetched: %s", summarizeFailures(failed))
 	}
+	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 	res, err := s.exportIfNew(streamGo, files, func(seq int64) (ExportResult, error) {
 		return s.writeGoBundle(streamGo, seq, mods, files)
 	})
@@ -1138,8 +1147,10 @@ func summarizeFailures(failed []FailedModule) string {
 // never blocks every other module from being exported.
 func (s *LowServer) fetchBundleContent(ctx context.Context, records []RequestRecord) (mods []ManifestMod, files []ManifestFile, failed []FailedModule, err error) {
 	seenFile := map[string]bool{}
-	for _, rec := range records {
+	for i, rec := range records {
+		emitProgress(ctx, "→ [%d/%d] %s@%s", i+1, len(records), rec.Module, rec.Version)
 		if ferr := s.fetchVersion(ctx, rec.Module, rec.Version); ferr != nil {
+			emitProgress(ctx, "  ✗ %s@%s: %s", rec.Module, rec.Version, ferr)
 			failed = append(failed, FailedModule{Module: rec.Module, Version: rec.Version, Error: ferr.Error()})
 			continue
 		}

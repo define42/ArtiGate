@@ -217,6 +217,7 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 	var mirrors []AptMirror
 	var files []ManifestFile
 	seenFile := map[string]bool{}
+	emitProgress(ctx, "Mirroring %d APT source(s)…", len(configs))
 	for _, cfg := range configs {
 		mirror, mf, err := s.mirrorAptRepo(ctx, cfg, stageRoot, newest)
 		if err != nil {
@@ -234,6 +235,7 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 		return ExportResult{}, errors.New("apt mirror produced no packages")
 	}
 
+	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 	return s.exportIfNew(streamApt, files, func(seq int64) (ExportResult, error) {
 		return s.writeAptBundle(seq, stageRoot, files, mirrors)
 	})
@@ -246,6 +248,7 @@ func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stag
 	base := strings.TrimRight(cfg.URI, "/")
 	distBase := base + "/dists/" + cfg.Suite
 
+	emitProgress(ctx, "→ %s: fetching Release and Packages indexes…", cfg.Name)
 	releaseBytes, err := s.fetchAptRelease(ctx, distBase, cfg.SignedBy)
 	if err != nil {
 		return AptMirror{}, nil, err
@@ -287,6 +290,7 @@ func (s *LowServer) collectAptIndex(ctx context.Context, base, distBase, name, c
 	if newestOnly {
 		pkgs = filterNewestApt(pkgs)
 	}
+	emitProgress(ctx, "  %s %s/%s: %d package(s)", name, comp, arch, len(pkgs))
 	var files []ManifestFile
 	for _, pkg := range pkgs {
 		mf, err := s.downloadAptDeb(ctx, base, name, pkg, stageRoot)
@@ -294,6 +298,7 @@ func (s *LowServer) collectAptIndex(ctx context.Context, base, distBase, name, c
 			return nil, nil, err
 		}
 		if !seenFile[mf.Path] {
+			emitProgress(ctx, "    ↓ %s (%s)", path.Base(mf.Path), formatBytes(mf.Size))
 			files = append(files, mf)
 			seenFile[mf.Path] = true
 		}
