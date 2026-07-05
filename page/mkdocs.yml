@@ -1,4 +1,7 @@
 site_name: ArtiGate
+site_description: Dependency mirror for one-way data-diode / air-gapped networks.
+repo_url: https://github.com/define42/ArtiGate
+repo_name: define42/ArtiGate
 
 docs_dir: docs
 
@@ -21,12 +24,50 @@ theme:
   features:
     - navigation.instant
     - navigation.top
+    - navigation.tracking
+    - navigation.sections
+    - toc.follow
     - content.code.copy
+    - content.code.annotate
     - search.suggest
+    - search.highlight
 
 markdown_extensions:
   - admonition
-  - pymdownx.highlight
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
   - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
   - toc:
       permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Architecture: architecture.md
+  - Running:
+      - Low side: low-side.md
+      - High side: high-side.md
+      - Scheduling (watches): scheduling.md
+      - Deployment: deployment.md
+  - Ecosystems:
+      - Overview: ecosystems/index.md
+      - Go modules: ecosystems/go.md
+      - Python (PyPI): ecosystems/python.md
+      - Java (Maven): ecosystems/maven.md
+      - NPM: ecosystems/npm.md
+      - APT (Debian/Ubuntu): ecosystems/apt.md
+      - RPM (RHEL/Fedora): ecosystems/rpm.md
+      - Container images (OCI): ecosystems/containers.md
+  - Security & trust: security.md
+  - TLS / HTTPS: tls.md
+  - Configuration reference: configuration.md
+  - HTTP API reference: api.md
+  - Troubleshooting: troubleshooting.md
