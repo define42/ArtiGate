@@ -308,10 +308,11 @@ type LowServer struct {
 	streamLocks   map[string]*sync.Mutex
 	mu            sync.Mutex
 	state         LowState
-	// exportIndexMu guards the read-modify-write of the per-stream
-	// exported-content indexes (Tier-1 dedup). Those live in their own files,
-	// separate from state, so this is distinct from mu.
-	exportIndexMu sync.Mutex
+	// exported is the SQLite-backed per-stream index of content hashes already
+	// forwarded across the diode (Tier-1 dedup). It is separate from the
+	// stdlib-JSON sequence state so a SQLite problem can never wedge the core
+	// export pipeline: the index is only an optimization (collectors fail safe).
+	exported *ExportedStore
 	// watches holds scheduled recurring collects (SQLite-backed); watchTick is
 	// how often the scheduler checks for due ones; watchRunning guards against a
 	// watch running concurrently with itself (a tick overlapping a run-now).
@@ -434,12 +435,18 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 		return nil, err
 	}
 	ls.watches = store
+	exported, err := OpenExportedStore(filepath.Join(cfg.Root, "exported.db"))
+	if err != nil {
+		return nil, err
+	}
+	ls.exported = exported
 	return ls, nil
 }
 
-// Close releases the low server's resources (currently the watch database).
+// Close releases the low server's resources (the watch and exported-index
+// databases).
 func (s *LowServer) Close() error {
-	return s.watches.Close()
+	return errors.Join(s.watches.Close(), s.exported.Close())
 }
 
 func (s *LowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1039,68 +1046,20 @@ func (s *LowServer) exportIfNew(stream string, files []ManifestFile, write func(
 	return res, nil
 }
 
-// -----------------------------------------------------------------------------
-// Exported-content index (Tier-1 dedup)
-//
-// A permanent, append-only per-stream set of the content hashes already written
-// into a bundle — i.e. forwarded across the diode. A collect whose entire
-// resolved file set is already in the index produces no bundle, so a scheduled
-// re-pull of unchanged upstreams stops re-sending bytes the high side already
-// has. It is deliberately independent of the rolling bundle archive: rebuilding
-// it from archived manifests would let archive pruning forget shipped content
-// and re-ship it. Re-export never consults or updates it.
-// -----------------------------------------------------------------------------
-
-func (s *LowServer) exportedIndexPath(stream string) string {
-	return filepath.Join(s.cfg.Root, "exported-"+stream+".json")
-}
-
-type exportedContentIndex struct {
-	SHA256 []string `json:"sha256"`
-}
-
-// loadExportedIndex reads a stream's exported-content index as a set. A missing
-// index is an empty set (nothing forwarded yet).
-func (s *LowServer) loadExportedIndex(stream string) (map[string]bool, error) {
-	b, err := os.ReadFile(s.exportedIndexPath(stream))
-	if errors.Is(err, os.ErrNotExist) {
-		return map[string]bool{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var idx exportedContentIndex
-	if err := json.Unmarshal(b, &idx); err != nil {
-		return nil, err
-	}
-	set := make(map[string]bool, len(idx.SHA256))
-	for _, h := range idx.SHA256 {
-		set[h] = true
-	}
-	return set, nil
-}
-
-// allForwarded reports whether every file's content hash is already in the
-// stream's exported index, so this collect would add nothing new to the diode.
-// It fails safe: an empty file set or any index error returns false (never skip
-// when unsure), so content is never wrongly suppressed.
+// allForwarded reports whether every file's content hash is already recorded
+// for the stream, so this collect would add nothing new to the diode. It fails
+// safe: an empty file set or any store error returns false (never skip when
+// unsure), so content is never wrongly suppressed.
 func (s *LowServer) allForwarded(stream string, files []ManifestFile) bool {
 	if len(files) == 0 {
 		return false
 	}
-	s.exportIndexMu.Lock()
-	defer s.exportIndexMu.Unlock()
-	set, err := s.loadExportedIndex(stream)
+	all, err := s.exported.AllForwarded(stream, manifestHashes(files))
 	if err != nil {
 		log.Printf("export index %s: %v; exporting without dedup", stream, err)
 		return false
 	}
-	for _, f := range files {
-		if !set[f.SHA256] {
-			return false
-		}
-	}
-	return true
+	return all
 }
 
 // recordForwarded adds every file's content hash to the stream's permanent
@@ -1110,31 +1069,17 @@ func (s *LowServer) recordForwarded(stream string, files []ManifestFile) {
 	if len(files) == 0 {
 		return
 	}
-	s.exportIndexMu.Lock()
-	defer s.exportIndexMu.Unlock()
-	set, err := s.loadExportedIndex(stream)
-	if err != nil {
-		log.Printf("export index %s: %v; not recording %d file(s)", stream, err, len(files))
-		return
+	if err := s.exported.Record(stream, manifestHashes(files)); err != nil {
+		log.Printf("export index %s: record failed: %v", stream, err)
 	}
-	added := false
+}
+
+func manifestHashes(files []ManifestFile) []string {
+	hashes := make([]string, 0, len(files))
 	for _, f := range files {
-		if !set[f.SHA256] {
-			set[f.SHA256] = true
-			added = true
-		}
+		hashes = append(hashes, f.SHA256)
 	}
-	if !added {
-		return
-	}
-	hashes := make([]string, 0, len(set))
-	for h := range set {
-		hashes = append(hashes, h)
-	}
-	sort.Strings(hashes)
-	if err := writeJSONAtomic(s.exportedIndexPath(stream), exportedContentIndex{SHA256: hashes}, stateFileMode); err != nil {
-		log.Printf("export index %s: write failed: %v", stream, err)
-	}
+	return hashes
 }
 
 // writeGoBundle builds, signs, and writes a Go bundle for already-fetched

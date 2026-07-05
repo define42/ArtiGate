@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -56,15 +55,15 @@ func TestExportedContentIndex(t *testing.T) {
 		t.Error("the index must be per-stream")
 	}
 
-	// It persists to disk as a set (recording the same files again is a no-op).
+	// It persists as a set (recording the same files again is a no-op).
 	ls.recordForwarded(streamNpm, files)
-	idx, err := ls.loadExportedIndex(streamNpm)
-	if err != nil || len(idx) != 2 {
-		t.Errorf("index should hold exactly 2 hashes, got %d (err %v)", len(idx), err)
+	n, err := ls.exported.Count(streamNpm)
+	if err != nil || n != 2 {
+		t.Errorf("index should hold exactly 2 hashes, got %d (err %v)", n, err)
 	}
 }
 
-// TestExportedContentIndexFailsSafe proves a corrupt index never suppresses a
+// TestExportedContentIndexFailsSafe proves a store error never suppresses a
 // collect: allForwarded returns false (export anyway) rather than skipping.
 func TestExportedContentIndexFailsSafe(t *testing.T) {
 	ls := newBareLowServer(t)
@@ -73,11 +72,12 @@ func TestExportedContentIndexFailsSafe(t *testing.T) {
 	if !ls.allForwarded(streamNpm, files) {
 		t.Fatal("precondition: file should be recorded")
 	}
-	if err := os.WriteFile(ls.exportedIndexPath(streamNpm), []byte("{not json"), 0o600); err != nil {
+	// Close the store out from under the collector: every query now errors.
+	if err := ls.exported.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if ls.allForwarded(streamNpm, files) {
-		t.Error("a corrupt index must fail safe (export, not skip)")
+		t.Error("a store error must fail safe (export, not skip)")
 	}
 }
 

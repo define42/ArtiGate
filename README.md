@@ -236,17 +236,19 @@ run immediately, or deleted from the same page.
 
 ### Export deduplication
 
-A collect only bundles content it has not already sent. Each stream keeps a
-permanent index of the content hashes it has forwarded (`<root>/exported-<stream>.json`);
-when a collect resolves to a file set that is *entirely* already-forwarded, no
-bundle is written and no bundle number is consumed — the dashboard (and a
-schedule's status) simply reports "no new content". So a daily schedule over an
-unchanged upstream stops re-sending bytes the high side already has. This runs
-after the fetch (a wheel's hash is only known once downloaded), so it saves diode
-bandwidth and low-side archive disk, not the upstream fetch itself. The index is
-independent of the re-export archive: re-transmitting a bundle never consults or
-updates it. (Partial-overlap collects still send the whole bundle for now; the
-high side dedups the already-present files by content hash on import.)
+A collect only bundles content it has not already sent. The low side records the
+content hashes it has forwarded, per stream, in a small SQLite index
+(`<root>/exported.db`); when a collect resolves to a file set that is *entirely*
+already-forwarded, no bundle is written and no bundle number is consumed — the
+dashboard (and a schedule's status) simply reports "no new content". So a daily
+schedule over an unchanged upstream stops re-sending bytes the high side already
+has. This runs after the fetch (a wheel's hash is only known once downloaded), so
+it saves diode bandwidth and low-side archive disk, not the upstream fetch
+itself. The index is independent of the re-export archive: re-transmitting a
+bundle never consults or updates it, and if the index is ever unavailable a
+collect simply exports as normal rather than wrongly skipping. (Partial-overlap
+collects still send the whole bundle for now; the high side dedups the
+already-present files by content hash on import.)
 
 ### Status and re-export
 
