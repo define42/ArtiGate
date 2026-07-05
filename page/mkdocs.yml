@@ -2,6 +2,5 @@ site_name: My Project
 
 docs_dir: docs
 
-
 theme:
   name: mkdocs
