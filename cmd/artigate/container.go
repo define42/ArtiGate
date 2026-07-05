@@ -75,11 +75,27 @@ type ContainerBlob struct {
 	Size   int64  `json:"size"`
 }
 
+// containerBlobShardHex returns a blob's sharding subdirectory: the first three
+// characters of its hex digest, which spreads blobs across 16^3 = 4096
+// directories so no single directory holds the entire store. Docker's own
+// registry and git use the same first-N-hex-character scheme. Digests are
+// validated to 64 hex chars before they reach here; the guard only avoids a
+// panic on malformed input.
+func containerBlobShardHex(hex string) string {
+	if len(hex) < 3 {
+		return hex
+	}
+	return hex[:3]
+}
+
 // containerBlobRel returns the bundle/repository-relative path of a blob,
-// e.g. containers/blobs/sha256/ab12... The store is content-addressed and
-// shared across repositories, so identical layers are kept once.
+// e.g. containers/blobs/sha256/ab1/ab12... The store is content-addressed and
+// shared across repositories, so identical layers are kept once; blobs are
+// sharded by digest prefix (see containerBlobShardHex) to keep any one
+// directory small.
 func containerBlobRel(digest string) string {
-	return path.Join("containers", "blobs", "sha256", strings.TrimPrefix(digest, "sha256:"))
+	hex := strings.TrimPrefix(digest, "sha256:")
+	return path.Join("containers", "blobs", "sha256", containerBlobShardHex(hex), hex)
 }
 
 // -----------------------------------------------------------------------------
@@ -1142,7 +1158,8 @@ func (s *HighServer) containersDir() string {
 }
 
 func (s *HighServer) containerBlobPath(digest string) string {
-	return filepath.Join(s.containersDir(), "blobs", "sha256", strings.TrimPrefix(digest, "sha256:"))
+	hex := strings.TrimPrefix(digest, "sha256:")
+	return filepath.Join(s.containersDir(), "blobs", "sha256", containerBlobShardHex(hex), hex)
 }
 
 // containerRepoIndexPath is where a repository's accumulated tag index lives.
