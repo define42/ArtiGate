@@ -118,7 +118,7 @@ func writeSignedPythonBundle(t *testing.T, landing string, priv ed25519.PrivateK
 	for name, content := range wheels {
 		writeFile(t, filepath.Join(dest, name), []byte(content))
 	}
-	files, projects, err := collectPythonDist(dest)
+	files, projects, _, err := collectPythonDist(dest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,5 +392,109 @@ func TestHighServerSimpleEscapesHTML(t *testing.T) {
 		if !strings.Contains(body, "&lt;xss&gt;") {
 			t.Errorf("GET %s did not HTML-escape the crafted name:\n%s", p, body)
 		}
+	}
+}
+
+func TestParseSdistFilename(t *testing.T) {
+	tests := []struct {
+		filename, name, version string
+		ok                      bool
+	}{
+		{"legacypkg-1.0.0.tar.gz", "legacypkg", "1.0.0", true},
+		{"My_Pkg-2.3.tar.gz", "my-pkg", "2.3", true},                                 // normalized name
+		{"django-rest-framework-3.14.tar.gz", "django-rest-framework", "3.14", true}, // hyphenated name
+		{"foo-1.0.zip", "foo", "1.0", true},
+		{"bar-3.1.4.tar.bz2", "bar", "3.1.4", true},
+		{"requests-2.32.4-py3-none-any.whl", "", "", false}, // a wheel, not an sdist
+		{"noextension", "", "", false},
+	}
+	for _, tt := range tests {
+		name, version, ok := parseSdistFilename(tt.filename)
+		if ok != tt.ok || name != tt.name || version != tt.version {
+			t.Errorf("parseSdistFilename(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				tt.filename, name, version, ok, tt.name, tt.version, tt.ok)
+		}
+	}
+}
+
+// fakePipMixedScript writes one wheel and one source distribution, simulating a
+// requirements set where a package publishes only an sdist.
+const fakePipMixedScript = `#!/usr/bin/env bash
+set -eu
+dest=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--dest" ]; then dest="$a"; fi
+  prev="$a"
+done
+mkdir -p "$dest"
+printf 'wheel-requests' > "$dest/requests-2.32.4-py3-none-any.whl"
+printf 'sdist-legacy'   > "$dest/legacypkg-1.0.0.tar.gz"
+`
+
+// fakePipSdistOnlyScript writes only a source distribution (no wheel at all).
+const fakePipSdistOnlyScript = `#!/usr/bin/env bash
+set -eu
+dest=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--dest" ]; then dest="$a"; fi
+  prev="$a"
+done
+mkdir -p "$dest"
+printf 'sdist-only' > "$dest/onlysdist-2.0.0.tar.gz"
+`
+
+func newPyLowServerWithPip(t *testing.T, script string) (*LowServer, ed25519.PrivateKey) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake pip shell script is not portable to Windows")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available for fake pip script")
+	}
+	_, priv := newTestKeys(t)
+	pip := filepath.Join(t.TempDir(), "pip")
+	if err := os.WriteFile(pip, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := LowConfig{Root: t.TempDir(), ExportDir: filepath.Join(t.TempDir(), "out"), PipBinary: pip}
+	ls, err := NewLowServer(cfg, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ls.Close() })
+	return ls, priv
+}
+
+// TestCollectPythonReportsSdists proves the wheels in a requirements set still
+// export while a source-only package is reported as skipped (not silently
+// dropped) — the lenient "uncheck Wheels only" behaviour.
+func TestCollectPythonReportsSdists(t *testing.T) {
+	ls, _ := newPyLowServerWithPip(t, fakePipMixedScript)
+
+	res, err := ls.CollectPython(context.Background(), PythonCollectRequest{Requirements: []string{"requests", "legacypkg"}})
+	if err != nil {
+		t.Fatalf("CollectPython: %v", err)
+	}
+	if res.BundleID != "python-bundle-000001" || res.ExportedModules != 1 {
+		t.Fatalf("expected the one wheel bundled, got %+v", res)
+	}
+	if len(res.SkippedModules) != 1 || res.SkippedModules[0].Module != "legacypkg" || res.SkippedModules[0].Version != "1.0.0" {
+		t.Fatalf("expected legacypkg reported as skipped, got %+v", res.SkippedModules)
+	}
+}
+
+// TestCollectPythonAllSdistsFails proves a requirements set with no wheels at
+// all fails with a clear source-distribution message and burns no sequence.
+func TestCollectPythonAllSdistsFails(t *testing.T) {
+	ls, _ := newPyLowServerWithPip(t, fakePipSdistOnlyScript)
+
+	_, err := ls.CollectPython(context.Background(), PythonCollectRequest{Requirements: []string{"onlysdist"}})
+	if err == nil || !strings.Contains(err.Error(), "source distribution") {
+		t.Fatalf("expected a source-distribution error, got %v", err)
+	}
+	if seq := ls.peekSequence(streamPython); seq != 1 {
+		t.Errorf("failed collect burned a sequence: next = %d, want 1", seq)
 	}
 }

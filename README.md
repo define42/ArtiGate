@@ -160,9 +160,13 @@ toolchain when a module requires one.
   `module@latest` for the newest), or upload a project's `go.mod` (and optional
   `go.sum`) to mirror exactly what it builds. The full dependency graph is always
   fetched.
-- **Python** — a requirements list (paste or upload `requirements.txt`). An
-  optional cross-target downloads wheels for the high-side interpreter/platform
-  rather than the low-side host. Wheels only.
+- **Python** — a requirements list (paste or upload `requirements.txt`). Wheels
+  only (no sdists). **"Wheels only"** is on by default: the collect fails if any
+  package in the closure has no wheel, so you never ship a silently incomplete
+  mirror. Untick it to mirror the wheels that *are* available and get back a list
+  of the source-only packages that were skipped. An optional cross-target
+  downloads wheels for the high-side interpreter/platform rather than the
+  low-side host (which forces wheels-only regardless).
 - **Java** — Maven coordinates (`groupId:artifactId:version`, one per line) or an
   uploaded `pom.xml`. Release versions only; SNAPSHOTs and version ranges are
   rejected.
@@ -365,7 +369,9 @@ signature check (`repo_gpgcheck=0`, `[trusted=yes]`, etc.).
   it to localhost or a trusted network too.
 - **Go**: no sumdb mirroring — use `GOSUMDB=off` on the high side and rely on your
   committed `go.sum` plus the signed bundles.
-- **Python**: wheels only (no sdists).
+- **Python**: wheels only (no sdists). "Wheels only" is on by default (fail if a
+  package has no wheel); untick it to mirror what's available and report the
+  source-only packages as skipped.
 - **Java/Maven**: release versions only; SNAPSHOT and dynamic/range versions are
   rejected.
 - **NPM**: registry tarballs only — dependencies resolved to git or file URLs

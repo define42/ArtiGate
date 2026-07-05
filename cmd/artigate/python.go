@@ -400,61 +400,118 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 		return ExportResult{}, err
 	}
 
-	files, projects, err := collectPythonDist(dest)
+	files, projects, skipped, err := collectPythonDist(dest)
 	if err != nil {
 		return ExportResult{}, err
 	}
 	if len(files) == 0 {
+		if len(skipped) > 0 {
+			return ExportResult{}, fmt.Errorf("no wheels to mirror; %d package(s) publish only a source distribution: %s",
+				len(skipped), summarizeFailures(skipped))
+		}
 		return ExportResult{}, errors.New("pip download produced no wheels")
 	}
 
 	// exportIfNew peeks/commits the sequence around the write (so a failed
 	// collection never burns a number) and skips entirely when every wheel was
 	// already forwarded.
-	return s.exportIfNew(streamPython, files, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(streamPython, files, func(seq int64) (ExportResult, error) {
 		return s.writePythonBundle(seq, stageRoot, files, projects)
 	})
+	if err != nil {
+		return ExportResult{}, err
+	}
+	// Report source-only packages that could not be mirrored, like the other
+	// ecosystems report their unfetchable items.
+	res.SkippedModules = append(res.SkippedModules, skipped...)
+	return res, nil
+}
+
+// parseSdistFilename does a best-effort split of a source-distribution filename
+// ("{name}-{version}.tar.gz") into its normalized project name and version. It
+// is used only to report a package that cannot be mirrored (ArtiGate serves
+// wheels only), so an imperfect split on a hyphenated name is acceptable.
+func parseSdistFilename(filename string) (name, version string, ok bool) {
+	for _, ext := range []string{".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".zip"} {
+		stem, cut := strings.CutSuffix(filename, ext)
+		if !cut {
+			continue
+		}
+		if i := strings.LastIndex(stem, "-"); i > 0 && i < len(stem)-1 {
+			return normalizePyName(stem[:i]), stem[i+1:], true
+		}
+		return normalizePyName(stem), "", true
+	}
+	return "", "", false
+}
+
+// pyDist accumulates the wheels (and the source-only packages skipped) found in
+// a pip download directory.
+type pyDist struct {
+	byProject map[string]*PythonProject
+	order     []string
+	files     []ManifestFile
+	skipped   []FailedModule
+}
+
+// addWheel hashes one wheel and records it under its project. A filename that
+// does not parse as a wheel is ignored.
+func (d *pyDist) addWheel(dest, name string) error {
+	project, version, ok := parseWheelFilename(name)
+	if !ok {
+		return nil
+	}
+	rel := path.Join("python", "packages", name)
+	mf, err := hashManifestFile(filepath.Join(dest, name), rel)
+	if err != nil {
+		return err
+	}
+	d.files = append(d.files, mf)
+	key := project + "@" + version
+	p := d.byProject[key]
+	if p == nil {
+		p = &PythonProject{Name: project, NormalizedName: project, Version: version}
+		d.byProject[key] = p
+		d.order = append(d.order, key)
+	}
+	p.Files = append(p.Files, PythonFile{Filename: name, Path: rel, SHA256: mf.SHA256})
+	return nil
+}
+
+func (d *pyDist) projects() []PythonProject {
+	out := make([]PythonProject, 0, len(d.order))
+	for _, k := range d.order {
+		out = append(out, *d.byProject[k])
+	}
+	return out
 }
 
 // collectPythonDist scans a pip download directory and returns the manifest
-// files plus the per-project grouping for the manifest's python section.
-func collectPythonDist(dest string) ([]ManifestFile, []PythonProject, error) {
+// files and per-project grouping for the wheels found, plus any source
+// distributions pip downloaded. A source distribution means the package
+// published no wheel; ArtiGate serves wheels only, so it cannot be mirrored and
+// is reported as skipped rather than silently dropped.
+func collectPythonDist(dest string) ([]ManifestFile, []PythonProject, []FailedModule, error) {
 	entries, err := os.ReadDir(dest)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	byProject := map[string]*PythonProject{}
-	var order []string
-	var files []ManifestFile
+	d := &pyDist{byProject: map[string]*PythonProject{}}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".whl") {
+		switch {
+		case e.IsDir():
 			continue
+		case strings.HasSuffix(e.Name(), ".whl"):
+			if err := d.addWheel(dest, e.Name()); err != nil {
+				return nil, nil, nil, err
+			}
+		default:
+			if name, version, ok := parseSdistFilename(e.Name()); ok {
+				d.skipped = append(d.skipped, FailedModule{Module: name, Version: version, Error: "no wheel available (source distribution only); not mirrored"})
+			}
 		}
-		project, version, ok := parseWheelFilename(e.Name())
-		if !ok {
-			continue
-		}
-		rel := path.Join("python", "packages", e.Name())
-		mf, err := hashManifestFile(filepath.Join(dest, e.Name()), rel)
-		if err != nil {
-			return nil, nil, err
-		}
-		files = append(files, mf)
-
-		key := project + "@" + version
-		p, ok := byProject[key]
-		if !ok {
-			p = &PythonProject{Name: project, NormalizedName: project, Version: version}
-			byProject[key] = p
-			order = append(order, key)
-		}
-		p.Files = append(p.Files, PythonFile{Filename: e.Name(), Path: rel, SHA256: mf.SHA256})
 	}
-	projects := make([]PythonProject, 0, len(order))
-	for _, k := range order {
-		projects = append(projects, *byProject[k])
-	}
-	return files, projects, nil
+	return d.files, d.projects(), d.skipped, nil
 }
 
 func (s *LowServer) writePythonBundle(seq int64, stageRoot string, files []ManifestFile, projects []PythonProject) (ExportResult, error) {

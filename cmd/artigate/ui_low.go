@@ -171,16 +171,16 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or load a requirements.txt
         <input id="pyfile" type="file" accept=".txt,text/plain" onchange="loadPyFile()">
       </label>
+      <label class="pytarget-check"><input id="pyonly" type="checkbox" checked> Wheels only &mdash; fail if any package has no wheel (uncheck to mirror the wheels available and list the rest)</label>
       <details class="pytarget">
         <summary>Cross-target for a different interpreter (optional)</summary>
-        <label class="pytarget-check"><input id="pyonly" type="checkbox"> Wheels only (recommended for air-gapped builds)</label>
         <div class="pytarget-grid">
           <label>Python version<input id="pyver" type="text" placeholder="3.12" autocomplete="off"></label>
           <label>Implementation<input id="pyimpl" type="text" placeholder="cp" autocomplete="off"></label>
           <label>ABI<input id="pyabi" type="text" placeholder="cp312" autocomplete="off"></label>
           <label>Platforms (comma-separated)<input id="pyplat" type="text" placeholder="manylinux_2_28_x86_64, manylinux_2_34_x86_64" autocomplete="off"></label>
         </div>
-        <p class="hint">Set these to download wheels for the high-side interpreter rather than this host; any of them forces <code>--only-binary=:all:</code>.</p>
+        <p class="hint">Set these to download wheels for the high-side interpreter rather than this host; any of them forces <code>--only-binary=:all:</code> (wheels only) regardless of the checkbox above.</p>
       </details>
       <button class="primary" type="submit" id="pyBtn">Collect &amp; export</button>
     </form>
@@ -549,12 +549,18 @@ async function collectPython(ev){
     const d=JSON.parse(text);
     if(handleSkip(d, showPyResult)) return;
     let msg='&#10003; Collected '+esc(d.exported_modules)+' package(s) into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
-    if(parsed.skipped.length){
-      msg+='<br>&#9888; Skipped '+esc(parsed.skipped.length)+' pip option line(s) not supported here (e.g. <code>'+esc(parsed.skipped[0])+'</code>).';
-      showPyResult('warn', msg);
-    } else {
-      showPyResult('ok', msg);
+    let warn=false;
+    const sdists=d.skipped_modules||[];
+    if(sdists.length){
+      warn=true;
+      msg+='<br>&#9888; '+esc(sdists.length)+' package(s) had no wheel (source distribution only) and were not mirrored &mdash; pin a version that ships a wheel, or exclude them:<ul>'+
+        sdists.map(m=>'<li><code>'+esc(m.module)+(m.version?' '+esc(m.version):'')+'</code></li>').join('')+'</ul>';
     }
+    if(parsed.skipped.length){
+      warn=true;
+      msg+='<br>&#9888; Skipped '+esc(parsed.skipped.length)+' pip option line(s) not supported here (e.g. <code>'+esc(parsed.skipped[0])+'</code>).';
+    }
+    showPyResult(warn?'warn':'ok', msg);
     loadStatus();
   }catch(e){ showPyResult('err','Request failed: '+esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent=label; }
