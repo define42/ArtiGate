@@ -95,7 +95,7 @@ artigate low \
 | `--watch-interval` | `60s` | How often the scheduler checks for due watches; `0` disables scheduled watches |
 
 !!! note
-    The `GO*` flags become process environment only when non-empty. `GOTOOLCHAIN` is exported only if non-empty (the default `auto` is exported). `GIT_TERMINAL_PROMPT=0` is always forced (no interactive git password prompts) and `GO111MODULE=on` is always set.
+    `GOPRIVATE`, `GONOSUMDB`, `GONOPROXY`, and `GOTOOLCHAIN` are exported only when non-empty (the default `GOTOOLCHAIN=auto` is exported); `GOPROXY`, `GOSUMDB`, and `GOVCS` are always exported (even if set to empty). `GIT_TERMINAL_PROMPT=0` is always forced (no interactive git password prompts) and `GO111MODULE=on` is always set.
 
 `--watch-interval` is a Go `time.Duration`, so it accepts `30s`, `10m`, `2h`, etc. On startup the low server creates `<root>`, `<export-dir>`, and `<root>/gopath/pkg/mod/cache/download` (`0o755`), opens `<root>/watches.db` and `<root>/exported.db` (SQLite), and loads or creates `<root>/low-state.json` (`0o600`).
 

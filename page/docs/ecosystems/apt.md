@@ -38,7 +38,7 @@ Every `deb` stanza in the pasted text is parsed. A multi-repo `.sources` file th
 
 | Field | Meaning | Default if omitted |
 | --- | --- | --- |
-| `Types` | Must contain the token `deb` (binary). `deb-src` alone is rejected. | required (per stanza) |
+| `Types` | Only validated when present: if supplied it must contain the token `deb` (binary), and `deb-src` alone is rejected. Omitting it is allowed and the stanza is mirrored as `deb`. | none → treated as `deb` |
 | `URIs` | Archive root URL (`http`/`https`). **Only the first token is used.** | required |
 | `Suites` | Suite / distribution, e.g. `stable`. **Only the first token is used.** | required |
 | `Components` | Space-separated components, e.g. `main contrib`. | `main` |

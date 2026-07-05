@@ -102,7 +102,7 @@ After the verified files are installed, the high side rebuilds all served reposi
 
 ### No upstream fetch on the high side
 
-The high side has **no HTTP client and no upstream fetcher**. Its only loops are the import loop and the read-only serving mux. Missing content returns `404` — it is never fetched from anywhere. (The only upstream configuration in the whole system is the low side's `--upstream-goproxy`.) This is the property the diode exists to guarantee: nothing the high side serves came from the network, only from a signed, hash-verified, sequence-chained bundle.
+The high side has **no HTTP client and no upstream fetcher**. Its only loops are the import loop and the read-only serving mux. Missing content returns `404` — it is never fetched from anywhere. (All upstream/fetch configuration lives on the low side — e.g. `--upstream-goproxy`, `--npm-registry`, `--container-registry`, `--gosumdb`; the high side has none.) This is the property the diode exists to guarantee: nothing the high side serves came from the network, only from a signed, hash-verified, sequence-chained bundle.
 
 ## Low-side authentication
 

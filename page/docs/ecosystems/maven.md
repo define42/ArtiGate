@@ -152,13 +152,13 @@ On import, the high side rejects any bundle whose artifacts lack a coordinate, l
 
 ## High side: serving a Maven 2 repository
 
-The high side exposes the mirrored files as a static Maven 2 repository rooted at `<root>/download/maven`, served under `/maven/`.
+The high side exposes the mirrored files as a static Maven 2 repository rooted at `<root>/cache/download/maven`, served under `/maven/`.
 
 ### Routing
 
 - Only `GET` and `HEAD` are allowed; other methods return `405 method not allowed`.
 - Bare `/maven` (no file) returns `404`. Paths that fail relative-path or safe-join validation return `404` / `400 unsafe path`.
-- **`maven-metadata.xml`** (and its `.sha1`/`.md5`) is **computed on the fly** — never served from disk. Every other path (`.pom`, `.jar`, `.module`, checksums, …) is served directly from `<root>/download/maven/<path>`.
+- **`maven-metadata.xml`** (and its `.sha1`/`.md5`) is **computed on the fly** — never served from disk. Every other path (`.pom`, `.jar`, `.module`, checksums, …) is served directly from `<root>/cache/download/maven/<path>`.
 
 ```http
 GET /maven/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar   → stored file

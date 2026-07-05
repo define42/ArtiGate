@@ -41,7 +41,7 @@ See [Ecosystems](ecosystems/index.md) for the per-ecosystem detail pages.
 - **Export deduplication.** The low side records the content hashes it has forwarded, per stream, in a small SQLite index (`<root>/exported.db`). When a collect resolves entirely to already-forwarded content, no bundle is written and no sequence number is consumed — a daily schedule over an unchanged upstream simply reports "no new content".
 
 !!! tip "Air-gap friendly by construction"
-    ArtiGate is stdlib-only apart from two dependencies: pure-Go SQLite (for scheduled watches and the export-dedup index) and `hashicorp/go-version` (for container tag constraints). Both dashboards are fully self-contained with no external assets.
+    ArtiGate leans on the Go standard library, with five direct third-party dependencies: `caddyserver/certmagic` (automatic HTTPS/ACME), `gorilla/securecookie` (signed/encrypted session cookies), `golang.org/x/crypto` (argon2 password hashing), pure-Go `modernc.org/sqlite` (scheduled watches and the export-dedup index), and `hashicorp/go-version` (container tag constraints). Both dashboards are fully self-contained with no external assets.
 
 ## Where to next
 

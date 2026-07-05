@@ -6,9 +6,9 @@ ArtiGate is a single static binary with four subcommands (`keygen`, `low`, `high
 
 ## The Docker image
 
-The [`Dockerfile`](https://github.com/) is a two-stage build, both stages on `golang:1.25-alpine`.
+The `Dockerfile` is a two-stage build, both stages on `golang:1.25-alpine`.
 
-**Build stage.** `go.mod` is copied first so the module-download layer caches independently of source changes (ArtiGate has no third-party runtime dependencies beyond pure-Go SQLite and one small helper, so this is quick). The binary is compiled fully static with CGO disabled, so it runs on any base:
+**Build stage.** `go.mod` is copied first so the module-download layer caches independently of source changes (ArtiGate's runtime deps are pure-Go: `certmagic` for ACME/TLS, `gorilla/securecookie`, `hashicorp/go-version`, `golang.org/x/crypto`, and `modernc.org` SQLite). The binary is compiled fully static with CGO disabled, so it runs on any base:
 
 ```dockerfile
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/artigate ./cmd/artigate
