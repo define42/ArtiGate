@@ -469,6 +469,12 @@ func (c *hfClient) fetchHFRepoInfo(ctx context.Context, ref hfRepoRef) (commit s
 	if resp.StatusCode != http.StatusOK {
 		return "", nil, fmt.Errorf("%s: repository info: HTTP %d", ref, resp.StatusCode)
 	}
+	return parseHFRepoInfo(ref, body)
+}
+
+// parseHFRepoInfo decodes a /revision listing into the commit hash and the
+// sorted per-file metadata, rejecting unsafe paths and empty repositories.
+func parseHFRepoInfo(ref hfRepoRef, body []byte) (commit string, files []hfRepoFileMeta, err error) {
 	var info struct {
 		SHA      string `json:"sha"`
 		Siblings []struct {
@@ -514,31 +520,43 @@ func (c *hfClient) fetchHFRepoInfo(ctx context.Context, ref hfRepoRef) (commit s
 func (c *hfClient) downloadHFRepoFile(ctx context.Context, ref hfRepoRef, commit string, meta hfRepoFileMeta, stageRoot string, staged map[string]bool) (HFRepoFile, ManifestFile, error) {
 	rawURL := c.base + "/" + ref.Org + "/" + ref.Name + "/resolve/" + commit + "/" + escapeHFRepoPath(meta.Path)
 	if meta.LFS != "" && meta.Size > 0 {
-		rel := hfBlobRel("sha256:" + meta.LFS)
-		rf := HFRepoFile{Path: meta.Path, SHA256: meta.LFS, Size: meta.Size}
-		mf := ManifestFile{Path: rel, SHA256: meta.LFS, Size: meta.Size}
-		if staged[rel] {
-			return rf, mf, nil
-		}
-		ctx, cancel := context.WithTimeout(ctx, hfBlobDownloadTimeout)
-		defer cancel()
-		resp, err := c.do(ctx, ref.String(), rawURL, "")
-		if err != nil {
-			return HFRepoFile{}, ManifestFile{}, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return HFRepoFile{}, ManifestFile{}, fmt.Errorf("%s: %s: HTTP %d", ref, meta.Path, resp.StatusCode)
-		}
-		abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
-		body := newProgressReader(ctx, resp.Body, meta.Path, meta.Size)
-		if err := writeVerifiedBlob(abs, body, meta.Size, meta.LFS); err != nil {
-			return HFRepoFile{}, ManifestFile{}, fmt.Errorf("%s: %s: %w", ref, meta.Path, err)
-		}
-		emitProgress(ctx, "    ↓ %s (%s)", meta.Path, formatBytes(meta.Size))
-		staged[rel] = true
+		return c.downloadHFRepoLFSFile(ctx, ref, meta, rawURL, stageRoot, staged)
+	}
+	return c.downloadHFRepoPlainFile(ctx, ref, meta, rawURL, stageRoot, staged)
+}
+
+// downloadHFRepoLFSFile streams an LFS-backed file straight to its blob path,
+// verifying the upstream SHA-256 and size.
+func (c *hfClient) downloadHFRepoLFSFile(ctx context.Context, ref hfRepoRef, meta hfRepoFileMeta, rawURL, stageRoot string, staged map[string]bool) (HFRepoFile, ManifestFile, error) {
+	rel := hfBlobRel("sha256:" + meta.LFS)
+	rf := HFRepoFile{Path: meta.Path, SHA256: meta.LFS, Size: meta.Size}
+	mf := ManifestFile{Path: rel, SHA256: meta.LFS, Size: meta.Size}
+	if staged[rel] {
 		return rf, mf, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, hfBlobDownloadTimeout)
+	defer cancel()
+	resp, err := c.do(ctx, ref.String(), rawURL, "")
+	if err != nil {
+		return HFRepoFile{}, ManifestFile{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return HFRepoFile{}, ManifestFile{}, fmt.Errorf("%s: %s: HTTP %d", ref, meta.Path, resp.StatusCode)
+	}
+	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
+	body := newProgressReader(ctx, resp.Body, meta.Path, meta.Size)
+	if err := writeVerifiedBlob(abs, body, meta.Size, meta.LFS); err != nil {
+		return HFRepoFile{}, ManifestFile{}, fmt.Errorf("%s: %s: %w", ref, meta.Path, err)
+	}
+	emitProgress(ctx, "    ↓ %s (%s)", meta.Path, formatBytes(meta.Size))
+	staged[rel] = true
+	return rf, mf, nil
+}
+
+// downloadHFRepoPlainFile fetches a small non-LFS file (config, tokenizer),
+// hashing it while downloading and placing it by the computed hash.
+func (c *hfClient) downloadHFRepoPlainFile(ctx context.Context, ref hfRepoRef, meta hfRepoFileMeta, rawURL, stageRoot string, staged map[string]bool) (HFRepoFile, ManifestFile, error) {
 	sha, size, tmp, err := c.downloadHFToTemp(ctx, ref.String()+": "+meta.Path, rawURL, stageRoot)
 	if err != nil {
 		return HFRepoFile{}, ManifestFile{}, err
