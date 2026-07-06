@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // -----------------------------------------------------------------------------
@@ -503,6 +504,85 @@ func TestCollectHFRepoSnapshot(t *testing.T) {
 		if !strings.HasPrefix(f.Path, "hf/blobs/sha256/") || !strings.HasSuffix(f.Path, f.SHA256) {
 			t.Errorf("file %s is not content-addressed by its sha256", f.Path)
 		}
+	}
+}
+
+// TestCollectHFStopCancelsDownload covers the dashboard's Stop button
+// server-side: cancelling the collect's context (what aborting the streaming
+// request does) aborts an in-flight download promptly, exports nothing, and
+// burns no sequence number.
+func TestCollectHFStopCancelsDownload(t *testing.T) {
+	model := makeFakeHFModel("Q4_0", "gguf-blocked")
+	arrived := make(chan struct{}, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v2/unsloth/gpt-oss-20b-GGUF/manifests/Q4_0", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", mtDockerManifest)
+		_, _ = w.Write(model.manifest)
+	})
+	// Every blob request parks until the cancelled collect tears the
+	// connection down.
+	mux.HandleFunc("/v2/", func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case arrived <- struct{}{}:
+		default:
+		}
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	ls, _ := newHFLowServer(t, srv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := ls.CollectHF(ctx, HFCollectRequest{Models: []string{"unsloth/gpt-oss-20b-GGUF:Q4_0"}})
+		done <- err
+	}()
+
+	<-arrived // a blob download is now in flight
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled collect should fail")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("collect did not stop after cancellation")
+	}
+	if seq := ls.peekSequence(streamHF); seq != 1 {
+		t.Fatalf("next sequence = %d, want 1 (no number burned)", seq)
+	}
+	entries, err := os.ReadDir(ls.cfg.ExportDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("export dir should be empty after a stop, got %d entries", len(entries))
+	}
+}
+
+// TestExportIfNewStoppedBeforeExport checks the export gate: a collect whose
+// context was cancelled before packing must not allocate a sequence or write
+// anything.
+func TestExportIfNewStoppedBeforeExport(t *testing.T) {
+	ls, _ := newAptLowServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	called := false
+	_, err := ls.exportIfNew(ctx, streamHF, []ManifestFile{{Path: "hf/x", SHA256: strings.Repeat("a", 64), Size: 1}},
+		func(int64) (ExportResult, error) {
+			called = true
+			return ExportResult{}, nil
+		})
+	if err == nil || !strings.Contains(err.Error(), "stopped") {
+		t.Fatalf("cancelled export = %v, want a 'stopped' error", err)
+	}
+	if called {
+		t.Fatal("bundle write ran despite cancellation")
+	}
+	if seq := ls.peekSequence(streamHF); seq != 1 {
+		t.Fatalf("next sequence = %d, want 1", seq)
 	}
 }
 

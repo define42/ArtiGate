@@ -234,3 +234,14 @@ func TestLowServerUIReexportFlow(t *testing.T) {
 		t.Errorf("unexpected reexport result: %+v", res)
 	}
 }
+
+// TestLowUICollectStopButton checks the collect modal ships a Stop control
+// wired to abort the streaming request (the server cancels the collect with
+// the connection).
+func TestLowUICollectStopButton(t *testing.T) {
+	for _, want := range []string{`id="cmStop"`, "stopCollect()", "AbortController", "AbortError"} {
+		if !strings.Contains(lowUIHTML, want) {
+			t.Errorf("low UI missing %q", want)
+		}
+	}
+}

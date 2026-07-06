@@ -835,7 +835,7 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 		return ExportResult{}, fmt.Errorf("no modules could be fetched: %s", summarizeFailures(failed))
 	}
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	res, err := s.exportIfNew(streamGo, files, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamGo, files, func(seq int64) (ExportResult, error) {
 		return s.writeGoBundle(streamGo, seq, mods, files)
 	})
 	if err != nil {
@@ -1045,7 +1045,15 @@ func (s *LowServer) commitSequence(stream string, seq int64) error {
 // number, returning a skipped result. write builds and writes the bundle for
 // the allocated sequence. The caller must hold the stream lock (every collector
 // does) so the peek/commit stay race-free.
-func (s *LowServer) exportIfNew(stream string, files []ManifestFile, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
+//
+// A cancelled collect (the dashboard's Stop button aborts the streaming
+// request, cancelling ctx) stops here rather than packing and exporting a
+// bundle nobody wants; a cancellation arriving after this point lets the
+// in-flight write finish, so a bundle is either fully produced or not at all.
+func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []ManifestFile, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ExportResult{}, fmt.Errorf("collect stopped before export: %w", err)
+	}
 	if s.allForwarded(stream, files) {
 		return ExportResult{Stream: stream, Skipped: true, Message: "no new content since the last export"}, nil
 	}

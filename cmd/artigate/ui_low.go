@@ -122,8 +122,10 @@ const lowUIHTML = `<!DOCTYPE html>
   .cmodal-log .l-err { color: #ff9ea3; }
   .cmodal-foot { flex: 0 0 auto; padding: .8rem 1.1rem; border-top: 1px solid #2a2f3a; }
   .cmodal-foot .rbox { margin-top: 0; }
-  .cm-actions { display: flex; justify-content: flex-end; margin-top: .7rem; }
+  .cm-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: .7rem; }
   .cm-actions button:disabled { opacity: .5; cursor: default; }
+  button.danger { background: #2e1416; color: #ff9ea3; border: 1px solid #7f2a30; border-radius: 6px; padding: .5rem 1rem; cursor: pointer; font: inherit; }
+  button.danger:hover:not(:disabled) { background: #3a191c; }
 </style>
 </head>
 <body>
@@ -413,7 +415,10 @@ const lowUIHTML = `<!DOCTYPE html>
   <pre class="cmodal-log" id="cmLog" aria-live="polite"></pre>
   <div class="cmodal-foot">
     <div id="cmResult" class="rbox"></div>
-    <div class="cm-actions"><button type="button" class="secondary" id="cmClose" onclick="closeCollectModal()">Close</button></div>
+    <div class="cm-actions">
+      <button type="button" class="danger" id="cmStop" onclick="stopCollect()">Stop</button>
+      <button type="button" class="secondary" id="cmClose" onclick="closeCollectModal()">Close</button>
+    </div>
   </div>
 </dialog>
 <script>
@@ -428,7 +433,9 @@ function clearResult(id){const el=document.getElementById(id); if(el){ el.classN
 // Every "Collect & export" streams its progress into one shared modal: the
 // collect POST carries ?stream=1, and the server answers with newline-delimited
 // JSON events ({type:"log"|"done"|"error"}) that this reader renders live.
-let cmRunning=false;
+// Stop aborts the streaming request; the server ties the collect to that
+// request's context, so aborting cancels the running downloads/tools too.
+let cmRunning=false, cmAbort=null;
 
 function openCollectModal(title){
   const m=document.getElementById('collectModal');
@@ -436,8 +443,20 @@ function openCollectModal(title){
   document.getElementById('cmLog').textContent='';
   const rb=document.getElementById('cmResult'); rb.className='rbox'; rb.innerHTML='';
   m.dataset.done=''; cmRunning=true;
+  cmAbort=new AbortController();
+  const stop=document.getElementById('cmStop'); stop.disabled=false; stop.textContent='Stop';
   document.getElementById('cmClose').disabled=true;
   if(!m.open) m.showModal();
+}
+
+// stopCollect aborts the in-flight collect. The fetch rejects with AbortError,
+// which runCollect renders as a "stopped" outcome rather than an error.
+function stopCollect(){
+  if(!cmRunning || !cmAbort) return;
+  const stop=document.getElementById('cmStop');
+  stop.disabled=true; stop.textContent='Stopping…';
+  appendCollectLog('Stop requested — cancelling the running collect…');
+  cmAbort.abort();
 }
 function appendCollectLog(msg, cls){
   const log=document.getElementById('cmLog');
@@ -452,8 +471,9 @@ function appendCollectLog(msg, cls){
 }
 function finishCollectModal(cls, html){
   const m=document.getElementById('collectModal');
-  m.dataset.done='1'; cmRunning=false;
+  m.dataset.done='1'; cmRunning=false; cmAbort=null;
   const rb=document.getElementById('cmResult'); rb.className='rbox '+cls; rb.innerHTML=html;
+  const stop=document.getElementById('cmStop'); stop.disabled=true; stop.textContent='Stop';
   document.getElementById('cmClose').disabled=false;
 }
 function closeCollectModal(){
@@ -463,9 +483,10 @@ function closeCollectModal(){
 
 // streamCollect POSTs a collect with ?stream=1 and consumes the NDJSON progress
 // stream, appending each log line to the modal. It resolves with the final
-// ExportResult, or throws with the server's error message.
-async function streamCollect(url, body){
-  const res=await fetch(url+'?stream=1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+// ExportResult, or throws with the server's error message (or AbortError when
+// the Stop button aborted the signal).
+async function streamCollect(url, body, signal){
+  const res=await fetch(url+'?stream=1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:signal});
   if(!res.ok || !res.body){
     const t=await res.text().catch(()=>''); throw new Error((t&&t.trim())||('HTTP '+res.status));
   }
@@ -498,7 +519,7 @@ async function runCollect(o){
   btn.disabled=true; btn.textContent=o.busyLabel||'Collecting…';
   openCollectModal(o.title);
   try{
-    const d=await streamCollect(o.url, o.body);
+    const d=await streamCollect(o.url, o.body, cmAbort.signal);
     const out = (d && d.skipped)
       ? {cls:'ok', msg:'&#10003; No new content since the last export &mdash; nothing to send across the diode.'}
       : o.render(d);
@@ -506,8 +527,18 @@ async function runCollect(o){
     o.showFn(out.cls, out.msg);
     loadStatus();
   }catch(e){
-    finishCollectModal('err','Error: '+esc(e.message));
-    o.showFn('err','Error: '+esc(e.message));
+    if(e && e.name==='AbortError'){
+      // Stop was pressed: the server cancels the collect with the connection.
+      // A stop that lands after packing began still exports (a bundle is all
+      // or nothing), so point at the Status page rather than promising.
+      const msg='&#9632; Collect stopped. Nothing was exported &mdash; unless packing had already started; check the Status page.';
+      finishCollectModal('warn', msg);
+      o.showFn('warn', msg);
+      loadStatus();
+    }else{
+      finishCollectModal('err','Error: '+esc(e.message));
+      o.showFn('err','Error: '+esc(e.message));
+    }
   }finally{ btn.disabled=false; btn.textContent=label; }
 }
 

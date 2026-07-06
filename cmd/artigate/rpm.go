@@ -573,7 +573,7 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	}
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	return s.exportIfNew(streamRpm, files, func(seq int64) (ExportResult, error) {
+	return s.exportIfNew(ctx, streamRpm, files, func(seq int64) (ExportResult, error) {
 		return s.writeRpmBundle(seq, stageRoot, files, mirrors)
 	})
 }

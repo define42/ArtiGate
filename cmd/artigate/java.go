@@ -500,7 +500,7 @@ func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (
 	}
 
 	emitProgress(ctx, "Packing %d artifact file(s) into a signed bundle…", len(files))
-	return s.exportIfNew(streamMaven, files, func(seq int64) (ExportResult, error) {
+	return s.exportIfNew(ctx, streamMaven, files, func(seq int64) (ExportResult, error) {
 		return s.writeMavenBundle(seq, stageRoot, files, artifacts)
 	})
 }
