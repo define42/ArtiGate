@@ -1,0 +1,71 @@
+# ArtiGate low side with the built-in UDP data diode (the "pitcher").
+#
+# Runs on the machine whose spare NIC feeds the diode's TX fiber. At startup
+# ArtiGate configures that NIC itself — MTU 9000, txqueuelen 10000, IPv6
+# link-local addressing derived from the MAC (addr-gen-mode eui64), TX ring
+# buffers at hardware maximum, link up — then transmits every exported bundle
+# as rate-limited, Reed-Solomon-coded IPv6 multicast. Multicast because the
+# fiber is one-way: the pitcher can never resolve the catcher's MAC address,
+# and a multicast destination needs no resolution.
+#
+# Host networking and permissions, and why each is needed:
+#
+#   network_mode: host   the pitcher must own a REAL host NIC (the fiber TX);
+#                        bridge networking would hide it. `ports:` does not
+#                        apply with host networking — the dashboard binds host
+#                        port 8080 directly.
+#   cap_add: NET_ADMIN   configure the NIC (MTU / queues / eui64 / link) via
+#                        ioctl + rtnetlink, and raise the send buffer past
+#                        wmem_max (SO_SNDBUFFORCE).
+#   user: "0:0"          Docker grants added capabilities to the root user
+#                        only; the image's default `artigate` user would get
+#                        EPERM. Prefer not to run as root? Configure the NIC
+#                        on the host instead and set
+#                        ARTIGATE_PITCHER_NETSETUP=off.
+#
+# One-time key setup (the public key must be carried to the high side):
+#   docker compose -f docker-compose-diode-low.yml run --rm --user root low \
+#     keygen --private /keys/low.ed25519 --public /keys/high.ed25519.pub
+
+services:
+  low:
+    build: ..
+    network_mode: host
+    user: "0:0"
+    cap_add:
+      - NET_ADMIN
+    command:
+      - low
+      - --listen=:8080
+      - --root=/var/lib/artigate
+      - --export-dir=/var/spool/diode-out
+      - --private-key=/keys/low.ed25519
+      - --upstream-goproxy=https://proxy.golang.org,direct
+    environment:
+      # The dedicated one-way NIC feeding the diode's TX fiber. Setting this
+      # is what enables the pitcher — replace with your NIC's name.
+      - ARTIGATE_PITCHER_INTERFACE=eth1
+      # Hard ceiling on the wire rate (Mbit/s). A one-way link has no
+      # congestion control: keep this at or below what the catcher host was
+      # provisioned to absorb.
+      - ARTIGATE_PITCHER_RATE_MBIT=800
+      # Defaults, spelled out for visibility. FEC 32+8 means any 8 of every
+      # 40 datagrams may be lost and repaired; raise parity for lossy links.
+      # - ARTIGATE_PITCHER_MTU=9000
+      # - ARTIGATE_PITCHER_TXQUEUELEN=10000
+      # - ARTIGATE_PITCHER_GROUP=ff02::4147
+      # - ARTIGATE_PITCHER_PORT=4147
+      # - ARTIGATE_PITCHER_FEC_DATA=32
+      # - ARTIGATE_PITCHER_FEC_PARITY=8
+      # NIC already configured by the host? Turn ArtiGate's setup off:
+      # - ARTIGATE_PITCHER_NETSETUP=off
+    volumes:
+      - keys:/keys:ro
+      - low-outbound:/var/spool/diode-out
+      - low-data:/var/lib/artigate
+    restart: unless-stopped
+
+volumes:
+  keys:
+  low-outbound:
+  low-data:

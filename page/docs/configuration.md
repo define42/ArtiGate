@@ -151,7 +151,7 @@ artigate high \
 
 ## Environment variables
 
-There are **no** environment variables for `keygen` or `hashpw`. The TLS variables apply to **both** `low` and `high` (both call the same `tlsConfigFromEnv`). The auth and cookie variables apply to the **low side only** — the high side has no auth. The diode-transport variables split by side (`ARTIGATE_DIODE_URL` low, `ARTIGATE_DIODE_INGEST` high, the token both), and `ARTIGATE_HF_TOKEN` is low-side only.
+There are **no** environment variables for `keygen` or `hashpw`. The TLS variables apply to **both** `low` and `high` (both call the same `tlsConfigFromEnv`). The auth and cookie variables apply to the **low side only** — the high side has no auth. The diode-transport variables split by side (`ARTIGATE_DIODE_URL` low, `ARTIGATE_DIODE_INGEST` high, the token both; `ARTIGATE_PITCHER_*` low, `ARTIGATE_CATCHER_*` high), and `ARTIGATE_HF_TOKEN` is low-side only.
 
 ### Low-side authentication
 
@@ -191,6 +191,28 @@ The optional HTTP transfer between the sides — see [Deployment](deployment.md)
 | `ARTIGATE_DIODE_INGEST` | high | `off` | `on`/`1`/`true`/`yes` accepts bundle uploads at `PUT/POST /diode/<file>` into the landing directory; any other non-off value is fatal |
 | `ARTIGATE_DIODE_TOKEN` | both | unset (open) | Shared bearer token: the low side sends it, the high side requires it when set (constant-time compare) |
 
+### Built-in UDP data diode
+
+The direct one-way-fiber transport — see [Built-in UDP diode](data-diode.md) for how it works, Docker permissions, and tuning. Naming the interface enables each side; every value is validated at startup and a bad one is fatal. `ARTIGATE_DIODE_URL` and `ARTIGATE_PITCHER_INTERFACE` are mutually exclusive.
+
+| Variable | Side | Default | Meaning |
+|---|---|---|---|
+| `ARTIGATE_PITCHER_INTERFACE` | low | unset (disabled) | Dedicated diode TX NIC; enables the pitcher |
+| `ARTIGATE_PITCHER_RATE_MBIT` | low | `800` | Max wire rate in Mbit/s (1–100000), Ethernet/IP/UDP framing included |
+| `ARTIGATE_PITCHER_MTU` | low | `9000` | Interface MTU (1280–65536); datagrams are sized to it and never fragment |
+| `ARTIGATE_PITCHER_TXQUEUELEN` | low | `10000` | Interface TX queue length |
+| `ARTIGATE_PITCHER_GROUP` | low | `ff02::4147` | IPv6 multicast destination group |
+| `ARTIGATE_PITCHER_PORT` | low | `4147` | UDP destination port |
+| `ARTIGATE_PITCHER_FEC_DATA` | low | `32` | Reed-Solomon data shards per block (1–255, data+parity ≤ 256) |
+| `ARTIGATE_PITCHER_FEC_PARITY` | low | `8` | Reed-Solomon parity shards per block — the per-block loss budget |
+| `ARTIGATE_PITCHER_NETSETUP` | low | `on` | `on`: ArtiGate configures the NIC (eui64 link-local, MTU, txqueuelen, TX rings, link up); `off`: host-preconfigured |
+| `ARTIGATE_CATCHER_INTERFACE` | high | unset (disabled) | Dedicated diode RX NIC; enables the catcher |
+| `ARTIGATE_CATCHER_RCVBUF_MB` | high | `64` | UDP receive buffer in MiB (1–4096), set via `SO_RCVBUFFORCE` when permitted |
+| `ARTIGATE_CATCHER_MTU` | high | `9000` | Interface MTU; must be ≥ the pitcher's |
+| `ARTIGATE_CATCHER_GROUP` | high | `ff02::4147` | IPv6 multicast group to join (must match the pitcher) |
+| `ARTIGATE_CATCHER_PORT` | high | `4147` | UDP port (must match the pitcher) |
+| `ARTIGATE_CATCHER_NETSETUP` | high | `on` | `on`: ArtiGate configures the NIC (eui64, MTU, RX rings, link up) and best-effort raises `net.core.netdev_max_backlog`; `off`: host-preconfigured |
+
 ### Hugging Face (AI models)
 
 | Variable | Side | Default | Meaning |
@@ -228,6 +250,6 @@ Validation (all fatal at startup):
 The file paths, listen addresses, and behaviour toggles are **flag-only**; TLS and low-side auth are **env-only**. There is deliberately no flag for TLS and no env var for paths/listen addresses.
 
 - **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags, `--hf-endpoint`, `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`.
-- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_HF_TOKEN`.
+- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`.
 
 See also: [Deployment](deployment.md) for production topologies, [Security & trust](security.md) for the trust model, and [TLS / HTTPS](tls.md) for the full TLS matrix.

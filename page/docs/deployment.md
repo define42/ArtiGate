@@ -8,7 +8,7 @@ ArtiGate is a single static binary with four subcommands (`keygen`, `low`, `high
 
 The `Dockerfile` is a two-stage build, both stages on `golang:1.25-alpine`.
 
-**Build stage.** `go.mod` is copied first so the module-download layer caches independently of source changes (ArtiGate's runtime deps are pure-Go: `certmagic` for ACME/TLS, `gorilla/securecookie`, `hashicorp/go-version`, `golang.org/x/crypto`, and `modernc.org` SQLite). The binary is compiled fully static with CGO disabled, so it runs on any base:
+**Build stage.** `go.mod`/`go.sum` are copied first so the module-download layer caches independently of source changes (ArtiGate's runtime deps are pure-Go: `certmagic` for ACME/TLS, `gorilla/securecookie`, `hashicorp/go-version`, `golang.org/x/crypto`, `klauspost/reedsolomon` for the UDP diode's forward error correction, and `modernc.org` SQLite). The binary is compiled fully static with CGO disabled, so it runs on any base:
 
 ```dockerfile
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/artigate ./cmd/artigate
@@ -213,7 +213,7 @@ Enabling HTTPS on either side is done entirely through environment variables in 
 
 ## The real diode transfer
 
-ArtiGate itself never moves bundles across the gap. The transport — the actual one-way path — is **out of scope**; ArtiGate only reads and writes files in two directories. Your job is to carry files from the low side's export directory (`--export-dir`, default `/var/spool/diode-out`) into the high side's landing directory (`--landing`, default `/var/spool/diode-in`).
+In the default **folder flow**, ArtiGate itself never moves bundles across the gap; it only reads and writes files in two directories, and your job is to carry files from the low side's export directory (`--export-dir`, default `/var/spool/diode-out`) into the high side's landing directory (`--landing`, default `/var/spool/diode-in`). Two built-in transports can take that job over: the **HTTP transport** (`ARTIGATE_DIODE_*`, for diodes and diode proxies that speak HTTP) and the **[built-in UDP diode](data-diode.md)** (`ARTIGATE_PITCHER_*`/`ARTIGATE_CATCHER_*`), which drives a raw one-way fiber directly with rate-limited, Reed-Solomon-coded multicast. Whatever carries the files, everything below — bundle format, ordering, quarantine, verification — is identical.
 
 ### Carry three files per bundle
 

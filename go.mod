@@ -6,6 +6,7 @@ require (
 	github.com/caddyserver/certmagic v0.25.4
 	github.com/gorilla/securecookie v1.1.2
 	github.com/hashicorp/go-version v1.9.0
+	github.com/klauspost/reedsolomon v1.14.1
 	golang.org/x/crypto v0.53.0
 	modernc.org/sqlite v1.53.0
 )

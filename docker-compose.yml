@@ -11,6 +11,11 @@
 # and mount one shared volume as the low side's /var/spool/diode-out and the
 # high side's /var/spool/diode-in.
 #
+# Driving a real one-way fiber with the built-in UDP diode (pitcher/catcher)
+# instead? See examples/docker-compose-diode-low.yml and
+# examples/docker-compose-diode-high.yml — those run one side per host with
+# network_mode: host and CAP_NET_ADMIN.
+#
 # The `keygen` service creates the Ed25519 signing key pair once into the shared
 # `keys` volume (idempotent: it will not overwrite existing keys), then low and
 # high start after it completes.

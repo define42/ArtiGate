@@ -2,8 +2,9 @@
 // read-only repository server for data-diode use.
 //
 // It intentionally sticks to the Go standard library (the only exceptions:
-// pure-Go SQLite for scheduled watches and hashicorp/go-version for container
-// tag constraints). The low side delegates fetching to the installed
+// pure-Go SQLite for scheduled watches, hashicorp/go-version for container
+// tag constraints, and klauspost/reedsolomon for the built-in UDP diode's
+// forward error correction). The low side delegates fetching to the installed
 // `go`/`git`/`pip`/`mvn`/`npm` tools; the high side never invokes them and
 // never fetches upstream.
 package main
@@ -88,7 +89,10 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `Usage:
+	fmt.Fprint(os.Stderr, usageText)
+}
+
+const usageText = `Usage:
   artigate keygen --private low.ed25519 --public high.ed25519.pub
 
   artigate hashpw --user alice        # argon2id hash for ARTIGATE_LOW_AUTH (reads password from stdin)
@@ -128,6 +132,16 @@ Diode transport (env; default is the folder flow via --export-dir/--landing):
                                into the landing directory (default off)
   ARTIGATE_DIODE_TOKEN   both: optional shared bearer token for the diode endpoint
 
+Built-in UDP data diode (env; a dedicated one-way fiber NIC on each side; the
+bundles cross as rate-limited, Reed-Solomon-coded IPv6 multicast — no return path):
+  low:   ARTIGATE_PITCHER_INTERFACE=eth1 enables; ARTIGATE_PITCHER_RATE_MBIT=800,
+         _MTU=9000, _TXQUEUELEN=10000, _GROUP=ff02::4147, _PORT=4147, _FEC_DATA=32,
+         _FEC_PARITY=8 (any 8 of every 40 datagrams may be lost harmlessly),
+         _NETSETUP=on|off (on: ArtiGate sets MTU/queues/ipv6 eui64 itself)
+  high:  ARTIGATE_CATCHER_INTERFACE=eth1 enables; ARTIGATE_CATCHER_RCVBUF_MB=64,
+         plus _MTU, _GROUP, _PORT, _NETSETUP as above
+  Docker: network_mode: host, cap_add: [NET_ADMIN], root user (see examples/).
+
 TLS (env, both low and high):
   ARTIGATE_TLS_MODE=unencrypted|acme|own-certificate|auto-generate-certificate
   acme:            ARTIGATE_TLS_DOMAINS, ARTIGATE_ACME_EMAIL, ARTIGATE_ACME_DIRECTORY, ARTIGATE_ACME_CA_ROOT
@@ -139,8 +153,7 @@ Auth (env, low side only):
   ARTIGATE_LOW_COOKIE_SECURE=auto|true|false   (default auto: Secure follows ArtiGate's own TLS)
   Set to 'true' when ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy.
 
-`)
-}
+`
 
 // -----------------------------------------------------------------------------
 // Shared manifest/state types
@@ -341,6 +354,9 @@ type LowServer struct {
 	// authEnabled is set when ARTIGATE_LOW_AUTH is configured; it makes the UI
 	// render a "Log out" button.
 	authEnabled bool
+	// pitcher is the built-in UDP diode sender (ARTIGATE_PITCHER_INTERFACE);
+	// nil means bundles leave via the export dir or the HTTP diode endpoint.
+	pitcher *diodePitcher
 	// containerRegistryBases maps a container registry name to the API base URL
 	// it is fetched from (parsed from cfg.ContainerRegistries).
 	containerRegistryBases map[string]string
@@ -374,6 +390,7 @@ func runLow(args []string) {
 	cfg.DiodeURL = strings.TrimSpace(os.Getenv("ARTIGATE_DIODE_URL"))
 	cfg.DiodeToken = os.Getenv("ARTIGATE_DIODE_TOKEN")
 	must(validateDiodeURL(cfg.DiodeURL))
+	pitcherCfg := mustPitcherConfig(cfg.DiodeURL)
 
 	if cfg.PrivateKeyPath == "" {
 		log.Fatal("--private-key is required")
@@ -384,6 +401,8 @@ func runLow(args []string) {
 	ls, err := NewLowServer(cfg, priv)
 	must(err)
 	defer func() { _ = ls.Close() }()
+
+	attachPitcher(ls, pitcherCfg)
 
 	if cfg.WatchInterval > 0 {
 		go ls.watchLoop(context.Background())
@@ -417,6 +436,11 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 	log.Printf("low-side export dir: %s", cfg.ExportDir)
 	if cfg.DiodeURL != "" {
 		log.Printf("low-side diode endpoint: %s (bundles upload after export; export dir is the retry spool)", cfg.DiodeURL)
+	}
+	if ls.pitcher != nil {
+		p := ls.pitcher
+		log.Printf("low-side diode pitcher: %s → %s at ≤ %d Mbit/s (FEC %d+%d, MTU %d; bundles transmit after export, export dir is the retry spool)",
+			p.cfg.Interface, p.target(), p.cfg.RateMbit, p.cfg.DataShards, p.cfg.ParityShards, p.cfg.MTU)
 	}
 	must(listenAndServe(tc, cfg.Listen, cfg.Root, logHTTP(handler)))
 }
@@ -471,9 +495,13 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 }
 
 // Close releases the low server's resources (the watch and exported-index
-// databases).
+// databases, and the diode sender when one is open).
 func (s *LowServer) Close() error {
-	return errors.Join(s.watches.Close(), s.exported.Close())
+	err := errors.Join(s.watches.Close(), s.exported.Close())
+	if s.pitcher != nil {
+		err = errors.Join(err, s.pitcher.Close())
+	}
+	return err
 }
 
 func (s *LowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1695,6 +1723,7 @@ func runHigh(args []string) {
 	must(err)
 	hs, err := NewHighServer(cfg, pub)
 	must(err)
+	startCatcherIfConfigured(hs)
 
 	if cfg.ImportInterval > 0 {
 		go hs.importLoop()

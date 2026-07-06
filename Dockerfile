@@ -1,15 +1,15 @@
 # syntax=docker/dockerfile:1
 
 # -----------------------------------------------------------------------------
-# Build stage: compile a static ArtiGate binary using only the Go stdlib.
+# Build stage: compile a static ArtiGate binary (pure-Go dependencies only).
 # -----------------------------------------------------------------------------
 FROM golang:1.25-alpine AS build
 
 WORKDIR /src
 
 # Copy module metadata first so the download layer is cached independently of
-# source changes. ArtiGate has no third-party dependencies, so this is quick.
-COPY go.mod ./
+# source changes.
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
