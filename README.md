@@ -366,6 +366,7 @@ interface is what enables each side — ArtiGate configures the NIC itself
 | `ARTIGATE_PITCHER_INTERFACE` | low | dedicated diode TX NIC (e.g. `eth1`); enables the pitcher |
 | `ARTIGATE_PITCHER_RATE_MBIT` | low | max wire rate, default `800` — a one-way link has no congestion control, so stay below what the catcher absorbs |
 | `ARTIGATE_PITCHER_FEC_DATA` / `_FEC_PARITY` | low | Reed-Solomon geometry, default `32`+`8`: any 8 of every 40 datagrams may be lost harmlessly |
+| `ARTIGATE_PITCHER_TXQUEUELEN` | low | TX NIC queue length, default `10000` — raise if the driver drops on bursts |
 | `ARTIGATE_CATCHER_INTERFACE` | high | dedicated diode RX NIC; enables the catcher |
 | `ARTIGATE_CATCHER_RCVBUF_MB` | high | receive buffer (MiB), default `64`, set via `SO_RCVBUFFORCE` |
 | `ARTIGATE_{PITCHER,CATCHER}_{MTU,GROUP,PORT,NETSETUP}` | both | MTU `9000`, group `ff02::4147`, port `4147`; `NETSETUP=off` when the host pre-configures the NIC |
