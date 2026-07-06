@@ -836,7 +836,7 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 	}
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 	res, err := s.exportIfNew(ctx, streamGo, files, func(seq int64) (ExportResult, error) {
-		return s.writeGoBundle(streamGo, seq, mods, files)
+		return s.writeGoBundle(ctx, streamGo, seq, mods, files)
 	})
 	if err != nil {
 		return ExportResult{}, err
@@ -1048,8 +1048,10 @@ func (s *LowServer) commitSequence(stream string, seq int64) error {
 //
 // A cancelled collect (the dashboard's Stop button aborts the streaming
 // request, cancelling ctx) stops here rather than packing and exporting a
-// bundle nobody wants; a cancellation arriving after this point lets the
-// in-flight write finish, so a bundle is either fully produced or not at all.
+// bundle nobody wants. Packing itself also honors cancellation (the archive
+// temp file is removed, no sequence is committed); only the final
+// sign-and-archive steps run to completion, so a bundle is either fully
+// produced or not at all.
 func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []ManifestFile, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ExportResult{}, fmt.Errorf("collect stopped before export: %w", err)
@@ -1111,7 +1113,7 @@ func manifestHashes(files []ManifestFile) []string {
 // writeGoBundle builds, signs, and writes a Go bundle for already-fetched
 // modules at the allocated sequence. Fetching happens in CollectGo so the
 // resolved file set can be dedup-checked before a sequence is allocated.
-func (s *LowServer) writeGoBundle(stream string, seq int64, mods []ManifestMod, files []ManifestFile) (ExportResult, error) {
+func (s *LowServer) writeGoBundle(ctx context.Context, stream string, seq int64, mods []ManifestMod, files []ManifestFile) (ExportResult, error) {
 	if seq <= 0 {
 		return ExportResult{}, fmt.Errorf("invalid sequence %d", seq)
 	}
@@ -1135,7 +1137,7 @@ func (s *LowServer) writeGoBundle(stream string, seq int64, mods []ManifestMod, 
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
 
-	if err := s.writeBundleArtifacts(id, s.downloadDir, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, s.downloadDir, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 
@@ -1198,7 +1200,7 @@ func bundleSuffixes() []string {
 // archive so the exact signed bytes can be replayed on re-export. baseDir is the
 // root the manifest file paths are relative to (the Go module cache for Go
 // bundles, a staging dir for Python).
-func (s *LowServer) writeBundleArtifacts(bundleID, baseDir string, manifestBytes, sig []byte, files []ManifestFile) error {
+func (s *LowServer) writeBundleArtifacts(ctx context.Context, bundleID, baseDir string, manifestBytes, sig []byte, files []ManifestFile) error {
 	if err := os.MkdirAll(s.cfg.ExportDir, 0o755); err != nil {
 		return err
 	}
@@ -1206,7 +1208,7 @@ func (s *LowServer) writeBundleArtifacts(bundleID, baseDir string, manifestBytes
 	manifestPath := filepath.Join(s.cfg.ExportDir, bundleID+".manifest.json")
 	sigPath := filepath.Join(s.cfg.ExportDir, bundleID+".manifest.json.sig")
 
-	if err := createTarGzAtomic(archivePath, baseDir, files); err != nil {
+	if err := createTarGzAtomic(ctx, archivePath, baseDir, files); err != nil {
 		return err
 	}
 	if err := writeBytesAtomic(manifestPath, manifestBytes, 0o644); err != nil {
@@ -2739,7 +2741,12 @@ func sha256File(p string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func createTarGzAtomic(dst string, baseDir string, files []ManifestFile) error {
+// createTarGzAtomic packs the files into dst. Packing a large bundle takes
+// real time (gzip over gigabytes), so it drives the dashboard's progress bar
+// through the context's download sink and honors cancellation between chunks
+// — a stopped collect aborts here and the temp file is removed, so a bundle
+// is either fully produced or not at all.
+func createTarGzAtomic(ctx context.Context, dst string, baseDir string, files []ManifestFile) error {
 	tmp := dst + ".tmp"
 	_ = os.Remove(tmp)
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
@@ -2753,13 +2760,22 @@ func createTarGzAtomic(dst string, baseDir string, files []ManifestFile) error {
 			_ = os.Remove(tmp)
 		}
 	}()
+	var total int64
+	for _, mf := range files {
+		total += mf.Size
+	}
+	tracker := newProgressTracker(ctx, "packing "+filepath.Base(dst), total)
 	gz := gzip.NewWriter(f)
 	tw := tar.NewWriter(gz)
 	for _, mf := range files {
-		if err := addFileToTar(tw, baseDir, mf); err != nil {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("packing stopped: %w", err)
+		}
+		if err := addFileToTar(ctx, tw, baseDir, mf, tracker); err != nil {
 			return err
 		}
 	}
+	tracker.finish()
 	if err := tw.Close(); err != nil {
 		return err
 	}
@@ -2780,8 +2796,8 @@ func createTarGzAtomic(dst string, baseDir string, files []ManifestFile) error {
 }
 
 // addFileToTar writes a single repository file into the tar stream with a
-// deterministic header.
-func addFileToTar(tw *tar.Writer, baseDir string, mf ManifestFile) error {
+// deterministic header, counting its bytes toward the pack tracker.
+func addFileToTar(ctx context.Context, tw *tar.Writer, baseDir string, mf ManifestFile, tracker *progressTracker) error {
 	if err := validateRelPath(mf.Path); err != nil {
 		return err
 	}
@@ -2798,12 +2814,29 @@ func addFileToTar(tw *tar.Writer, baseDir string, mf ManifestFile) error {
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(tw, in)
+	_, copyErr := io.Copy(tw, &packSource{ctx: ctx, r: in, tracker: tracker})
 	closeErr := in.Close()
 	if copyErr != nil {
 		return copyErr
 	}
 	return closeErr
+}
+
+// packSource feeds one file into the archive, counting bytes toward the pack
+// tracker and aborting between chunks when the collect is cancelled.
+type packSource struct {
+	ctx     context.Context
+	r       io.Reader
+	tracker *progressTracker
+}
+
+func (p *packSource) Read(b []byte) (int, error) {
+	if err := p.ctx.Err(); err != nil {
+		return 0, fmt.Errorf("packing stopped: %w", err)
+	}
+	n, err := p.r.Read(b)
+	p.tracker.add(int64(n))
+	return n, err
 }
 
 func extractAndVerifyTarGz(archivePath, staging string, files []ManifestFile) error {

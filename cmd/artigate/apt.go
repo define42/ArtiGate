@@ -237,7 +237,7 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 	return s.exportIfNew(ctx, streamApt, files, func(seq int64) (ExportResult, error) {
-		return s.writeAptBundle(seq, stageRoot, files, mirrors)
+		return s.writeAptBundle(ctx, seq, stageRoot, files, mirrors)
 	})
 }
 
@@ -586,7 +586,7 @@ func splitStanzaBlocks(data []byte) []string {
 	return blocks
 }
 
-func (s *LowServer) writeAptBundle(seq int64, stageRoot string, files []ManifestFile, mirrors []AptMirror) (ExportResult, error) {
+func (s *LowServer) writeAptBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, mirrors []AptMirror) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	id := bundleIDFor(streamApt, seq)
 	manifest := BundleManifest{
@@ -606,7 +606,7 @@ func (s *LowServer) writeAptBundle(seq int64, stageRoot string, files []Manifest
 		return ExportResult{}, err
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 	total := 0

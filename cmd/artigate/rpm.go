@@ -574,7 +574,7 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 	return s.exportIfNew(ctx, streamRpm, files, func(seq int64) (ExportResult, error) {
-		return s.writeRpmBundle(seq, stageRoot, files, mirrors)
+		return s.writeRpmBundle(ctx, seq, stageRoot, files, mirrors)
 	})
 }
 
@@ -707,7 +707,7 @@ func readStagedMetadata(stageRoot, mirror, relHref string) ([]byte, error) {
 	return decompressByExt(relHref, raw)
 }
 
-func (s *LowServer) writeRpmBundle(seq int64, stageRoot string, files []ManifestFile, mirrors []RpmMirror) (ExportResult, error) {
+func (s *LowServer) writeRpmBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, mirrors []RpmMirror) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	id := bundleIDFor(streamRpm, seq)
 	manifest := BundleManifest{
@@ -727,7 +727,7 @@ func (s *LowServer) writeRpmBundle(seq int64, stageRoot string, files []Manifest
 		return ExportResult{}, err
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 	total := 0

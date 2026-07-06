@@ -144,7 +144,7 @@ func writeSignedPythonBundle(t *testing.T, landing string, priv ed25519.PrivateK
 	if err := os.MkdirAll(landing, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := createTarGzAtomic(filepath.Join(landing, bundleID+".tar.gz"), src, files); err != nil {
+	if err := createTarGzAtomic(context.Background(), filepath.Join(landing, bundleID+".tar.gz"), src, files); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(landing, bundleID+".manifest.json"), manifestBytes)

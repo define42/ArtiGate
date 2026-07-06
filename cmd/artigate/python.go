@@ -418,7 +418,7 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 	// collection never burns a number) and skips entirely when every wheel was
 	// already forwarded.
 	res, err := s.exportIfNew(ctx, streamPython, files, func(seq int64) (ExportResult, error) {
-		return s.writePythonBundle(seq, stageRoot, files, projects)
+		return s.writePythonBundle(ctx, seq, stageRoot, files, projects)
 	})
 	if err != nil {
 		return ExportResult{}, err
@@ -516,7 +516,7 @@ func collectPythonDist(dest string) ([]ManifestFile, []PythonProject, []FailedMo
 	return d.files, d.projects(), d.skipped, nil
 }
 
-func (s *LowServer) writePythonBundle(seq int64, stageRoot string, files []ManifestFile, projects []PythonProject) (ExportResult, error) {
+func (s *LowServer) writePythonBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, projects []PythonProject) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	id := bundleIDFor(streamPython, seq)
 	manifest := BundleManifest{
@@ -536,7 +536,7 @@ func (s *LowServer) writePythonBundle(seq int64, stageRoot string, files []Manif
 		return ExportResult{}, err
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 	return ExportResult{Stream: streamPython, Sequence: seq, ExportedModules: len(projects), BundleID: id}, nil

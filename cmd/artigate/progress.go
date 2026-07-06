@@ -91,21 +91,12 @@ func dlNameFromURL(rawURL string) string {
 // don't flash the dashboard's progress bar.
 const dlProgressInterval = 500 * time.Millisecond
 
-// newProgressReader wraps a download body so the bytes flowing through it are
-// reported to ctx's download sink. Without a sink (plain admin collects,
-// scheduled watches) the reader is returned untouched, making this free.
-func newProgressReader(ctx context.Context, r io.Reader, name string, total int64) io.Reader {
-	if sink, _ := ctx.Value(downloadKey{}).(downloadSink); sink == nil {
-		return r
-	}
-	if total < 0 {
-		total = 0 // an unknown Content-Length renders as bytes+speed, no bar
-	}
-	return &progressReader{r: r, ctx: ctx, name: name, total: total}
-}
-
-type progressReader struct {
-	r           io.Reader
+// progressTracker accumulates byte progress toward a known total — one
+// download body, or all the files packed into one archive — and reports it
+// through ctx's download sink at most every dlProgressInterval. Work that
+// finishes inside the first interval never reports, so small files and small
+// bundles stay silent.
+type progressTracker struct {
 	ctx         context.Context
 	name        string
 	total       int64
@@ -115,27 +106,68 @@ type progressReader struct {
 	reported    bool
 }
 
-func (p *progressReader) Read(b []byte) (int, error) {
-	n, err := p.r.Read(b)
-	if n > 0 {
-		p.done += int64(n)
-		p.window += int64(n)
+// newProgressTracker returns nil when ctx carries no download sink (plain
+// admin collects, scheduled watches); the nil tracker's methods are no-ops,
+// so callers need no guards and the tracking is free.
+func newProgressTracker(ctx context.Context, name string, total int64) *progressTracker {
+	if sink, _ := ctx.Value(downloadKey{}).(downloadSink); sink == nil {
+		return nil
 	}
+	if total < 0 {
+		total = 0 // an unknown total renders as bytes+speed, no bar
+	}
+	return &progressTracker{ctx: ctx, name: name, total: total}
+}
+
+// add records n more bytes of progress, reporting when the interval is due.
+func (p *progressTracker) add(n int64) {
+	if p == nil || n <= 0 {
+		return
+	}
+	p.done += n
+	p.window += n
 	now := time.Now()
 	if p.windowStart.IsZero() {
 		p.windowStart = now // arm the interval; no report yet
-		return n, err
+		return
 	}
-	elapsed := now.Sub(p.windowStart)
-	switch {
-	case elapsed >= dlProgressInterval:
+	if elapsed := now.Sub(p.windowStart); elapsed >= dlProgressInterval {
 		bps := int64(float64(p.window) / elapsed.Seconds())
 		emitDownloadProgress(p.ctx, p.name, p.done, p.total, bps)
 		p.reported = true
 		p.windowStart, p.window = now, 0
-	case err != nil && p.reported:
-		// Final sample so the bar lands on 100% before the completion log line.
-		emitDownloadProgress(p.ctx, p.name, p.done, p.total, 0)
+	}
+}
+
+// finish lands the bar on its final position — but only if it ever appeared.
+func (p *progressTracker) finish() {
+	if p == nil || !p.reported {
+		return
+	}
+	emitDownloadProgress(p.ctx, p.name, p.done, p.total, 0)
+}
+
+// newProgressReader wraps a download body so the bytes flowing through it are
+// reported to ctx's download sink. Without a sink the reader is returned
+// untouched, making this free.
+func newProgressReader(ctx context.Context, r io.Reader, name string, total int64) io.Reader {
+	t := newProgressTracker(ctx, name, total)
+	if t == nil {
+		return r
+	}
+	return &progressReader{r: r, t: t}
+}
+
+type progressReader struct {
+	r io.Reader
+	t *progressTracker
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.t.add(int64(n))
+	if err != nil {
+		p.t.finish() // land on 100% before the completion log line
 	}
 	return n, err
 }

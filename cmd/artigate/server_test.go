@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -60,7 +61,7 @@ func writeSignedBundle(t *testing.T, landing string, priv ed25519.PrivateKey, se
 	if err := os.MkdirAll(landing, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := createTarGzAtomic(filepath.Join(landing, bundleID+".tar.gz"), src, files); err != nil {
+	if err := createTarGzAtomic(context.Background(), filepath.Join(landing, bundleID+".tar.gz"), src, files); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(landing, bundleID+".manifest.json"), manifestBytes)
@@ -126,7 +127,7 @@ func writeSignedStreamBundle(t *testing.T, landing string, priv ed25519.PrivateK
 	if err := os.MkdirAll(landing, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := createTarGzAtomic(filepath.Join(landing, bundleID+".tar.gz"), src, files); err != nil {
+	if err := createTarGzAtomic(context.Background(), filepath.Join(landing, bundleID+".tar.gz"), src, files); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(landing, bundleID+".manifest.json"), manifestBytes)
@@ -453,7 +454,7 @@ func TestTarGzRoundTrip(t *testing.T) {
 	}
 
 	archive := filepath.Join(t.TempDir(), "bundle.tar.gz")
-	if err := createTarGzAtomic(archive, src, []ManifestFile{mf}); err != nil {
+	if err := createTarGzAtomic(context.Background(), archive, src, []ManifestFile{mf}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -705,6 +706,32 @@ func TestSortRequestRecords(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("sortRequestRecords = %v, want %v", got, want)
 			break
+		}
+	}
+}
+
+// TestCreateTarGzCancelledLeavesNothing checks that stopping a collect during
+// the packing phase aborts the archive write and removes the temp file — a
+// bundle is either fully produced or not at all.
+func TestCreateTarGzCancelledLeavesNothing(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(src, "blob"), []byte("bundle-content"))
+	files := []ManifestFile{{Path: "blob", SHA256: strings.Repeat("a", 64), Size: 14}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dst := filepath.Join(dir, "bundle.tar.gz")
+	err := createTarGzAtomic(ctx, dst, src, files)
+	if err == nil || !strings.Contains(err.Error(), "stopped") {
+		t.Fatalf("cancelled packing = %v, want a 'stopped' error", err)
+	}
+	for _, p := range []string{dst, dst + ".tmp"} {
+		if fileExists(p) {
+			t.Errorf("%s exists after a cancelled pack", p)
 		}
 	}
 }

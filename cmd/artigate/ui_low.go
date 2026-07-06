@@ -576,10 +576,10 @@ async function runCollect(o){
     loadStatus();
   }catch(e){
     if(e && e.name==='AbortError'){
-      // Stop was pressed: the server cancels the collect with the connection.
-      // A stop that lands after packing began still exports (a bundle is all
-      // or nothing), so point at the Status page rather than promising.
-      const msg='&#9632; Collect stopped. Nothing was exported &mdash; unless packing had already started; check the Status page.';
+      // Stop was pressed: the server cancels the collect with the connection,
+      // aborting downloads and packing alike. Only a stop landing in the final
+      // sign-and-archive moment still exports, so point at the Status page.
+      const msg='&#9632; Collect stopped. Nothing was exported &mdash; unless it had already reached the final signing step; check the Status page.';
       finishCollectModal('warn', msg);
       o.showFn('warn', msg);
       loadStatus();

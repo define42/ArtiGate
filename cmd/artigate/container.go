@@ -865,7 +865,7 @@ func (s *LowServer) CollectContainers(ctx context.Context, req ContainerCollectR
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 	res, err := s.exportIfNew(ctx, streamContainers, files, func(seq int64) (ExportResult, error) {
-		return s.writeContainerBundle(seq, stageRoot, files, repos)
+		return s.writeContainerBundle(ctx, seq, stageRoot, files, repos)
 	})
 	if err != nil {
 		return ExportResult{}, err
@@ -1067,7 +1067,7 @@ func verifyContainerConfigPlatform(stageRoot string, ref imageRef, configDigest 
 	return nil
 }
 
-func (s *LowServer) writeContainerBundle(seq int64, stageRoot string, files []ManifestFile, repos []ContainerRepo) (ExportResult, error) {
+func (s *LowServer) writeContainerBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, repos []ContainerRepo) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	id := bundleIDFor(streamContainers, seq)
 	manifest := BundleManifest{
@@ -1087,7 +1087,7 @@ func (s *LowServer) writeContainerBundle(seq int64, stageRoot string, files []Ma
 		return ExportResult{}, err
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 	total := 0

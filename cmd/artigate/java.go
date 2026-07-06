@@ -501,7 +501,7 @@ func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (
 
 	emitProgress(ctx, "Packing %d artifact file(s) into a signed bundle…", len(files))
 	return s.exportIfNew(ctx, streamMaven, files, func(seq int64) (ExportResult, error) {
-		return s.writeMavenBundle(seq, stageRoot, files, artifacts)
+		return s.writeMavenBundle(ctx, seq, stageRoot, files, artifacts)
 	})
 }
 
@@ -649,7 +649,7 @@ func rejectMavenSnapshots(arts []MavenArtifact) error {
 	return nil
 }
 
-func (s *LowServer) writeMavenBundle(seq int64, stageRoot string, files []ManifestFile, artifacts []MavenArtifact) (ExportResult, error) {
+func (s *LowServer) writeMavenBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, artifacts []MavenArtifact) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	id := bundleIDFor(streamMaven, seq)
 	manifest := BundleManifest{
@@ -669,7 +669,7 @@ func (s *LowServer) writeMavenBundle(seq int64, stageRoot string, files []Manife
 		return ExportResult{}, err
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 	return ExportResult{Stream: streamMaven, Sequence: seq, ExportedModules: len(artifacts), BundleID: id}, nil

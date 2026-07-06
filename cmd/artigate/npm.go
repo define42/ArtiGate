@@ -744,7 +744,7 @@ func (s *LowServer) CollectNpm(ctx context.Context, req NpmCollectRequest) (Expo
 	// collection never burns a number) and skips entirely when every tarball was
 	// already forwarded.
 	res, err := s.exportIfNew(ctx, streamNpm, files, func(seq int64) (ExportResult, error) {
-		return s.writeNpmBundle(seq, stageRoot, files, pkgs)
+		return s.writeNpmBundle(ctx, seq, stageRoot, files, pkgs)
 	})
 	if err != nil {
 		return ExportResult{}, err
@@ -1066,7 +1066,7 @@ func (v *sriVerifier) verify() error {
 // Bundle writing
 // -----------------------------------------------------------------------------
 
-func (s *LowServer) writeNpmBundle(seq int64, stageRoot string, files []ManifestFile, pkgs []NpmPackage) (ExportResult, error) {
+func (s *LowServer) writeNpmBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, pkgs []NpmPackage) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	sort.Slice(pkgs, func(i, j int) bool {
 		if pkgs[i].Name == pkgs[j].Name {
@@ -1092,7 +1092,7 @@ func (s *LowServer) writeNpmBundle(seq int64, stageRoot string, files []Manifest
 		return ExportResult{}, err
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 	return ExportResult{Stream: streamNpm, Sequence: seq, ExportedModules: len(pkgs), BundleID: id}, nil

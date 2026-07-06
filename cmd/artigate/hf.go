@@ -671,7 +671,7 @@ func (s *LowServer) CollectHF(ctx context.Context, req HFCollectRequest) (Export
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 	res, err := s.exportIfNew(ctx, streamHF, files, func(seq int64) (ExportResult, error) {
-		return s.writeHFBundle(seq, stageRoot, files, models, repos)
+		return s.writeHFBundle(ctx, seq, stageRoot, files, models, repos)
 	})
 	if err != nil {
 		return ExportResult{}, err
@@ -923,7 +923,7 @@ func stageHFManifestBlob(stageRoot, digest string, manifestBytes []byte, staged 
 	return mf, nil
 }
 
-func (s *LowServer) writeHFBundle(seq int64, stageRoot string, files []ManifestFile, models []HFModel, repos []HFRepo) (ExportResult, error) {
+func (s *LowServer) writeHFBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, models []HFModel, repos []HFRepo) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	id := bundleIDFor(streamHF, seq)
 	manifest := BundleManifest{
@@ -943,7 +943,7 @@ func (s *LowServer) writeHFBundle(seq int64, stageRoot string, files []ManifestF
 		return ExportResult{}, err
 	}
 	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
 		return ExportResult{}, err
 	}
 	total := len(repos)
