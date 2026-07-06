@@ -1,6 +1,6 @@
 # Ecosystems
 
-ArtiGate mirrors **eight** package ecosystems across a one-way data diode. Each is a self-contained stream with the same lifecycle — the low side *collects* upstream artifacts, packs them into a signed *bundle*, the diode carries it, and the high side *imports* and *serves* it — but the input format and the client protocol differ per ecosystem. This page is the hub; each row links to its full page.
+ArtiGate mirrors **eight** artifact ecosystems across a one-way data diode. Each is a self-contained stream with the same lifecycle — the low side *collects* upstream artifacts, packs them into a signed *bundle*, the diode carries it, and the high side *imports* and *serves* it — but the input format and the client protocol differ per ecosystem. This page is the hub; each row links to its full page.
 
 ## The common flow
 

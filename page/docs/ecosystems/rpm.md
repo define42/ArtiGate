@@ -2,7 +2,7 @@
 
 ArtiGate mirrors yum/dnf repositories at full metadata fidelity: the [low side](../low-side.md) fetches `repomd.xml`, every metadata file it references, and every `.rpm`, verifies them, and packs them into a signed bundle; the [high side](../high-side.md) regenerates `repomd.xml` from the recorded entries, optionally re-signs it, and serves the whole repository read-only under `/rpm/<mirror>`.
 
-RPM work travels on the `rpm` stream. Like every ecosystem, that stream has its own sequence counter and export lock, so an RPM collect never blocks or interleaves with Go, Python, Maven, npm, APT, or container work — only the `rpm` stream lock is held across the whole mirror → write → commit.
+RPM work travels on the `rpm` stream. Like every ecosystem, that stream has its own sequence counter and export lock, so an RPM collect never blocks or interleaves with Go, Python, Maven, npm, APT, container, or AI model work — only the `rpm` stream lock is held across the whole mirror → write → commit.
 
 Unlike a pull-through cache, ArtiGate is a **full repository mirror** (Fedora/RHEL/EPEL-scale): each collect is a complete re-sync of the current upstream repository into one new sequenced, Ed25519-signed bundle. There is no incremental/delta logic.
 

@@ -453,7 +453,7 @@ Both return the identical `LowBundleStatus` payload.
 ### Health & dashboard
 
 - `GET /healthz` → body `ok\n`, no JSON.
-- `GET /`, `/ui`, `/ui/` → the self-contained HTML dashboard (tabs: Overview / Go / Python / Maven / NPM / APT / RPM / Containers). Non-read methods → **405**.
+- `GET /`, `/ui`, `/ui/` → the self-contained HTML dashboard (tabs: Overview / Go / Python / Maven / NPM / APT / RPM / Containers / AI Models / Status). Non-read methods → **405**.
 
 ---
 

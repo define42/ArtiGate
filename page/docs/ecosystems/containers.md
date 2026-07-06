@@ -2,7 +2,7 @@
 
 ArtiGate mirrors OCI/Docker container images end to end: the [low side](../low-side.md) resolves each image reference against its upstream registry over the OCI Distribution HTTP API, pulls the `linux/amd64` manifest with its config and layer blobs, and packs everything into a signed bundle; the [high side](../high-side.md) serves it all back as a **read-only OCI Distribution registry** under `/v2/` that `docker`, `podman`, and `containerd` can pull from.
 
-Container work travels on the `containers` stream. Like every ecosystem, that stream has its own sequence counter, export lock, and export-dedup index, so a container collect never blocks or interleaves with Go, Python, Maven, npm, APT, or RPM work.
+Container work travels on the `containers` stream. Like every ecosystem, that stream has its own sequence counter, export lock, and export-dedup index, so a container collect never blocks or interleaves with Go, Python, Maven, npm, APT, RPM, or AI model work.
 
 !!! warning "linux/amd64 only, anonymous public images only"
     ArtiGate mirrors the `linux/amd64` platform exclusively — multi-platform indexes are resolved down to the amd64 sub-manifest and nothing else is re-served. All upstream authentication is **anonymous Bearer-token**; only public images from public registries can be mirrored. There is no support for credentialed pulls.

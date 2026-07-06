@@ -2,7 +2,7 @@
 
 ArtiGate mirrors Go modules end to end: the [low side](../low-side.md) fetches them from the internet with the real `go` toolchain and packs the resulting module-cache files into signed bundles, and the [high side](../high-side.md) serves them back over HTTP as a read-only [GOPROXY](https://go.dev/ref/mod#goproxy-protocol) for air-gapped clients.
 
-Go work travels on the `go` stream. Like every ecosystem, that stream has its own sequence counter, export lock, and export-dedup index, so a Go collect never blocks or interleaves with Python, Maven, npm, APT, RPM, or container work.
+Go work travels on the `go` stream. Like every ecosystem, that stream has its own sequence counter, export lock, and export-dedup index, so a Go collect never blocks or interleaves with Python, Maven, npm, APT, RPM, container, or AI model work.
 
 ## What it mirrors
 

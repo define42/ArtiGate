@@ -1,6 +1,6 @@
 # Architecture
 
-ArtiGate is a single Go binary that mirrors package ecosystems across a one-way data diode. This page is the deep model: how a low-side *exporter* turns upstream artifacts into signed, sequenced **bundles**, how those bundles cross the diode, and how a high-side *importer* verifies them and rebuilds every repository index from the artifacts themselves — trusting nothing that was transferred except bytes that pass an Ed25519 signature and a SHA-256 hash.
+ArtiGate is a single Go binary that mirrors artifact ecosystems across a one-way data diode. This page is the deep model: how a low-side *exporter* turns upstream artifacts into signed, sequenced **bundles**, how those bundles cross the diode, and how a high-side *importer* verifies them and rebuilds every repository index from the artifacts themselves — trusting nothing that was transferred except bytes that pass an Ed25519 signature and a SHA-256 hash.
 
 !!! note "Two design constraints drive everything below"
     - **Lean on the stdlib.** The core mirroring pipeline uses only two third-party dependencies: pure-Go SQLite (`modernc.org/sqlite`) for the [watch scheduler](scheduling.md) and the export-dedup index, and `hashicorp/go-version` for [container](ecosystems/containers.md) tag constraints. The optional TLS and login/auth features add three more: `caddyserver/certmagic` for automatic HTTPS, `gorilla/securecookie` for login sessions, and `golang.org/x/crypto` for argon2id auth hashes — five direct dependencies in all, linked into the single binary.
@@ -304,4 +304,4 @@ The shard key is `containerBlobShardHex(hex)` — the first 3 hex characters of 
 - [High side](high-side.md) — importing, quarantine, status/missing, and serving.
 - [Scheduling (watches)](scheduling.md) — recurring collects on a stored spec.
 - [Security &amp; trust](security.md) — the full trust argument and hardening.
-- [Ecosystems](ecosystems/index.md) — the eight streams, including the richest one, [containers](ecosystems/containers.md).
+- [Ecosystems](ecosystems/index.md) — the eight streams and their per-ecosystem details.

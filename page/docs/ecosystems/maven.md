@@ -99,7 +99,7 @@ The release-only policy is enforced on every coordinate before resolution:
 
 `CollectMaven` performs a lock-protected resolve → pack → commit:
 
-1. **Lock the `maven` stream.** The per-stream mutex is held for the whole operation so a concurrent Maven exporter cannot claim the same sequence number; other streams (Go, Python, …) export in parallel. See [Low side](../low-side.md#collect-amp-export).
+1. **Lock the `maven` stream.** The per-stream mutex is held for the whole operation so a concurrent Maven exporter cannot claim the same sequence number; other streams (Go, Python, …) export in parallel. See [Low side](../low-side.md).
 2. **Stage.** A temp dir is created under `<root>/maven/staging/collect-*` and the `pom.xml` is written into it. The local repository lives at `<stageRoot>/maven` so its Maven 2 layout maps directly onto the `maven/…` paths the high side serves.
 3. **Resolve.** ArtiGate runs, in batch mode with an isolated local repo:
    ```bash

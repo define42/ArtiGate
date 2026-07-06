@@ -22,7 +22,7 @@ go   python   maven   apt   rpm   containers   npm   hf
 
 ## Adding a schedule from an ecosystem page
 
-Every ecosystem page — [Go](ecosystems/go.md), [Python](ecosystems/python.md), [Maven](ecosystems/maven.md), [NPM](ecosystems/npm.md), [APT](ecosystems/apt.md), [RPM](ecosystems/rpm.md), [Containers](ecosystems/containers.md) — has a **"Schedule the above"** row beneath its collect form. Fill in the collect form as you would for a one-off export, then:
+Every ecosystem page — [Go](ecosystems/go.md), [Python](ecosystems/python.md), [Maven](ecosystems/maven.md), [NPM](ecosystems/npm.md), [APT](ecosystems/apt.md), [RPM](ecosystems/rpm.md), [Containers](ecosystems/containers.md), and [AI models](ecosystems/ai-models.md) — has a **"Schedule the above"** row beneath its collect form. Fill in the collect form as you would for a one-off export, then:
 
 1. Enter a number in the **every** field.
 2. Choose **hours** or **days** (days is the default).

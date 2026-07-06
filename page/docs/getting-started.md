@@ -119,7 +119,7 @@ curl -XPOST localhost:8080/admin/python/collect \
   -d '{"requirements":["requests"]}'
 ```
 
-See [Ecosystems](ecosystems/index.md) for every collector's payload — Go, Python, Maven, npm, APT, RPM, and containers.
+See [Ecosystems](ecosystems/index.md) for every collector's payload — Go, Python, Maven, npm, APT, RPM, containers, and AI models.
 
 !!! note "Nothing new? Nothing sent."
     If every file in a collect was already exported on that stream, the low side reports `"skipped": true` with `"no new content since the last export"` and consumes **no** sequence number — a re-pull of an unchanged upstream ships zero bytes across the diode.
@@ -157,7 +157,7 @@ export GOSUMDB=off
 go get rsc.io/quote@latest
 ```
 
-The high side serves **only** complete, verified versions that it has actually imported; anything not mirrored simply isn't found (the `,off` keeps the client from falling through to upstream). See [Go modules](ecosystems/go.md) for `go env`/CI setup, and the other [ecosystem pages](ecosystems/index.md) for the equivalent APT, RPM, PyPI, npm, Maven, and OCI client configuration.
+The high side serves **only** complete, verified versions that it has actually imported; anything not mirrored simply isn't found (the `,off` keeps the client from falling through to upstream). See [Go modules](ecosystems/go.md) for `go env`/CI setup, and the other [ecosystem pages](ecosystems/index.md) for the equivalent APT, RPM, PyPI, npm, Maven, OCI, and AI model client configuration.
 
 ## Generating signing keys manually
 
