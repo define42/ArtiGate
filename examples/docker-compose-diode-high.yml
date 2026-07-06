@@ -1,0 +1,68 @@
+# ArtiGate high side with the built-in UDP data diode (the "catcher").
+#
+# Runs on the machine whose spare NIC hangs off the diode's RX fiber. At
+# startup ArtiGate configures that NIC itself — MTU 9000 (must be at least the
+# pitcher's), IPv6 link-local addressing derived from the MAC (addr-gen-mode
+# eui64), RX ring buffers at hardware maximum, link up — joins the pitcher's
+# multicast group, and reassembles the Reed-Solomon-coded datagrams into
+# bundle files in the landing directory. From there the normal
+# verify-and-import pipeline takes over: the wire carries zero trust, the
+# Ed25519 signature / sequencing / hash checks are unchanged.
+#
+# Host networking and permissions, and why each is needed:
+#
+#   network_mode: host   the catcher must own a REAL host NIC (the fiber RX).
+#                        `ports:` does not apply — the repository binds host
+#                        port 8080 directly.
+#   cap_add: NET_ADMIN   configure the NIC (MTU / rings / eui64 / link) via
+#                        ioctl + rtnetlink, and raise the receive buffer past
+#                        rmem_max (SO_RCVBUFFORCE) — that buffer is what rides
+#                        out import/disk stalls at full line rate.
+#   user: "0:0"          Docker grants added capabilities to the root user
+#                        only. Prefer not to run as root? Configure the NIC on
+#                        the host and set ARTIGATE_CATCHER_NETSETUP=off.
+#
+# Optional extra headroom: net.core.netdev_max_backlog can only be raised
+# from inside the container if /proc/sys is writable (privileged: true);
+# without it ArtiGate logs a note and continues. Setting the sysctl on the
+# host works just as well.
+#
+# The /keys volume must contain high.ed25519.pub, generated on the LOW side
+# and carried over once.
+
+services:
+  high:
+    build: ..
+    network_mode: host
+    user: "0:0"
+    cap_add:
+      - NET_ADMIN
+    command:
+      - high
+      - --listen=:8080
+      - --root=/var/lib/artigate
+      - --landing=/var/spool/diode-in
+      - --public-key=/keys/high.ed25519.pub
+      - --import-interval=10s
+    environment:
+      # The dedicated one-way NIC on the diode's RX fiber. Setting this is
+      # what enables the catcher — replace with your NIC's name.
+      - ARTIGATE_CATCHER_INTERFACE=eth1
+      # Defaults, spelled out for visibility. Group/port must match the
+      # pitcher's; the receive buffer (MiB) absorbs bursts and import stalls.
+      # - ARTIGATE_CATCHER_RCVBUF_MB=64
+      # - ARTIGATE_CATCHER_MTU=9000
+      # - ARTIGATE_CATCHER_GROUP=ff02::4147
+      # - ARTIGATE_CATCHER_PORT=4147
+      # NIC already configured by the host? Turn ArtiGate's setup off:
+      # - ARTIGATE_CATCHER_NETSETUP=off
+    volumes:
+      - keys:/keys:ro
+      - high-landing:/var/spool/diode-in
+      - high-data:/var/lib/artigate
+    restart: unless-stopped
+
+volumes:
+  keys:
+  high-landing:
+  high-data:

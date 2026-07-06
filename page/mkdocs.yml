@@ -57,6 +57,7 @@ nav:
       - High side: high-side.md
       - Scheduling (watches): scheduling.md
       - Deployment: deployment.md
+      - Built-in UDP diode: data-diode.md
   - Ecosystems:
       - Overview: ecosystems/index.md
       - Go modules: ecosystems/go.md
