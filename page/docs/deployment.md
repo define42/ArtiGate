@@ -55,20 +55,20 @@ Because the entrypoint is the binary itself, `docker run <image>` prints usage. 
 
 ## Docker Compose demo stack
 
-The bundled `docker-compose.yml` runs a complete low + high pipeline on a single host. A shared named volume, `diode`, is written by the low side's export directory and read by the high side's landing directory — it **stands in for the one-way data diode**. It lets you exercise the whole flow locally.
+The bundled `docker-compose.yml` runs a complete low + high pipeline on a single host, wired together over the **HTTP diode transport**: the low side uploads each exported bundle to the high side's `/diode` ingest endpoint (`ARTIGATE_DIODE_URL=http://high:8080/diode`, shared `ARTIGATE_DIODE_TOKEN`), which **stands in for the one-way data diode** and lets you exercise the whole flow locally. Prefer the classic folder flow instead? Drop the `ARTIGATE_DIODE_*` variables and mount one shared volume as the low side's `/var/spool/diode-out` and the high side's `/var/spool/diode-in`.
 
-!!! warning "The compose `diode` volume is not a real diode"
-    In a real deployment the two sides are physically separated and the transfer is enforced one-way by hardware. The compose `diode` volume is mounted read-write on both services — Compose cannot enforce directionality. Never treat the demo topology as an air gap. See [Security & trust](security.md).
+!!! warning "The compose wiring is not a real diode"
+    In a real deployment the two sides are physically separated and the transfer is enforced one-way by hardware. In the demo the low side simply HTTP-POSTs to the high side on the same Docker network — nothing enforces directionality. Never treat the demo topology as an air gap, and replace the demo `change-me-diode-token` before sharing the stack. See [Security & trust](security.md).
 
 ### Services
 
 | Service | Role | Host port | Key volumes |
 |---|---|---|---|
 | `keygen` | One-shot: generate the Ed25519 key pair into `keys` (idempotent) | — | `keys:/keys` |
-| `low` | Internet-side exporter dashboard | `8080 → 8080` | `keys:/keys:ro`, `diode:/var/spool/diode-out`, `low-data:/var/lib/artigate` |
-| `high` | Air-gapped read-only repository + tree | `8081 → 8080` | `keys:/keys:ro`, `diode:/var/spool/diode-in`, `high-data:/var/lib/artigate` |
+| `low` | Internet-side exporter dashboard | `8080 → 8080` | `keys:/keys:ro`, `low-outbound:/var/spool/diode-out`, `low-data:/var/lib/artigate` |
+| `high` | Air-gapped read-only repository + tree | `8081 → 8080` | `keys:/keys:ro`, `high-landing:/var/spool/diode-in`, `high-data:/var/lib/artigate` |
 
-`keygen` runs first; both `low` and `high` declare `depends_on: keygen: condition: service_completed_successfully`. Its command is guarded so it never overwrites existing keys:
+`keygen` runs first; both `low` and `high` declare `depends_on: keygen: condition: service_completed_successfully` (and `low` additionally waits for `high` to start, so the first collect's upload doesn't race the high side's boot). The keygen command is guarded so it never overwrites existing keys:
 
 ```bash
 test -f /keys/low.ed25519 || artigate keygen --private /keys/low.ed25519 --public /keys/high.ed25519.pub
@@ -85,6 +85,9 @@ low:
     - --export-dir=/var/spool/diode-out
     - --private-key=/keys/low.ed25519
     - --upstream-goproxy=https://proxy.golang.org,direct
+  environment:
+    - ARTIGATE_DIODE_URL=http://high:8080/diode
+    - ARTIGATE_DIODE_TOKEN=change-me-diode-token
 high:
   command:
     - high
@@ -93,6 +96,9 @@ high:
     - --landing=/var/spool/diode-in
     - --public-key=/keys/high.ed25519.pub
     - --import-interval=10s
+  environment:
+    - ARTIGATE_DIODE_INGEST=on
+    - ARTIGATE_DIODE_TOKEN=change-me-diode-token
 ```
 
 After the stack is up:
@@ -126,7 +132,7 @@ The `Makefile` wraps Compose (it auto-detects `docker compose` v2 and falls back
 | `make reset` | `docker compose down -v` | Stop **and wipe all volumes** — a fresh start, sequences back to `1` |
 
 !!! warning "`reset` destroys the mirror and resets sequencing"
-    `make reset` (`docker compose down -v`) removes `low-data`, `high-data`, `diode`, and `keys`. Sequence numbering restarts at `1` and a new key pair is generated. Use `make stop` for an ordinary restart; only use `reset` when you deliberately want to start over.
+    `make reset` (`docker compose down -v`) removes `low-data`, `high-data`, `low-outbound`, `high-landing`, and `keys`. Sequence numbering restarts at `1` and a new key pair is generated. Use `make stop` for an ordinary restart; only use `reset` when you deliberately want to start over.
 
 ### Enabling low-side auth (and the `$$` caveat)
 
@@ -219,7 +225,7 @@ A bundle is **exactly three sibling files** sharing a bundle ID. All three must 
 <bundleID>.manifest.json.sig  # detached base64 Ed25519 signature over the manifest bytes
 ```
 
-The bundle ID is `<stream>-bundle-<seq>` zero-padded to six digits, e.g. `go-bundle-000001`, `python-bundle-000042`, `apt-bundle-000001`. Each of the seven **streams** — `go`, `python`, `maven`, `apt`, `rpm`, `containers`, `npm` — has its own independent sequence counter, so a gap in one stream never blocks another. Bundles are written atomically (temp file + rename), so a partially-arrived bundle is simply "incomplete" and is skipped until all three files are present. See [Architecture](architecture.md) for the bundle format and signing model.
+The bundle ID is `<stream>-bundle-<seq>` zero-padded to six digits, e.g. `go-bundle-000001`, `python-bundle-000042`, `apt-bundle-000001`. Each of the eight **streams** — `go`, `python`, `maven`, `apt`, `rpm`, `containers`, `npm`, `hf` — has its own independent sequence counter, so a gap in one stream never blocks another. Bundles are written atomically (temp file + rename), so a partially-arrived bundle is simply "incomplete" and is skipped until all three files are present. See [Architecture](architecture.md) for the bundle format and signing model.
 
 ### Strict in-order import
 
@@ -245,8 +251,25 @@ curl localhost:8081/admin/status
 
 which reports, per stream, `last_imported_sequence`, `next_expected_sequence`, `missing_ranges`, `quarantined_sequences`, and any `blocking_missing_sequence`.
 
-!!! note "The transport is yours to build"
+!!! note "The transport is yours to build — or use the built-in HTTP one"
     ArtiGate makes no assumptions about how the three files cross the gap — a hardware data diode, a manual sneakernet drive, or any one-way transfer works, because bundles are self-contained and self-verifying. The only requirement is that all three files of a bundle land in the high side's landing directory. ArtiGate never sends anything back from high to low; the flow is strictly one-way.
+
+### Optional HTTP transport
+
+For diodes or diode proxies that speak HTTP, ArtiGate can perform the transfer itself, configured entirely by environment variables:
+
+| Variable | Side | Meaning |
+|---|---|---|
+| `ARTIGATE_DIODE_URL` | low | endpoint bundles are uploaded to after every export and re-export (`PUT <url>/<file>`, archive first) |
+| `ARTIGATE_DIODE_INGEST` | high | `on` accepts uploads at `PUT/POST /diode/<file>` into the landing directory (default `off`) |
+| `ARTIGATE_DIODE_TOKEN` | both | optional shared bearer token |
+
+After a successful upload the low side clears the bundle from the export directory (it shows as *sent* on the Status page); a failed upload never loses a bundle — the collect still succeeds, the dashboard and a schedule's status report the error, and the bundle stays staged for a re-transmit. Uploads stream atomically into the landing directory (a half-received file is never visible under its final name), a completed bundle imports immediately rather than on the next scan tick, and only the three bundle-file name shapes are accepted. The transport carries no trust — signature, sequencing, and hash checks are unchanged; the token only protects the high side's disk. Anything that can `PUT` a file works as a sender:
+
+```bash
+curl -fT go-bundle-000042.tar.gz -H "Authorization: Bearer $TOKEN" \
+  https://artigate-high.local/diode/go-bundle-000042.tar.gz
+```
 
 ## State, volumes, and backups
 
@@ -261,7 +284,7 @@ Each side keeps durable state under its `--root`. Plan capacity and backups for 
 | `<root>/watches.db` | SQLite scheduled-watch definitions and history |
 | `<root>/bundles` | Persistent archive of every generated bundle, retained for re-export |
 | `<root>/gopath/...` | Go module download cache |
-| `<export-dir>` (default `/var/spool/diode-out`) | Freshly written bundles staged for the diode transfer |
+| `<export-dir>` (default `/var/spool/diode-out`) | Freshly written bundles staged for the diode transfer (cleared automatically after a successful HTTP diode upload) |
 
 **High side** (`--root`, default `/var/lib/artigate-high`):
 

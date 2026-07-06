@@ -8,7 +8,7 @@ ArtiGate is a single binary with two roles that never share routes: `artigate lo
 ## Conventions
 
 - **Bundle IDs** are `<stream>-bundle-%06d`, e.g. `go-bundle-000042`, `python-bundle-000007`. Each bundle is three files: `<id>.tar.gz`, `<id>.manifest.json`, `<id>.manifest.json.sig`.
-- **Streams** are the seven ecosystems, each independently sequenced: `go`, `python`, `maven`, `apt`, `rpm`, `containers`, `npm`. The `go` stream keeps the legacy single-stream numbering.
+- **Streams** are the eight ecosystems, each independently sequenced: `go`, `python`, `maven`, `apt`, `rpm`, `containers`, `npm`, `hf`. The `go` stream keeps the legacy single-stream numbering.
 - **Error codes**: collect and re-export errors are `400`; watch validation `400`, watch store failures `500`; high-side import/status failures `500`; UI `detail` not-found `404`; `repos` for a wrong ecosystem `400`. Non-read methods on serving/UI routes return `405`.
 - **Auth**: only the low dashboard can require login (`ARTIGATE_LOW_AUTH`). The high side is never authenticated. See [Security & trust](security.md) and [TLS / HTTPS](tls.md).
 
@@ -58,12 +58,13 @@ Every ecosystem exposes `POST /admin/{eco}/collect`. The dispatch is POST-only; 
 | `skipped` | bool | omitempty; `true` when Tier-1 dedup found every resolved file already forwarded on this stream — **no bundle written, no sequence consumed** |
 | `message` | string | omitempty; `"no new content since the last export"` on a dedup skip, or `"re-exported from archive"` on a replay |
 | `skipped_modules` | `[]FailedModule` | omitempty; per-item fetch failures that were skipped so the rest of the batch still exports. `FailedModule` = `{module, version, error}` |
+| `diode_error` | string | omitempty; set when the upload to the [HTTP diode endpoint](deployment.md) failed. The bundle itself is committed, archived, and still staged — a "re-transmit me" signal, not a lost export |
 
 !!! warning "`skipped:true` consumes no sequence"
     A dedup skip writes no bundle and burns no sequence number. The [high side](high-side.md) must not wait on a sequence that was never produced.
 
 !!! note "Which collectors populate `skipped_modules`"
-    **Go**, **containers**, **Python** (source-only distributions that cannot be mirrored under the wheels-only policy), and **NPM** (git-URL / otherwise-unfetchable packages) report per-item failures here. **APT**, **RPM**, and **Maven** never populate the field — they either fully succeed or return a single top-level error. If *all* items fail, the whole request errors at 400 (e.g. Go `"no modules could be fetched: …"`, containers `"no images could be fetched: …"`) rather than writing an empty bundle.
+    **Go**, **containers**, **AI models**, **Python** (source-only distributions that cannot be mirrored under the wheels-only policy), and **NPM** (git-URL / otherwise-unfetchable packages) report per-item failures here. **APT**, **RPM**, and **Maven** never populate the field — they either fully succeed or return a single top-level error. If *all* items fail, the whole request errors at 400 (e.g. Go `"no modules could be fetched: …"`, containers `"no images could be fetched: …"`) rather than writing an empty bundle.
 
 ---
 
@@ -236,6 +237,26 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 !!! warning "linux/amd64 only"
     Only the `linux/amd64` platform is mirrored. Unfetchable images are skipped and reported in `skipped_modules`.
 
+#### AI models — `POST /admin/hf/collect`
+
+`HFCollectRequest`. Body limit **1 MiB**. See [AI models (Hugging Face)](ecosystems/ai-models.md).
+
+```json
+{
+  "models": ["hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0"],
+  "repos": ["openai/gpt-oss-20b", "org/model@main"],
+  "repo_exclude": ["original", "metal"]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `models` | `[]string` | GGUF variant refs; the tag is a quantization resolved by the Hub (`latest` = the repo's default); the `hf.co/` prefix is optional |
+| `repos` | `[]string` | full repository snapshots, pinned to a commit at collect time; `@branch` / `@commit` optional (default `main`) |
+| `repo_exclude` | `[]string` | skip repository paths: a bare directory name excludes the subtree, else `path.Match` against the full path |
+
+At least one of `models`/`repos` is required. Gated models need `ARTIGATE_HF_TOKEN` on the low side; unfetchable references are skipped and reported in `skipped_modules`.
+
 ---
 
 ### Streaming variant — `?stream=1`
@@ -244,7 +265,8 @@ Append `?stream=1` to any `/admin/{eco}/collect` to receive live progress as **N
 
 - Response headers: `Content-Type: application/x-ndjson`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`. HTTP **200** is sent immediately, then lines are flushed as they occur.
 - The request body is buffered up to **16 MiB** before headers go out (the collect goroutine re-reads it), a cap that sits *above* each handler's own body limit.
-- Exactly one terminal `done` **or** `error` event follows zero or more `log` events.
+- Exactly one terminal `done` **or** `error` event follows zero or more `log` and `dl` events.
+- Aborting the request (the dashboard's **Stop** button) cancels the running collect server-side: downloads, spawned tools, and bundle packing all stop, and no sequence number is burned.
 
 Event shapes:
 
@@ -252,11 +274,16 @@ Event shapes:
 {"type":"log","message":"→ [3/12] rsc.io/quote@v1.5.2"}
 ```
 ```json
+{"type":"dl","name":"model-00001-of-00002.safetensors","done":5242880,"total":12582912000,"bps":44040192}
+```
+```json
 {"type":"done","result":{"stream":"go","sequence":42,"exported_modules":12,"bundle_id":"go-bundle-000042"}}
 ```
 ```json
 {"type":"error","error":"no modules could be fetched: ..."}
 ```
+
+`dl` events sample an in-flight file transfer at most every 500 ms — direct HTTP downloads (containers, AI models, APT, RPM), bundle **packing** (`"name":"packing hf-bundle-000001.tar.gz"`, measured on the uncompressed input side), and uploads to the HTTP diode endpoint. `total` is `0` when the size is unknown; transfers finishing inside the first interval emit nothing. They are ephemeral: when the client reads slowly, samples are dropped rather than queued (log lines are never dropped). The dashboard renders them as the per-file progress bar with rate and ETA.
 
 Progress lines are human-readable, e.g. `Resolving the Go module graph…`, `Resolved 12 module(s); fetching…`, `→ [3/12] rsc.io/quote@v1.5.2`, `  ✗ example.com/x@v0.1.0: not found`, `Packing 40 file(s) into a signed bundle…`, `Running mvn dependency:go-offline…`, `Resolving 2 image reference(s) (linux/amd64)…`.
 
@@ -432,7 +459,7 @@ Both return the identical `LowBundleStatus` payload.
 
 ## HIGH side
 
-`HighServer.ServeHTTP` tries, in order: `serveHighAdmin`, `serveGo`, `servePython`, `serveMaven`, `serveApt`, `serveRpm`, `serveContainers`, `serveNpm`, `serveUI`; unclaimed → `404`. Every ecosystem handler is **read-only** (GET/HEAD; others → `405`, or a registry error for containers). The high side never fetches upstream and never invokes toolchains — it serves imported bundle contents from disk. See [High side](high-side.md).
+`HighServer.ServeHTTP` tries, in order: `serveHighAdmin`, `serveDiode`, `serveGo`, `servePython`, `serveMaven`, `serveApt`, `serveRpm`, `serveHF`, `serveContainers`, `serveNpm`, `serveUI`; unclaimed → `404`. Every ecosystem handler is **read-only** (GET/HEAD; others → `405`, or a registry error for containers). The one write surface is the opt-in diode ingest (`/diode/`, below), which only lands files in the import pipeline. The high side never fetches upstream and never invokes toolchains — it serves imported bundle contents from disk. See [High side](high-side.md).
 
 ### Admin & health
 
@@ -481,6 +508,20 @@ Both return the identical `LowBundleStatus` payload.
 
 !!! note "Status has a side effect"
     `/admin/status`, `/admin/missing`, and `/ui/api/overview` first sort stray landing bundles into quarantine/duplicates before reporting.
+
+### Diode ingest — `PUT|POST /diode/<bundle-file>`
+
+The [HTTP diode transport](deployment.md)'s receiving end, **off by default** — enabled with `ARTIGATE_DIODE_INGEST=on`, optionally token-gated with `ARTIGATE_DIODE_TOKEN` (`Authorization: Bearer …`, constant-time compare). The body streams atomically into the landing directory; a completed bundle triggers an immediate import.
+
+| Situation | Status |
+|---|---|
+| Stored | 200, `{"stored":"<name>","size":<bytes>}` |
+| Ingest disabled | 403 `diode ingest is disabled; set ARTIGATE_DIODE_INGEST=on` |
+| Missing/wrong token | 401 |
+| Method not PUT/POST | 405 |
+| Name is not one of the three bundle-file shapes (`<stream>-bundle-<seq>{.tar.gz,.manifest.json,.manifest.json.sig}`) | 400 |
+
+The transport carries no trust — an uploaded bundle is verified exactly like a diode-carried file (signature, sequencing, hashes).
 
 ---
 
@@ -555,6 +596,21 @@ Client: `npm config set registry <base>/npm/`. See [NPM](ecosystems/npm.md).
 | `/npm/<name>/<version>` or `/npm/@scope/pkg/<version>` | Single version manifest |
 | `/npm/<name>/-/<file>` or `/npm/@scope/pkg/-/<file>` | Tarball (`<file>` must contain no slash) |
 
+#### AI models — prefixes `/v2`, `/hf`, `/api/models`, `/<org>/<name>/resolve`
+
+Clients: `ollama pull <high-host>/<org>/<name>:<tag>`, or `HF_ENDPOINT=<base>` for vLLM/transformers/`hf`. See [AI models (Hugging Face)](ecosystems/ai-models.md).
+
+| URL | Returns |
+|---|---|
+| `GET\|HEAD /v2/<org>/<name>/manifests/<tag-or-digest>` | variant manifest (also under `/v2/hf.co/<org>/<name>/…`); tags and names match case-insensitively |
+| `GET\|HEAD /v2/<org>/<name>/blobs/<digest>` | blob, Range supported |
+| `GET /v2/<org>/<name>/tags/list` | `{"name":"<org>/<name>","tags":[…]}` |
+| `GET /hf/<org>/<name>/<tag>.gguf` | the variant's raw model file, `Content-Disposition` filename `<name>-<tag>.gguf` |
+| `GET /api/models/<org>/<name>[/revision/<rev>]` | snapshot info: pinned commit (`sha`) + `siblings` file list |
+| `GET\|HEAD /<org>/<name>/resolve/<rev>/<path>` | snapshot file with `ETag` (sha256) and `X-Repo-Commit`; Range supported |
+
+Hub-API misses carry `X-Error-Code` (`RepoNotFound`, `RevisionNotFound`, `EntryNotFound`) so `huggingface_hub` raises its typed errors. The `/v2` space is shared with containers without ambiguity — a container name's first segment is a dotted registry host, which can never parse as a Hugging Face organization.
+
 ---
 
 ### Dashboard JSON — `/ui/api/*`
@@ -571,7 +627,7 @@ Just the import status; the package trees are fetched lazily.
 
 #### `GET /ui/api/tree?eco=<eco>&path=<path>`
 
-`eco` ∈ `go` (default), `python`, `maven`, `apt`, `rpm`, `containers`, `npm`. `path` is the parent node path (empty for root); children are returned one level at a time.
+`eco` ∈ `go` (default), `python`, `maven`, `apt`, `rpm`, `containers`, `npm`, `hf`. `path` is the parent node path (empty for root); children are returned one level at a time.
 
 ```json
 { "nodes": [
@@ -613,7 +669,7 @@ Inventory is memoized for **3 seconds**, so freshly imported content appears wit
 
 #### `GET /ui/api/repos?eco=<eco>` → `UIReposResponse`
 
-Valid only for `eco` ∈ `apt | rpm | containers`; anything else → **400** `"repos are only available for apt, rpm, and containers"`.
+Valid only for `eco` ∈ `apt | rpm | containers | hf`; anything else → **400** `"repos are only available for apt, rpm, containers, and hf"`. For `hf`, entries with `"kind":"repo"` are full repository snapshots (consumed via `HF_ENDPOINT`); the rest are GGUF models with their variant tags.
 
 ```json
 { "repos": [
@@ -631,5 +687,5 @@ Valid only for `eco` ∈ `apt | rpm | containers`; anything else → **400** `"r
 - [Low side](low-side.md) and [High side](high-side.md) — operating each role.
 - [Scheduling (watches)](scheduling.md) — the recurring-pull model behind `/admin/watches*`.
 - [Configuration reference](configuration.md) — every flag and environment variable.
-- [Ecosystems](ecosystems/index.md) — the seven ecosystem pages linked above.
+- [Ecosystems](ecosystems/index.md) — the eight ecosystem pages linked above.
 - [Troubleshooting & limitations](troubleshooting.md) — error codes and known edges.

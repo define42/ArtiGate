@@ -235,4 +235,4 @@ Any Maven collect can be turned into a recurring **watch** so an unchanged upstr
 - **The high-side `/maven/` endpoint is unauthenticated by design.**
 - Needs a working `mvn` on the low-side host (configurable via `--maven`); resolution reaches whatever upstream repositories that host's Maven is configured for.
 
-See [Troubleshooting &amp; limitations](../troubleshooting.md) for the consolidated list, and the [Ecosystems overview](index.md) for the other six.
+See [Troubleshooting &amp; limitations](../troubleshooting.md) for the consolidated list, and the [Ecosystems overview](index.md) for the other seven.

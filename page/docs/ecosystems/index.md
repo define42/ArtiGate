@@ -1,18 +1,18 @@
 # Ecosystems
 
-ArtiGate mirrors **seven** package ecosystems across a one-way data diode. Each is a self-contained stream with the same lifecycle — the low side *collects* upstream artifacts, packs them into a signed *bundle*, the diode carries it, and the high side *imports* and *serves* it — but the input format and the client protocol differ per ecosystem. This page is the hub; each row links to its full page.
+ArtiGate mirrors **eight** package ecosystems across a one-way data diode. Each is a self-contained stream with the same lifecycle — the low side *collects* upstream artifacts, packs them into a signed *bundle*, the diode carries it, and the high side *imports* and *serves* it — but the input format and the client protocol differ per ecosystem. This page is the hub; each row links to its full page.
 
 ## The common flow
 
 Every ecosystem follows the same **collect → bundle → import → serve** path described in [Architecture](../architecture.md):
 
-1. **Collect** — an operator (or a [watch](../scheduling.md)) sends `POST /admin/{ecosystem}/collect` to the [low side](../low-side.md). Go, Python, Maven, and NPM shell out to their *native* CLI (`go`, `pip`, `mvn`, `npm`); APT, RPM, and containers are fetched directly over the ecosystem's own HTTP protocol (deb822 index + `.deb` files, repodata + `.rpm` files, and the OCI/Docker registry API respectively).
+1. **Collect** — an operator (or a [watch](../scheduling.md)) sends `POST /admin/{ecosystem}/collect` to the [low side](../low-side.md). Go, Python, Maven, and NPM shell out to their *native* CLI (`go`, `pip`, `mvn`, `npm`); APT, RPM, containers, and AI models are fetched directly over the ecosystem's own HTTP protocol (deb822 index + `.deb` files, repodata + `.rpm` files, the OCI/Docker registry API, and the Hugging Face Hub's Ollama-compatible and file APIs respectively).
 2. **Bundle** — the fetched files are packed into a signed three-file bundle (`<bundleID>.tar.gz`, `.manifest.json`, `.manifest.json.sig`) and written to the export directory. Each ecosystem is an independently-numbered [stream](../architecture.md), so a slow container mirror never blocks a Python collect.
 3. **Import** — the [high side](../high-side.md) verifies the Ed25519 signature and every SHA-256 hash, installs the artifacts immutably, and imports strictly in sequence order per stream.
 4. **Serve** — the high side **regenerates** all repository metadata from the artifacts actually present (it never trusts a transferred index) and serves clients under a per-ecosystem base path.
 
 !!! note "One manifest, one stream per ecosystem"
-    All seven streams share the same [bundle format](../architecture.md). The manifest `type` field is always the legacy string `"go-module-bundle"` regardless of ecosystem — the real ecosystem is carried by the `stream` field (`go`, `python`, `maven`, `npm`, `apt`, `rpm`, `containers`) and the populated sub-manifest.
+    All eight streams share the same [bundle format](../architecture.md). The manifest `type` field is always the legacy string `"go-module-bundle"` regardless of ecosystem — the real ecosystem is carried by the `stream` field (`go`, `python`, `maven`, `npm`, `apt`, `rpm`, `containers`, `hf`) and the populated sub-manifest.
 
 ## Comparison
 
@@ -25,11 +25,12 @@ Every ecosystem follows the same **collect → bundle → import → serve** pat
 | [APT (Debian/Ubuntu)](apt.md) | deb822 source stanza, or explicit `uri`/`suite`/`components`/`architectures` | APT (deb822) repository | `/apt/` | `apt-get` |
 | [RPM (RHEL/Fedora)](rpm.md) | A `.repo` file, or explicit `name`/`base_url` (e.g. `packages.microsoft.com`) | yum/dnf repository | `/rpm/` | `dnf` / `yum` |
 | [Container images (OCI)](containers.md) | Docker-style image refs (`alpine:3.20`, `ghcr.io/org/app@sha256:…`) | OCI / Docker registry (v2) | `/v2/` | `docker` / `podman` |
+| [AI models (Hugging Face)](ai-models.md) | GGUF variant refs (`hf.co/org/model-GGUF:Q4_0`) and full repositories (`openai/gpt-oss-20b[@rev]`) | Ollama-compatible registry + Hub download API | `/v2/`, `/hf/`, `/api/models/` | `ollama`, `vllm` / `hf` via `HF_ENDPOINT` |
 
 !!! tip "Client base paths are stable"
     The high side claims each URL space separately (`serveGo`, `servePython`, …); anything outside these prefixes returns `404`. Point clients at `<high-base>/go`, pip at the `<high-base>/simple` index, and so on.
 
-## The seven ecosystems
+## The eight ecosystems
 
 ### Go modules → [go.md](go.md)
 
@@ -59,6 +60,10 @@ Collect takes a `.repo` file or explicit `name`/`base_url` (e.g. `packages.micro
 
 The richest ecosystem: collect takes docker-style image references (`alpine:3.20`, or a digest pin) and mirrors the `linux/amd64` image. The high side reassembles blobs and manifests and serves an OCI/Docker v2 registry under `/v2/`. Tag constraints use `hashicorp/go-version` (ArtiGate's only non-stdlib dependency besides SQLite).
 
+### AI models (Hugging Face) → [ai-models.md](ai-models.md)
+
+Two forms on one `hf` stream. **GGUF variants** are addressed container-style (`hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0` — the tag is a quantization, resolved by the Hub itself) and served back over the same registry protocol Ollama uses, so `ollama pull <high-host>/<org>/<model>:<tag>` works air-gapped; the raw GGUF also downloads from `/hf/…` for llama.cpp. **Full repository snapshots** (`openai/gpt-oss-20b`, for safetensors releases) are pinned to a commit, LFS-verified, and served over the Hub API's download subset — point `HF_ENDPOINT` at the mirror and `vllm serve`, transformers, and `hf download` work unchanged. Gated models authenticate with `ARTIGATE_HF_TOKEN` on the low side.
+
 ## Cross-cutting notes
 
 Each ecosystem trades completeness for airgap-friendliness in a different way. Know these before you build a mirror:
@@ -69,6 +74,7 @@ Each ecosystem trades completeness for airgap-friendliness in a different way. K
 | Python | **Wheels only** — no sdists, so the high side never compiles |
 | Maven | **Release only** — `-SNAPSHOT` artifacts are not mirrored |
 | APT, RPM | **Newest-only by default** — one version per package unless `newest_only: false` |
+| AI models | **Exactly what you name** — one variant per reference; a repository snapshot is every file at one pinned commit (minus `repo_exclude`) |
 
 !!! warning "Content dedup is per stream"
     The low side's Tier-1 export dedup ([`exported.db`](../architecture.md)) is content-hash based and **per stream**. A re-collect of an unchanged upstream is skipped and consumes no sequence number; it does not dedup across ecosystems, and [re-export](../low-side.md) bypasses dedup entirely.

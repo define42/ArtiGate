@@ -66,6 +66,7 @@ nav:
       - APT (Debian/Ubuntu): ecosystems/apt.md
       - RPM (RHEL/Fedora): ecosystems/rpm.md
       - Container images (OCI): ecosystems/containers.md
+      - AI models (Hugging Face): ecosystems/ai-models.md
   - Security & trust: security.md
   - TLS / HTTPS: tls.md
   - Configuration reference: configuration.md

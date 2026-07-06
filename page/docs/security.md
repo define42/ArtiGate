@@ -111,7 +111,7 @@ Authentication is **optional**, **off by default**, and **low side only**. It is
 !!! danger "Unauthenticated by default — including all of `/admin/*`"
     With no `ARTIGATE_LOW_AUTH` set, the low side is **fully open**. Anyone who can reach the listener can drive collects and re-exports and read every admin endpoint:
 
-    - `POST /admin/{go,python,maven,apt,rpm,containers,npm}/collect` — trigger fetching and export
+    - `POST /admin/{go,python,maven,apt,rpm,containers,npm,hf}/collect` — trigger fetching and export
     - `POST /admin/reexport?stream=go&sequences=42,45-47` — replay archived bundles
     - `GET /admin/bundles` — bundle status
     - the dashboard UI and the watches routes
@@ -203,6 +203,14 @@ There is no `ARTIGATE_HIGH_AUTH` and no auth middleware on the high side. Its ad
 - `GET /admin/status` and `GET /admin/missing`
 
 The high side's integrity comes from **signature + hash verification at import**, not from request authentication. It is a read-only repository intended to sit on the trusted/high network; anyone who can reach it can *read* what has already been verified, but nothing they send can inject content — writes only ever happen through the verified import path. Place it on a trusted segment accordingly.
+
+### The one optional write surface: diode ingest
+
+With `ARTIGATE_DIODE_INGEST=on` (off by default), the high side accepts bundle uploads at `PUT/POST /diode/<file>` — the receiving end of the [HTTP diode transport](deployment.md). This does **not** weaken the trust model: an uploaded file lands in the landing directory exactly as a diode-carried file would, only strictly-validated bundle file names are accepted, and nothing is served until the import's signature, sequencing, and hash checks pass. What an unauthenticated uploader *can* do is consume disk, so set `ARTIGATE_DIODE_TOKEN` (a shared bearer token, compared in constant time) unless the endpoint is reachable only by the diode proxy. Leave ingest off entirely when you use the folder flow.
+
+### Upstream credentials on the low side
+
+`ARTIGATE_HF_TOKEN` (a Hugging Face access token for gated models) is the one upstream credential ArtiGate itself sends. It is read from the environment at collect time, attached as a Bearer header to Hugging Face requests only, and never forwarded: `net/http` drops the `Authorization` header on the cross-host CDN redirects that model downloads follow, and the token never appears in bundles, manifests, or the high side.
 
 ## Dependency-confusion guidance
 

@@ -50,7 +50,7 @@ Point a browser at the listen address (`/`, `/ui`, or `/ui/`) for a single self-
 | One page per ecosystem | A collect form for that ecosystem, a live progress modal, an inline result box, and a "schedule the above" row |
 | **Status** | The bundle ledger: next sequence per stream and every exported sequence with its archive/outbound state |
 
-There is one ecosystem page per stream: **Go**, **Python**, **Maven**, **npm**, **APT**, **RPM**, and **Containers**. Each page's collect form maps directly to the matching `/admin/<stream>/collect` endpoint. See [Ecosystems](ecosystems/index.md) for the payload each one accepts.
+There is one ecosystem page per stream: **Go**, **Python**, **Maven**, **npm**, **APT**, **RPM**, **Containers**, and **AI Models**. Each page's collect form maps directly to the matching `/admin/<stream>/collect` endpoint. See [Ecosystems](ecosystems/index.md) for the payload each one accepts.
 
 If `ARTIGATE_LOW_AUTH` is configured, a **Log out** button appears (it POSTs to `/logout`), and any `401` from an expired session redirects the whole UI to `/login`.
 
@@ -98,7 +98,7 @@ Bundle IDs are `<stream>-bundle-<seq>` zero-padded to six digits — for example
 | `<id>.manifest.json` | The manifest — the exact bytes that are signed |
 | `<id>.manifest.json.sig` | Detached base64 Ed25519 signature of the manifest bytes |
 
-All three are written atomically into `--export-dir` and then copied into the persistent archive at `<root>/bundles`. The diode transfer moves the copies *out of* the export dir; the archive copy is what makes a later re-export possible.
+All three are written atomically into `--export-dir` and then copied into the persistent archive at `<root>/bundles`. The diode transfer moves the copies *out of* the export dir — with the [HTTP diode transport](deployment.md) configured (`ARTIGATE_DIODE_URL`), ArtiGate uploads them itself right after export and clears them on success; the archive copy is what makes a later re-export possible either way.
 
 !!! note
     The manifest's `type` field is always the legacy string `"go-module-bundle"` for **every** ecosystem — the real ecosystem is carried by the `stream` field and the populated sub-manifest (`python`, `apt`, `npm`, …). The signature is over the exact on-disk manifest bytes, so any tool that rewrites that JSON breaks verification.
@@ -115,7 +115,7 @@ The dashboard always POSTs collects with `?stream=1`, which switches the respons
 {"type":"done","result":{"stream":"go","sequence":1,"exported_modules":3,"bundle_id":"go-bundle-000001"}}
 ```
 
-There are three event types: `log` (a human-readable progress line), a terminal `done` carrying the full `ExportResult`, and a terminal `error` carrying the error string. You can consume the same stream from the command line:
+There are four event types: `log` (a human-readable progress line), `dl` (a throttled byte-progress sample for the file currently downloading, packing, or uploading — name, bytes done/total, transfer rate), a terminal `done` carrying the full `ExportResult`, and a terminal `error` carrying the error string. You can consume the same stream from the command line:
 
 ```bash
 curl -N -X POST 'http://localhost:8080/admin/python/collect?stream=1' \
@@ -123,7 +123,9 @@ curl -N -X POST 'http://localhost:8080/admin/python/collect?stream=1' \
   -d '{"requirements":"requests"}'
 ```
 
-In the browser this drives a shared **progress modal**: a spinner, a live-tailing log, and a result box. Close is disabled while a collect runs, and Esc / backdrop dismissal is blocked until it finishes. A dedup skip renders uniformly as "No new content since the last export — nothing to send across the diode." The modal always refreshes the Status page afterward.
+In the browser this drives a shared **progress modal**: a spinner, a live-tailing log, a **per-file progress bar** (percentage, bytes, transfer rate, ETA — shown for direct HTTP downloads, bundle packing, and diode uploads once a transfer outlasts half a second), and a result box. A **Stop** button aborts the running collect server-side — downloads, spawned tools, and packing all cancel, nothing is exported, and no sequence number is burned; only a stop landing in the final signing moment still exports, which the stopped message calls out. Close is disabled while a collect runs, and Esc / backdrop dismissal is blocked until it finishes. A dedup skip renders uniformly as "No new content since the last export — nothing to send across the diode." The modal always refreshes the Status page afterward.
+
+With an [HTTP diode endpoint](deployment.md) configured, each successful collect ends by uploading the bundle; a failed upload turns the result into a warning — the bundle is committed, archived, and still staged, ready to re-transmit from the Status page.
 
 !!! tip
     Without `?stream=1` the collect runs buffered and emits no progress lines — the progress sink is a no-op, which is exactly how scheduled watches run. Streaming is purely a UI/observability aid; the export result is identical either way.

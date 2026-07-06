@@ -38,10 +38,10 @@ Confirm the binary works:
 
 ## Quick start with Docker Compose
 
-The repository ships a `docker-compose.yml` that runs both sides on one host. A shared named volume, `diode`, is written by the low side's export dir and read by the high side's landing dir — it **stands in for the one-way data diode** so you can exercise the whole pipeline locally.
+The repository ships a `docker-compose.yml` that runs both sides on one host, wired together over the **HTTP diode transport**: the low side uploads each exported bundle to the high side's `/diode` ingest endpoint — it **stands in for the one-way data diode** so you can exercise the whole pipeline locally. (The classic folder flow works too: drop the `ARTIGATE_DIODE_*` variables and share one volume between the export and landing dirs.)
 
 !!! warning "The demo diode is not one-way"
-    Compose cannot enforce a one-way transfer: the `diode` volume is writable from both services. Only physically separate hardware enforces the diode in production. See [Deployment](deployment.md).
+    Compose cannot enforce a one-way transfer: in the demo the low side simply HTTP-uploads to the high side over the shared Docker network. Only physically separate hardware enforces the diode in production. See [Deployment](deployment.md).
 
 ```bash
 make run          # docker compose up --build   (foreground, low + high)

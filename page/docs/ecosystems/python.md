@@ -237,6 +237,6 @@ See consolidated limitations and fixes in [Troubleshooting & limitations](../tro
 
 ## See also
 
-- [Ecosystems overview](index.md) — the hub for all seven ecosystems.
+- [Ecosystems overview](index.md) — the hub for all eight ecosystems.
 - [Go modules](go.md), [Java (Maven)](maven.md), [NPM](npm.md), [APT (Debian/Ubuntu)](apt.md), [RPM (RHEL/Fedora)](rpm.md), [Container images (OCI)](containers.md) — sibling ecosystem pages.
 - [Low side](../low-side.md) · [High side](../high-side.md) · [Architecture](../architecture.md) · [Configuration reference](../configuration.md) · [HTTP API reference](../api.md) · [Deployment](../deployment.md).

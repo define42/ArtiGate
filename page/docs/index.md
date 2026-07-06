@@ -1,6 +1,6 @@
 # ArtiGate
 
-ArtiGate is a dependency mirror for **one-way data-diode / air-gapped networks**. It fetches Go modules, Python (PyPI) wheels, Java (Maven) artifacts, NPM packages, APT (`.deb`) and RPM (`.rpm`) repositories, and container images from the internet, carries them across a diode as signed numbered bundles, and serves them on the isolated side in each ecosystem's native format.
+ArtiGate is a dependency mirror for **one-way data-diode / air-gapped networks**. It fetches Go modules, Python (PyPI) wheels, Java (Maven) artifacts, NPM packages, APT (`.deb`) and RPM (`.rpm`) repositories, container images, and AI models from Hugging Face from the internet, carries them across a diode as signed numbered bundles, and serves them on the isolated side in each ecosystem's native format.
 
 !!! note "One binary, two modes"
     A single `artigate` executable runs as either the internet-side exporter (`artigate low`) or the air-gapped read-only mirror (`artigate high`). The low side **delegates fetching** to the host's own `go`/`git`, `pip`, `mvn`, `npm`, and `gpgv` tools. The high side **never invokes them and never touches the network** — it only imports, verifies, and serves what already crossed the diode.
@@ -12,13 +12,13 @@ ArtiGate is a dependency mirror for **one-way data-diode / air-gapped networks**
          fetch + sign        carry across          verify + serve
 ```
 
-1. **Low side** — from its web dashboard you give it a spec (a `go.mod` or module list, a Python requirements list, Maven coordinates, a `package.json` or NPM package list, an APT source stanza, a `.repo`, or a list of container images). It fetches the closure from upstream and writes a **signed, numbered bundle** — three files per bundle: `<id>.tar.gz`, `<id>.manifest.json`, and `<id>.manifest.json.sig` — into the export directory.
-2. **Diode** — a one-way transfer carries those three files into the high side's landing directory. ArtiGate never performs this move itself.
-3. **High side** — it imports each stream's bundles strictly in sequence, verifies the Ed25519 signature and every file's SHA-256 hash, installs artifacts immutably, and **regenerates** all repository metadata from the artifacts actually present. It then serves clients as a GOPROXY, a PyPI index, a Maven 2 repository, an NPM registry, APT/RPM repositories, and a read-only OCI registry.
+1. **Low side** — from its web dashboard you give it a spec (a `go.mod` or module list, a Python requirements list, Maven coordinates, a `package.json` or NPM package list, an APT source stanza, a `.repo`, a list of container images, or Hugging Face model references). It fetches the closure from upstream and writes a **signed, numbered bundle** — three files per bundle: `<id>.tar.gz`, `<id>.manifest.json`, and `<id>.manifest.json.sig` — into the export directory.
+2. **Diode** — a one-way transfer carries those three files into the high side's landing directory: either something moves the files (ArtiGate never performs that move itself), or the optional **HTTP diode transport** does — the low side uploads each bundle to an HTTP endpoint (`ARTIGATE_DIODE_URL`) and the high side ingests uploads at `/diode/` (`ARTIGATE_DIODE_INGEST=on`).
+3. **High side** — it imports each stream's bundles strictly in sequence, verifies the Ed25519 signature and every file's SHA-256 hash, installs artifacts immutably, and **regenerates** all repository metadata from the artifacts actually present. It then serves clients as a GOPROXY, a PyPI index, a Maven 2 repository, an NPM registry, APT/RPM repositories, a read-only OCI registry, and an Ollama-compatible model registry plus the Hub download API for AI models.
 
 Each ecosystem is an independently numbered **stream**, so a stalled or missing bundle in one stream never blocks the others.
 
-## The seven ecosystems
+## The eight ecosystems
 
 | Ecosystem | Low side mirrors | High side serves as | Client prefix |
 |---|---|---|---|
@@ -29,6 +29,7 @@ Each ecosystem is an independently numbered **stream**, so a stalled or missing 
 | **APT (Debian/Ubuntu)** | a deb822 source stanza, optional `Signed-By` keyring verified with `gpgv` | APT repository | `/apt/<mirror>` |
 | **RPM (RHEL/Fedora)** | a yum/dnf `.repo` stanza with a concrete `baseurl` | RPM repository | `/rpm/<mirror>` |
 | **Container images (OCI)** | image refs (`alpine:3.20`, `ghcr.io/org/app:v1`), optional tag version constraints; **linux/amd64 only** | read-only OCI registry (Docker Registry v2) | `/v2/` |
+| **AI models (Hugging Face)** | GGUF variants (`hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0`) and full repository snapshots (`openai/gpt-oss-20b`) pinned to a commit | Ollama-compatible registry + Hub download API (`HF_ENDPOINT`) | `/v2/`, `/hf/`, `/api/models/` |
 
 See [Ecosystems](ecosystems/index.md) for the per-ecosystem detail pages.
 
@@ -49,6 +50,6 @@ See [Ecosystems](ecosystems/index.md) for the per-ecosystem detail pages.
 - [Architecture](architecture.md) — the deep model: streams, bundle format, signing, and the import loop.
 - [Low side](low-side.md) — operating the exporter: collecting, scheduling, and re-export.
 - [High side](high-side.md) — operating the mirror: importing, status, and serving clients.
-- [Ecosystems](ecosystems/index.md) — the seven ecosystems and their client setup.
+- [Ecosystems](ecosystems/index.md) — the eight ecosystems and their client setup.
 - [Configuration reference](configuration.md) — every flag and environment variable.
 - [Security & trust](security.md) — the trust story and hardening guidance.

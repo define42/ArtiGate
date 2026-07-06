@@ -14,10 +14,10 @@ Because it re-runs the real collect every time, a watch inherits all of that col
 - [Tier-1 dedup](architecture.md) still applies: if every resolved file was already forwarded on that stream, no bundle is produced and no sequence number is consumed — the watch just records a "skipped" run.
 - Per-unit fetch failures are collected as skipped units, not fatal, so one broken reference never blocks the batch.
 
-A watch can target any of the seven known streams:
+A watch can target any of the eight known streams:
 
 ```text
-go   python   maven   apt   rpm   containers   npm
+go   python   maven   apt   rpm   containers   npm   hf
 ```
 
 ## Adding a schedule from an ecosystem page

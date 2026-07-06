@@ -32,12 +32,12 @@ One binary, three subcommands (`keygen`, `low`, `high`; plus `hashpw` for low-si
   │                          install immutably │ (isolated)    │
   │                          regenerate indexes│               │
   │                                            ▼               │
-  │  serve  /go /simple /maven /apt /rpm /v2 /npm             │
+  │  serve  /go /simple /maven /apt /rpm /v2 /npm /hf /api    │
   └────────────────────────────────────────────────────────────┘
 ```
 
 1. **Low side** (`runLow`) is an *exporter*, not a proxy. Its HTTP handler rejects anything that is not an `/admin/*` route or the dashboard — "the low side is an exporter, not a module proxy." Operators drive it with `POST /admin/{ecosystem}/collect`; it fetches with the native tools and writes a signed **bundle** (three files) into the export directory (default `/var/spool/diode-out`).
-2. **The diode transfer** moves those three files from the low export dir to the high **landing** dir (default `/var/spool/diode-in`). ArtiGate itself never performs this move — it is your diode/guard.
+2. **The diode transfer** moves those three files from the low export dir to the high **landing** dir (default `/var/spool/diode-in`). By default ArtiGate never performs this move — it is your diode/guard — but the optional [HTTP transport](#optional-http-transport) lets the two sides do it themselves for diodes that speak HTTP.
 3. **High side** (`runHigh`) watches the landing dir on a ticker, imports bundles **strictly in sequence order per stream**, verifies signature + hashes, installs artifacts immutably, and **regenerates** all repository metadata from the artifacts actually present. Then it serves read-only clients.
 
 See [Low side](low-side.md) and [High side](high-side.md) for operating each half, and [Security &amp; trust](security.md) for the threat model.
@@ -55,10 +55,11 @@ const (
     streamRpm        = "rpm"
     streamContainers = "containers"
     streamNpm        = "npm"
+    streamHF         = "hf"
 )
 ```
 
-`knownStreams()` returns all seven; they appear in status even before anything has been exported. The `go` stream deliberately keeps the pre-multi-stream numbering for backward compatibility.
+`knownStreams()` returns all eight; they appear in status even before anything has been exported. The `go` stream deliberately keeps the pre-multi-stream numbering for backward compatibility.
 
 | Concern | Low side | High side |
 |---|---|---|
@@ -100,6 +101,7 @@ type BundleManifest struct {
     Rpm              *RpmManifest       `json:"rpm,omitempty"`
     Containers       *ContainerManifest `json:"containers,omitempty"`
     Npm              *NpmManifest       `json:"npm,omitempty"`
+    HuggingFace      *HFManifest        `json:"huggingface,omitempty"`
     Files            []ManifestFile     `json:"files"`               // flat authoritative file set
 }
 ```
@@ -167,7 +169,7 @@ So a bundle lives in **two** places:
 
 | Location | Purpose | After the diode transfer |
 |---|---|---|
-| `--export-dir` (`/var/spool/diode-out`) | staged for the diode; the transfer moves these out | gone (forwarded) |
+| `--export-dir` (`/var/spool/diode-out`) | staged for the diode; the transfer — or a successful HTTP diode upload — moves these out | gone (forwarded) |
 | `<root>/bundles` | retained for [re-export](low-side.md) | kept |
 
 `GET /admin/bundles` surfaces `InArchive` / `InOutbound` booleans and `SizeBytes` per sequence: a forwarded bundle is archive-only; a not-yet-sent one is in both.
@@ -213,11 +215,17 @@ Two more properties: dedup is **per-stream and content-hash only** — it does n
 
 ## The diode transfer
 
-ArtiGate does not move files across the diode — your data-diode or cross-domain guard does. The contract is minimal:
+By default ArtiGate does not move files across the diode — your data-diode or cross-domain guard does. The contract is minimal:
 
 - Move the three files of each bundle (`.tar.gz`, `.manifest.json`, `.manifest.json.sig`) from the low `--export-dir` to the high `--landing` dir.
 - The transfer is **one-way**: nothing ever flows high → low. There is no acknowledgement channel, which is exactly why the low side retains `<root>/bundles` for operator-driven re-export.
 - A partially-arrived bundle is simply not yet "complete" on the high side (see below) and is skipped until all three files are present.
+
+### Optional HTTP transport
+
+For diodes (or diode proxies) that speak HTTP instead of moving files, both sides also implement the transfer themselves, configured by environment variables (see [Deployment](deployment.md)): with `ARTIGATE_DIODE_URL` set, the low side uploads each bundle's three files (`PUT <url>/<file>`, the archive first) right after export and re-export, then clears them from the export dir — which keeps its exact spool semantics, staged-until-transferred; with `ARTIGATE_DIODE_INGEST=on`, the high side accepts uploads at `PUT/POST /diode/<file>`, streams them atomically into the landing directory, and imports a completed bundle immediately instead of waiting for the next scan tick. An optional shared bearer token (`ARTIGATE_DIODE_TOKEN`) gates the endpoint.
+
+The transport carries **zero trust**: an uploaded bundle enters the same verify-and-import pipeline as a diode-carried file — signature, sequencing, and every hash are still checked. A failed upload never loses a bundle; the collect still succeeds, the failure is reported, and the staged bundle is re-transmitted from the Status page.
 
 ## High side: strict in-order import per stream
 
@@ -296,4 +304,4 @@ The shard key is `containerBlobShardHex(hex)` — the first 3 hex characters of 
 - [High side](high-side.md) — importing, quarantine, status/missing, and serving.
 - [Scheduling (watches)](scheduling.md) — recurring collects on a stored spec.
 - [Security &amp; trust](security.md) — the full trust argument and hardening.
-- [Ecosystems](ecosystems/index.md) — the seven streams, including the richest one, [containers](ecosystems/containers.md).
+- [Ecosystems](ecosystems/index.md) — the eight streams, including the richest one, [containers](ecosystems/containers.md).

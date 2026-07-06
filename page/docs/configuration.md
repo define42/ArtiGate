@@ -92,6 +92,7 @@ artigate low \
 | `--npm` | `npm` | npm command used to resolve NPM package graphs |
 | `--npm-registry` | `""` | Registry URL npm resolves against (passed as `--registry`; empty uses npm's own config) |
 | `--container-registry` | `""` | Comma-separated `host=baseURL` registry overrides (e.g. `docker.io=https://mirror.example.com`) |
+| `--hf-endpoint` | `""` (→ `https://huggingface.co`) | Hugging Face endpoint AI models are fetched from (a private Hub mirror, or a test server) |
 | `--watch-interval` | `60s` | How often the scheduler checks for due watches; `0` disables scheduled watches |
 
 !!! note
@@ -101,7 +102,7 @@ artigate low \
 
 ### Routes
 
-- `POST /admin/{go,python,maven,apt,rpm,containers,npm}/collect` (add `?stream=1` for streamed progress)
+- `POST /admin/{go,python,maven,apt,rpm,containers,npm,hf}/collect` (add `?stream=1` for streamed progress)
 - `POST /admin/reexport?stream=go&sequences=42,45-47` (`stream` defaults to `go`; also accepts a JSON body `{"stream":"go","sequences":"42,45-47"}`)
 - `GET /admin/bundles`
 - `GET /healthz` → `ok\n` (always open, even with auth enabled)
@@ -144,12 +145,13 @@ artigate high \
 - `GET /admin/missing`
 - `GET /admin/status`
 - `GET /healthz`
+- `PUT|POST /diode/<bundle-file>` — bundle ingest, only when `ARTIGATE_DIODE_INGEST=on` (403 otherwise)
 
 ---
 
 ## Environment variables
 
-There are **no** environment variables for `keygen` or `hashpw`. The TLS variables apply to **both** `low` and `high` (both call the same `tlsConfigFromEnv`). The auth and cookie variables apply to the **low side only** — the high side has no auth.
+There are **no** environment variables for `keygen` or `hashpw`. The TLS variables apply to **both** `low` and `high` (both call the same `tlsConfigFromEnv`). The auth and cookie variables apply to the **low side only** — the high side has no auth. The diode-transport variables split by side (`ARTIGATE_DIODE_URL` low, `ARTIGATE_DIODE_INGEST` high, the token both), and `ARTIGATE_HF_TOKEN` is low-side only.
 
 ### Low-side authentication
 
@@ -178,6 +180,22 @@ Parsing rules and gotchas:
 
 !!! tip
     Set `ARTIGATE_LOW_COOKIE_SECURE=true` when ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy, so the session cookie is still marked `Secure`. It only takes effect when `ARTIGATE_LOW_AUTH` is set (otherwise there is no session cookie).
+
+### Diode transport (HTTP)
+
+The optional HTTP transfer between the sides — see [Deployment](deployment.md) for semantics and [Security & trust](security.md) for the trust notes.
+
+| Variable | Side | Default | Meaning |
+|---|---|---|---|
+| `ARTIGATE_DIODE_URL` | low | unset (folder flow) | HTTP endpoint bundles are uploaded to after every export and re-export (`PUT <url>/<file>`). Must parse as an `http`/`https` URL or startup fails. On success the bundle is cleared from the export dir; on failure it stays staged and the error is reported on the collect result |
+| `ARTIGATE_DIODE_INGEST` | high | `off` | `on`/`1`/`true`/`yes` accepts bundle uploads at `PUT/POST /diode/<file>` into the landing directory; any other non-off value is fatal |
+| `ARTIGATE_DIODE_TOKEN` | both | unset (open) | Shared bearer token: the low side sends it, the high side requires it when set (constant-time compare) |
+
+### Hugging Face (AI models)
+
+| Variable | Side | Default | Meaning |
+|---|---|---|---|
+| `ARTIGATE_HF_TOKEN` | low | unset (anonymous) | Hugging Face access token for gated/private models, sent as a Bearer header; read at collect time, so it rotates without a restart |
 
 ### TLS
 
@@ -209,7 +227,7 @@ Validation (all fatal at startup):
 
 The file paths, listen addresses, and behaviour toggles are **flag-only**; TLS and low-side auth are **env-only**. There is deliberately no flag for TLS and no env var for paths/listen addresses.
 
-- **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags, `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`.
-- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`.
+- **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags, `--hf-endpoint`, `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`.
+- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_HF_TOKEN`.
 
 See also: [Deployment](deployment.md) for production topologies, [Security & trust](security.md) for the trust model, and [TLS / HTTPS](tls.md) for the full TLS matrix.
