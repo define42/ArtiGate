@@ -18,6 +18,9 @@ func (s *LowServer) serveLowUI(w http.ResponseWriter, r *http.Request) bool {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return true
 		}
+		// The dashboard's script is inline in this page and changes across
+		// versions; never let a browser cache serve a stale copy.
+		w.Header().Set("Cache-Control", "no-store")
 		writeHTML(w, s.renderLowUI())
 	case "/ui/api/status":
 		if !isReadMethod(r) {
@@ -120,6 +123,12 @@ const lowUIHTML = `<!DOCTYPE html>
   @media (prefers-reduced-motion: reduce) { .cmodal-spin { animation: none; } }
   .cmodal-log { flex: 1 1 auto; min-height: 6rem; margin: 0; padding: .8rem 1.1rem; overflow-y: auto; overflow-x: auto; font-family: ui-monospace, monospace; font-size: .8rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: #c7cedb; background: #0f1115; }
   .cmodal-log .l-err { color: #ff9ea3; }
+  .cmdl { flex: 0 0 auto; padding: .55rem 1.1rem .65rem; border-top: 1px solid #2a2f3a; background: #12161f; }
+  .cmdl-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-bottom: .35rem; font-size: .78rem; }
+  .cmdl-name { font-family: ui-monospace, monospace; color: #c7cedb; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cmdl-stats { color: #8b93a5; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .cmdl-bar { height: 6px; border-radius: 3px; background: #2a2f3a; overflow: hidden; }
+  .cmdl-fill { height: 100%; width: 0; background: #2b8f59; transition: width .3s linear; }
   .cmodal-foot { flex: 0 0 auto; padding: .8rem 1.1rem; border-top: 1px solid #2a2f3a; }
   .cmodal-foot .rbox { margin-top: 0; }
   .cm-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: .7rem; }
@@ -413,6 +422,10 @@ const lowUIHTML = `<!DOCTYPE html>
 <dialog id="collectModal" class="cmodal" aria-label="Collect progress">
   <div class="cmodal-head"><span class="cmodal-spin" id="cmSpin" aria-hidden="true"></span><h3 id="cmTitle">Collecting</h3></div>
   <pre class="cmodal-log" id="cmLog" aria-live="polite"></pre>
+  <div class="cmdl" id="cmDl" hidden>
+    <div class="cmdl-head"><span class="cmdl-name" id="cmDlName"></span><span class="cmdl-stats" id="cmDlStats"></span></div>
+    <div class="cmdl-bar"><div class="cmdl-fill" id="cmDlFill"></div></div>
+  </div>
   <div class="cmodal-foot">
     <div id="cmResult" class="rbox"></div>
     <div class="cm-actions">
@@ -444,6 +457,7 @@ function openCollectModal(title){
   const rb=document.getElementById('cmResult'); rb.className='rbox'; rb.innerHTML='';
   m.dataset.done=''; cmRunning=true;
   cmAbort=new AbortController();
+  hideCollectDl();
   const stop=document.getElementById('cmStop'); stop.disabled=false; stop.textContent='Stop';
   document.getElementById('cmClose').disabled=true;
   if(!m.open) m.showModal();
@@ -457,6 +471,36 @@ function stopCollect(){
   stop.disabled=true; stop.textContent='Stopping…';
   appendCollectLog('Stop requested — cancelling the running collect…');
   cmAbort.abort();
+}
+// ---- Per-file download progress ----
+// Downloads within a collect are sequential, so one bar tracks the file in
+// flight: {type:"dl", name, done, total, bps} events update it in place
+// (total 0 means the size is unknown — bytes and speed only).
+function updateCollectDl(ev){
+  const done=Number(ev.done)||0, total=Number(ev.total)||0, bps=Number(ev.bps)||0;
+  document.getElementById('cmDl').hidden=false;
+  document.getElementById('cmDlName').textContent=ev.name||'download';
+  let stats='';
+  if(total>0) stats+=Math.min(100,Math.floor(done*100/total))+'% · ';
+  stats+=formatBytes(done);
+  if(total>0) stats+=' / '+formatBytes(total);
+  if(bps>0){
+    stats+=' · '+formatBytes(bps)+'/s';
+    if(total>done) stats+=' · ETA '+fmtETA((total-done)/bps);
+  }
+  document.getElementById('cmDlStats').textContent=stats;
+  document.getElementById('cmDlFill').style.width=(total>0?Math.min(100,done*100/total):0)+'%';
+}
+function hideCollectDl(){
+  const el=document.getElementById('cmDl');
+  el.hidden=true;
+  document.getElementById('cmDlFill').style.width='0%';
+}
+function fmtETA(sec){
+  sec=Math.max(0,Math.round(sec));
+  if(sec<60) return sec+'s';
+  if(sec<3600) return Math.floor(sec/60)+'m'+String(sec%60).padStart(2,'0')+'s';
+  return Math.floor(sec/3600)+'h'+String(Math.floor(sec/60)%60).padStart(2,'0')+'m';
 }
 function appendCollectLog(msg, cls){
   const log=document.getElementById('cmLog');
@@ -472,6 +516,7 @@ function appendCollectLog(msg, cls){
 function finishCollectModal(cls, html){
   const m=document.getElementById('collectModal');
   m.dataset.done='1'; cmRunning=false; cmAbort=null;
+  hideCollectDl();
   const rb=document.getElementById('cmResult'); rb.className='rbox '+cls; rb.innerHTML=html;
   const stop=document.getElementById('cmStop'); stop.disabled=true; stop.textContent='Stop';
   document.getElementById('cmClose').disabled=false;
@@ -495,9 +540,12 @@ async function streamCollect(url, body, signal){
   const handle=line=>{
     line=line.trim(); if(!line) return;
     let ev; try{ ev=JSON.parse(line); }catch(_){ return; }
-    if(ev.type==='log') appendCollectLog(ev.message);
-    else if(ev.type==='done') result=ev.result||{};
-    else if(ev.type==='error'){ errMsg=ev.error||'collect failed'; appendCollectLog(errMsg,'l-err'); }
+    // A log line follows every finished download (and every phase change), so
+    // it doubles as the signal to retire the current file's progress bar.
+    if(ev.type==='log'){ appendCollectLog(ev.message); hideCollectDl(); }
+    else if(ev.type==='dl') updateCollectDl(ev);
+    else if(ev.type==='done'){ result=ev.result||{}; hideCollectDl(); }
+    else if(ev.type==='error'){ errMsg=ev.error||'collect failed'; appendCollectLog(errMsg,'l-err'); hideCollectDl(); }
   };
   for(;;){
     const {value,done}=await reader.read();

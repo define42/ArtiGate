@@ -1025,3 +1025,72 @@ func TestHFRepoDashboardAndDetail(t *testing.T) {
 		t.Error("detail of an unknown revision should fail")
 	}
 }
+
+// TestStreamingCollectEmitsDownloadProgress drives a real streaming collect
+// over HTTP — the exact path the dashboard's "Collect & export" uses — against
+// an upstream that dribbles a multi-megabyte blob out slowly, and asserts the
+// per-file progress events reach the wire between the log lines.
+func TestStreamingCollectEmitsDownloadProgress(t *testing.T) {
+	model := makeFakeHFModel("Q4_0", strings.Repeat("g", 4<<20))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v2/unsloth/gpt-oss-20b-GGUF/manifests/Q4_0", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", mtDockerManifest)
+		_, _ = w.Write(model.manifest)
+	})
+	for _, b := range [][]byte{model.config, model.template} {
+		blob := b
+		mux.HandleFunc("/v2/unsloth/gpt-oss-20b-GGUF/blobs/"+containerSHA(blob), func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write(blob)
+		})
+	}
+	// The model blob trickles out over ~1.3s, well past the report interval.
+	mux.HandleFunc("/v2/unsloth/gpt-oss-20b-GGUF/blobs/"+containerSHA(model.gguf), func(w http.ResponseWriter, _ *http.Request) {
+		f := w.(http.Flusher)
+		for data := model.gguf; len(data) > 0; {
+			n := min(256<<10, len(data))
+			_, _ = w.Write(data[:n])
+			f.Flush()
+			data = data[n:]
+			time.Sleep(80 * time.Millisecond)
+		}
+	})
+	hub := httptest.NewServer(mux)
+	t.Cleanup(hub.Close)
+
+	ls, _ := newHFLowServer(t, hub.URL)
+	web := httptest.NewServer(ls)
+	t.Cleanup(web.Close)
+
+	resp, err := http.Post(web.URL+"/admin/hf/collect?stream=1", "application/json", //nolint:noctx // test request
+		strings.NewReader(`{"models":["hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := readAllString(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("streaming collect: %d %q", resp.StatusCode, body)
+	}
+	events := decodeNDJSON(t, body)
+	var dls []map[string]any
+	for _, ev := range events {
+		if ev["type"] == "dl" {
+			dls = append(dls, ev)
+		}
+	}
+	if len(dls) == 0 {
+		t.Fatalf("no dl events on the wire; events: %v", events)
+	}
+	first := dls[0]
+	if first["name"] != "blob "+shortDigest(containerSHA(model.gguf)) {
+		t.Errorf("dl name = %v", first["name"])
+	}
+	if total := first["total"].(float64); total != float64(len(model.gguf)) {
+		t.Errorf("dl total = %v, want %d", total, len(model.gguf))
+	}
+	if done := first["done"].(float64); done <= 0 || done > float64(len(model.gguf)) {
+		t.Errorf("dl done = %v", done)
+	}
+	if events[len(events)-1]["type"] != "done" {
+		t.Errorf("final event = %v, want done", events[len(events)-1])
+	}
+}

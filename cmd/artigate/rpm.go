@@ -753,7 +753,8 @@ func httpDownload(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<30))
+	r := newProgressReader(ctx, resp.Body, dlNameFromURL(rawURL), resp.ContentLength)
+	body, err := io.ReadAll(io.LimitReader(r, 4<<30))
 	if err != nil {
 		return nil, err
 	}

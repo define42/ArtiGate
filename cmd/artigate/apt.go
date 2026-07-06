@@ -632,7 +632,8 @@ func (s *LowServer) aptGet(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<30)) // 2 GiB cap per file
+	r := newProgressReader(ctx, resp.Body, dlNameFromURL(rawURL), resp.ContentLength)
+	body, err := io.ReadAll(io.LimitReader(r, 2<<30)) // 2 GiB cap per file
 	if err != nil {
 		return nil, err
 	}

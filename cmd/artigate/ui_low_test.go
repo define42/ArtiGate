@@ -245,3 +245,13 @@ func TestLowUICollectStopButton(t *testing.T) {
 		}
 	}
 }
+
+// TestLowUIDownloadProgressBar checks the collect modal ships the per-file
+// download progress bar and handles the server's "dl" events.
+func TestLowUIDownloadProgressBar(t *testing.T) {
+	for _, want := range []string{`id="cmDl"`, `id="cmDlFill"`, `id="cmDlStats"`, "ev.type==='dl'", "updateCollectDl", "fmtETA"} {
+		if !strings.Contains(lowUIHTML, want) {
+			t.Errorf("low UI missing %q", want)
+		}
+	}
+}

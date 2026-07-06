@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // decodeNDJSON reads the recorder body as newline-delimited JSON events.
@@ -127,5 +128,109 @@ func TestWantsStreamingCollect(t *testing.T) {
 	}
 	if wantsStreamingCollect(no) {
 		t.Error("no query should not request streaming")
+	}
+}
+
+// dlSample is one captured download-progress emission.
+type dlSample struct {
+	name        string
+	done, total int64
+	bps         int64
+}
+
+// TestProgressReaderReportsLargeDownloads checks the per-file progress
+// plumbing: a download outlasting the report interval emits samples with
+// cumulative bytes and a rate, and lands on a final done==total sample.
+func TestProgressReaderReportsLargeDownloads(t *testing.T) {
+	var samples []dlSample
+	ctx := withDownloadProgress(context.Background(), func(name string, done, total, bps int64) {
+		samples = append(samples, dlSample{name, done, total, bps})
+	})
+	content := strings.Repeat("x", 1<<20)
+	pr := newProgressReader(ctx, strings.NewReader(content), "model.gguf", int64(len(content)))
+
+	// First read arms the interval; a read after the interval reports.
+	buf := make([]byte, 512<<10)
+	if _, err := pr.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(dlProgressInterval + 50*time.Millisecond)
+	if _, err := io.Copy(io.Discard, pr); err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) == 0 {
+		t.Fatal("no progress samples for a download outlasting the interval")
+	}
+	first := samples[0]
+	if first.name != "model.gguf" || first.total != int64(len(content)) || first.done <= 0 || first.bps <= 0 {
+		t.Fatalf("first sample = %+v", first)
+	}
+	last := samples[len(samples)-1]
+	if last.done != int64(len(content)) {
+		t.Fatalf("final sample done = %d, want %d", last.done, len(content))
+	}
+}
+
+// TestProgressReaderSilentForSmallDownloads checks that a download finishing
+// inside the first interval emits nothing (indexes and configs must not flash
+// the bar) and that without a sink the reader is returned untouched.
+func TestProgressReaderSilentForSmallDownloads(t *testing.T) {
+	var samples []dlSample
+	ctx := withDownloadProgress(context.Background(), func(name string, done, total, bps int64) {
+		samples = append(samples, dlSample{name, done, total, bps})
+	})
+	pr := newProgressReader(ctx, strings.NewReader("tiny"), "Packages.gz", 4)
+	if _, err := io.Copy(io.Discard, pr); err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 0 {
+		t.Fatalf("small download emitted %d samples, want 0", len(samples))
+	}
+
+	plain := strings.NewReader("no sink")
+	if got := newProgressReader(context.Background(), plain, "x", 7); got != io.Reader(plain) {
+		t.Error("without a sink the reader must be returned untouched")
+	}
+}
+
+// TestStreamCollectForwardsDownloadEvents checks the wire format: download
+// samples reach the client as {"type":"dl",...} events among the log lines.
+func TestStreamCollectForwardsDownloadEvents(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/admin/hf/collect?stream=1", nil)
+	w := httptest.NewRecorder()
+
+	(&LowServer{}).streamCollect(w, r, func(ctx context.Context) (ExportResult, error) {
+		emitProgress(ctx, "→ hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0")
+		emitDownloadProgress(ctx, "blob ab12cd34ef56", 5<<20, 100<<20, 42<<20)
+		return ExportResult{BundleID: "hf-bundle-000001"}, nil
+	})
+
+	events := decodeNDJSON(t, w.Body.String())
+	var dl map[string]any
+	for _, ev := range events {
+		if ev["type"] == "dl" {
+			dl = ev
+		}
+	}
+	if dl == nil {
+		t.Fatalf("no dl event in %v", events)
+	}
+	if dl["name"] != "blob ab12cd34ef56" || dl["done"].(float64) != float64(5<<20) ||
+		dl["total"].(float64) != float64(100<<20) || dl["bps"].(float64) != float64(42<<20) {
+		t.Errorf("dl event = %v", dl)
+	}
+	if events[len(events)-1]["type"] != "done" {
+		t.Errorf("final event = %v, want done", events[len(events)-1])
+	}
+}
+
+func TestDlNameFromURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://mirror.example.com/pool/main/c/code/code_1.101.2_amd64.deb": "code_1.101.2_amd64.deb",
+		"https://example.com/repodata/primary.xml.gz?auth=t":                 "primary.xml.gz",
+	} {
+		if got := dlNameFromURL(in); got != want {
+			t.Errorf("dlNameFromURL(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

@@ -84,6 +84,9 @@ func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return true
 		}
+		// The dashboard shell and its script change across versions; never let
+		// a browser cache serve a stale copy of either.
+		w.Header().Set("Cache-Control", "no-store")
 		writeHTML(w, uiIndexHTML)
 	case "/ui/app.js":
 		if !isReadMethod(r) {
@@ -91,6 +94,7 @@ func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
 		_, _ = io.WriteString(w, uiAppJS)
 	case "/ui/api/overview":
 		if !isReadMethod(r) {

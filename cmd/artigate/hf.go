@@ -429,7 +429,8 @@ func (c *hfClient) downloadHFBlob(ctx context.Context, ref hfRef, desc ociDescri
 		return ManifestFile{}, fmt.Errorf("%s: blob %s: HTTP %d", ref, desc.Digest, resp.StatusCode)
 	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
-	if err := writeVerifiedBlob(abs, resp.Body, desc.Size, mf.SHA256); err != nil {
+	body := newProgressReader(ctx, resp.Body, "blob "+shortDigest(desc.Digest), desc.Size)
+	if err := writeVerifiedBlob(abs, body, desc.Size, mf.SHA256); err != nil {
 		return ManifestFile{}, fmt.Errorf("%s: blob %s: %w", ref, desc.Digest, err)
 	}
 	emitProgress(ctx, "    ↓ blob %s (%s)", shortDigest(desc.Digest), formatBytes(desc.Size))
@@ -530,7 +531,8 @@ func (c *hfClient) downloadHFRepoFile(ctx context.Context, ref hfRepoRef, commit
 			return HFRepoFile{}, ManifestFile{}, fmt.Errorf("%s: %s: HTTP %d", ref, meta.Path, resp.StatusCode)
 		}
 		abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
-		if err := writeVerifiedBlob(abs, resp.Body, meta.Size, meta.LFS); err != nil {
+		body := newProgressReader(ctx, resp.Body, meta.Path, meta.Size)
+		if err := writeVerifiedBlob(abs, body, meta.Size, meta.LFS); err != nil {
 			return HFRepoFile{}, ManifestFile{}, fmt.Errorf("%s: %s: %w", ref, meta.Path, err)
 		}
 		emitProgress(ctx, "    ↓ %s (%s)", meta.Path, formatBytes(meta.Size))
