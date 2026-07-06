@@ -138,6 +138,7 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="apt" onclick="setView('apt')">APT</button>
     <button type="button" data-view="rpm" onclick="setView('rpm')">RPM</button>
     <button type="button" data-view="containers" onclick="setView('containers')">Containers</button>
+    <button type="button" data-view="hf" onclick="setView('hf')">AI Models</button>
     <button type="button" data-view="status" onclick="setView('status')">Status</button>
   </nav>
   <button type="button" class="refresh" onclick="loadStatus();loadAllWatches()">Refresh</button>
@@ -350,6 +351,35 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   </section>
 
+  <section class="view" id="view-hf" hidden>
+  <div class="card">
+    <h2>Mirror AI models (Hugging Face)</h2>
+    <p class="hint">Two kinds of references, both optional. <b>GGUF models</b> &mdash; container-style, one per line: <code>hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0</code>; the tag picks a <b>variant/quantization</b> (<code>Q4_K_M</code>, <code>Q8_0</code>, &hellip;), resolved by Hugging Face itself &mdash; omit it for the repository's default; on the high side, Ollama pulls these straight from the mirror. <b>Full repositories</b> &mdash; for safetensors releases such as <code>openai/gpt-oss-20b</code> that publish no GGUF: every file is mirrored at a pinned commit, and the high side serves the Hub API so vLLM/transformers consume them via <code>HF_ENDPOINT</code>; add <code>@branch</code> or <code>@commit</code> to pin. The <code>hf.co/</code> prefix is optional everywhere. Gated models need <code>ARTIGATE_HF_TOKEN</code> on the low side. Same as POSTing to <code>/admin/hf/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectHF(event)">
+      <label class="filelabel">GGUF models <span class="opt">&mdash; one per line; a missing tag means the default quantization</span>
+        <textarea id="hfmodels" rows="4" placeholder="hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0&#10;bartowski/Llama-3.2-1B-Instruct-GGUF:Q8_0" autocomplete="off"></textarea>
+      </label>
+      <label class="filelabel">Full repositories <span class="opt">&mdash; one per line; every file at a pinned commit, for vLLM/transformers via the Hub API</span>
+        <textarea id="hfrepos" rows="3" placeholder="openai/gpt-oss-20b&#10;openai/gpt-oss-20b@main" autocomplete="off"></textarea>
+      </label>
+      <label class="filelabel">Skip repository paths <span class="opt">&mdash; optional, comma-separated; a folder name skips its whole subtree (e.g. the extra <code>original</code>/<code>metal</code> copies in gpt-oss)</span>
+        <input id="hfexclude" type="text" placeholder="original, metal" autocomplete="off">
+      </label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="hfBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('hfResult')">Reset</button>
+      </div>
+    </form>
+    <div id="hfResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule these models:</span>
+      <span class="every"><input id="hfEvery" type="number" min="1" value="1" autocomplete="off"> <select id="hfUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleHF()">Add schedule</button>
+    </div>
+    <div id="hfWatches" class="watchlist"></div>
+  </div>
+  </section>
+
   <section class="view" id="view-status" hidden>
   <div class="card">
     <h2>Re-transmit bundles</h2>
@@ -363,6 +393,7 @@ const lowUIHTML = `<!DOCTYPE html>
         <option value="apt">APT</option>
         <option value="rpm">RPM</option>
         <option value="containers">Containers</option>
+        <option value="hf">AI Models (Hugging Face)</option>
       </select>
       <input id="seq" type="text" placeholder="42,45-47" autocomplete="off" autofocus>
       <button class="primary" type="submit">Re-export</button>
@@ -389,7 +420,7 @@ const lowUIHTML = `<!DOCTYPE html>
 // If the session has expired, any API call returns 401; bounce to the login page.
 (function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers'})[name]||name;}
+function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers',hf:'AI Models'})[name]||name;}
 // clearResult hides an ecosystem's inline result box; the Reset button pairs it
 // with the form's native field reset (type="reset").
 function clearResult(id){const el=document.getElementById(id); if(el){ el.className='rbox'; el.innerHTML=''; }}
@@ -518,9 +549,9 @@ function outboundCell(inOutbound){
 // VIEW_STREAM maps each ecosystem view to its backend stream (now identical
 // names); views without a stream (overview, status) are absent, so it doubles as
 // the "is this an ecosystem page" test.
-const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers'};
+const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers',hf:'hf'};
 function setView(view){
-  for(const v of ['overview','go','python','maven','npm','apt','rpm','containers','status']){
+  for(const v of ['overview','go','python','maven','npm','apt','rpm','containers','hf','status']){
     document.getElementById('view-'+v).hidden = (v!==view);
   }
   document.querySelectorAll('nav button[data-view]').forEach(b=>{
@@ -792,6 +823,51 @@ async function scheduleContainers(){
   createWatch('containers','Containers: '+images.slice(0,3).join(', '), {images:images}, 'ctrEvery','ctrUnit', showCtrResult);
 }
 
+function showHFResult(cls, html){
+  const el=document.getElementById('hfResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+// hfModels / hfRepos read the two reference lists: one per line, comments
+// dropped. hfBody builds the shared collect/schedule payload from them.
+function hfModels(){
+  return document.getElementById('hfmodels').value.split(/\r?\n/)
+    .map(s=>s.replace(/\s+#.*$/,'').trim()).filter(l=>l && l.charAt(0)!=='#');
+}
+function hfRepos(){
+  return document.getElementById('hfrepos').value.split(/\r?\n/)
+    .map(s=>s.replace(/\s+#.*$/,'').trim()).filter(l=>l && l.charAt(0)!=='#');
+}
+function hfBody(){
+  const models=hfModels(), repos=hfRepos();
+  if(!models.length && !repos.length) return null;
+  const body={models:models, repos:repos};
+  const ex=document.getElementById('hfexclude').value.split(',').map(s=>s.trim()).filter(Boolean);
+  if(ex.length) body.repo_exclude=ex;
+  return body;
+}
+
+async function collectHF(ev){
+  ev.preventDefault();
+  const body=hfBody();
+  if(!body){ showHFResult('err','List at least one model or repository reference.'); return; }
+  runCollect({btnId:'hfBtn', showFn:showHFResult, title:'Collecting AI models',
+    url:'/admin/hf/collect', body:body, render:d=>{
+      const msg=collectedMsg(d,'Collected','model(s)');
+      const sk=d.skipped_modules||[];
+      if(sk.length) return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' unfetchable model(s):', sk, m=>'<code>'+esc(m.module)+':'+esc(m.version)+'</code> &mdash; '+esc(m.error))};
+      return {cls:'ok', msg};
+    }});
+}
+
+async function scheduleHF(){
+  const body=hfBody();
+  if(!body){ showHFResult('err','List at least one model or repository reference to schedule.'); return; }
+  const refs=hfModels().concat(hfRepos());
+  createWatch('hf','AI Models: '+refs.slice(0,3).join(', '), body, 'hfEvery','hfUnit', showHFResult);
+}
+
 async function loadStatus(){
   try{
     const r=await fetch('/ui/api/status',{cache:'no-store'});
@@ -824,8 +900,8 @@ async function loadStatus(){
 // ---- Schedules (watches) ----
 // Each ecosystem page schedules a recurring collect from its own inputs, so the
 // spec built here is exactly what that page's collect button would POST.
-const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',npm:'npmWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches'};
-const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,npm:showNpmResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult};
+const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',npm:'npmWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches',hf:'hfWatches'};
+const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,npm:showNpmResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult,hf:showHFResult};
 
 function intervalSeconds(everyId, unitId){
   const n=parseInt(document.getElementById(everyId).value,10);

@@ -56,12 +56,13 @@ const (
 	streamRpm        = "rpm"
 	streamContainers = "containers"
 	streamNpm        = "npm"
+	streamHF         = "hf"
 )
 
 // knownStreams is the set of built-in ecosystem streams, shown in the low-side
 // status even before anything has been exported.
 func knownStreams() []string {
-	return []string{streamGo, streamPython, streamMaven, streamApt, streamRpm, streamContainers, streamNpm}
+	return []string{streamGo, streamPython, streamMaven, streamApt, streamRpm, streamContainers, streamNpm, streamHF}
 }
 
 func main() {
@@ -113,7 +114,7 @@ High-side clients:
   GOSUMDB=off
 
 Useful admin endpoints:
-  low:  POST /admin/{go,python,maven,apt,rpm,containers,npm}/collect
+  low:  POST /admin/{go,python,maven,apt,rpm,containers,npm,hf}/collect
   low:  POST /admin/reexport?stream=go&sequences=42,45-47
   low:  GET  /admin/bundles
   high: POST /admin/import
@@ -154,6 +155,7 @@ type BundleManifest struct {
 	Rpm              *RpmManifest       `json:"rpm,omitempty"`
 	Containers       *ContainerManifest `json:"containers,omitempty"`
 	Npm              *NpmManifest       `json:"npm,omitempty"`
+	HuggingFace      *HFManifest        `json:"huggingface,omitempty"`
 	Files            []ManifestFile     `json:"files"`
 }
 
@@ -267,7 +269,11 @@ type LowConfig struct {
 	NpmBinary       string
 	// NpmRegistry optionally overrides the registry npm resolves against
 	// (passed as --registry); empty uses npm's configured default.
-	NpmRegistry   string
+	NpmRegistry string
+	// HFEndpoint optionally overrides the Hugging Face endpoint models are
+	// fetched from (a private mirror, or a test server); empty means
+	// https://huggingface.co.
+	HFEndpoint    string
 	WatchInterval time.Duration
 	// ContainerRegistries optionally remaps container registry names to the
 	// endpoints they are fetched from, as comma-separated host=baseURL pairs.
@@ -347,6 +353,7 @@ func runLow(args []string) {
 	fs.StringVar(&cfg.MavenBinary, "maven", "mvn", "maven command used to resolve Java/Maven artifacts")
 	fs.StringVar(&cfg.NpmBinary, "npm", "npm", "npm command used to resolve NPM package graphs")
 	fs.StringVar(&cfg.NpmRegistry, "npm-registry", "", "registry URL npm resolves against (default: npm's own configuration)")
+	fs.StringVar(&cfg.HFEndpoint, "hf-endpoint", "", "Hugging Face endpoint models are fetched from (default https://huggingface.co); ARTIGATE_HF_TOKEN optionally authenticates gated models")
 	fs.StringVar(&cfg.ContainerRegistries, "container-registry", "", "comma-separated host=baseURL overrides for container registries (e.g. docker.io=https://mirror.example.com)")
 	fs.DurationVar(&cfg.WatchInterval, "watch-interval", 60*time.Second, "how often the scheduler checks for due watches; 0 disables scheduled watches")
 	_ = fs.Parse(args)
@@ -513,6 +520,8 @@ func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool
 		run = func(ctx context.Context) (ExportResult, error) { return s.HandleContainerCollect(ctx, r) }
 	case "/admin/npm/collect":
 		run = func(ctx context.Context) (ExportResult, error) { return s.HandleNpmCollect(ctx, r) }
+	case "/admin/hf/collect":
+		run = func(ctx context.Context) (ExportResult, error) { return s.HandleHFCollect(ctx, r) }
 	default:
 		return false
 	}
@@ -1691,7 +1700,7 @@ func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// request; anything unclaimed is not found.
 	for _, serve := range []func(http.ResponseWriter, *http.Request) bool{
 		s.serveHighAdmin, s.serveGo, s.servePython, s.serveMaven, s.serveApt,
-		s.serveRpm, s.serveContainers, s.serveNpm, s.serveUI,
+		s.serveRpm, s.serveHF, s.serveContainers, s.serveNpm, s.serveUI,
 	} {
 		if serve(w, r) {
 			return
@@ -2240,6 +2249,7 @@ func validateManifestCompleteness(m BundleManifest) error {
 		{m.Rpm != nil && len(m.Rpm.Mirrors) > 0, func(s map[string]bool) error { return validateRpmMirrors(m.Rpm.Mirrors, s) }},
 		{m.Containers != nil && len(m.Containers.Repos) > 0, func(s map[string]bool) error { return validateContainerRepos(m.Containers.Repos, s, m.Files) }},
 		{m.Npm != nil && len(m.Npm.Packages) > 0, func(s map[string]bool) error { return validateNpmPackages(m.Npm.Packages, s) }},
+		{m.HuggingFace != nil && (len(m.HuggingFace.Models) > 0 || len(m.HuggingFace.Repos) > 0), func(s map[string]bool) error { return validateHF(m.HuggingFace, s, m.Files) }},
 	}
 	matched := false
 	for _, e := range ecosystems {
@@ -2252,7 +2262,7 @@ func validateManifestCompleteness(m BundleManifest) error {
 		}
 	}
 	if !matched {
-		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, container repos, or npm packages")
+		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, container repos, npm packages, or hugging face models")
 	}
 	return nil
 }
@@ -2311,6 +2321,9 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 	// Regenerate the served npm metadata from each tarball's own embedded
 	// package.json (never trusting a transferred packument).
 	if err := s.publishNpm(manifest.Npm); err != nil {
+		return err
+	}
+	if err := s.publishHF(manifest.HuggingFace); err != nil {
 		return err
 	}
 	// Complete markers are written only after all files are installed.

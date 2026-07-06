@@ -12,6 +12,7 @@ const VIEW_TITLES = {
     apt: "APT packages",
     rpm: "RPM packages",
     containers: "Container images",
+    hf: "AI models (Hugging Face)",
 };
 let currentView = "overview";
 let selectedLeaf = null;
@@ -52,6 +53,7 @@ const STREAM_LABELS = {
     apt: "APT",
     rpm: "RPM",
     containers: "Containers",
+    hf: "AI Models",
 };
 function streamLabel(name) {
     return STREAM_LABELS[name] ?? name;
@@ -707,6 +709,72 @@ function containersGuideSection(repos) {
                 "high side over TLS to drop this entirely.",
     };
 }
+// hfGuideSection shows how to consume mirrored Hugging Face content. GGUF
+// models pull with Ollama (an Ollama model name is host/namespace/model:tag,
+// so the pull name is this host followed by the model's own
+// <org>/<name>:<variant>) or download as a raw file. Full repository
+// snapshots serve the Hub API, so vLLM/transformers/hf point HF_ENDPOINT at
+// this mirror. The examples are built from what is actually mirrored.
+function hfGuideSection(repos) {
+    const host = window.location.host; // host:port, honoring any reverse proxy
+    const base = serverBase();
+    const secure = window.location.protocol === "https:";
+    const insecure = secure ? "" : "--insecure ";
+    const gguf = repos.filter((r) => r.kind !== "repo");
+    const full = repos.filter((r) => r.kind === "repo");
+    // Every section always renders — the guide teaches the workflows even
+    // before anything is mirrored — but sections whose content is not mirrored
+    // yet are labeled as examples.
+    const example = (mirrored) => (mirrored ? "" : " (example — none mirrored yet)");
+    const pullName = (r) => `${host}/${r.name}${r.tags && r.tags.length ? `:${r.tags[0]}` : ""}`;
+    const pulls = gguf
+        .slice(0, 8)
+        .map((r) => `ollama pull ${insecure}${pullName(r)}`)
+        .join("\n");
+    // One concrete model+variant / repository for the runnable examples.
+    const firstGguf = gguf.length ? gguf[0] : undefined;
+    const ggufName = firstGguf ? firstGguf.name : "unsloth/gpt-oss-20b-GGUF";
+    const ggufTag = firstGguf && firstGguf.tags && firstGguf.tags.length ? firstGguf.tags[0] : "Q4_0";
+    const file = `${ggufName.split("/")[1] ?? "model"}-${ggufTag}.gguf`;
+    const repoName = full.length ? full[0].name : "openai/gpt-oss-20b";
+    const blocks = [
+        {
+            label: `Ollama — pull and run a GGUF model${example(gguf.length > 0)}`,
+            code: (pulls || `ollama pull ${insecure}${host}/${ggufName}:${ggufTag}`) +
+                `\nollama run ${host}/${ggufName}:${ggufTag}`,
+        },
+        {
+            label: `vLLM / transformers / hf — full repositories via the Hub API${example(full.length > 0)}`,
+            code: `export HF_ENDPOINT=${base}\n` +
+                `vllm serve ${repoName}\n` +
+                `hf download ${repoName}    # or any huggingface_hub client`,
+        },
+        {
+            label: `llama.cpp — download the raw GGUF file${example(gguf.length > 0)}`,
+            code: `curl -fL -o ${file} ${base}/hf/${ggufName}/${ggufTag}.gguf\nllama-server -m ${file}`,
+        },
+    ];
+    const notes = [
+        secure
+            ? "Ollama: this host serves HTTPS, so plain `ollama pull` works as shown."
+            : "Ollama: this mirror is plain HTTP, so pass --insecure to ollama pull (or serve the high side over TLS).",
+        full.length > 0
+            ? "vLLM: setting HF_ENDPOINT redirects every huggingface_hub client to this mirror — no other flags needed."
+            : "vLLM: no full repositories are mirrored yet — collect one in the low side's \"Full repositories\" box; GGUF models alone cannot be served over the Hub API.",
+        "A downloaded GGUF also works with vLLM's per-architecture GGUF loader " +
+            `(HF_HUB_OFFLINE=1 vllm serve ./${file}), but full repositories are the reliable vLLM path.`,
+    ];
+    return {
+        heading: "AI models (Hugging Face)",
+        body: "Three ways to consume this mirror: Ollama pulls GGUF models over its own " +
+            "registry protocol (pull name: <this-host>/<org>/<model>:<variant>); " +
+            "vLLM, transformers, and hf consume full repository snapshots through " +
+            "the Hub API by pointing HF_ENDPOINT here; raw GGUF files download from " +
+            "/hf/ for llama.cpp.",
+        blocks,
+        note: notes.join(" "),
+    };
+}
 // openGuide shows the whole-ecosystem setup for Go/Python/Maven/containers
 // (one config for the mirror). APT/RPM set up per repository instead, via
 // openRepoGuide.
@@ -717,20 +785,22 @@ function openGuide() {
     byId("guideTitle").textContent = `Set up ${VIEW_TITLES[currentView]}`;
     body.textContent = "";
     body.appendChild(guideIntro(currentView, base));
-    if (currentView === "containers") {
+    if (currentView === "containers" || currentView === "hf") {
         // Built from the live repo list so the pull commands are copy-paste ready.
+        const view = currentView;
+        const section = (repos) => view === "hf" ? hfGuideSection(repos) : containersGuideSection(repos);
         const loading = document.createElement("p");
         loading.className = "empty";
         loading.textContent = "Loading…";
         body.appendChild(loading);
-        fetchRepos("containers")
+        fetchRepos(view)
             .then((repos) => {
             loading.remove();
-            renderGuideSections(body, [containersGuideSection(repos)]);
+            renderGuideSections(body, [section(repos)]);
         })
             .catch(() => {
             loading.remove();
-            renderGuideSections(body, [containersGuideSection([])]);
+            renderGuideSections(body, [section([])]);
         });
     }
     else {

@@ -4,21 +4,22 @@
 
 ArtiGate is a dependency mirror for **one-way data-diode networks**. It mirrors
 Go modules, Python (PyPI) wheels, Java (Maven) artifacts, NPM packages, APT
-(`.deb`) and RPM (`.rpm`) repositories, and container images (Docker/OCI,
-linux/amd64) from the internet into an air-gapped network, and serves them
-there in each ecosystem's native format.
+(`.deb`) and RPM (`.rpm`) repositories, container images (Docker/OCI,
+linux/amd64), and AI models from Hugging Face (GGUF, for Ollama) from the
+internet into an air-gapped network, and serves them there in each ecosystem's
+native format.
 
 One binary, two modes:
 
 - **`low`** — runs on the internet side. From its web dashboard you give it a spec
   (a `go.mod` or module list, a Python requirements list, Maven coordinates, a
-  `package.json` or NPM package list, an APT source, a `.repo`, or a list of
-  container images); it fetches the artifacts from upstream and writes **signed,
-  numbered bundle files**.
+  `package.json` or NPM package list, an APT source, a `.repo`, a list of
+  container images, or a list of Hugging Face model references); it fetches the
+  artifacts from upstream and writes **signed, numbered bundle files**.
 - **`high`** — runs air-gapped. It imports the bundles (in order, verifying every
   signature and hash) and serves them as a GOPROXY, a PyPI index, a Maven 2
-  repository, an NPM registry, APT/RPM repositories, and a read-only OCI
-  container registry.
+  repository, an NPM registry, APT/RPM repositories, a read-only OCI
+  container registry, and an Ollama-compatible model registry.
 
 ```
   spec ──▶ [ low ] ──▶ signed bundles ──▶ ((diode)) ──▶ [ high ] ──▶ clients
@@ -226,6 +227,43 @@ toolchain when a module requires one.
   collect re-resolves on every run, so `golang:1.26.x` keeps tracking new patch
   releases through the diode automatically.
 
+- **AI Models** — two kinds of Hugging Face references, one per line each.
+  **GGUF models**, container-style:
+
+  ```text
+  hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0
+  bartowski/Llama-3.2-1B-Instruct-GGUF:Q8_0     # hf.co/ prefix optional
+  unsloth/gpt-oss-20b-GGUF                       # no tag = default quantization
+  ```
+
+  The repository names the Hugging Face model; the tag selects a
+  **variant/quantization**, resolved by Hugging Face itself (the same
+  Ollama-compatible API behind `ollama run hf.co/…`), so it works for any GGUF
+  model repository that Ollama accepts. The manifest, model file, chat
+  template, params, and license are fetched with their SHA-256s verified and
+  stored content-addressed — a license or model blob shared between variants
+  is bundled and stored once.
+
+  **Full repositories**, for safetensors releases that publish no GGUF
+  (`openai/gpt-oss-20b`, say) — consumed on the high side by vLLM,
+  transformers, and `hf download` through the Hub API:
+
+  ```text
+  openai/gpt-oss-20b                # branch main, pinned to its commit
+  openai/gpt-oss-20b@main           # same, explicit
+  org/model@<commit-hash>           # pin an exact revision
+  ```
+
+  Every file is mirrored at the pinned commit (large LFS files verified
+  against their upstream SHA-256s) into the same content-addressed store. A
+  **"Skip repository paths"** field excludes subtrees you don't want to carry
+  across the diode — e.g. `original, metal` skips gpt-oss's two extra full
+  copies of the weights and roughly third-sizes the bundle.
+
+  For both kinds: gated or private models need `ARTIGATE_HF_TOKEN` (a Hugging
+  Face access token) set on the low side; `--hf-endpoint` points the collector
+  at a private mirror instead of `https://huggingface.co`.
+
 [hashicorp/go-version]: https://github.com/hashicorp/go-version
 
 For APT and RPM, a **"Newest version only"** checkbox (on by default) mirrors just
@@ -341,6 +379,22 @@ docker pull artigate-high.local/docker.io/library/alpine:3.20
 docker pull artigate-high.local/ghcr.io/org/app:v1
 ```
 
+```bash
+# AI models — Ollama pulls straight from the mirror (add --insecure for plain HTTP)
+ollama pull artigate-high.local/unsloth/gpt-oss-20b-GGUF:Q4_0
+ollama run  artigate-high.local/unsloth/gpt-oss-20b-GGUF:Q4_0
+
+# ...or download the raw GGUF for vLLM / llama.cpp
+curl -fL -o gpt-oss-20b-GGUF-Q4_0.gguf \
+  https://artigate-high.local/hf/unsloth/gpt-oss-20b-GGUF/Q4_0.gguf
+HF_HUB_OFFLINE=1 vllm serve ./gpt-oss-20b-GGUF-Q4_0.gguf
+
+# Full repositories (safetensors) — every huggingface_hub client, via HF_ENDPOINT
+export HF_ENDPOINT=https://artigate-high.local
+vllm serve openai/gpt-oss-20b
+hf download openai/gpt-oss-20b
+```
+
 Docker/podman require HTTPS for remote registries — enable TLS on the high side,
 or, for a plain-HTTP mirror, trust it explicitly (then `systemctl restart docker`).
 The high-side **"Set me up"** guide renders this block ready to copy, with the
@@ -390,5 +444,18 @@ signature check (`repo_gpgcheck=0`, `[trusted=yes]`, etc.).
   the high-side pull name). `--container-registry host=baseURL` on the low side
   redirects a registry's API to a private mirror/proxy. The high-side registry
   is read-only (no push).
+- **AI Models**: GGUF references use Hugging Face's Ollama-compatible endpoint
+  (the repos `ollama run hf.co/…` accepts; sharded/split GGUFs are not
+  supported upstream); tags are quantization names resolved at collect time,
+  and digest pins are not supported. Ollama requires HTTPS — enable TLS on the
+  high side or pass `--insecure` to `ollama pull`. The raw GGUF is also served
+  at `/hf/<org>/<model>/<variant>.gguf` for llama.cpp and vLLM's GGUF loader
+  (with vLLM set `HF_HUB_OFFLINE=1`; without `--tokenizer` it converts the
+  tokenizer from the GGUF, which slows the first start). Full-repository
+  snapshots serve the download subset of the Hub API (`/api/models/…` and
+  `…/resolve/…`) — enough for `HF_ENDPOINT`-pointed vLLM, transformers, and
+  `hf download`, but not search or the write APIs. Snapshots are pinned to a
+  commit; re-collecting a branch adds the new commit and moves the branch
+  name to it (old snapshots stay pullable by commit hash).
 - Low-side collects for different ecosystems run concurrently; the high side never
   runs `go`/`pip`/`mvn` and does no upstream fetching.

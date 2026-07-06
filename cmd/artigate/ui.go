@@ -74,6 +74,7 @@ type treeCache struct {
 	rpm        []UIModule
 	containers []UIModule
 	npm        []UIModule
+	hf         []UIModule
 }
 
 func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
@@ -134,10 +135,13 @@ func (s *HighServer) handleUIOverview(w http.ResponseWriter) {
 	writeJSON(w, UIOverview{Status: status})
 }
 
-// UIRepo describes one mirrored APT/RPM/container repository for the "Set me
-// up" guide. The APT fields are empty for RPM; Tags is set only for container
-// repositories. Signed is true when the high side publishes the repository
-// with its own GPG signature (so clients should verify it).
+// UIRepo describes one mirrored APT/RPM/container/AI-model repository for the
+// "Set me up" guide. The APT fields are empty for RPM; Tags is set for
+// container repositories and AI models. Signed is true when the high side
+// publishes the repository with its own GPG signature (so clients should
+// verify it). Kind distinguishes an AI-model full repository snapshot
+// ("repo", consumed via HF_ENDPOINT) from a GGUF model (empty, pulled with
+// Ollama).
 type UIRepo struct {
 	Name          string   `json:"name"`
 	Suite         string   `json:"suite,omitempty"`
@@ -145,6 +149,7 @@ type UIRepo struct {
 	Architectures []string `json:"architectures,omitempty"`
 	Tags          []string `json:"tags,omitempty"`
 	Signed        bool     `json:"signed"`
+	Kind          string   `json:"kind,omitempty"`
 }
 
 // UIReposResponse is the body of GET /ui/api/repos.
@@ -166,8 +171,10 @@ func (s *HighServer) handleUIRepos(w http.ResponseWriter, r *http.Request) {
 		repos, err = s.rpmRepoList()
 	case "containers":
 		repos, err = s.containerRepoList()
+	case "hf":
+		repos, err = s.hfRepoList()
 	default:
-		http.Error(w, "repos are only available for apt, rpm, and containers", http.StatusBadRequest)
+		http.Error(w, "repos are only available for apt, rpm, containers, and hf", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
@@ -204,6 +211,10 @@ func (s *HighServer) handleUITree(w http.ResponseWriter, r *http.Request) {
 		nodes = goTreeChildren(lists.rpm, path)
 	case "containers":
 		nodes = goTreeChildren(lists.containers, path)
+	case "hf":
+		// Model names are "<org>/<name>", so the segment-tree builder groups
+		// them by organization, with the variant tags as version leaves.
+		nodes = goTreeChildren(lists.hf, path)
 	case "npm":
 		// npm names are flat (a scope is part of the name, not a directory), so
 		// the two-level package -> versions tree applies.
@@ -223,6 +234,7 @@ type ecoLists struct {
 	rpm        []UIModule
 	containers []UIModule
 	npm        []UIModule
+	hf         []UIModule
 }
 
 // cachedLists returns the mirrored inventory across ecosystems, memoized for a
@@ -231,7 +243,7 @@ func (s *HighServer) cachedLists() (ecoLists, error) {
 	s.tree.mu.Lock()
 	defer s.tree.mu.Unlock()
 	if time.Now().Before(s.tree.expiry) {
-		return ecoLists{mods: s.tree.mods, python: s.tree.python, maven: s.tree.maven, apt: s.tree.apt, rpm: s.tree.rpm, containers: s.tree.containers, npm: s.tree.npm}, nil
+		return ecoLists{mods: s.tree.mods, python: s.tree.python, maven: s.tree.maven, apt: s.tree.apt, rpm: s.tree.rpm, containers: s.tree.containers, npm: s.tree.npm, hf: s.tree.hf}, nil
 	}
 	mods, err := s.listGoModules()
 	if err != nil {
@@ -261,9 +273,13 @@ func (s *HighServer) cachedLists() (ecoLists, error) {
 	if err != nil {
 		return ecoLists{}, err
 	}
-	s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt, s.tree.rpm, s.tree.containers, s.tree.npm = mods, python, maven, apt, rpm, containers, npm
+	hf, err := s.listHFModels()
+	if err != nil {
+		return ecoLists{}, err
+	}
+	s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt, s.tree.rpm, s.tree.containers, s.tree.npm, s.tree.hf = mods, python, maven, apt, rpm, containers, npm, hf
 	s.tree.expiry = time.Now().Add(3 * time.Second)
-	return ecoLists{mods: mods, python: python, maven: maven, apt: apt, rpm: rpm, containers: containers, npm: npm}, nil
+	return ecoLists{mods: mods, python: python, maven: maven, apt: apt, rpm: rpm, containers: containers, npm: npm, hf: hf}, nil
 }
 
 // goTreeChildren returns the immediate children of prefix in the Go module path
@@ -506,6 +522,8 @@ func (s *HighServer) handleUIDetail(w http.ResponseWriter, r *http.Request) {
 		detail, err = s.containerDetail(path)
 	case "npm":
 		detail, err = s.npmDetail(path)
+	case "hf":
+		detail, err = s.hfDetail(path)
 	default:
 		detail, err = s.goDetail(path)
 	}
