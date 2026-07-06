@@ -568,9 +568,14 @@ async function runCollect(o){
   openCollectModal(o.title);
   try{
     const d=await streamCollect(o.url, o.body, cmAbort.signal);
-    const out = (d && d.skipped)
+    let out = (d && d.skipped)
       ? {cls:'ok', msg:'&#10003; No new content since the last export &mdash; nothing to send across the diode.'}
       : o.render(d);
+    // A failed upload to the HTTP diode endpoint is a warning, not an error:
+    // the bundle is committed and archived, ready to re-transmit.
+    if(d && d.diode_error){
+      out={cls:'warn', msg:out.msg+'<br>&#9888; Diode upload failed: '+esc(d.diode_error)+' &mdash; the bundle is archived and still staged; re-transmit it from the Status page.'};
+    }
     finishCollectModal(out.cls, out.msg);
     o.showFn(out.cls, out.msg);
     loadStatus();

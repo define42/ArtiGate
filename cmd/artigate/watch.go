@@ -304,6 +304,9 @@ func watchRunMessage(res ExportResult) string {
 	if n := len(res.SkippedModules); n > 0 {
 		msg += fmt.Sprintf(", %d skipped", n)
 	}
+	if res.DiodeError != "" {
+		msg += "; diode upload failed: " + res.DiodeError
+	}
 	return msg
 }
 

@@ -121,6 +121,13 @@ Useful admin endpoints:
   high: GET  /admin/missing
   high: GET  /admin/status
 
+Diode transport (env; default is the folder flow via --export-dir/--landing):
+  ARTIGATE_DIODE_URL     low:  HTTP endpoint bundles are uploaded to after every export
+                               (PUT <url>/<file>); the export dir becomes the retry spool
+  ARTIGATE_DIODE_INGEST  high: on|off — accept bundle uploads at PUT/POST /diode/<file>
+                               into the landing directory (default off)
+  ARTIGATE_DIODE_TOKEN   both: optional shared bearer token for the diode endpoint
+
 TLS (env, both low and high):
   ARTIGATE_TLS_MODE=unencrypted|acme|own-certificate|auto-generate-certificate
   acme:            ARTIGATE_TLS_DOMAINS, ARTIGATE_ACME_EMAIL, ARTIGATE_ACME_DIRECTORY, ARTIGATE_ACME_CA_ROOT
@@ -278,6 +285,11 @@ type LowConfig struct {
 	// ContainerRegistries optionally remaps container registry names to the
 	// endpoints they are fetched from, as comma-separated host=baseURL pairs.
 	ContainerRegistries string
+	// DiodeURL optionally names the HTTP endpoint bundles are uploaded to
+	// after every export (ARTIGATE_DIODE_URL); empty keeps the folder-only
+	// flow. DiodeToken is its optional bearer token (ARTIGATE_DIODE_TOKEN).
+	DiodeURL   string
+	DiodeToken string
 }
 
 type LowState struct {
@@ -358,6 +370,11 @@ func runLow(args []string) {
 	fs.DurationVar(&cfg.WatchInterval, "watch-interval", 60*time.Second, "how often the scheduler checks for due watches; 0 disables scheduled watches")
 	_ = fs.Parse(args)
 
+	// The diode transport is configured by environment, like TLS and auth.
+	cfg.DiodeURL = strings.TrimSpace(os.Getenv("ARTIGATE_DIODE_URL"))
+	cfg.DiodeToken = os.Getenv("ARTIGATE_DIODE_TOKEN")
+	must(validateDiodeURL(cfg.DiodeURL))
+
 	if cfg.PrivateKeyPath == "" {
 		log.Fatal("--private-key is required")
 	}
@@ -398,6 +415,9 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 	log.Printf("low-side exporter listening on %s (TLS: %s, auth: %s)", cfg.Listen, tc.Mode, authStatus(users))
 	log.Printf("low-side go module cache: %s", ls.downloadDir)
 	log.Printf("low-side export dir: %s", cfg.ExportDir)
+	if cfg.DiodeURL != "" {
+		log.Printf("low-side diode endpoint: %s (bundles upload after export; export dir is the retry spool)", cfg.DiodeURL)
+	}
 	must(listenAndServe(tc, cfg.Listen, cfg.Root, logHTTP(handler)))
 }
 
@@ -755,6 +775,10 @@ type ExportResult struct {
 	Skipped        bool           `json:"skipped,omitempty"`
 	Message        string         `json:"message,omitempty"`
 	SkippedModules []FailedModule `json:"skipped_modules,omitempty"`
+	// DiodeError reports a failed upload to the HTTP diode endpoint. The
+	// bundle itself is fine — committed, archived, and still staged in the
+	// export dir — so this is a "re-transmit me" signal, not a lost export.
+	DiodeError string `json:"diode_error,omitempty"`
 }
 
 // FailedModule records a module that could not be fetched during a collect.
@@ -1071,6 +1095,10 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []Mani
 	// content is not durably part of the stream, so a retry must re-export it
 	// rather than see it as already forwarded and skip.
 	s.recordForwarded(stream, files)
+	// With an HTTP diode endpoint configured, hand the bundle over now; a
+	// failed upload is reported on the result, never fatal (the bundle is
+	// committed and archived, ready to re-transmit).
+	s.uploadBundleIfConfigured(ctx, &res)
 	return res, nil
 }
 
@@ -1382,6 +1410,9 @@ func (s *LowServer) ExportSequence(stream string, seq int64) (ExportResult, erro
 		return ExportResult{}, err
 	}
 	if ok {
+		// A re-transmit goes out over the same transport as the original
+		// export: the configured HTTP diode endpoint, or the export dir.
+		s.uploadBundleIfConfigured(context.Background(), &res)
 		return res, nil
 	}
 	return ExportResult{}, fmt.Errorf("no archived bundle for %s", bundleIDFor(stream, seq))
@@ -1613,6 +1644,11 @@ type HighConfig struct {
 	ImportInterval time.Duration
 	AptGPGKey      string
 	RpmGPGKey      string
+	// DiodeIngest accepts bundle uploads at PUT/POST /diode/<file> into the
+	// landing directory (ARTIGATE_DIODE_INGEST=on); DiodeToken optionally
+	// requires a bearer token on those uploads (ARTIGATE_DIODE_TOKEN).
+	DiodeIngest bool
+	DiodeToken  string
 }
 
 type HighState struct {
@@ -1649,6 +1685,12 @@ func runHigh(args []string) {
 	if cfg.PublicKeyPath == "" {
 		log.Fatal("--public-key is required")
 	}
+	ingest, err := parseOnOff(os.Getenv("ARTIGATE_DIODE_INGEST"))
+	if err != nil {
+		log.Fatalf("ARTIGATE_DIODE_INGEST: %v", err)
+	}
+	cfg.DiodeIngest = ingest
+	cfg.DiodeToken = os.Getenv("ARTIGATE_DIODE_TOKEN")
 	pub, err := readPublicKey(cfg.PublicKeyPath)
 	must(err)
 	hs, err := NewHighServer(cfg, pub)
@@ -1664,6 +1706,9 @@ func runHigh(args []string) {
 	mux := http.NewServeMux()
 	mux.Handle("/", hs)
 	log.Printf("high-side repository listening on %s (TLS: %s)", cfg.Listen, tc.Mode)
+	if cfg.DiodeIngest {
+		log.Printf("high-side diode ingest: accepting bundle uploads at /diode/ (%s)", diodeTokenStatus(cfg.DiodeToken))
+	}
 	log.Printf("high-side repo: %s", hs.downloadDir)
 	log.Printf("high-side landing: %s", cfg.Landing)
 	log.Printf("high-side quarantine: %s", hs.cfg.Quarantine)
@@ -1709,7 +1754,7 @@ func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ecosystem under its own prefix — and reports whether it handled the
 	// request; anything unclaimed is not found.
 	for _, serve := range []func(http.ResponseWriter, *http.Request) bool{
-		s.serveHighAdmin, s.serveGo, s.servePython, s.serveMaven, s.serveApt,
+		s.serveHighAdmin, s.serveDiode, s.serveGo, s.servePython, s.serveMaven, s.serveApt,
 		s.serveRpm, s.serveHF, s.serveContainers, s.serveNpm, s.serveUI,
 	} {
 		if serve(w, r) {

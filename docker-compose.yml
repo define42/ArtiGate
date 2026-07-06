@@ -1,9 +1,15 @@
 # ArtiGate demo stack: a low side and a high side wired together.
 #
 # In a real deployment the two sides are physically separated by a one-way data
-# diode. Here the `diode` volume — written by the low side's export dir and read
-# by the high side's landing dir — stands in for that one-way transfer so the
-# whole pipeline can be exercised on one host.
+# diode. Here the HTTP diode transport stands in for that transfer: the low
+# side uploads every exported bundle to the high side's ingest endpoint
+# (ARTIGATE_DIODE_URL -> PUT http://high:8080/diode/<file>), where the normal
+# verify-and-import pipeline picks it up. The transport carries no trust — the
+# high side still verifies the Ed25519 signature, sequencing, and every hash.
+#
+# Prefer the classic folder flow instead? Drop the ARTIGATE_DIODE_* variables
+# and mount one shared volume as the low side's /var/spool/diode-out and the
+# high side's /var/spool/diode-in.
 #
 # The `keygen` service creates the Ed25519 signing key pair once into the shared
 # `keys` volume (idempotent: it will not overwrite existing keys), then low and
@@ -36,6 +42,8 @@ services:
     depends_on:
       keygen:
         condition: service_completed_successfully
+      high:
+        condition: service_started
     command:
       - low
       - --listen=:8080
@@ -43,20 +51,25 @@ services:
       - --export-dir=/var/spool/diode-out
       - --private-key=/keys/low.ed25519
       - --upstream-goproxy=https://proxy.golang.org,direct
-    # Optional low-side login. DISABLED by default — uncomment the block below to
-    # require a login, and replace the hash with your own. Generate one with:
-    #   ./artigate hashpw --user user
-    # NOTE: Compose treats a single "$" as a variable reference, so every "$" in
-    # the argon2 hash MUST be doubled to "$$" here (it reaches the container as a
-    # single "$"). The example hash below is the password "password" — do NOT ship
-    # it; generate your own.
-    # environment:
-    #   - ARTIGATE_LOW_AUTH=user:$$argon2id$$v=19$$m=65536,t=3,p=1$$5ba6Q+p3TKhi2kXkU+OtIw$$lg4sRrA78xnKtlOiNCMOAPtaHAG0KoTNzUV8xStZSes
+    environment:
+      # Upload every exported bundle to the high side's ingest endpoint. The
+      # export dir stays the retry spool: a failed upload leaves the bundle
+      # staged there for a re-transmit from the Status page.
+      - ARTIGATE_DIODE_URL=http://high:8080/diode
+      - ARTIGATE_DIODE_TOKEN=change-me-diode-token
+      # Optional low-side login. DISABLED by default — uncomment the line below
+      # and replace the hash with your own, generated with:
+      #   ./artigate hashpw --user user
+      # NOTE: Compose treats a single "$" as a variable reference, so every "$"
+      # in the argon2 hash MUST be doubled to "$$" here (it reaches the container
+      # as a single "$"). The example hash below is the password "password" — do
+      # NOT ship it; generate your own.
+      # - ARTIGATE_LOW_AUTH=user:$$argon2id$$v=19$$m=65536,t=3,p=1$$5ba6Q+p3TKhi2kXkU+OtIw$$lg4sRrA78xnKtlOiNCMOAPtaHAG0KoTNzUV8xStZSes
     ports:
       - "8080:8080"
     volumes:
       - keys:/keys:ro
-      - diode:/var/spool/diode-out
+      - low-outbound:/var/spool/diode-out
       - low-data:/var/lib/artigate
     restart: unless-stopped
 
@@ -72,16 +85,23 @@ services:
       - --landing=/var/spool/diode-in
       - --public-key=/keys/high.ed25519.pub
       - --import-interval=10s
+    environment:
+      # Accept bundle uploads at PUT/POST /diode/<file> into the landing dir.
+      # The token must match the low side's; it only guards the disk — bundle
+      # trust still comes from the Ed25519 signature check on import.
+      - ARTIGATE_DIODE_INGEST=on
+      - ARTIGATE_DIODE_TOKEN=change-me-diode-token
     ports:
       - "8081:8080"
     volumes:
       - keys:/keys:ro
-      - diode:/var/spool/diode-in
+      - high-landing:/var/spool/diode-in
       - high-data:/var/lib/artigate
     restart: unless-stopped
 
 volumes:
   keys:
-  diode:
+  low-outbound:
+  high-landing:
   low-data:
   high-data:

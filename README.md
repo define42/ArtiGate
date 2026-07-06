@@ -37,8 +37,9 @@ go build -o artigate ./cmd/artigate
 
 ## Quick start (Docker Compose)
 
-Brings up a low + high stack wired together by a shared `diode` volume, with the
-signing keys generated automatically:
+Brings up a low + high stack wired together over the HTTP diode transport (the
+low side uploads each bundle to the high side's `/diode` ingest endpoint), with
+the signing keys generated automatically:
 
 ```bash
 make run          # foreground   (make run-detach to background)
@@ -305,6 +306,49 @@ directory. The high side imports each **stream** strictly in order. An
 out-of-order bundle (e.g. `go-bundle-000043` before `000042`) is quarantined, not
 rejected, and imported automatically once the gap is filled; duplicates and old
 replays are ignored. A gap in one stream never blocks the others.
+
+### HTTP transport (optional)
+
+For diodes (or diode proxies) that speak HTTP instead of moving files, both
+sides also support an HTTP transport, configured entirely by environment
+variables — the folder flow stays the default:
+
+| Variable | Side | Meaning |
+|---|---|---|
+| `ARTIGATE_DIODE_URL` | low | endpoint bundles are uploaded to after every export and re-export (`PUT <url>/<file>`, archive first) |
+| `ARTIGATE_DIODE_INGEST` | high | `on` accepts bundle uploads at `PUT/POST /diode/<file>` into the landing directory (default `off`) |
+| `ARTIGATE_DIODE_TOKEN` | both | optional shared bearer token for the endpoint |
+
+```bash
+# low side — upload each bundle to the diode proxy (or directly to the high side)
+export ARTIGATE_DIODE_URL=https://artigate-high.local/diode
+export ARTIGATE_DIODE_TOKEN=…
+
+# high side — accept uploads into the landing directory
+export ARTIGATE_DIODE_INGEST=on
+export ARTIGATE_DIODE_TOKEN=…
+```
+
+After a successful upload the low side clears the bundle from the export
+directory (it shows as *sent* on the Status page), exactly like a folder diode
+moving the files out; the archive copy is kept for re-transmits, which also go
+out over HTTP. A failed upload never loses a bundle — the collect still
+succeeds, the dashboard (and a schedule's status) reports the upload error,
+and the bundle stays staged for a re-transmit from the Status page. A complete
+bundle received over HTTP is imported immediately rather than on the next scan
+tick.
+
+The transport carries no trust: uploads land in the landing directory exactly
+as diode-carried files would, and the importer still verifies the Ed25519
+signature, per-stream sequencing, and every file hash. The token only protects
+the high side's disk from unauthenticated uploads — leave the ingest off (the
+default) unless you use the HTTP transport. Anything that can `PUT` a file
+works as a sender, e.g.:
+
+```bash
+curl -fT go-bundle-000042.tar.gz -H "Authorization: Bearer $TOKEN" \
+  https://artigate-high.local/diode/go-bundle-000042.tar.gz
+```
 
 ## High side
 
