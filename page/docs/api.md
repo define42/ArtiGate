@@ -176,7 +176,7 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 {
   "name": "debian",
   "uri": "http://deb.debian.org/debian",
-  "suite": "bookworm",
+  "suites": ["bookworm", "bookworm-updates"],
   "components": ["main", "contrib"],
   "architectures": ["amd64"],
   "signed_by": "/etc/apt/keyrings/debian.gpg",
@@ -189,10 +189,10 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 |---|---|---|
 | `name` | string | Mirror name (URL segment on the high side) |
 | `uri` | string | Archive base URI |
-| `suite` | string | e.g. `bookworm` |
-| `components` | `[]string` | e.g. `["main","contrib"]` |
-| `architectures` | `[]string` | e.g. `["amd64"]` |
-| `signed_by` | string | Local keyring path used to verify the archive |
+| `suites` | `[]string` | One or more, e.g. `["bookworm","bookworm-updates"]`; all share the mirror's pool |
+| `components` | `[]string` | e.g. `["main","contrib"]`; applies to every suite |
+| `architectures` | `[]string` | e.g. `["amd64"]`; applies to every suite |
+| `signed_by` | string | Local keyring path used to verify each suite's Release |
 | `source_list` | string | A deb822 stanza; an alternative to the explicit fields above |
 | `newest_only` | `*bool` | **Defaults true when absent**; `false` mirrors every version in the index |
 
@@ -673,12 +673,12 @@ Valid only for `eco` ∈ `apt | rpm | containers | hf`; anything else → **400*
 
 ```json
 { "repos": [
-  { "name": "debian", "suite": "bookworm", "components": ["main"],
+  { "name": "debian", "suites": ["bookworm", "bookworm-updates"], "components": ["main"],
     "architectures": ["amd64"], "tags": ["3.20"], "signed": true }
 ] }
 ```
 
-`UIRepo` fields: `name`, `suite` (omitempty), `components` (omitempty), `architectures` (omitempty), `tags` (omitempty, containers only), `signed` (bool — true when the high side republishes with its own GPG signature). APT fields are empty for RPM.
+`UIRepo` fields: `name`, `suites` (omitempty), `components` (omitempty), `architectures` (omitempty), `tags` (omitempty, containers only), `signed` (bool — true when the high side republishes with its own GPG signature; for APT, when every suite's `InRelease` is present). APT fields are empty for RPM.
 
 ---
 

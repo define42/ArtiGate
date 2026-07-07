@@ -148,7 +148,7 @@ func (s *HighServer) handleUIOverview(w http.ResponseWriter) {
 // Ollama).
 type UIRepo struct {
 	Name          string   `json:"name"`
-	Suite         string   `json:"suite,omitempty"`
+	Suites        []string `json:"suites,omitempty"`
 	Components    []string `json:"components,omitempty"`
 	Architectures []string `json:"architectures,omitempty"`
 	Tags          []string `json:"tags,omitempty"`

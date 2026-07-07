@@ -568,7 +568,7 @@ function serverBase(): string {
 // HF_ENDPOINT) as opposed to a GGUF model (pulled with Ollama).
 interface UIRepo {
   name: string;
-  suite?: string;
+  suites?: string[];
   components?: string[];
   architectures?: string[];
   tags?: string[];
@@ -662,9 +662,9 @@ function mavenGuideSection(base: string): GuideSection {
 }
 
 // aptGuideSection builds setup for one mirrored APT repository, filling in the
-// suite/components/architectures it was actually mirrored with.
+// suites/components/architectures it was actually mirrored with.
 function aptGuideSection(base: string, repo: UIRepo): GuideSection {
-  const suite = repo.suite || "<suite>";
+  const suites = repo.suites && repo.suites.length ? repo.suites.join(" ") : "<suite>";
   const comps = repo.components && repo.components.length ? repo.components.join(" ") : "<components>";
   const arches = repo.architectures && repo.architectures.length ? repo.architectures.join(" ") : "<arch>";
   // Signed repos are verified with ArtiGate's key; unsigned repos are trusted directly.
@@ -678,7 +678,7 @@ function aptGuideSection(base: string, repo: UIRepo): GuideSection {
         code:
           "Types: deb\n" +
           `URIs: ${base}/apt/${repo.name}\n` +
-          `Suites: ${suite}\n` +
+          `Suites: ${suites}\n` +
           `Components: ${comps}\n` +
           `Architectures: ${arches}\n` +
           trust,

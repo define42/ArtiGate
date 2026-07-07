@@ -508,9 +508,9 @@ function mavenGuideSection(base) {
     };
 }
 // aptGuideSection builds setup for one mirrored APT repository, filling in the
-// suite/components/architectures it was actually mirrored with.
+// suites/components/architectures it was actually mirrored with.
 function aptGuideSection(base, repo) {
-    const suite = repo.suite || "<suite>";
+    const suites = repo.suites && repo.suites.length ? repo.suites.join(" ") : "<suite>";
     const comps = repo.components && repo.components.length ? repo.components.join(" ") : "<components>";
     const arches = repo.architectures && repo.architectures.length ? repo.architectures.join(" ") : "<arch>";
     // Signed repos are verified with ArtiGate's key; unsigned repos are trusted directly.
@@ -523,7 +523,7 @@ function aptGuideSection(base, repo) {
                 label: "/etc/apt/sources.list.d/artigate.sources",
                 code: "Types: deb\n" +
                     `URIs: ${base}/apt/${repo.name}\n` +
-                    `Suites: ${suite}\n` +
+                    `Suites: ${suites}\n` +
                     `Components: ${comps}\n` +
                     `Architectures: ${arches}\n` +
                     trust,

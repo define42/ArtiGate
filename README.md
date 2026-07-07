@@ -180,17 +180,18 @@ toolchain when a module requires one.
   tarball is downloaded and verified against the lockfile's integrity hash.
   Dependencies that resolve outside the registry (git/file URLs) are skipped
   and reported. `--npm-registry` points resolution at a different registry.
-- **APT** — a deb822 source stanza (paste or upload a `.sources` file). An optional
-  `Signed-By` keyring verifies the upstream release with `gpgv`; several stanzas
-  mirror several repositories. Example:
+- **APT** — a deb822 source stanza (paste or upload a `.sources` file). `Suites:`
+  may list several suites of the archive (they share one mirror and its pool); an
+  optional `Signed-By` keyring verifies each suite's upstream release with `gpgv`;
+  several stanzas mirror several repositories. Example:
 
   ```text
   Types: deb
-  URIs: https://packages.microsoft.com/repos/code
-  Suites: stable
-  Components: main
+  URIs: http://archive.ubuntu.com/ubuntu
+  Suites: noble noble-updates noble-security
+  Components: main universe
   Architectures: amd64
-  Signed-By: /usr/share/keyrings/microsoft.gpg
+  Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
   ```
 
 - **RPM** — a yum/dnf `.repo` stanza (paste or upload). `baseurl` must be concrete
