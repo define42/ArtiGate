@@ -673,12 +673,16 @@ Valid only for `eco` ∈ `apt | rpm | containers | hf`; anything else → **400*
 
 ```json
 { "repos": [
-  { "name": "debian", "suites": ["bookworm", "bookworm-updates"], "components": ["main"],
-    "architectures": ["amd64"], "tags": ["3.20"], "signed": true }
+  { "name": "debian",
+    "suites": [
+      { "name": "bookworm", "components": ["main"], "architectures": ["amd64"] },
+      { "name": "bookworm-updates", "components": ["main"], "architectures": ["amd64"] }
+    ],
+    "tags": ["3.20"], "signed": true }
 ] }
 ```
 
-`UIRepo` fields: `name`, `suites` (omitempty), `components` (omitempty), `architectures` (omitempty), `tags` (omitempty, containers only), `signed` (bool — true when the high side republishes with its own GPG signature; for APT, when every suite's `InRelease` is present). APT fields are empty for RPM.
+`UIRepo` fields: `name`, `suites` (omitempty, APT only — each suite with its **own** `components`/`architectures`, so the "Set me up" release picker can build exact stanzas), `tags` (omitempty, containers only), `signed` (bool — true when the high side republishes with its own GPG signature; for APT, when every suite's `InRelease` is present). APT fields are empty for RPM.
 
 ---
 

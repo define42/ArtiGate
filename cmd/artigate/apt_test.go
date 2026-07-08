@@ -389,8 +389,38 @@ func TestAptSuitesAccumulate(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &repos); err != nil {
 		t.Fatal(err)
 	}
-	if len(repos.Repos) != 1 || strings.Join(repos.Repos[0].Suites, " ") != "noble noble-updates" {
+	var names []string
+	if len(repos.Repos) == 1 {
+		for _, s := range repos.Repos[0].Suites {
+			names = append(names, s.Name)
+		}
+	}
+	if strings.Join(names, " ") != "noble noble-updates" {
 		t.Errorf("repo list missing accumulated suites: %+v", repos.Repos)
+	}
+}
+
+// TestMergeAptSuites checks the per-suite union: the same suite's components
+// and architectures merge, distinct suites accumulate, and cross-suite
+// settings never bleed into each other.
+func TestMergeAptSuites(t *testing.T) {
+	got := mergeAptSuites(
+		[]AptSuite{{Name: "noble", Components: []string{"main"}, Architectures: []string{"amd64"}}},
+		[]AptSuite{
+			{Name: "noble", Components: []string{"universe"}, Architectures: []string{"amd64"}},
+			{Name: "resolute", Components: []string{"stable"}, Architectures: []string{"arm64"}},
+		})
+	if len(got) != 2 {
+		t.Fatalf("merged suites = %+v, want 2", got)
+	}
+	noble, resolute := got[0], got[1]
+	if noble.Name != "noble" || strings.Join(noble.Components, " ") != "main universe" ||
+		strings.Join(noble.Architectures, " ") != "amd64" {
+		t.Errorf("noble = %+v", noble)
+	}
+	if resolute.Name != "resolute" || strings.Join(resolute.Components, " ") != "stable" ||
+		strings.Join(resolute.Architectures, " ") != "arm64" {
+		t.Errorf("resolute = %+v", resolute)
 	}
 }
 

@@ -88,10 +88,10 @@ The filter is applied **per suite** (per component × architecture index): `nobl
 
 On import (after Ed25519 signature + per-file SHA-256 verification), the high side publishes each mirror under `<downloadDir>/apt/<name>`:
 
-- **Merge** — the new mirror is merged into a persistent `<name>/index.json`. `Suites`/`Components`/`Architectures` are unioned; packages are deduped **by `(Suite, Filename)`** (accumulating all suites/versions/arches ever imported — a `.deb` listed in two suites gets one index entry per suite but one pool file). Re-collecting the same mirror with a different suite therefore **adds** a suite; it never replaces one.
-- **Regenerate `Packages`/`Packages.gz`** — for each suite × component × architecture, ArtiGate emits the stanzas of that suite's packages where the `.deb` **actually exists on disk**. `Architecture: all` packages are emitted into every architecture's index.
+- **Merge** — the new mirror is merged into a persistent `<name>/index.json`. Suites accumulate **per suite**: each suite record carries its own components/architectures (unioned when the same suite is re-imported), so suites collected with different settings never bleed into each other. Packages are deduped **by `(Suite, Filename)`** (a `.deb` listed in two suites gets one index entry per suite but one pool file). Re-collecting the same mirror with a different suite therefore **adds** a suite; it never replaces one.
+- **Regenerate `Packages`/`Packages.gz`** — for each suite × **that suite's own** components × architectures, ArtiGate emits the stanzas of that suite's packages where the `.deb` **actually exists on disk**. `Architecture: all` packages are emitted into every architecture's index.
 - **Prune stale `dists/` entries** — everything under `dists/` is regenerated from the index on every publish, so any `dists/<x>` not among the mirror's suites is deleted.
-- **Regenerate `Release`** — one minimal, freshly built file per suite:
+- **Regenerate `Release`** — one minimal, freshly built file per suite, whose `Components:`/`Architectures:` lines are the suite's own (clients are never pointed at indexes the suite doesn't have):
 
 ```text
 Origin: ArtiGate
@@ -144,10 +144,14 @@ The high side serves the mirror as static files under `/apt` (GET/HEAD only):
 
 ## Client configuration
 
-Point APT at the high side with a deb822 `.sources` file — one stanza per mirror, listing **all** of its suites, just like the upstream archive. The "Set me up" guide on the high-side dashboard generates the exact stanza for each mirrored repository:
+Point APT at the high side with a deb822 `.sources` file. The "Set me up" guide on the high-side dashboard generates the exact stanza for each mirrored repository from its live per-suite index:
+
+- Suites are **grouped by release** (the token before the first `-`): `noble`, `noble-updates`, and `noble-security` belong together; `resolute` or `bookworm` are separate releases.
+- When a mirror carries **more than one release** (e.g. `download.docker.com/linux/ubuntu` with `noble` *and* `resolute`), the guide asks **"Which release does this machine run?"** and builds the stanza for exactly that release's suites. Mixing releases in one client is never offered — a foreign release's build would sort higher and become apt's install candidate.
+- Suites with identical components/architectures share one stanza; a suite collected with different settings gets its own stanza in the same file.
 
 ```text
-# /etc/apt/sources.list.d/artigate.sources
+# /etc/apt/sources.list.d/artigate.sources  (generated for the "noble" release)
 Types: deb
 URIs: https://high-proxy:8080/apt/archive-ubuntu-com-ubuntu
 Suites: noble noble-updates noble-security
@@ -156,7 +160,7 @@ Architectures: amd64
 Signed-By: /usr/share/keyrings/artigate-apt.gpg
 ```
 
-Clients must use the **same suite tokens** the mirror was collected with — the regenerated `Release` sets both `Suite:` and `Codename:` to that token, so a mirror collected as `stable` is not addressable as `bookworm` (or vice versa).
+Clients must use the **same suite tokens** the mirror was collected with — the regenerated `Release` sets both `Suite:` and `Codename:` to that token, so a mirror collected as `stable` is not addressable as `bookworm` (or vice versa). A machine's own codename is `lsb_release -cs` (or `VERSION_CODENAME` in `/etc/os-release`).
 
 The last line depends on whether the high side signed the suite:
 
@@ -207,7 +211,7 @@ sudo apt-get install code
 
 - **Upstream verification is opt-in.** Without `Signed-By`, the upstream `Release` is trusted over TLS only — no GPG check.
 - **First-token-only for `URIs`.** Multiple `URIs` in one stanza are reduced to the first. (`Suites` has no such limit — every token is mirrored.)
-- **Stanza-level `Components`/`Architectures`.** They apply to every suite in the stanza; a suite that lacks one of the listed component × architecture indexes fails the collect.
+- **Stanza-level `Components`/`Architectures` at collect time.** They apply to every suite in the stanza; a suite that lacks one of the listed component × architecture indexes fails the collect. (Use separate collects with different settings per suite — the high side records and publishes them per suite.)
 - **Index format.** Only `Packages.gz`/`Packages` (stdlib gzip); no `.xz`/`.bz2`/`.zst`-only repositories.
 - **SHA256-only.** Only the `SHA256:` section of the upstream `Release` is used to locate indexes; a `Release` without it fails.
 - **Minimal regenerated `Release`.** `Origin: ArtiGate`, `Suite == Codename`, no `Valid-Until`, no by-hash; upstream `Release` metadata is discarded.

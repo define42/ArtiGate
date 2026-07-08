@@ -557,6 +557,16 @@ interface GuideSection {
   body: string;
   blocks: GuideBlock[];
   note?: string;
+  chooser?: GuideChooser;
+}
+
+// GuideChooser renders a radio row above a section's code blocks; picking an
+// option re-renders the blocks. APT uses it to ask which release the client
+// machine runs when a mirror carries suites for several releases.
+interface GuideChooser {
+  prompt: string;
+  options: { label: string; sub?: string }[];
+  blocksFor: (index: number) => GuideBlock[];
 }
 
 function serverBase(): string {
@@ -568,12 +578,17 @@ function serverBase(): string {
 // HF_ENDPOINT) as opposed to a GGUF model (pulled with Ollama).
 interface UIRepo {
   name: string;
-  suites?: string[];
-  components?: string[];
-  architectures?: string[];
+  suites?: AptSuite[];
   tags?: string[];
   signed?: boolean;
   kind?: string;
+}
+
+// One suite of an APT mirror with the components/architectures it holds.
+interface AptSuite {
+  name: string;
+  components?: string[];
+  architectures?: string[];
 }
 
 async function fetchRepos(eco: View): Promise<UIRepo[]> {
@@ -661,32 +676,111 @@ function mavenGuideSection(base: string): GuideSection {
   };
 }
 
-// aptGuideSection builds setup for one mirrored APT repository, filling in the
-// suites/components/architectures it was actually mirrored with.
+// aptSuiteBase returns the release a suite belongs to: "noble-updates" and
+// "noble-security" group under "noble"; "resolute" stands alone.
+function aptSuiteBase(name: string): string {
+  const i = name.indexOf("-");
+  return i > 0 ? name.slice(0, i) : name;
+}
+
+// aptSuiteGroups buckets a mirror's suites by release. Vendor repos like
+// download.docker.com carry one suite per Ubuntu/Debian release (noble,
+// resolute, bookworm…) of which a machine should use exactly one; archive
+// repos carry complementary suites of one release (noble, noble-updates,
+// noble-security) that belong together.
+function aptSuiteGroups(suites: AptSuite[]): { base: string; suites: AptSuite[] }[] {
+  const byBase = new Map<string, AptSuite[]>();
+  for (const s of suites) {
+    const base = aptSuiteBase(s.name);
+    const group = byBase.get(base);
+    if (group) {
+      group.push(s);
+    } else {
+      byBase.set(base, [s]);
+    }
+  }
+  return [...byBase.entries()]
+    .map(([base, ss]) => ({ base, suites: ss }))
+    .sort((a, b) => a.base.localeCompare(b.base));
+}
+
+// aptSourcesFile renders the .sources stanzas for the chosen suites. Suites
+// with identical components/architectures share one stanza; a deb822 stanza
+// applies its Components to every suite in it, so suites collected with
+// different settings get their own stanza in the same file.
+function aptSourcesFile(base: string, repoName: string, suites: AptSuite[], trust: string): string {
+  const bySig = new Map<string, AptSuite[]>();
+  for (const s of suites) {
+    const sig = `${(s.components ?? []).join(" ")}|${(s.architectures ?? []).join(" ")}`;
+    const group = bySig.get(sig);
+    if (group) {
+      group.push(s);
+    } else {
+      bySig.set(sig, [s]);
+    }
+  }
+  const stanza = (group: AptSuite[]): string => {
+    const first = group[0]!;
+    const comps = first.components && first.components.length ? first.components.join(" ") : "<components>";
+    const arches = first.architectures && first.architectures.length ? first.architectures.join(" ") : "<arch>";
+    return (
+      "Types: deb\n" +
+      `URIs: ${base}/apt/${repoName}\n` +
+      `Suites: ${group.map((s) => s.name).join(" ")}\n` +
+      `Components: ${comps}\n` +
+      `Architectures: ${arches}\n` +
+      trust
+    );
+  };
+  if (bySig.size === 0) {
+    return stanza([{ name: "<suite>" }]);
+  }
+  return [...bySig.values()].map(stanza).join("\n\n");
+}
+
+// aptGuideSection builds setup for one mirrored APT repository from its live
+// per-suite data. When the mirror carries suites for more than one release, a
+// chooser asks which release the client machine runs and the stanza is built
+// for exactly that release's suites — mixing releases would make a foreign
+// release's build apt's install candidate.
 function aptGuideSection(base: string, repo: UIRepo): GuideSection {
-  const suites = repo.suites && repo.suites.length ? repo.suites.join(" ") : "<suite>";
-  const comps = repo.components && repo.components.length ? repo.components.join(" ") : "<components>";
-  const arches = repo.architectures && repo.architectures.length ? repo.architectures.join(" ") : "<arch>";
   // Signed repos are verified with ArtiGate's key; unsigned repos are trusted directly.
   const trust = repo.signed ? "Signed-By: /usr/share/keyrings/artigate-apt.gpg" : "Trusted: yes";
+  const signNote = repo.signed
+    ? "Use ArtiGate's high-side APT key (Signed-By), not the upstream vendor key."
+    : "This repository is served unsigned, so apt trusts it directly (Trusted: yes). To verify instead, sign it with --apt-gpg-key on the high side.";
+  const groups = aptSuiteGroups(repo.suites ?? []);
+  const fileLabel = "/etc/apt/sources.list.d/artigate.sources";
+  const blocksFor = (i: number): GuideBlock[] => [
+    { label: fileLabel, code: aptSourcesFile(base, repo.name, groups[i]?.suites ?? [], trust) },
+  ];
+  if (groups.length <= 1) {
+    return {
+      heading: repo.name,
+      body: "Point apt at this mirrored repository (deb822 .sources format).",
+      blocks: blocksFor(0),
+      note: signNote,
+    };
+  }
   return {
     heading: repo.name,
-    body: "Point apt at this mirrored repository (deb822 .sources format).",
-    blocks: [
-      {
-        label: "/etc/apt/sources.list.d/artigate.sources",
-        code:
-          "Types: deb\n" +
-          `URIs: ${base}/apt/${repo.name}\n` +
-          `Suites: ${suites}\n` +
-          `Components: ${comps}\n` +
-          `Architectures: ${arches}\n` +
-          trust,
-      },
-    ],
-    note: repo.signed
-      ? "Use ArtiGate's high-side APT key (Signed-By), not the upstream vendor key."
-      : "This repository is served unsigned, so apt trusts it directly (Trusted: yes). To verify instead, sign it with --apt-gpg-key on the high side.",
+    body:
+      "This mirror carries suites for more than one release. Pick the release " +
+      "this machine runs — its codename is `lsb_release -cs` (or " +
+      "VERSION_CODENAME in /etc/os-release).",
+    blocks: [],
+    chooser: {
+      prompt: "Which release does this machine run?",
+      options: groups.map((g) => {
+        const opt: { label: string; sub?: string } = { label: g.base };
+        if (g.suites.length > 1) {
+          opt.sub = g.suites.map((s) => s.name).join(", ");
+        }
+        return opt;
+      }),
+      blocksFor,
+    },
+    note: signNote,
   };
 }
 
@@ -787,9 +881,20 @@ function guideSectionEl(section: GuideSection): HTMLElement {
   body.textContent = section.body;
   el.appendChild(body);
 
-  for (const block of section.blocks) {
-    el.appendChild(codeBlock(block));
+  const blocksEl = document.createElement("div");
+  const renderBlocks = (blocks: GuideBlock[]): void => {
+    blocksEl.textContent = "";
+    for (const block of blocks) {
+      blocksEl.appendChild(codeBlock(block));
+    }
+  };
+  if (section.chooser) {
+    el.appendChild(guideChooserEl(section.chooser, renderBlocks));
+    renderBlocks(section.chooser.blocksFor(0));
+  } else {
+    renderBlocks(section.blocks);
   }
+  el.appendChild(blocksEl);
 
   if (section.note) {
     const note = document.createElement("p");
@@ -798,6 +903,42 @@ function guideSectionEl(section: GuideSection): HTMLElement {
     el.appendChild(note);
   }
   return el;
+}
+
+let guideChoiceSeq = 0;
+
+// guideChooserEl renders a chooser's prompt and radio row; picking an option
+// re-renders the owning section's code blocks via onPick.
+function guideChooserEl(chooser: GuideChooser, onPick: (blocks: GuideBlock[]) => void): HTMLElement {
+  const wrap = document.createElement("div");
+  const prompt = document.createElement("div");
+  prompt.className = "code-label";
+  prompt.textContent = chooser.prompt;
+  wrap.appendChild(prompt);
+
+  const row = document.createElement("div");
+  row.className = "guide-choices";
+  const group = `guide-choice-${++guideChoiceSeq}`;
+  chooser.options.forEach((opt, i) => {
+    const lbl = document.createElement("label");
+    lbl.className = "guide-choice";
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = group;
+    radio.checked = i === 0;
+    radio.addEventListener("change", () => onPick(chooser.blocksFor(i)));
+    lbl.appendChild(radio);
+    lbl.appendChild(document.createTextNode(opt.label));
+    if (opt.sub) {
+      const sub = document.createElement("span");
+      sub.className = "sub";
+      sub.textContent = opt.sub;
+      lbl.appendChild(sub);
+    }
+    row.appendChild(lbl);
+  });
+  wrap.appendChild(row);
+  return wrap;
 }
 
 function guideIntro(view: View, base: string): HTMLElement {

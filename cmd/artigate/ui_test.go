@@ -264,10 +264,14 @@ func TestHighServerUIReposApt(t *testing.T) {
 		t.Fatalf("apt repos = %+v, want 1", resp.Repos)
 	}
 	r := resp.Repos[0]
-	if r.Name != "microsoft-code" || len(r.Suites) != 1 || r.Suites[0] != "stable" ||
-		len(r.Components) != 1 || r.Components[0] != "main" ||
-		len(r.Architectures) != 1 || r.Architectures[0] != "amd64" {
-		t.Errorf("apt repo = %+v", r)
+	if r.Name != "microsoft-code" || len(r.Suites) != 1 {
+		t.Fatalf("apt repo = %+v", r)
+	}
+	s := r.Suites[0]
+	if s.Name != "stable" ||
+		len(s.Components) != 1 || s.Components[0] != "main" ||
+		len(s.Architectures) != 1 || s.Architectures[0] != "amd64" {
+		t.Errorf("apt suite = %+v", s)
 	}
 	if r.Signed { // this test's high server has no signing key
 		t.Error("apt repo reported signed, but the high server has no signing key")

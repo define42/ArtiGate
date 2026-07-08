@@ -54,13 +54,22 @@ type AptManifest struct {
 }
 
 type AptMirror struct {
-	Name          string       `json:"name"`
-	URI           string       `json:"uri"`
-	Suites        []string     `json:"suites"`
-	Components    []string     `json:"components"`
-	Architectures []string     `json:"architectures"`
-	SignedBy      string       `json:"signed_by,omitempty"`
-	Packages      []AptPackage `json:"packages"`
+	Name     string       `json:"name"`
+	URI      string       `json:"uri"`
+	Suites   []AptSuite   `json:"suites"`
+	SignedBy string       `json:"signed_by,omitempty"`
+	Packages []AptPackage `json:"packages"`
+}
+
+// AptSuite is one suite of a mirror together with the components and
+// architectures it was collected with. They are recorded per suite — not
+// mirror-wide — so suites collected with different settings each publish and
+// advertise exactly what they hold, and the "Set me up" guide can emit an
+// exact stanza for whichever release the user picks.
+type AptSuite struct {
+	Name          string   `json:"name"`
+	Components    []string `json:"components"`
+	Architectures []string `json:"architectures"`
 }
 
 type AptPackage struct {
@@ -252,14 +261,14 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 // archive pool, so seenFile dedupes .debs listed in more than one suite.
 func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stageRoot string, newestOnly bool) (AptMirror, []ManifestFile, error) {
 	base := strings.TrimRight(cfg.URI, "/")
-	mirror := AptMirror{
-		Name: cfg.Name, URI: base, Suites: cfg.Suites,
-		Components: cfg.Components, Architectures: cfg.Architectures, SignedBy: filepath.Base(cfg.SignedBy),
-	}
+	mirror := AptMirror{Name: cfg.Name, URI: base, SignedBy: filepath.Base(cfg.SignedBy)}
 	var files []ManifestFile
 	seenFile := map[string]bool{}
 
 	for _, suite := range cfg.Suites {
+		mirror.Suites = append(mirror.Suites, AptSuite{
+			Name: suite, Components: cfg.Components, Architectures: cfg.Architectures,
+		})
 		distBase := base + "/dists/" + suite
 
 		emitProgress(ctx, "→ %s %s: fetching Release and Packages indexes…", cfg.Name, suite)
@@ -899,10 +908,15 @@ func validateAptMirror(m AptMirror, seen map[string]bool) error {
 	}
 	suites := map[string]bool{}
 	for _, suite := range m.Suites {
-		if !mavenTokenRE.MatchString(suite) {
-			return fmt.Errorf("invalid apt suite %q", suite)
+		if len(suite.Components) == 0 || len(suite.Architectures) == 0 {
+			return fmt.Errorf("apt suite %q missing components or architectures", suite.Name)
 		}
-		suites[suite] = true
+		for _, tok := range append(append([]string{suite.Name}, suite.Components...), suite.Architectures...) {
+			if !mavenTokenRE.MatchString(tok) {
+				return fmt.Errorf("invalid apt suite/component/architecture token %q", tok)
+			}
+		}
+		suites[suite.Name] = true
 	}
 	for _, p := range m.Packages {
 		if err := validateAptPackage(m.Name, p, suites, seen); err != nil {
@@ -952,8 +966,9 @@ func (s *HighServer) publishApt(m *AptManifest) error {
 
 // mergeAptMirror merges a newly imported mirror's packages into the persistent
 // per-mirror index on disk and returns the union. Suites accumulate like
-// packages do; entries are keyed by (suite, filename) since one .deb can
-// legitimately be listed in several suites, while its pool file is stored once.
+// packages do (per-suite components/architectures are unioned); package entries
+// are keyed by (suite, filename) since one .deb can legitimately be listed in
+// several suites, while its pool file is stored once.
 func (s *HighServer) mergeAptMirror(mirror AptMirror) (AptMirror, error) {
 	indexPath := filepath.Join(s.aptDir(), mirror.Name, "index.json")
 	merged := AptMirror{Name: mirror.Name, URI: mirror.URI}
@@ -965,9 +980,7 @@ func (s *HighServer) mergeAptMirror(mirror AptMirror) (AptMirror, error) {
 		return AptMirror{}, err
 	}
 	merged.URI = mirror.URI
-	merged.Suites = unionStrings(merged.Suites, mirror.Suites)
-	merged.Components = unionStrings(merged.Components, mirror.Components)
-	merged.Architectures = unionStrings(merged.Architectures, mirror.Architectures)
+	merged.Suites = mergeAptSuites(merged.Suites, mirror.Suites)
 
 	pkgKey := func(p AptPackage) string { return p.Suite + "\x00" + p.Filename }
 	byKey := map[string]int{}
@@ -999,29 +1012,53 @@ func (s *HighServer) mergeAptMirror(mirror AptMirror) (AptMirror, error) {
 	return merged, nil
 }
 
+// mergeAptSuites unions two suite lists by suite name, unioning each suite's
+// components and architectures, and returns them sorted by name.
+func mergeAptSuites(a, b []AptSuite) []AptSuite {
+	byName := map[string]int{}
+	out := append([]AptSuite{}, a...)
+	for i, s := range out {
+		byName[s.Name] = i
+	}
+	for _, s := range b {
+		if i, ok := byName[s.Name]; ok {
+			out[i].Components = unionStrings(out[i].Components, s.Components)
+			out[i].Architectures = unionStrings(out[i].Architectures, s.Architectures)
+		} else {
+			byName[s.Name] = len(out)
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 func (s *HighServer) publishAptMirror(mirror AptMirror) error {
 	merged, err := s.mergeAptMirror(mirror)
 	if err != nil {
 		return err
 	}
 	mirrorRoot := filepath.Join(s.aptDir(), merged.Name)
+	names := make([]string, 0, len(merged.Suites))
 	for _, suite := range merged.Suites {
 		if err := s.publishAptSuite(mirrorRoot, merged, suite); err != nil {
-			return fmt.Errorf("suite %s: %w", suite, err)
+			return fmt.Errorf("suite %s: %w", suite.Name, err)
 		}
+		names = append(names, suite.Name)
 	}
-	return pruneAptDists(mirrorRoot, merged.Suites)
+	return pruneAptDists(mirrorRoot, names)
 }
 
 // publishAptSuite regenerates dists/<suite> (Packages, Packages.gz, Release,
-// optional signatures) for one suite of a merged mirror.
-func (s *HighServer) publishAptSuite(mirrorRoot string, merged AptMirror, suite string) error {
-	distDir := filepath.Join(mirrorRoot, "dists", suite)
+// optional signatures) for one suite of a merged mirror, over the suite's own
+// components and architectures.
+func (s *HighServer) publishAptSuite(mirrorRoot string, merged AptMirror, suite AptSuite) error {
+	distDir := filepath.Join(mirrorRoot, "dists", suite.Name)
 
 	var metas []aptMeta
-	for _, comp := range merged.Components {
-		for _, arch := range merged.Architectures {
-			pkgs := s.presentAptStanzas(mirrorRoot, merged.Packages, suite, comp, arch)
+	for _, comp := range suite.Components {
+		for _, arch := range suite.Architectures {
+			pkgs := s.presentAptStanzas(mirrorRoot, merged.Packages, suite.Name, comp, arch)
 			if len(pkgs) == 0 {
 				continue
 			}
@@ -1102,15 +1139,16 @@ type aptMeta struct {
 }
 
 // buildAptRelease renders one suite's Release file with MD5Sum/SHA1/SHA256
-// sections over the regenerated index files.
-func buildAptRelease(mirror AptMirror, suite string, metas []aptMeta) []byte {
+// sections over the regenerated index files. Components/Architectures are the
+// suite's own, so clients are never pointed at indexes the suite doesn't have.
+func buildAptRelease(mirror AptMirror, suite AptSuite, metas []aptMeta) []byte {
 	var b strings.Builder
 	b.WriteString("Origin: ArtiGate\n")
 	fmt.Fprintf(&b, "Label: %s\n", mirror.Name)
-	fmt.Fprintf(&b, "Suite: %s\n", suite)
-	fmt.Fprintf(&b, "Codename: %s\n", suite)
-	fmt.Fprintf(&b, "Components: %s\n", strings.Join(mirror.Components, " "))
-	fmt.Fprintf(&b, "Architectures: %s\n", strings.Join(mirror.Architectures, " "))
+	fmt.Fprintf(&b, "Suite: %s\n", suite.Name)
+	fmt.Fprintf(&b, "Codename: %s\n", suite.Name)
+	fmt.Fprintf(&b, "Components: %s\n", strings.Join(suite.Components, " "))
+	fmt.Fprintf(&b, "Architectures: %s\n", strings.Join(suite.Architectures, " "))
 	fmt.Fprintf(&b, "Date: %s\n", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 UTC"))
 	writeReleaseHashes(&b, "MD5Sum", metas, func(d []byte) string { h := md5.Sum(d); return hex.EncodeToString(h[:]) }) //nolint:gosec // legacy APT checksum
 	writeReleaseHashes(&b, "SHA1", metas, func(d []byte) string { h := sha1.Sum(d); return hex.EncodeToString(h[:]) })  //nolint:gosec // legacy APT checksum
@@ -1215,8 +1253,9 @@ func (s *HighServer) serveApt(w http.ResponseWriter, r *http.Request) bool {
 // listAptMirrors reads each mirror's persistent index and returns UIModule
 // entries keyed by "<mirror>/<package>", so the generic segment-tree builder
 // renders mirror -> package -> versions.
-// aptRepoList returns each mirrored APT repository with the fields a client
-// needs (name, suites, components, architectures), for the "Set me up" guide.
+// aptRepoList returns each mirrored APT repository with the per-suite fields a
+// client needs (suite name, components, architectures), for the "Set me up"
+// guide's release picker.
 func (s *HighServer) aptRepoList() ([]UIRepo, error) {
 	entries, err := os.ReadDir(s.aptDir())
 	if errors.Is(err, os.ErrNotExist) {
@@ -1238,18 +1277,12 @@ func (s *HighServer) aptRepoList() ([]UIRepo, error) {
 		// signing key covers the whole mirror, so all-or-nothing in practice).
 		signed := len(m.Suites) > 0
 		for _, suite := range m.Suites {
-			if !fileExists(filepath.Join(s.aptDir(), e.Name(), "dists", suite, "InRelease")) {
+			if !fileExists(filepath.Join(s.aptDir(), e.Name(), "dists", suite.Name, "InRelease")) {
 				signed = false
 				break
 			}
 		}
-		repos = append(repos, UIRepo{
-			Name:          e.Name(),
-			Suites:        m.Suites,
-			Components:    m.Components,
-			Architectures: m.Architectures,
-			Signed:        signed,
-		})
+		repos = append(repos, UIRepo{Name: e.Name(), Suites: m.Suites, Signed: signed})
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
 	return repos, nil
