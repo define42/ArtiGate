@@ -781,8 +781,10 @@ function guideChooserEl(chooser, onPick) {
     const togglesEl = document.createElement("div");
     const emit = () => onPick(chooser.blocksFor(selected, enabled));
     // renderToggles rebuilds the checkbox row for the current option; every
-    // item starts enabled, and the last enabled one is locked (disabled) so the
-    // selection can never become empty.
+    // item starts enabled, and the last enabled one is locked so the selection
+    // can never become empty. Locking blocks the click instead of disabling the
+    // input — a disabled checkbox is rendered grey by the browser, which would
+    // make the one component that IS enabled look switched off.
     const renderToggles = () => {
         togglesEl.textContent = "";
         const toggles = chooser.togglesFor?.(selected);
@@ -799,7 +801,13 @@ function guideChooserEl(chooser, onPick) {
         const boxes = [];
         const lockLast = () => {
             for (const box of boxes) {
-                box.disabled = box.checked && enabled.length === 1;
+                const locked = box.checked && enabled.length === 1;
+                box.dataset["locked"] = locked ? "1" : "";
+                const lbl = box.closest("label");
+                if (lbl) {
+                    lbl.classList.toggle("locked", locked);
+                    lbl.title = locked ? "At least one component is required" : "";
+                }
             }
         };
         for (const item of toggles.items) {
@@ -808,6 +816,11 @@ function guideChooserEl(chooser, onPick) {
             const box = document.createElement("input");
             box.type = "checkbox";
             box.checked = true;
+            box.addEventListener("click", (ev) => {
+                if (box.dataset["locked"] === "1") {
+                    ev.preventDefault(); // keep the last enabled item on
+                }
+            });
             box.addEventListener("change", () => {
                 // Keep enabled in the items' original order.
                 const keep = new Set(enabled.filter((x) => x !== item));
