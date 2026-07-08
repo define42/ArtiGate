@@ -148,7 +148,8 @@ Point APT at the high side with a deb822 `.sources` file. The "Set me up" guide 
 
 - Suites are **grouped by release** (the token before the first `-`): `noble`, `noble-updates`, and `noble-security` belong together; `resolute` or `bookworm` are separate releases.
 - When a mirror carries **more than one release** (e.g. `download.docker.com/linux/ubuntu` with `noble` *and* `resolute`), the guide asks **"Which release does this machine run?"** and builds the stanza for exactly that release's suites. Mixing releases in one client is never offered — a foreign release's build would sort higher and become apt's install candidate.
-- Suites with identical components/architectures share one stanza; a suite collected with different settings gets its own stanza in the same file.
+- When the chosen release has **more than one component**, a checkbox row lets the machine opt out of individual components (all start enabled; the last one is locked so the stanza never goes empty). Combined components are the normal case (`main universe`), but channel components like Docker's `test` carry pre-releases that would become apt's upgrade candidates — untick them on machines that should stay on stable versions. Unticking only edits the generated stanza; the mirror keeps serving every component.
+- Suites with identical (enabled) components/architectures share one stanza; a suite collected with different settings gets its own stanza in the same file.
 
 ```text
 # /etc/apt/sources.list.d/artigate.sources  (generated for the "noble" release)

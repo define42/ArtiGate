@@ -560,13 +560,17 @@ interface GuideSection {
   chooser?: GuideChooser;
 }
 
-// GuideChooser renders a radio row above a section's code blocks; picking an
-// option re-renders the blocks. APT uses it to ask which release the client
-// machine runs when a mirror carries suites for several releases.
+// GuideChooser renders choice rows above a section's code blocks; changing a
+// choice re-renders the blocks. APT uses it to ask which release the client
+// machine runs (radio row, shown when a mirror carries several releases) and
+// which components the machine should enable (checkbox row from togglesFor,
+// all enabled to start; the last enabled one is locked so the stanza never
+// goes empty).
 interface GuideChooser {
   prompt: string;
   options: { label: string; sub?: string }[];
-  blocksFor: (index: number) => GuideBlock[];
+  togglesFor?: (index: number) => { prompt: string; items: string[] };
+  blocksFor: (index: number, enabled: string[]) => GuideBlock[];
 }
 
 function serverBase(): string {
@@ -738,11 +742,48 @@ function aptSourcesFile(base: string, repoName: string, suites: AptSuite[], trus
   return [...bySig.values()].map(stanza).join("\n\n");
 }
 
+// aptGroupComponents returns the distinct components of a suite group, in
+// first-occurrence order across its suites.
+function aptGroupComponents(suites: AptSuite[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of suites) {
+    for (const c of s.components ?? []) {
+      if (!seen.has(c)) {
+        seen.add(c);
+        out.push(c);
+      }
+    }
+  }
+  return out;
+}
+
+// filterAptComponents restricts each suite to the enabled components and drops
+// suites left with none (a stanza without components would be invalid).
+function filterAptComponents(suites: AptSuite[], enabled: string[]): AptSuite[] {
+  const keep = new Set(enabled);
+  const out: AptSuite[] = [];
+  for (const s of suites) {
+    const comps = (s.components ?? []).filter((c) => keep.has(c));
+    if (comps.length === 0) {
+      continue;
+    }
+    const filtered: AptSuite = { name: s.name, components: comps };
+    if (s.architectures) {
+      filtered.architectures = s.architectures;
+    }
+    out.push(filtered);
+  }
+  return out;
+}
+
 // aptGuideSection builds setup for one mirrored APT repository from its live
 // per-suite data. When the mirror carries suites for more than one release, a
-// chooser asks which release the client machine runs and the stanza is built
+// radio row asks which release the client machine runs and the stanza is built
 // for exactly that release's suites — mixing releases would make a foreign
-// release's build apt's install candidate.
+// release's build apt's install candidate. When the chosen release has more
+// than one component, a checkbox row lets the machine opt out of channel
+// components (e.g. Docker's "test" pre-releases); everything starts enabled.
 function aptGuideSection(base: string, repo: UIRepo): GuideSection {
   // Signed repos are verified with ArtiGate's key; unsigned repos are trusted directly.
   const trust = repo.signed ? "Signed-By: /usr/share/keyrings/artigate-apt.gpg" : "Trusted: yes";
@@ -751,23 +792,32 @@ function aptGuideSection(base: string, repo: UIRepo): GuideSection {
     : "This repository is served unsigned, so apt trusts it directly (Trusted: yes). To verify instead, sign it with --apt-gpg-key on the high side.";
   const groups = aptSuiteGroups(repo.suites ?? []);
   const fileLabel = "/etc/apt/sources.list.d/artigate.sources";
-  const blocksFor = (i: number): GuideBlock[] => [
-    { label: fileLabel, code: aptSourcesFile(base, repo.name, groups[i]?.suites ?? [], trust) },
+  const blocksFor = (i: number, enabled: string[]): GuideBlock[] => [
+    {
+      label: fileLabel,
+      code: aptSourcesFile(base, repo.name, filterAptComponents(groups[i]?.suites ?? [], enabled), trust),
+    },
   ];
-  if (groups.length <= 1) {
+  const multiRelease = groups.length > 1;
+  const multiComponent = groups.some((g) => aptGroupComponents(g.suites).length > 1);
+  if (!multiRelease && !multiComponent) {
     return {
       heading: repo.name,
       body: "Point apt at this mirrored repository (deb822 .sources format).",
-      blocks: blocksFor(0),
+      blocks: blocksFor(0, aptGroupComponents(groups[0]?.suites ?? [])),
       note: signNote,
     };
   }
+  const componentNote = multiComponent
+    ? " Untick components this machine should not use — a channel component like Docker's \"test\" carries pre-releases that would otherwise become apt's upgrade candidates. Unticking only edits this stanza; the mirror keeps serving every component."
+    : "";
   return {
     heading: repo.name,
-    body:
-      "This mirror carries suites for more than one release. Pick the release " +
-      "this machine runs — its codename is `lsb_release -cs` (or " +
-      "VERSION_CODENAME in /etc/os-release).",
+    body: multiRelease
+      ? "This mirror carries suites for more than one release. Pick the release " +
+        "this machine runs — its codename is `lsb_release -cs` (or " +
+        "VERSION_CODENAME in /etc/os-release)."
+      : "Point apt at this mirrored repository (deb822 .sources format).",
     blocks: [],
     chooser: {
       prompt: "Which release does this machine run?",
@@ -778,9 +828,13 @@ function aptGuideSection(base: string, repo: UIRepo): GuideSection {
         }
         return opt;
       }),
+      togglesFor: (i) => ({
+        prompt: "Components for this machine:",
+        items: aptGroupComponents(groups[i]?.suites ?? []),
+      }),
       blocksFor,
     },
-    note: signNote,
+    note: signNote + componentNote,
   };
 }
 
@@ -889,8 +943,7 @@ function guideSectionEl(section: GuideSection): HTMLElement {
     }
   };
   if (section.chooser) {
-    el.appendChild(guideChooserEl(section.chooser, renderBlocks));
-    renderBlocks(section.chooser.blocksFor(0));
+    el.appendChild(guideChooserEl(section.chooser, renderBlocks)); // renders the initial blocks
   } else {
     renderBlocks(section.blocks);
   }
@@ -907,37 +960,103 @@ function guideSectionEl(section: GuideSection): HTMLElement {
 
 let guideChoiceSeq = 0;
 
-// guideChooserEl renders a chooser's prompt and radio row; picking an option
-// re-renders the owning section's code blocks via onPick.
+// guideChooserEl renders a chooser's radio row (only when there is more than
+// one option) and its per-option checkbox row (only when there is more than
+// one toggle item), keeping the selection state and re-rendering the owning
+// section's code blocks via onPick on every change. It emits the initial
+// blocks before returning.
 function guideChooserEl(chooser: GuideChooser, onPick: (blocks: GuideBlock[]) => void): HTMLElement {
   const wrap = document.createElement("div");
-  const prompt = document.createElement("div");
-  prompt.className = "code-label";
-  prompt.textContent = chooser.prompt;
-  wrap.appendChild(prompt);
+  let selected = 0;
+  let enabled: string[] = [];
+  const togglesEl = document.createElement("div");
 
-  const row = document.createElement("div");
-  row.className = "guide-choices";
-  const group = `guide-choice-${++guideChoiceSeq}`;
-  chooser.options.forEach((opt, i) => {
-    const lbl = document.createElement("label");
-    lbl.className = "guide-choice";
-    const radio = document.createElement("input");
-    radio.type = "radio";
-    radio.name = group;
-    radio.checked = i === 0;
-    radio.addEventListener("change", () => onPick(chooser.blocksFor(i)));
-    lbl.appendChild(radio);
-    lbl.appendChild(document.createTextNode(opt.label));
-    if (opt.sub) {
-      const sub = document.createElement("span");
-      sub.className = "sub";
-      sub.textContent = opt.sub;
-      lbl.appendChild(sub);
+  const emit = (): void => onPick(chooser.blocksFor(selected, enabled));
+
+  // renderToggles rebuilds the checkbox row for the current option; every
+  // item starts enabled, and the last enabled one is locked (disabled) so the
+  // selection can never become empty.
+  const renderToggles = (): void => {
+    togglesEl.textContent = "";
+    const toggles = chooser.togglesFor?.(selected);
+    enabled = toggles ? [...toggles.items] : [];
+    if (!toggles || toggles.items.length <= 1) {
+      return;
     }
-    row.appendChild(lbl);
-  });
-  wrap.appendChild(row);
+    const prompt = document.createElement("div");
+    prompt.className = "code-label";
+    prompt.textContent = toggles.prompt;
+    togglesEl.appendChild(prompt);
+
+    const row = document.createElement("div");
+    row.className = "guide-choices";
+    const boxes: HTMLInputElement[] = [];
+    const lockLast = (): void => {
+      for (const box of boxes) {
+        box.disabled = box.checked && enabled.length === 1;
+      }
+    };
+    for (const item of toggles.items) {
+      const lbl = document.createElement("label");
+      lbl.className = "guide-choice";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = true;
+      box.addEventListener("change", () => {
+        // Keep enabled in the items' original order.
+        const keep = new Set(enabled.filter((x) => x !== item));
+        if (box.checked) {
+          keep.add(item);
+        }
+        enabled = toggles.items.filter((x) => keep.has(x));
+        lockLast();
+        emit();
+      });
+      boxes.push(box);
+      lbl.appendChild(box);
+      lbl.appendChild(document.createTextNode(item));
+      row.appendChild(lbl);
+    }
+    togglesEl.appendChild(row);
+    lockLast();
+  };
+
+  if (chooser.options.length > 1) {
+    const prompt = document.createElement("div");
+    prompt.className = "code-label";
+    prompt.textContent = chooser.prompt;
+    wrap.appendChild(prompt);
+
+    const row = document.createElement("div");
+    row.className = "guide-choices";
+    const group = `guide-choice-${++guideChoiceSeq}`;
+    chooser.options.forEach((opt, i) => {
+      const lbl = document.createElement("label");
+      lbl.className = "guide-choice";
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = group;
+      radio.checked = i === 0;
+      radio.addEventListener("change", () => {
+        selected = i;
+        renderToggles();
+        emit();
+      });
+      lbl.appendChild(radio);
+      lbl.appendChild(document.createTextNode(opt.label));
+      if (opt.sub) {
+        const sub = document.createElement("span");
+        sub.className = "sub";
+        sub.textContent = opt.sub;
+        lbl.appendChild(sub);
+      }
+      row.appendChild(lbl);
+    });
+    wrap.appendChild(row);
+  }
+  wrap.appendChild(togglesEl);
+  renderToggles();
+  emit();
   return wrap;
 }
 
