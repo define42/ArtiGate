@@ -38,14 +38,17 @@ Drive a collect with `POST /admin/rpm/collect`. Provide **either** a full yum/dn
 
 | Field | Type | Meaning |
 |---|---|---|
-| `name` | string | Mirror name; derived from the URL host/path when empty. Must not contain `/`. |
+| `name` | string | Mirror name (explicit-fields form only); derived from the URL host/path when empty. Must not contain `/`. Ignored with `repo_file` — those mirrors are always URL-named (see below). |
 | `base_url` | string | Concrete `baseurl` (see the variable rule below). Required if no `repo_file`. |
 | `gpg_key` | string | **Local** keyring path for `gpgv`, used to verify `repomd.xml.asc`. Optional. |
 | `repo_file` | string | A full `.repo` (INI) file, one or more `[section]`s. Wins when non-blank. |
 | `newest_only` | *bool | Keep only the newest version of each package. **Defaults to `true`** when omitted. |
 | `architectures` | []string | Package architectures to mirror. **Defaults to `["x86_64", "noarch"]`** when omitted — `noarch` stays in because hardware-arch packages routinely depend on noarch ones. List explicitly to override (e.g. add `i686`, or `["x86_64"]` to drop noarch). Applies to every repo in the collect. |
 
-When `repo_file` is present and non-blank it wins: each `[section]` becomes one mirror. A top-level `gpg_key` in the request **overrides** the `gpgkey=` parsed from every section. Duplicate mirror names across sections are rejected (`give each repo a distinct name`).
+When `repo_file` is present and non-blank it wins: each `[section]` becomes one mirror. A top-level `gpg_key` in the request **overrides** the `gpgkey=` parsed from every section.
+
+!!! note "Mirror names always derive from `baseurl` (APT-style)"
+    The `[section]` header is **structural only** — distro repo files all ship generic ids (`[baseos]`, `[appstream]`), which would collide across distros and releases on the high side (Rocky 9's and RHEL 9's `baseos` would silently share one namespace, newest import winning). Instead, each mirror is named by its baseurl slug, e.g. `http://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/` → `dl-rockylinux-org-pub-rocky-9-BaseOS-x86-64-os` — unique by construction, exactly like APT mirror names. To hand-pick a name, use the explicit `name` + `base_url` fields instead of `repo_file`. Two sections with the same baseurl derive the same name and are rejected as duplicates.
 
 ### `.repo` (INI) parsing
 
@@ -186,7 +189,7 @@ curl -fsS -X POST http://low:8080/admin/rpm/collect \
       }'
 ```
 
-Or with the explicit fields and no local verification key:
+The mirror is named from its baseurl — here `packages-microsoft-com-rhel-9-0-prod` — regardless of the `[section]` header. To pick the name yourself, use the explicit fields instead:
 
 ```bash
 curl -fsS -X POST http://low:8080/admin/rpm/collect \

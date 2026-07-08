@@ -913,7 +913,7 @@ func resolveRpmMirrors(req RpmCollectRequest) ([]rpmMirrorConfig, error) {
 			return nil, err
 		}
 		if names[vc.Name] {
-			return nil, fmt.Errorf("duplicate mirror name %q; give each repo a distinct name", vc.Name)
+			return nil, fmt.Errorf("duplicate mirror name %q; two sections point at the same baseurl — drop the duplicate, or use the explicit name/base_url fields to name a mirror yourself", vc.Name)
 		}
 		names[vc.Name] = true
 		out = append(out, vc)
@@ -921,7 +921,11 @@ func resolveRpmMirrors(req RpmCollectRequest) ([]rpmMirrorConfig, error) {
 	return out, nil
 }
 
-// parseRepoFile parses a yum/dnf .repo (INI) file into one config per [section].
+// parseRepoFile parses a yum/dnf .repo (INI) file into one config per
+// [section]. Section headers are structural only — the mirror name always
+// derives from the section's baseurl (APT-style), because distro repo files
+// ship generic ids ([baseos], [appstream]) that would collide across distros
+// and releases on the high side.
 func parseRepoFile(text string) ([]rpmMirrorConfig, error) {
 	var configs []rpmMirrorConfig
 	var cur *rpmMirrorConfig
@@ -930,11 +934,11 @@ func parseRepoFile(text string) ([]rpmMirrorConfig, error) {
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
 		}
-		if name, ok := iniSection(line); ok {
+		if _, ok := iniSection(line); ok {
 			if cur != nil {
 				configs = append(configs, *cur)
 			}
-			cur = &rpmMirrorConfig{Name: name}
+			cur = &rpmMirrorConfig{}
 			continue
 		}
 		if cur != nil {

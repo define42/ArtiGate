@@ -215,7 +215,7 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 
 | Field | Type | Notes |
 |---|---|---|
-| `name` | string | Repo name (URL segment on the high side) |
+| `name` | string | Repo name (URL segment on the high side); defaults to a slug of `base_url`. Only honored with the explicit fields — `repo_file` mirrors are always named by their baseurl slug (section headers are structural only) |
 | `base_url` | string | Repository base URL |
 | `gpg_key` | string | Local keyring path for `gpgv` (optional) |
 | `repo_file` | string | A full `.repo` file (one or more `[sections]`); an alternative to `name`+`base_url` |

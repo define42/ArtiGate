@@ -336,7 +336,8 @@ func TestParseRepoFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfgs) != 1 || cfgs[0].Name != "code" || cfgs[0].BaseURL != "https://packages.microsoft.com/yumrepos/vscode" {
+	// The [section] header is structural only; the name derives from baseurl.
+	if len(cfgs) != 1 || cfgs[0].Name != "" || cfgs[0].BaseURL != "https://packages.microsoft.com/yumrepos/vscode" {
 		t.Fatalf("parseRepoFile = %+v", cfgs)
 	}
 	if cfgs[0].GPGKey != "" {
@@ -344,8 +345,36 @@ func TestParseRepoFile(t *testing.T) {
 	}
 	multi := "[a]\nbaseurl=https://a.example/repo\n\n[b]\nbaseurl=https://b.example/repo\n"
 	got, err := parseRepoFile(multi)
-	if err != nil || len(got) != 2 || got[0].Name != "a" || got[1].BaseURL != "https://b.example/repo" {
+	if err != nil || len(got) != 2 || got[0].Name != "" || got[1].BaseURL != "https://b.example/repo" {
 		t.Fatalf("multi-section parse = %+v, err %v", got, err)
+	}
+}
+
+// TestResolveRpmMirrorsNames pins the APT-style naming: repo_file mirrors are
+// always named by their baseurl slug (generic [baseos] sections from different
+// distros never collide), and two sections with the same baseurl are rejected.
+func TestResolveRpmMirrorsNames(t *testing.T) {
+	rocky9 := "[baseos]\nname=Rocky Linux 9 - BaseOS\nbaseurl=http://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/\n\n" +
+		"[baseos-10]\nname=Rocky Linux 10 - BaseOS\nbaseurl=http://dl.rockylinux.org/pub/rocky/10/BaseOS/x86_64/os/\n"
+	cfgs, err := resolveRpmMirrors(RpmCollectRequest{RepoFile: rocky9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfgs) != 2 ||
+		cfgs[0].Name != "dl-rockylinux-org-pub-rocky-9-BaseOS-x86-64-os" ||
+		cfgs[1].Name != "dl-rockylinux-org-pub-rocky-10-BaseOS-x86-64-os" {
+		t.Fatalf("derived names = %q, %q", cfgs[0].Name, cfgs[1].Name)
+	}
+	// Same baseurl twice derives the same name and is rejected.
+	dup := "[a]\nbaseurl=https://x.example/repo\n\n[b]\nbaseurl=https://x.example/repo\n"
+	if _, err := resolveRpmMirrors(RpmCollectRequest{RepoFile: dup}); err == nil ||
+		!strings.Contains(err.Error(), "duplicate mirror name") {
+		t.Fatalf("duplicate baseurl = %v, want duplicate mirror name error", err)
+	}
+	// The explicit fields form still allows a hand-picked name.
+	named, err := resolveRpmMirrors(RpmCollectRequest{Name: "rocky9-baseos", BaseURL: "https://x.example/repo"})
+	if err != nil || len(named) != 1 || named[0].Name != "rocky9-baseos" {
+		t.Fatalf("explicit name = %+v, err %v", named, err)
 	}
 }
 
@@ -457,10 +486,16 @@ func TestCollectRpmMultipleRepos(t *testing.T) {
 
 	srv := httptest.NewServer(hs)
 	defer srv.Close()
-	assertServed(t, srv.URL+"/rpm/code/Packages/code-1.0-1.x86_64.rpm", "FAKE-RPM-code")
-	assertServed(t, srv.URL+"/rpm/tools/Packages/tool-2.0-1.x86_64.rpm", "FAKE-RPM-tool")
+	// Mirror names derive from each baseurl, not from the [section] headers.
+	nCode := aptMirrorName(up.URL + "/repos/code")
+	nTools := aptMirrorName(up.URL + "/repos/tools")
+	if nCode == nTools {
+		t.Fatal("distinct baseurls must derive distinct mirror names")
+	}
+	assertServed(t, srv.URL+"/rpm/"+nCode+"/Packages/code-1.0-1.x86_64.rpm", "FAKE-RPM-code")
+	assertServed(t, srv.URL+"/rpm/"+nTools+"/Packages/tool-2.0-1.x86_64.rpm", "FAKE-RPM-tool")
 
-	_, body := httpGet(t, srv.URL+"/rpm/code/repodata/primary.xml.gz")
+	_, body := httpGet(t, srv.URL+"/rpm/"+nCode+"/repodata/primary.xml.gz")
 	plain, err := gunzip([]byte(body))
 	if err != nil {
 		t.Fatal(err)
