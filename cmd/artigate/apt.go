@@ -1251,8 +1251,9 @@ func (s *HighServer) serveApt(w http.ResponseWriter, r *http.Request) bool {
 // -----------------------------------------------------------------------------
 
 // listAptMirrors reads each mirror's persistent index and returns UIModule
-// entries keyed by "<mirror>/<package>", so the generic segment-tree builder
-// renders mirror -> package -> versions.
+// entries keyed by "<mirror>/<suite>/<component>/<package>", so the generic
+// segment-tree builder renders mirror -> suite -> component -> package ->
+// versions and packages from different suites/components are never mixed.
 // aptRepoList returns each mirrored APT repository with the per-suite fields a
 // client needs (suite name, components, architectures), for the "Set me up"
 // guide's release picker.
@@ -1315,8 +1316,9 @@ func (s *HighServer) listAptMirrors() ([]UIModule, error) {
 	return mods, nil
 }
 
-// collectAptVersions records, into byKey ("<mirror>/<package>" -> versions),
-// every package in a mirror's index whose .deb is present on disk.
+// collectAptVersions records, into byKey
+// ("<mirror>/<suite>/<component>/<package>" -> versions), every package in a
+// mirror's index whose .deb is present on disk.
 func (s *HighServer) collectAptVersions(name string, byKey map[string]map[string]bool) {
 	mirror, err := s.loadAptIndex(name)
 	if err != nil {
@@ -1326,7 +1328,7 @@ func (s *HighServer) collectAptVersions(name string, byKey map[string]map[string
 		if !fileExists(filepath.Join(s.aptDir(), name, filepath.FromSlash(p.Filename))) {
 			continue
 		}
-		key := name + "/" + p.Package
+		key := name + "/" + p.Suite + "/" + p.Component + "/" + p.Package
 		if byKey[key] == nil {
 			byKey[key] = map[string]bool{}
 		}
@@ -1347,65 +1349,47 @@ func (s *HighServer) loadAptIndex(name string) (AptMirror, error) {
 }
 
 // aptDetail describes one package version for the dashboard. spec is
-// "<mirror>/<package>@<version>".
+// "<mirror>/<suite>/<component>/<package>@<version>", matching the tree's
+// per-suite/per-component nesting.
 func (s *HighServer) aptDetail(spec string) (UIDetail, error) {
 	i := strings.LastIndex(spec, "@")
 	if i <= 0 || i == len(spec)-1 {
 		return UIDetail{}, errors.New("invalid package@version")
 	}
 	key, version := spec[:i], spec[i+1:]
-	slash := strings.IndexByte(key, '/')
-	if slash <= 0 {
+	parts := strings.Split(key, "/")
+	if len(parts) != 4 {
 		return UIDetail{}, errors.New("invalid package path")
 	}
-	mirrorName, pkgName := key[:slash], key[slash+1:]
-	if strings.ContainsRune(mirrorName, '/') || validateRelPath(mirrorName) != nil {
+	mirrorName, suite, comp, pkgName := parts[0], parts[1], parts[2], parts[3]
+	if validateRelPath(mirrorName) != nil {
 		return UIDetail{}, errors.New("invalid mirror")
 	}
 	mirror, err := s.loadAptIndex(mirrorName)
 	if err != nil {
 		return UIDetail{}, errors.New("mirror not found")
 	}
-	suites, fileFields := aptVersionFields(mirrorName, mirror.Packages, pkgName, version)
-	if len(fileFields) == 0 {
-		return UIDetail{}, errors.New("version not found")
-	}
-	fields := []UIDetailField{
-		{Label: "Mirror", Value: mirrorName, Mono: true},
-		{Label: "Package", Value: pkgName, Mono: true},
-		{Label: "Version", Value: version, Mono: true},
-		{Label: "Suites", Value: strings.Join(suites, " ")},
-	}
-	fields = append(fields, fileFields...)
-	return UIDetail{Title: pkgName, Subtitle: version, Fields: fields}, nil
-}
-
-// aptVersionFields collects the suites one package version is listed in and
-// its per-file detail fields. A version can be listed in several suites, so
-// each distinct .deb file is emitted once.
-func aptVersionFields(mirrorName string, pkgs []AptPackage, pkgName, version string) ([]string, []UIDetailField) {
-	var suites []string
-	seenSuite := map[string]bool{}
-	seenFile := map[string]bool{}
 	var fileFields []UIDetailField
-	for _, p := range pkgs {
-		if p.Package != pkgName || p.Version != version {
+	for _, p := range mirror.Packages {
+		if p.Suite != suite || p.Component != comp || p.Package != pkgName || p.Version != version {
 			continue
 		}
-		if p.Suite != "" && !seenSuite[p.Suite] {
-			seenSuite[p.Suite] = true
-			suites = append(suites, p.Suite)
-		}
-		if seenFile[p.Filename] {
-			continue
-		}
-		seenFile[p.Filename] = true
 		fileFields = append(fileFields,
 			UIDetailField{Label: p.Architecture + " file", Value: path.Base(p.Filename), Mono: true},
 			UIDetailField{Label: "Size", Value: formatBytes(p.Size)},
 			UIDetailField{Label: "SHA-256", Value: p.SHA256, Mono: true},
 			UIDetailField{Label: "Path", Value: "/apt/" + mirrorName + "/" + p.Filename, Mono: true})
 	}
-	sort.Strings(suites)
-	return suites, fileFields
+	if len(fileFields) == 0 {
+		return UIDetail{}, errors.New("version not found")
+	}
+	fields := []UIDetailField{
+		{Label: "Mirror", Value: mirrorName, Mono: true},
+		{Label: "Suite", Value: suite},
+		{Label: "Component", Value: comp},
+		{Label: "Package", Value: pkgName, Mono: true},
+		{Label: "Version", Value: version, Mono: true},
+	}
+	fields = append(fields, fileFields...)
+	return UIDetail{Title: pkgName, Subtitle: version, Fields: fields}, nil
 }

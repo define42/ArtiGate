@@ -335,6 +335,18 @@ func TestCollectAptMultiSuite(t *testing.T) {
 	// The pool is shared: both .debs live under the one mirror namespace.
 	assertServed(t, base+"/pool/main/c/code/code_1.0.0_amd64.deb", "FAKE-DEB-code-1.0.0")
 	assertServed(t, base+"/pool/main/c/code/code_1.1.0_amd64.deb", "FAKE-DEB-code-1.1.0")
+
+	// The dashboard tree keeps the suites apart: the mirror node lists both
+	// suites, and each suite's package carries only its own version.
+	mirrorName := aptMirrorName(up.URL + "/ubuntu")
+	_, tree := httpGet(t, srv.URL+"/ui/api/tree?eco=apt&path="+mirrorName)
+	if !strings.Contains(tree, `"noble"`) || !strings.Contains(tree, `"noble-updates"`) {
+		t.Errorf("mirror tree node missing suites: %s", tree)
+	}
+	_, versions := httpGet(t, srv.URL+"/ui/api/tree?eco=apt&path="+mirrorName+"/noble/main/code")
+	if !strings.Contains(versions, "1.0.0") || strings.Contains(versions, "1.1.0") {
+		t.Errorf("noble's code versions leaked across suites: %s", versions)
+	}
 }
 
 // TestAptSuitesAccumulate imports the same mirror name twice with different
@@ -444,21 +456,27 @@ func TestCollectAptEmptyRequest(t *testing.T) {
 }
 
 // TestHighServerUIAptTree confirms the dashboard exposes the imported APT
-// packages through the tree and detail APIs.
+// packages through the tree and detail APIs, nested as
+// mirror -> suite -> component -> package -> versions.
 func TestHighServerUIAptTree(t *testing.T) {
 	hs, _, _ := collectAndImportApt(t)
 	srv := httptest.NewServer(hs)
 	defer srv.Close()
 
-	// Tree root is the mirror name; expanding it yields the package.
-	if _, body := httpGet(t, srv.URL+"/ui/api/tree?eco=apt&path="); !strings.Contains(body, `"microsoft-code"`) {
-		t.Errorf("apt tree root missing mirror: %s", body)
+	steps := []struct{ path, want string }{
+		{"", `"microsoft-code"`},                 // root: mirrors
+		{"microsoft-code", `"stable"`},           // mirror: suites
+		{"microsoft-code/stable", `"main"`},      // suite: components
+		{"microsoft-code/stable/main", `"code"`}, // component: packages
 	}
-	if _, body := httpGet(t, srv.URL+"/ui/api/tree?eco=apt&path=microsoft-code"); !strings.Contains(body, `"code"`) {
-		t.Errorf("apt tree missing package: %s", body)
+	for _, st := range steps {
+		if _, body := httpGet(t, srv.URL+"/ui/api/tree?eco=apt&path="+st.path); !strings.Contains(body, st.want) {
+			t.Errorf("apt tree at %q missing %s: %s", st.path, st.want, body)
+		}
 	}
-	// Detail shows the coordinate.
-	assertServed(t, srv.URL+"/ui/api/detail?eco=apt&path=microsoft-code/code@1.101.2", "1.101.2")
+	// Detail shows the full coordinate including suite and component.
+	assertServed(t, srv.URL+"/ui/api/detail?eco=apt&path=microsoft-code/stable/main/code@1.101.2", "1.101.2")
+	assertServed(t, srv.URL+"/ui/api/detail?eco=apt&path=microsoft-code/stable/main/code@1.101.2", `"Suite"`)
 }
 
 func TestServeAptRejectsTraversal(t *testing.T) {
