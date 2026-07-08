@@ -144,19 +144,18 @@ The high side serves the mirror as static files under `/apt` (GET/HEAD only):
 
 ## Client configuration
 
-Point APT at the high side with a deb822 `.sources` file. The "Set me up" guide on the high-side dashboard generates the exact stanza for each mirrored repository from its live per-suite index:
+Point APT at the high side with a deb822 `.sources` file. In the dashboard's APT tree (mirror → suite → component → package), every **component node** carries its own "Set me up" button — where you click already decides the release *and* the channel, so the guide has nothing left to ask:
 
-- Suites are **grouped by release** (the token before the first `-`): `noble`, `noble-updates`, and `noble-security` belong together; `resolute` or `bookworm` are separate releases.
-- When a mirror carries **more than one release** (e.g. `download.docker.com/linux/ubuntu` with `noble` *and* `resolute`), the guide asks **"Which release does this machine run?"** and builds the stanza for exactly that release's suites. Mixing releases in one client is never offered — a foreign release's build would sort higher and become apt's install candidate.
-- When the chosen release has **more than one component**, a checkbox row lets the machine opt out of individual components (all start enabled; the last one is locked so the stanza never goes empty). Combined components are the normal case (`main universe`), but channel components like Docker's `test` carry pre-releases that would become apt's upgrade candidates — untick them on machines that should stay on stable versions. Unticking only edits the generated stanza; the mirror keeps serving every component.
-- Suites with identical (enabled) components/architectures share one stanza; a suite collected with different settings gets its own stanza in the same file.
+- Clicking `noble/stable` on a Docker mirror generates a stanza pinned to exactly `Suites: noble` + `Components: stable`; machines that want pre-releases click `noble/test` instead. Mixing releases is never offered — a foreign release's build would sort higher and become apt's install candidate.
+- The stanza's `Architectures:` is the clicked suite's own recorded list.
+- When **sibling suites of the same release** also carry the clicked component (`noble-updates` and `noble-security` next to `noble`), the guide points them out — append them to `Suites:` on machines that should also pull updates and security fixes.
 
 ```text
-# /etc/apt/sources.list.d/artigate.sources  (generated for the "noble" release)
+# /etc/apt/sources.list.d/artigate.sources  (generated from the noble/main node)
 Types: deb
 URIs: https://high-proxy:8080/apt/archive-ubuntu-com-ubuntu
-Suites: noble noble-updates noble-security
-Components: main universe
+Suites: noble
+Components: main
 Architectures: amd64
 Signed-By: /usr/share/keyrings/artigate-apt.gpg
 ```

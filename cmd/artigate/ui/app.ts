@@ -66,8 +66,9 @@ interface Detail {
 
 type View = "overview" | "go" | "python" | "maven" | "npm" | "apt" | "rpm" | "containers" | "hf";
 
-// RepoEco are the views whose content is set up per mirrored repository (each
-// top-level tree node gets its own "Set me up" button).
+// RepoEco are the views whose content is set up per mirrored repository: RPM's
+// top-level tree nodes and APT's component nodes carry their own "Set me up"
+// button (see repoGuideRef).
 type RepoEco = "apt" | "rpm" | "containers";
 
 const VIEW_TITLES: Record<View, string> = {
@@ -208,9 +209,9 @@ function setMessage(container: HTMLElement, text: string): void {
   container.appendChild(p);
 }
 
-// renderNodes renders a level of the tree. repoEco is set only for the top level
-// of the APT/RPM views, where each node is a mirrored repository that gets its
-// own "Set me up" button.
+// renderNodes renders a level of the tree. repoEco is set for the APT/RPM
+// views, where the nodes named by repoGuideRef carry their own "Set me up"
+// button.
 function renderNodes(container: HTMLElement, nodes: TreeNode[], repoEco?: RepoEco): void {
   container.textContent = "";
   if (nodes.length === 0) {
@@ -220,6 +221,19 @@ function renderNodes(container: HTMLElement, nodes: TreeNode[], repoEco?: RepoEc
   for (const node of nodes) {
     container.appendChild(node.expandable ? expandableNode(node, repoEco) : leafNode(node));
   }
+}
+
+// repoGuideRef returns the openRepoGuide target when a tree node should carry
+// a "Set me up" button. RPM repositories are the top-level nodes. An APT setup
+// is pinned to a component node (mirror/suite/component): where the user
+// clicked already decides the release and the channel, so the guide needs no
+// further choices.
+function repoGuideRef(eco: RepoEco, node: TreeNode): string | null {
+  const depth = node.path.split("/").length;
+  if (eco === "apt") {
+    return depth === 3 ? node.path : null;
+  }
+  return depth === 1 ? node.path : null;
 }
 
 function leafNode(node: TreeNode): HTMLElement {
@@ -422,9 +436,10 @@ function clearDetail(): void {
   hideLayers();
 }
 
-// repoGuideButton is the per-repository "Set me up" button shown on an APT/RPM
-// top-level node; it opens the guide for just that repository.
-function repoGuideButton(eco: RepoEco, repoName: string): HTMLButtonElement {
+// repoGuideButton is the per-repository "Set me up" button shown on an RPM
+// repository node or an APT component node; it opens the guide pinned to
+// exactly that target.
+function repoGuideButton(eco: RepoEco, repoRef: string): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "guide-toggle repo-guide";
@@ -432,7 +447,7 @@ function repoGuideButton(eco: RepoEco, repoName: string): HTMLButtonElement {
   btn.addEventListener("click", (ev) => {
     ev.preventDefault(); // don't toggle the enclosing <details>
     ev.stopPropagation();
-    void openRepoGuide(eco, repoName);
+    void openRepoGuide(eco, repoRef);
   });
   return btn;
 }
@@ -449,8 +464,9 @@ function expandableNode(node: TreeNode, repoEco?: RepoEco): HTMLElement {
     count.textContent = `${node.count} ${unit}`;
     summary.appendChild(count);
   }
-  if (repoEco) {
-    summary.appendChild(repoGuideButton(repoEco, node.label));
+  const guideRef = repoEco ? repoGuideRef(repoEco, node) : null;
+  if (repoEco && guideRef) {
+    summary.appendChild(repoGuideButton(repoEco, guideRef));
   }
   details.appendChild(summary);
 
@@ -466,7 +482,7 @@ function expandableNode(node: TreeNode, repoEco?: RepoEco): HTMLElement {
     loaded = true;
     setMessage(children, "loading…");
     fetchChildren(currentView, node.path)
-      .then((child) => renderNodes(children, child))
+      .then((child) => renderNodes(children, child, repoEco))
       .catch((err: unknown) => {
         loaded = false; // allow retry on next open
         setMessage(children, `failed to load: ${(err as Error).message}`);
@@ -483,9 +499,10 @@ function menuButtons(): NodeListOf<HTMLButtonElement> {
 async function loadTree(): Promise<void> {
   const tree = byId("tree");
   byId("treeTitle").textContent = VIEW_TITLES[currentView];
-  // APT/RPM set up per repository, so the top "Set me up" button is hidden and
-  // each repo node carries its own instead. (Containers group by upstream
-  // registry at the top level, so they keep the whole-ecosystem button.)
+  // APT/RPM set up per repository, so the top "Set me up" button is hidden:
+  // RPM repo nodes and APT component nodes carry their own instead.
+  // (Containers group by upstream registry at the top level, so they keep the
+  // whole-ecosystem button.)
   const perRepo = currentView === "apt" || currentView === "rpm";
   byId("guideBtn").hidden = perRepo;
   clearDetail();
@@ -557,20 +574,6 @@ interface GuideSection {
   body: string;
   blocks: GuideBlock[];
   note?: string;
-  chooser?: GuideChooser;
-}
-
-// GuideChooser renders choice rows above a section's code blocks; changing a
-// choice re-renders the blocks. APT uses it to ask which release the client
-// machine runs (radio row, shown when a mirror carries several releases) and
-// which components the machine should enable (checkbox row from togglesFor,
-// all enabled to start; the last enabled one refuses to untick so the stanza
-// never goes empty).
-interface GuideChooser {
-  prompt: string;
-  options: { label: string; sub?: string }[];
-  togglesFor?: (index: number) => { prompt: string; items: string[] };
-  blocksFor: (index: number, enabled: string[]) => GuideBlock[];
 }
 
 function serverBase(): string {
@@ -687,154 +690,45 @@ function aptSuiteBase(name: string): string {
   return i > 0 ? name.slice(0, i) : name;
 }
 
-// aptSuiteGroups buckets a mirror's suites by release. Vendor repos like
-// download.docker.com carry one suite per Ubuntu/Debian release (noble,
-// resolute, bookworm…) of which a machine should use exactly one; archive
-// repos carry complementary suites of one release (noble, noble-updates,
-// noble-security) that belong together.
-function aptSuiteGroups(suites: AptSuite[]): { base: string; suites: AptSuite[] }[] {
-  const byBase = new Map<string, AptSuite[]>();
-  for (const s of suites) {
-    const base = aptSuiteBase(s.name);
-    const group = byBase.get(base);
-    if (group) {
-      group.push(s);
-    } else {
-      byBase.set(base, [s]);
-    }
-  }
-  return [...byBase.entries()]
-    .map(([base, ss]) => ({ base, suites: ss }))
-    .sort((a, b) => a.base.localeCompare(b.base));
-}
-
-// aptSourcesFile renders the .sources stanzas for the chosen suites. Suites
-// with identical components/architectures share one stanza; a deb822 stanza
-// applies its Components to every suite in it, so suites collected with
-// different settings get their own stanza in the same file.
-function aptSourcesFile(base: string, repoName: string, suites: AptSuite[], trust: string): string {
-  const bySig = new Map<string, AptSuite[]>();
-  for (const s of suites) {
-    const sig = `${(s.components ?? []).join(" ")}|${(s.architectures ?? []).join(" ")}`;
-    const group = bySig.get(sig);
-    if (group) {
-      group.push(s);
-    } else {
-      bySig.set(sig, [s]);
-    }
-  }
-  const stanza = (group: AptSuite[]): string => {
-    const first = group[0]!;
-    const comps = first.components && first.components.length ? first.components.join(" ") : "<components>";
-    const arches = first.architectures && first.architectures.length ? first.architectures.join(" ") : "<arch>";
-    return (
-      "Types: deb\n" +
-      `URIs: ${base}/apt/${repoName}\n` +
-      `Suites: ${group.map((s) => s.name).join(" ")}\n` +
-      `Components: ${comps}\n` +
-      `Architectures: ${arches}\n` +
-      trust
-    );
-  };
-  if (bySig.size === 0) {
-    return stanza([{ name: "<suite>" }]);
-  }
-  return [...bySig.values()].map(stanza).join("\n\n");
-}
-
-// aptGroupComponents returns the distinct components of a suite group, in
-// first-occurrence order across its suites.
-function aptGroupComponents(suites: AptSuite[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const s of suites) {
-    for (const c of s.components ?? []) {
-      if (!seen.has(c)) {
-        seen.add(c);
-        out.push(c);
-      }
-    }
-  }
-  return out;
-}
-
-// filterAptComponents restricts each suite to the enabled components and drops
-// suites left with none (a stanza without components would be invalid).
-function filterAptComponents(suites: AptSuite[], enabled: string[]): AptSuite[] {
-  const keep = new Set(enabled);
-  const out: AptSuite[] = [];
-  for (const s of suites) {
-    const comps = (s.components ?? []).filter((c) => keep.has(c));
-    if (comps.length === 0) {
-      continue;
-    }
-    const filtered: AptSuite = { name: s.name, components: comps };
-    if (s.architectures) {
-      filtered.architectures = s.architectures;
-    }
-    out.push(filtered);
-  }
-  return out;
-}
-
-// aptGuideSection builds setup for one mirrored APT repository from its live
-// per-suite data. When the mirror carries suites for more than one release, a
-// radio row asks which release the client machine runs and the stanza is built
-// for exactly that release's suites — mixing releases would make a foreign
-// release's build apt's install candidate. When the chosen release has more
-// than one component, a checkbox row lets the machine opt out of channel
-// components (e.g. Docker's "test" pre-releases); everything starts enabled.
-function aptGuideSection(base: string, repo: UIRepo): GuideSection {
+// aptGuideSection builds setup for one suite/component of a mirrored APT
+// repository. The "Set me up" button sits on a component node of the tree
+// (mirror -> suite -> component), so where the user clicked already pins the
+// release and the channel — the stanza needs no further choices.
+function aptGuideSection(base: string, repo: UIRepo, suiteName: string, comp: string): GuideSection {
+  const suite = (repo.suites ?? []).find((s) => s.name === suiteName);
+  const arches =
+    suite && suite.architectures && suite.architectures.length ? suite.architectures.join(" ") : "<arch>";
   // Signed repos are verified with ArtiGate's key; unsigned repos are trusted directly.
   const trust = repo.signed ? "Signed-By: /usr/share/keyrings/artigate-apt.gpg" : "Trusted: yes";
   const signNote = repo.signed
     ? "Use ArtiGate's high-side APT key (Signed-By), not the upstream vendor key."
     : "This repository is served unsigned, so apt trusts it directly (Trusted: yes). To verify instead, sign it with --apt-gpg-key on the high side.";
-  const groups = aptSuiteGroups(repo.suites ?? []);
-  const fileLabel = "/etc/apt/sources.list.d/artigate.sources";
-  const blocksFor = (i: number, enabled: string[]): GuideBlock[] => [
-    {
-      label: fileLabel,
-      code: aptSourcesFile(base, repo.name, filterAptComponents(groups[i]?.suites ?? [], enabled), trust),
-    },
-  ];
-  const multiRelease = groups.length > 1;
-  const multiComponent = groups.some((g) => aptGroupComponents(g.suites).length > 1);
-  if (!multiRelease && !multiComponent) {
-    return {
-      heading: repo.name,
-      body: "Point apt at this mirrored repository (deb822 .sources format).",
-      blocks: blocksFor(0, aptGroupComponents(groups[0]?.suites ?? [])),
-      note: signNote,
-    };
-  }
-  const componentNote = multiComponent
-    ? " Untick components this machine should not use — a channel component like Docker's \"test\" carries pre-releases that would otherwise become apt's upgrade candidates. Unticking only edits this stanza; the mirror keeps serving every component."
+  // Sibling suites of the same release that also carry this component
+  // (noble-updates and noble-security next to noble) usually belong on the
+  // same machine — point them out rather than silently pinning one suite.
+  const related = (repo.suites ?? [])
+    .filter((s) => s.name !== suiteName && aptSuiteBase(s.name) === aptSuiteBase(suiteName))
+    .filter((s) => (s.components ?? []).includes(comp))
+    .map((s) => s.name);
+  const relatedNote = related.length
+    ? ` This mirror also carries ${related.join(" and ")} for the same release — append them to Suites: to pull their ${comp} packages too.`
     : "";
   return {
-    heading: repo.name,
-    body: multiRelease
-      ? "This mirror carries suites for more than one release. Pick the release " +
-        "this machine runs — its codename is `lsb_release -cs` (or " +
-        "VERSION_CODENAME in /etc/os-release)."
-      : "Point apt at this mirrored repository (deb822 .sources format).",
-    blocks: [],
-    chooser: {
-      prompt: "Which release does this machine run?",
-      options: groups.map((g) => {
-        const opt: { label: string; sub?: string } = { label: g.base };
-        if (g.suites.length > 1) {
-          opt.sub = g.suites.map((s) => s.name).join(", ");
-        }
-        return opt;
-      }),
-      togglesFor: (i) => ({
-        prompt: "Components for this machine:",
-        items: aptGroupComponents(groups[i]?.suites ?? []),
-      }),
-      blocksFor,
-    },
-    note: signNote + componentNote,
+    heading: `${repo.name} — ${suiteName}/${comp}`,
+    body: "Point apt at exactly this suite and component (deb822 .sources format).",
+    blocks: [
+      {
+        label: "/etc/apt/sources.list.d/artigate.sources",
+        code:
+          "Types: deb\n" +
+          `URIs: ${base}/apt/${repo.name}\n` +
+          `Suites: ${suiteName}\n` +
+          `Components: ${comp}\n` +
+          `Architectures: ${arches}\n` +
+          trust,
+      },
+    ],
+    note: signNote + relatedNote,
   };
 }
 
@@ -935,19 +829,9 @@ function guideSectionEl(section: GuideSection): HTMLElement {
   body.textContent = section.body;
   el.appendChild(body);
 
-  const blocksEl = document.createElement("div");
-  const renderBlocks = (blocks: GuideBlock[]): void => {
-    blocksEl.textContent = "";
-    for (const block of blocks) {
-      blocksEl.appendChild(codeBlock(block));
-    }
-  };
-  if (section.chooser) {
-    el.appendChild(guideChooserEl(section.chooser, renderBlocks)); // renders the initial blocks
-  } else {
-    renderBlocks(section.blocks);
+  for (const block of section.blocks) {
+    el.appendChild(codeBlock(block));
   }
-  el.appendChild(blocksEl);
 
   if (section.note) {
     const note = document.createElement("p");
@@ -956,121 +840,6 @@ function guideSectionEl(section: GuideSection): HTMLElement {
     el.appendChild(note);
   }
   return el;
-}
-
-let guideChoiceSeq = 0;
-
-// guideChooserEl renders a chooser's radio row (only when there is more than
-// one option) and its per-option checkbox row (only when there is more than
-// one toggle item), keeping the selection state and re-rendering the owning
-// section's code blocks via onPick on every change. It emits the initial
-// blocks before returning.
-function guideChooserEl(chooser: GuideChooser, onPick: (blocks: GuideBlock[]) => void): HTMLElement {
-  const wrap = document.createElement("div");
-  let selected = 0;
-  let enabled: string[] = [];
-  const togglesEl = document.createElement("div");
-
-  const emit = (): void => onPick(chooser.blocksFor(selected, enabled));
-
-  // renderToggles rebuilds the checkbox row for the current option; every
-  // item starts enabled, and the last enabled one is locked so the selection
-  // can never become empty. Locking blocks the click instead of disabling the
-  // input — a disabled checkbox is rendered grey by the browser, which would
-  // make the one component that IS enabled look switched off.
-  const renderToggles = (): void => {
-    togglesEl.textContent = "";
-    const toggles = chooser.togglesFor?.(selected);
-    enabled = toggles ? [...toggles.items] : [];
-    if (!toggles || toggles.items.length <= 1) {
-      return;
-    }
-    const prompt = document.createElement("div");
-    prompt.className = "code-label";
-    prompt.textContent = toggles.prompt;
-    togglesEl.appendChild(prompt);
-
-    const row = document.createElement("div");
-    row.className = "guide-choices";
-    const boxes: HTMLInputElement[] = [];
-    const lockLast = (): void => {
-      for (const box of boxes) {
-        const locked = box.checked && enabled.length === 1;
-        box.dataset["locked"] = locked ? "1" : "";
-        const lbl = box.closest("label");
-        if (lbl) {
-          lbl.classList.toggle("locked", locked);
-          lbl.title = locked ? "At least one component is required" : "";
-        }
-      }
-    };
-    for (const item of toggles.items) {
-      const lbl = document.createElement("label");
-      lbl.className = "guide-choice";
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.checked = true;
-      box.addEventListener("click", (ev) => {
-        if (box.dataset["locked"] === "1") {
-          ev.preventDefault(); // keep the last enabled item on
-        }
-      });
-      box.addEventListener("change", () => {
-        // Keep enabled in the items' original order.
-        const keep = new Set(enabled.filter((x) => x !== item));
-        if (box.checked) {
-          keep.add(item);
-        }
-        enabled = toggles.items.filter((x) => keep.has(x));
-        lockLast();
-        emit();
-      });
-      boxes.push(box);
-      lbl.appendChild(box);
-      lbl.appendChild(document.createTextNode(item));
-      row.appendChild(lbl);
-    }
-    togglesEl.appendChild(row);
-    lockLast();
-  };
-
-  if (chooser.options.length > 1) {
-    const prompt = document.createElement("div");
-    prompt.className = "code-label";
-    prompt.textContent = chooser.prompt;
-    wrap.appendChild(prompt);
-
-    const row = document.createElement("div");
-    row.className = "guide-choices";
-    const group = `guide-choice-${++guideChoiceSeq}`;
-    chooser.options.forEach((opt, i) => {
-      const lbl = document.createElement("label");
-      lbl.className = "guide-choice";
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = group;
-      radio.checked = i === 0;
-      radio.addEventListener("change", () => {
-        selected = i;
-        renderToggles();
-        emit();
-      });
-      lbl.appendChild(radio);
-      lbl.appendChild(document.createTextNode(opt.label));
-      if (opt.sub) {
-        const sub = document.createElement("span");
-        sub.className = "sub";
-        sub.textContent = opt.sub;
-        lbl.appendChild(sub);
-      }
-      row.appendChild(lbl);
-    });
-    wrap.appendChild(row);
-  }
-  wrap.appendChild(togglesEl);
-  renderToggles();
-  emit();
-  return wrap;
 }
 
 function guideIntro(view: View, base: string): HTMLElement {
@@ -1275,12 +1044,16 @@ function openGuide(): void {
 }
 
 // openRepoGuide shows setup for a single mirrored APT/RPM repository, fetched
-// live so the URL and (for APT) suite/components/arch are exact.
-async function openRepoGuide(eco: RepoEco, repoName: string): Promise<void> {
+// live so the URL and (for APT) suite/component/arch are exact. For APT,
+// repoRef is a component node's tree path "<mirror>/<suite>/<component>"; for
+// RPM it is the repository name.
+async function openRepoGuide(eco: RepoEco, repoRef: string): Promise<void> {
   const dialog = guideDialog();
   const body = byId("guideBody");
   const base = serverBase();
-  byId("guideTitle").textContent = `Set up ${streamLabel(eco)} — ${repoName}`;
+  const parts = repoRef.split("/");
+  const repoName = parts[0] ?? repoRef;
+  byId("guideTitle").textContent = `Set up ${streamLabel(eco)} — ${repoRef}`;
   body.textContent = "";
   body.appendChild(guideIntro(eco, base));
   const loading = document.createElement("p");
@@ -1299,7 +1072,7 @@ async function openRepoGuide(eco: RepoEco, repoName: string): Promise<void> {
     }
     const section =
       eco === "apt"
-        ? aptGuideSection(base, repo)
+        ? aptGuideSection(base, repo, parts[1] ?? "", parts[2] ?? "")
         : eco === "rpm"
           ? rpmGuideSection(base, repo)
           : containersGuideSection([repo]);
