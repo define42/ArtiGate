@@ -169,14 +169,21 @@ func registerRpmRepoVersions(t *testing.T, mux *http.ServeMux, prefix, pkg strin
 		flBlocks = append(flBlocks, fmt.Sprintf(`<package pkgid="%s" name="%s" arch="x86_64"><version epoch="0" ver="%s" rel="%s"/></package>`, sha, pkg, ver, rel))
 		mux.HandleFunc(prefix+"/"+loc, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
 	}
+	serveRpmRepodata(t, mux, prefix, len(vers), pkgBlocks, flBlocks)
+}
+
+// serveRpmRepodata assembles primary/filelists XML from per-package blocks and
+// serves them (gzipped) with a matching repomd.xml under prefix/repodata.
+func serveRpmRepodata(t *testing.T, mux *http.ServeMux, prefix string, n int, pkgBlocks, flBlocks []string) {
+	t.Helper()
 	primary := []byte(fmt.Sprintf(
 		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"+
 			"<metadata xmlns=\"http://linux.duke.edu/metadata/common\" packages=\"%d\">\n%s\n</metadata>\n",
-		len(vers), strings.Join(pkgBlocks, "\n")))
+		n, strings.Join(pkgBlocks, "\n")))
 	filelists := []byte(fmt.Sprintf(
 		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"+
 			"<filelists xmlns=\"http://linux.duke.edu/metadata/filelists\" packages=\"%d\">\n%s\n</filelists>\n",
-		len(vers), strings.Join(flBlocks, "\n")))
+		n, strings.Join(flBlocks, "\n")))
 	data := func(typ string, plain []byte) string {
 		gz, err := gzipBytes(plain)
 		if err != nil {
@@ -192,6 +199,24 @@ func registerRpmRepoVersions(t *testing.T, mux *http.ServeMux, prefix, pkg strin
 	repomd := `<?xml version="1.0" encoding="UTF-8"?>` + "\n<repomd xmlns=\"http://linux.duke.edu/metadata/repo\">\n  <revision>1</revision>\n" +
 		data("primary", primary) + data("filelists", filelists) + "</repomd>\n"
 	mux.HandleFunc(prefix+"/repodata/repomd.xml", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(repomd)) })
+}
+
+// registerRpmRepoArches serves a repo whose primary lists one build of a
+// package per architecture — for architecture-filter tests.
+func registerRpmRepoArches(t *testing.T, mux *http.ServeMux, prefix, pkg string, arches []string) {
+	t.Helper()
+	var pkgBlocks, flBlocks []string
+	for _, arch := range arches {
+		body := []byte("FAKE-RPM-" + pkg + "-" + arch)
+		sha := aptSHA256(body)
+		loc := fmt.Sprintf("Packages/%s-1.0-1.%s.rpm", pkg, arch)
+		pkgBlocks = append(pkgBlocks, fmt.Sprintf(`<package type="rpm"><name>%s</name><arch>%s</arch>`+
+			`<version epoch="0" ver="1.0" rel="1"/><checksum type="sha256" pkgid="YES">%s</checksum>`+
+			`<size package="%d"/><location href="%s"/></package>`, pkg, arch, sha, len(body), loc))
+		flBlocks = append(flBlocks, fmt.Sprintf(`<package pkgid="%s" name="%s" arch="%s"><version epoch="0" ver="1.0" rel="1"/></package>`, sha, pkg, arch))
+		mux.HandleFunc(prefix+"/"+loc, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
+	}
+	serveRpmRepodata(t, mux, prefix, len(arches), pkgBlocks, flBlocks)
 }
 
 // TestCollectRpmNewestOnly mirrors a repo that lists two versions of one package
@@ -248,6 +273,60 @@ func TestCollectRpmNewestOnly(t *testing.T) {
 	}
 	if all.ExportedModules != 2 {
 		t.Errorf("all-versions bundled %d packages, want 2", all.ExportedModules)
+	}
+}
+
+// TestCollectRpmArchFilter mirrors a repo listing x86_64, noarch, and i686
+// builds: the default filter keeps x86_64 + noarch and rewrites the served
+// primary so i686 is neither downloaded nor advertised; an explicit
+// architectures list overrides the default.
+func TestCollectRpmArchFilter(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRpmRepoArches(t, mux, "/yumrepos/tools", "tool", []string{"x86_64", "noarch", "i686"})
+	up := httptest.NewServer(mux)
+	defer up.Close()
+
+	ls, priv := newRpmLowServer(t)
+	res, err := ls.CollectRpm(context.Background(), RpmCollectRequest{Name: "tools", BaseURL: up.URL + "/yumrepos/tools"})
+	if err != nil {
+		t.Fatalf("CollectRpm: %v", err)
+	}
+	if res.ExportedModules != 2 { // x86_64 + noarch; i686 dropped
+		t.Fatalf("default arch filter bundled %d packages, want 2", res.ExportedModules)
+	}
+
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
+		name := res.BundleID + suffix
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, name), b)
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("import failed (rewritten primary checksums must match manifest): %v", err)
+	}
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	base := srv.URL + "/rpm/tools"
+	assertServed(t, base+"/Packages/tool-1.0-1.x86_64.rpm", "FAKE-RPM-tool-x86_64")
+	assertServed(t, base+"/Packages/tool-1.0-1.noarch.rpm", "FAKE-RPM-tool-noarch")
+	if code, _ := httpGet(t, base+"/Packages/tool-1.0-1.i686.rpm"); code == http.StatusOK {
+		t.Error("i686 package should not be mirrored by the default filter")
+	}
+
+	// An explicit list overrides the default: strictly x86_64, no noarch.
+	only, err := ls.CollectRpm(context.Background(), RpmCollectRequest{
+		Name: "tools", BaseURL: up.URL + "/yumrepos/tools", Architectures: []string{"x86_64"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if only.ExportedModules != 1 {
+		t.Errorf("explicit x86_64 filter bundled %d packages, want 1", only.ExportedModules)
 	}
 }
 

@@ -208,7 +208,8 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
   "base_url": "https://packages.microsoft.com/rhel/9/prod/",
   "gpg_key": "/etc/pki/rpm-gpg/RPM-GPG-KEY",
   "repo_file": "",
-  "newest_only": true
+  "newest_only": true,
+  "architectures": ["x86_64", "noarch"]
 }
 ```
 
@@ -219,6 +220,7 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 | `gpg_key` | string | Local keyring path for `gpgv` (optional) |
 | `repo_file` | string | A full `.repo` file (one or more `[sections]`); an alternative to `name`+`base_url` |
 | `newest_only` | `*bool` | **Defaults true when absent**; keeps only the highest EVR per package |
+| `architectures` | `[]string` | **Defaults to `["x86_64","noarch"]` when absent**; only packages of these architectures are mirrored (applies to every repo in the collect) |
 
 ---
 

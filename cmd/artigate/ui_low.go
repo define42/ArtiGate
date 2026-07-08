@@ -315,7 +315,7 @@ const lowUIHTML = `<!DOCTYPE html>
   <section class="view" id="view-rpm" hidden>
   <div class="card">
     <h2>Mirror an RPM (yum/dnf) repository</h2>
-    <p class="hint">Paste a yum/dnf <code>.repo</code> stanza. ArtiGate downloads and verifies <code>repomd.xml</code> and the <code>primary</code> index, mirrors every referenced <code>.rpm</code>, and writes a signed bundle. The high side regenerates <code>repodata</code> and (optionally) re-signs it. This is <code>/admin/rpm/collect</code>. <code>baseurl</code> must be concrete (no <code>$releasever</code>/<code>$basearch</code>).</p>
+    <p class="hint">Paste a yum/dnf <code>.repo</code> stanza. ArtiGate downloads and verifies <code>repomd.xml</code> and the <code>primary</code> index, mirrors every referenced <code>.rpm</code> for <code>x86_64</code> + <code>noarch</code> (other architectures are skipped; override via the API's <code>architectures</code> field), and writes a signed bundle. The high side regenerates <code>repodata</code> and (optionally) re-signs it. This is <code>/admin/rpm/collect</code>. <code>baseurl</code> must be concrete (no <code>$releasever</code>/<code>$basearch</code>).</p>
     <form class="gomod-form" onsubmit="collectRpm(event)">
       <label class="filelabel">Repo definition (.repo)
         <textarea id="rpmrepo" rows="6" placeholder="[code]&#10;name=Visual Studio Code&#10;baseurl=https://packages.microsoft.com/yumrepos/vscode&#10;enabled=1&#10;gpgcheck=1&#10;gpgkey=https://packages.microsoft.com/keys/microsoft.asc" autocomplete="off"></textarea>
