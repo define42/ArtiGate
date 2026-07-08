@@ -140,20 +140,19 @@ func (s *HighServer) handleUIOverview(w http.ResponseWriter) {
 }
 
 // UIRepo describes one mirrored APT/RPM/container/AI-model repository for the
-// "Set me up" guide. The APT fields are empty for RPM; Tags is set for
-// container repositories and AI models. Signed is true when the high side
-// publishes the repository with its own GPG signature (so clients should
+// "Set me up" guide. Suites (with each suite's own components/architectures)
+// is set for APT only, so the guide can offer a per-release picker; Tags is
+// set for container repositories and AI models. Signed is true when the high
+// side publishes the repository with its own GPG signature (so clients should
 // verify it). Kind distinguishes an AI-model full repository snapshot
 // ("repo", consumed via HF_ENDPOINT) from a GGUF model (empty, pulled with
 // Ollama).
 type UIRepo struct {
-	Name          string   `json:"name"`
-	Suite         string   `json:"suite,omitempty"`
-	Components    []string `json:"components,omitempty"`
-	Architectures []string `json:"architectures,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
-	Signed        bool     `json:"signed"`
-	Kind          string   `json:"kind,omitempty"`
+	Name   string     `json:"name"`
+	Suites []AptSuite `json:"suites,omitempty"`
+	Tags   []string   `json:"tags,omitempty"`
+	Signed bool       `json:"signed"`
+	Kind   string     `json:"kind,omitempty"`
 }
 
 // UIReposResponse is the body of GET /ui/api/repos.

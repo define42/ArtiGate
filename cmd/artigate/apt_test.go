@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -19,11 +20,11 @@ func aptSHA256(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// registerAptRepo serves a minimal but valid APT repository (Release + Packages
-// + one .deb) for one package at prefix on mux, with a correctly chaining
-// SHA256 so the collector verifies without GPG. tamper corrupts the served .deb.
+// registerAptRepo serves a minimal but valid APT suite (Release + Packages +
+// one .deb) for one package at prefix on mux, with a correctly chaining SHA256
+// so the collector verifies without GPG. tamper corrupts the served .deb.
 // It returns the .deb body.
-func registerAptRepo(t *testing.T, mux *http.ServeMux, prefix, pkg, version string, tamper bool) string {
+func registerAptRepo(t *testing.T, mux *http.ServeMux, prefix, suite, pkg, version string, tamper bool) string {
 	t.Helper()
 	deb := []byte("FAKE-DEB-" + pkg + "-" + version)
 	debRel := fmt.Sprintf("pool/main/%s/%s/%s_%s_amd64.deb", pkg[:1], pkg, pkg, version)
@@ -35,7 +36,7 @@ func registerAptRepo(t *testing.T, mux *http.ServeMux, prefix, pkg, version stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	release := "Origin: Test\nLabel: test\nSuite: stable\nCodename: stable\n" +
+	release := fmt.Sprintf("Origin: Test\nLabel: test\nSuite: %s\nCodename: %s\n", suite, suite) +
 		"Components: main\nArchitectures: amd64\nDate: Mon, 01 Jan 2024 00:00:00 UTC\nSHA256:\n" +
 		fmt.Sprintf(" %s %d main/binary-amd64/Packages.gz\n", aptSHA256(packagesGz), len(packagesGz)) +
 		fmt.Sprintf(" %s %d main/binary-amd64/Packages\n", aptSHA256(packages), len(packages))
@@ -43,9 +44,10 @@ func registerAptRepo(t *testing.T, mux *http.ServeMux, prefix, pkg, version stri
 	if tamper {
 		served = []byte("CORRUPTED-DIFFERENT-BYTES")
 	}
-	mux.HandleFunc(prefix+"/dists/stable/InRelease", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(release)) })
-	mux.HandleFunc(prefix+"/dists/stable/main/binary-amd64/Packages.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(packagesGz) })
-	mux.HandleFunc(prefix+"/dists/stable/main/binary-amd64/Packages", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(packages) })
+	distBase := prefix + "/dists/" + suite
+	mux.HandleFunc(distBase+"/InRelease", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(release)) })
+	mux.HandleFunc(distBase+"/main/binary-amd64/Packages.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(packagesGz) })
+	mux.HandleFunc(distBase+"/main/binary-amd64/Packages", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(packages) })
 	mux.HandleFunc(prefix+"/"+debRel, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(served) })
 	return string(deb)
 }
@@ -54,10 +56,24 @@ func registerAptRepo(t *testing.T, mux *http.ServeMux, prefix, pkg, version stri
 func fakeAptUpstream(t *testing.T, tamper bool) (*httptest.Server, string) {
 	t.Helper()
 	mux := http.NewServeMux()
-	deb := registerAptRepo(t, mux, "/repos/code", "code", "1.101.2", tamper)
+	deb := registerAptRepo(t, mux, "/repos/code", "stable", "code", "1.101.2", tamper)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, deb
+}
+
+// transferAptBundle copies one exported bundle (tarball, manifest, signature)
+// from the low server's export dir into the high server's landing dir.
+func transferAptBundle(t *testing.T, ls *LowServer, hs *HighServer, bundleID string) {
+	t.Helper()
+	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
+		name := bundleID + suffix
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, name), b)
+	}
 }
 
 func newAptLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
@@ -133,7 +149,8 @@ func TestParseAptSource(t *testing.T) {
 		t.Fatalf("parseAptSources returned %d stanzas, want 1", len(cfgs))
 	}
 	cfg := cfgs[0]
-	if cfg.URI != "https://packages.microsoft.com/repos/code" || cfg.Suite != "stable" ||
+	if cfg.URI != "https://packages.microsoft.com/repos/code" ||
+		len(cfg.Suites) != 1 || cfg.Suites[0] != "stable" ||
 		len(cfg.Components) != 1 || cfg.Components[0] != "main" ||
 		len(cfg.Architectures) != 1 || cfg.Architectures[0] != "amd64" ||
 		cfg.SignedBy != "/usr/share/keyrings/microsoft.gpg" {
@@ -143,6 +160,15 @@ func TestParseAptSource(t *testing.T) {
 	if _, err := parseAptSources("Types: deb-src\nURIs: https://x/y\nSuites: s\n"); err == nil {
 		t.Error("deb-src source should be rejected")
 	}
+	// Every token of a multi-suite Suites field is honored.
+	multiSuite, err := parseAptSources("Types: deb\nURIs: https://a.example/ubuntu\nSuites: noble noble-updates noble-security\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(multiSuite) != 1 || len(multiSuite[0].Suites) != 3 ||
+		multiSuite[0].Suites[0] != "noble" || multiSuite[0].Suites[2] != "noble-security" {
+		t.Fatalf("multi-suite parse = %+v", multiSuite)
+	}
 	// A multi-stanza .sources file yields one config per repository.
 	multi := "Types: deb\nURIs: https://a.example/repo\nSuites: stable\nComponents: main\nArchitectures: amd64\n\n" +
 		"Types: deb\nURIs: https://b.example/repo\nSuites: noble\nComponents: main\nArchitectures: arm64\n"
@@ -150,7 +176,8 @@ func TestParseAptSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].URI != "https://a.example/repo" || got[1].Suite != "noble" {
+	if len(got) != 2 || got[0].URI != "https://a.example/repo" ||
+		len(got[1].Suites) != 1 || got[1].Suites[0] != "noble" {
 		t.Fatalf("multi-stanza parse = %+v", got)
 	}
 }
@@ -173,23 +200,16 @@ func collectAndImportApt(t *testing.T) (*HighServer, ExportResult, string) {
 	up, debBody := fakeAptUpstream(t, false)
 	ls, priv := newAptLowServer(t)
 	res, err := ls.CollectApt(context.Background(), AptCollectRequest{
-		Name:  "microsoft-code",
-		URI:   up.URL + "/repos/code",
-		Suite: "stable", Components: []string{"main"}, Architectures: []string{"amd64"},
+		Name:   "microsoft-code",
+		URI:    up.URL + "/repos/code",
+		Suites: []string{"stable"}, Components: []string{"main"}, Architectures: []string{"amd64"},
 	})
 	if err != nil {
 		t.Fatalf("CollectApt: %v", err)
 	}
 	pub := priv.Public().(ed25519.PublicKey)
 	hs := newTestHighServer(t, pub)
-	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
-		name := res.BundleID + suffix
-		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeFile(t, filepath.Join(hs.cfg.Landing, name), b)
-	}
+	transferAptBundle(t, ls, hs, res.BundleID)
 	if _, err := hs.ImportNext(); err != nil {
 		t.Fatalf("high import of apt bundle failed: %v", err)
 	}
@@ -229,8 +249,8 @@ func TestLowToHighAptPipeline(t *testing.T) {
 // index) on the high side.
 func TestCollectAptMultipleRepos(t *testing.T) {
 	mux := http.NewServeMux()
-	registerAptRepo(t, mux, "/repos/code", "code", "1.101.2", false)
-	registerAptRepo(t, mux, "/repos/tools", "tool", "2.0.0", false)
+	registerAptRepo(t, mux, "/repos/code", "stable", "code", "1.101.2", false)
+	registerAptRepo(t, mux, "/repos/tools", "stable", "tool", "2.0.0", false)
 	up := httptest.NewServer(mux)
 	defer up.Close()
 
@@ -248,14 +268,7 @@ func TestCollectAptMultipleRepos(t *testing.T) {
 
 	pub := priv.Public().(ed25519.PublicKey)
 	hs := newTestHighServer(t, pub)
-	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
-		name := res.BundleID + suffix
-		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeFile(t, filepath.Join(hs.cfg.Landing, name), b)
-	}
+	transferAptBundle(t, ls, hs, res.BundleID)
 	if _, err := hs.ImportNext(); err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -278,12 +291,157 @@ func TestCollectAptMultipleRepos(t *testing.T) {
 	}
 }
 
+// TestCollectAptMultiSuite mirrors one archive with two suites from a single
+// stanza (the Debian/Ubuntu "noble noble-updates" pattern) and confirms the
+// high side publishes both dists trees under one namespace, with each suite's
+// index containing only its own packages.
+func TestCollectAptMultiSuite(t *testing.T) {
+	mux := http.NewServeMux()
+	registerAptRepo(t, mux, "/ubuntu", "noble", "code", "1.0.0", false)
+	registerAptRepo(t, mux, "/ubuntu", "noble-updates", "code", "1.1.0", false)
+	up := httptest.NewServer(mux)
+	defer up.Close()
+
+	ls, priv := newAptLowServer(t)
+	src := "Types: deb\nURIs: " + up.URL + "/ubuntu\nSuites: noble noble-updates\nComponents: main\nArchitectures: amd64\n"
+	res, err := ls.CollectApt(context.Background(), AptCollectRequest{SourceList: src})
+	if err != nil {
+		t.Fatalf("CollectApt (two suites): %v", err)
+	}
+	if res.ExportedModules != 2 { // one package record per suite
+		t.Fatalf("unexpected result: %+v", res)
+	}
+
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	transferAptBundle(t, ls, hs, res.BundleID)
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	base := srv.URL + "/apt/" + aptMirrorName(up.URL+"/ubuntu")
+
+	// Both suites are published, each listing only its own version.
+	assertServed(t, base+"/dists/noble/main/binary-amd64/Packages", "Version: 1.0.0")
+	assertServed(t, base+"/dists/noble-updates/main/binary-amd64/Packages", "Version: 1.1.0")
+	for suite, other := range map[string]string{"noble": "1.1.0", "noble-updates": "1.0.0"} {
+		if _, body := httpGet(t, base+"/dists/"+suite+"/main/binary-amd64/Packages"); strings.Contains(body, "Version: "+other) {
+			t.Errorf("suite %s index contains version %s from the other suite", suite, other)
+		}
+		assertServed(t, base+"/dists/"+suite+"/Release", "Suite: "+suite)
+	}
+	// The pool is shared: both .debs live under the one mirror namespace.
+	assertServed(t, base+"/pool/main/c/code/code_1.0.0_amd64.deb", "FAKE-DEB-code-1.0.0")
+	assertServed(t, base+"/pool/main/c/code/code_1.1.0_amd64.deb", "FAKE-DEB-code-1.1.0")
+
+	// The dashboard tree keeps the suites apart: the mirror node lists both
+	// suites, and each suite's package carries only its own version.
+	mirrorName := aptMirrorName(up.URL + "/ubuntu")
+	_, tree := httpGet(t, srv.URL+"/ui/api/tree?eco=apt&path="+mirrorName)
+	if !strings.Contains(tree, `"noble"`) || !strings.Contains(tree, `"noble-updates"`) {
+		t.Errorf("mirror tree node missing suites: %s", tree)
+	}
+	_, versions := httpGet(t, srv.URL+"/ui/api/tree?eco=apt&path="+mirrorName+"/noble/main/code")
+	if !strings.Contains(versions, "1.0.0") || strings.Contains(versions, "1.1.0") {
+		t.Errorf("noble's code versions leaked across suites: %s", versions)
+	}
+}
+
+// TestAptSuitesAccumulate imports the same mirror name twice with different
+// suites and confirms the high side accumulates the suites (no clobbering:
+// both dists trees stay published) while pruning unknown stale dists entries.
+func TestAptSuitesAccumulate(t *testing.T) {
+	mux := http.NewServeMux()
+	registerAptRepo(t, mux, "/ubuntu", "noble", "code", "1.0.0", false)
+	registerAptRepo(t, mux, "/ubuntu", "noble-updates", "code", "1.1.0", false)
+	up := httptest.NewServer(mux)
+	defer up.Close()
+
+	ls, priv := newAptLowServer(t)
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+
+	for i, suite := range []string{"noble", "noble-updates"} {
+		res, err := ls.CollectApt(context.Background(), AptCollectRequest{
+			Name: "ubuntu", URI: up.URL + "/ubuntu",
+			Suites: []string{suite}, Components: []string{"main"}, Architectures: []string{"amd64"},
+		})
+		if err != nil {
+			t.Fatalf("CollectApt %s: %v", suite, err)
+		}
+		if i == 1 {
+			// A dists entry no mirrored suite explains is stale; publish prunes it.
+			junk := filepath.Join(hs.downloadDir, "apt", "ubuntu", "dists", "junk")
+			if err := os.MkdirAll(junk, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(junk, "Release"), []byte("stale"))
+		}
+		transferAptBundle(t, ls, hs, res.BundleID)
+		if _, err := hs.ImportNext(); err != nil {
+			t.Fatalf("import %s: %v", suite, err)
+		}
+	}
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	base := srv.URL + "/apt/ubuntu"
+
+	// The first suite survives the second import; both are served.
+	assertServed(t, base+"/dists/noble/main/binary-amd64/Packages", "Version: 1.0.0")
+	assertServed(t, base+"/dists/noble-updates/main/binary-amd64/Packages", "Version: 1.1.0")
+	if code, _ := httpGet(t, base+"/dists/junk/Release"); code == http.StatusOK {
+		t.Error("stale dists/junk should have been pruned on publish")
+	}
+	// The merged index lists both suites for the "Set me up" guide.
+	_, body := httpGet(t, srv.URL+"/ui/api/repos?eco=apt")
+	var repos UIReposResponse
+	if err := json.Unmarshal([]byte(body), &repos); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	if len(repos.Repos) == 1 {
+		for _, s := range repos.Repos[0].Suites {
+			names = append(names, s.Name)
+		}
+	}
+	if strings.Join(names, " ") != "noble noble-updates" {
+		t.Errorf("repo list missing accumulated suites: %+v", repos.Repos)
+	}
+}
+
+// TestMergeAptSuites checks the per-suite union: the same suite's components
+// and architectures merge, distinct suites accumulate, and cross-suite
+// settings never bleed into each other.
+func TestMergeAptSuites(t *testing.T) {
+	got := mergeAptSuites(
+		[]AptSuite{{Name: "noble", Components: []string{"main"}, Architectures: []string{"amd64"}}},
+		[]AptSuite{
+			{Name: "noble", Components: []string{"universe"}, Architectures: []string{"amd64"}},
+			{Name: "resolute", Components: []string{"stable"}, Architectures: []string{"arm64"}},
+		})
+	if len(got) != 2 {
+		t.Fatalf("merged suites = %+v, want 2", got)
+	}
+	noble, resolute := got[0], got[1]
+	if noble.Name != "noble" || strings.Join(noble.Components, " ") != "main universe" ||
+		strings.Join(noble.Architectures, " ") != "amd64" {
+		t.Errorf("noble = %+v", noble)
+	}
+	if resolute.Name != "resolute" || strings.Join(resolute.Components, " ") != "stable" ||
+		strings.Join(resolute.Architectures, " ") != "arm64" {
+		t.Errorf("resolute = %+v", resolute)
+	}
+}
+
 func TestCollectAptRejectsBadDebHash(t *testing.T) {
 	up, _ := fakeAptUpstream(t, true) // tampered .deb
 	ls, _ := newAptLowServer(t)
 	_, err := ls.CollectApt(context.Background(), AptCollectRequest{
 		Name: "microsoft-code", URI: up.URL + "/repos/code",
-		Suite: "stable", Components: []string{"main"}, Architectures: []string{"amd64"},
+		Suites: []string{"stable"}, Components: []string{"main"}, Architectures: []string{"amd64"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "sha256") {
 		t.Fatalf("CollectApt with tampered .deb = %v, want a sha256 mismatch", err)
@@ -298,21 +456,27 @@ func TestCollectAptEmptyRequest(t *testing.T) {
 }
 
 // TestHighServerUIAptTree confirms the dashboard exposes the imported APT
-// packages through the tree and detail APIs.
+// packages through the tree and detail APIs, nested as
+// mirror -> suite -> component -> package -> versions.
 func TestHighServerUIAptTree(t *testing.T) {
 	hs, _, _ := collectAndImportApt(t)
 	srv := httptest.NewServer(hs)
 	defer srv.Close()
 
-	// Tree root is the mirror name; expanding it yields the package.
-	if _, body := httpGet(t, srv.URL+"/ui/api/tree?eco=apt&path="); !strings.Contains(body, `"microsoft-code"`) {
-		t.Errorf("apt tree root missing mirror: %s", body)
+	steps := []struct{ path, want string }{
+		{"", `"microsoft-code"`},                 // root: mirrors
+		{"microsoft-code", `"stable"`},           // mirror: suites
+		{"microsoft-code/stable", `"main"`},      // suite: components
+		{"microsoft-code/stable/main", `"code"`}, // component: packages
 	}
-	if _, body := httpGet(t, srv.URL+"/ui/api/tree?eco=apt&path=microsoft-code"); !strings.Contains(body, `"code"`) {
-		t.Errorf("apt tree missing package: %s", body)
+	for _, st := range steps {
+		if _, body := httpGet(t, srv.URL+"/ui/api/tree?eco=apt&path="+st.path); !strings.Contains(body, st.want) {
+			t.Errorf("apt tree at %q missing %s: %s", st.path, st.want, body)
+		}
 	}
-	// Detail shows the coordinate.
-	assertServed(t, srv.URL+"/ui/api/detail?eco=apt&path=microsoft-code/code@1.101.2", "1.101.2")
+	// Detail shows the full coordinate including suite and component.
+	assertServed(t, srv.URL+"/ui/api/detail?eco=apt&path=microsoft-code/stable/main/code@1.101.2", "1.101.2")
+	assertServed(t, srv.URL+"/ui/api/detail?eco=apt&path=microsoft-code/stable/main/code@1.101.2", `"Suite"`)
 }
 
 func TestServeAptRejectsTraversal(t *testing.T) {

@@ -126,9 +126,9 @@ function setMessage(container, text) {
     p.textContent = text;
     container.appendChild(p);
 }
-// renderNodes renders a level of the tree. repoEco is set only for the top level
-// of the APT/RPM views, where each node is a mirrored repository that gets its
-// own "Set me up" button.
+// renderNodes renders a level of the tree. repoEco is set for the APT/RPM
+// views, where the nodes named by repoGuideRef carry their own "Set me up"
+// button.
 function renderNodes(container, nodes, repoEco) {
     container.textContent = "";
     if (nodes.length === 0) {
@@ -138,6 +138,18 @@ function renderNodes(container, nodes, repoEco) {
     for (const node of nodes) {
         container.appendChild(node.expandable ? expandableNode(node, repoEco) : leafNode(node));
     }
+}
+// repoGuideRef returns the openRepoGuide target when a tree node should carry
+// a "Set me up" button. RPM repositories are the top-level nodes. An APT setup
+// is pinned to a component node (mirror/suite/component): where the user
+// clicked already decides the release and the channel, so the guide needs no
+// further choices.
+function repoGuideRef(eco, node) {
+    const depth = node.path.split("/").length;
+    if (eco === "apt") {
+        return depth === 3 ? node.path : null;
+    }
+    return depth === 1 ? node.path : null;
 }
 function leafNode(node) {
     const div = document.createElement("div");
@@ -323,9 +335,10 @@ function clearDetail() {
     setMessage(byId("detail"), "Select a version to see its details.");
     hideLayers();
 }
-// repoGuideButton is the per-repository "Set me up" button shown on an APT/RPM
-// top-level node; it opens the guide for just that repository.
-function repoGuideButton(eco, repoName) {
+// repoGuideButton is the per-repository "Set me up" button shown on an RPM
+// repository node or an APT component node; it opens the guide pinned to
+// exactly that target.
+function repoGuideButton(eco, repoRef) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "guide-toggle repo-guide";
@@ -333,7 +346,7 @@ function repoGuideButton(eco, repoName) {
     btn.addEventListener("click", (ev) => {
         ev.preventDefault(); // don't toggle the enclosing <details>
         ev.stopPropagation();
-        void openRepoGuide(eco, repoName);
+        void openRepoGuide(eco, repoRef);
     });
     return btn;
 }
@@ -348,8 +361,9 @@ function expandableNode(node, repoEco) {
         count.textContent = `${node.count} ${unit}`;
         summary.appendChild(count);
     }
-    if (repoEco) {
-        summary.appendChild(repoGuideButton(repoEco, node.label));
+    const guideRef = repoEco ? repoGuideRef(repoEco, node) : null;
+    if (repoEco && guideRef) {
+        summary.appendChild(repoGuideButton(repoEco, guideRef));
     }
     details.appendChild(summary);
     const children = document.createElement("div");
@@ -363,7 +377,7 @@ function expandableNode(node, repoEco) {
         loaded = true;
         setMessage(children, "loading…");
         fetchChildren(currentView, node.path)
-            .then((child) => renderNodes(children, child))
+            .then((child) => renderNodes(children, child, repoEco))
             .catch((err) => {
             loaded = false; // allow retry on next open
             setMessage(children, `failed to load: ${err.message}`);
@@ -377,9 +391,10 @@ function menuButtons() {
 async function loadTree() {
     const tree = byId("tree");
     byId("treeTitle").textContent = VIEW_TITLES[currentView];
-    // APT/RPM set up per repository, so the top "Set me up" button is hidden and
-    // each repo node carries its own instead. (Containers group by upstream
-    // registry at the top level, so they keep the whole-ecosystem button.)
+    // APT/RPM set up per repository, so the top "Set me up" button is hidden:
+    // RPM repo nodes and APT component nodes carry their own instead.
+    // (Containers group by upstream registry at the top level, so they keep the
+    // whole-ecosystem button.)
     const perRepo = currentView === "apt" || currentView === "rpm";
     byId("guideBtn").hidden = perRepo;
     clearDetail();
@@ -507,31 +522,49 @@ function mavenGuideSection(base) {
             "single source of truth. Pin exact versions; SNAPSHOTs and ranges are not mirrored.",
     };
 }
-// aptGuideSection builds setup for one mirrored APT repository, filling in the
-// suite/components/architectures it was actually mirrored with.
-function aptGuideSection(base, repo) {
-    const suite = repo.suite || "<suite>";
-    const comps = repo.components && repo.components.length ? repo.components.join(" ") : "<components>";
-    const arches = repo.architectures && repo.architectures.length ? repo.architectures.join(" ") : "<arch>";
+// aptSuiteBase returns the release a suite belongs to: "noble-updates" and
+// "noble-security" group under "noble"; "resolute" stands alone.
+function aptSuiteBase(name) {
+    const i = name.indexOf("-");
+    return i > 0 ? name.slice(0, i) : name;
+}
+// aptGuideSection builds setup for one suite/component of a mirrored APT
+// repository. The "Set me up" button sits on a component node of the tree
+// (mirror -> suite -> component), so where the user clicked already pins the
+// release and the channel — the stanza needs no further choices.
+function aptGuideSection(base, repo, suiteName, comp) {
+    const suite = (repo.suites ?? []).find((s) => s.name === suiteName);
+    const arches = suite && suite.architectures && suite.architectures.length ? suite.architectures.join(" ") : "<arch>";
     // Signed repos are verified with ArtiGate's key; unsigned repos are trusted directly.
     const trust = repo.signed ? "Signed-By: /usr/share/keyrings/artigate-apt.gpg" : "Trusted: yes";
+    const signNote = repo.signed
+        ? "Use ArtiGate's high-side APT key (Signed-By), not the upstream vendor key."
+        : "This repository is served unsigned, so apt trusts it directly (Trusted: yes). To verify instead, sign it with --apt-gpg-key on the high side.";
+    // Sibling suites of the same release that also carry this component
+    // (noble-updates and noble-security next to noble) usually belong on the
+    // same machine — point them out rather than silently pinning one suite.
+    const related = (repo.suites ?? [])
+        .filter((s) => s.name !== suiteName && aptSuiteBase(s.name) === aptSuiteBase(suiteName))
+        .filter((s) => (s.components ?? []).includes(comp))
+        .map((s) => s.name);
+    const relatedNote = related.length
+        ? ` This mirror also carries ${related.join(" and ")} for the same release — append them to Suites: to pull their ${comp} packages too.`
+        : "";
     return {
-        heading: repo.name,
-        body: "Point apt at this mirrored repository (deb822 .sources format).",
+        heading: `${repo.name} — ${suiteName}/${comp}`,
+        body: "Point apt at exactly this suite and component (deb822 .sources format).",
         blocks: [
             {
                 label: "/etc/apt/sources.list.d/artigate.sources",
                 code: "Types: deb\n" +
                     `URIs: ${base}/apt/${repo.name}\n` +
-                    `Suites: ${suite}\n` +
-                    `Components: ${comps}\n` +
+                    `Suites: ${suiteName}\n` +
+                    `Components: ${comp}\n` +
                     `Architectures: ${arches}\n` +
                     trust,
             },
         ],
-        note: repo.signed
-            ? "Use ArtiGate's high-side APT key (Signed-By), not the upstream vendor key."
-            : "This repository is served unsigned, so apt trusts it directly (Trusted: yes). To verify instead, sign it with --apt-gpg-key on the high side.",
+        note: signNote + relatedNote,
     };
 }
 // rpmGuideSection builds setup for one mirrored RPM repository.
@@ -818,12 +851,16 @@ function openGuide() {
     }
 }
 // openRepoGuide shows setup for a single mirrored APT/RPM repository, fetched
-// live so the URL and (for APT) suite/components/arch are exact.
-async function openRepoGuide(eco, repoName) {
+// live so the URL and (for APT) suite/component/arch are exact. For APT,
+// repoRef is a component node's tree path "<mirror>/<suite>/<component>"; for
+// RPM it is the repository name.
+async function openRepoGuide(eco, repoRef) {
     const dialog = guideDialog();
     const body = byId("guideBody");
     const base = serverBase();
-    byId("guideTitle").textContent = `Set up ${streamLabel(eco)} — ${repoName}`;
+    const parts = repoRef.split("/");
+    const repoName = parts[0] ?? repoRef;
+    byId("guideTitle").textContent = `Set up ${streamLabel(eco)} — ${repoRef}`;
     body.textContent = "";
     body.appendChild(guideIntro(eco, base));
     const loading = document.createElement("p");
@@ -841,7 +878,7 @@ async function openRepoGuide(eco, repoName) {
             return;
         }
         const section = eco === "apt"
-            ? aptGuideSection(base, repo)
+            ? aptGuideSection(base, repo, parts[1] ?? "", parts[2] ?? "")
             : eco === "rpm"
                 ? rpmGuideSection(base, repo)
                 : containersGuideSection([repo]);

@@ -245,8 +245,8 @@ func TestGoTreeChildren(t *testing.T) {
 }
 
 // TestHighServerUIReposApt checks the per-repo data the "Set me up" guide uses:
-// an imported APT mirror is listed with the suite/components/architectures it was
-// mirrored with, so the generated client .sources is exact.
+// an imported APT mirror is listed with the suites/components/architectures it
+// was mirrored with, so the generated client .sources is exact.
 func TestHighServerUIReposApt(t *testing.T) {
 	hs, _, _ := collectAndImportApt(t)
 	srv := httptest.NewServer(hs)
@@ -264,10 +264,14 @@ func TestHighServerUIReposApt(t *testing.T) {
 		t.Fatalf("apt repos = %+v, want 1", resp.Repos)
 	}
 	r := resp.Repos[0]
-	if r.Name != "microsoft-code" || r.Suite != "stable" ||
-		len(r.Components) != 1 || r.Components[0] != "main" ||
-		len(r.Architectures) != 1 || r.Architectures[0] != "amd64" {
-		t.Errorf("apt repo = %+v", r)
+	if r.Name != "microsoft-code" || len(r.Suites) != 1 {
+		t.Fatalf("apt repo = %+v", r)
+	}
+	s := r.Suites[0]
+	if s.Name != "stable" ||
+		len(s.Components) != 1 || s.Components[0] != "main" ||
+		len(s.Architectures) != 1 || s.Architectures[0] != "amd64" {
+		t.Errorf("apt suite = %+v", s)
 	}
 	if r.Signed { // this test's high server has no signing key
 		t.Error("apt repo reported signed, but the high server has no signing key")

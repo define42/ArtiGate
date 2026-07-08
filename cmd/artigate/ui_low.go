@@ -288,7 +288,7 @@ const lowUIHTML = `<!DOCTYPE html>
   <section class="view" id="view-apt" hidden>
   <div class="card">
     <h2>Mirror an APT (deb) repository</h2>
-    <p class="hint">Paste a deb822 source stanza (the <code>.sources</code> format). ArtiGate downloads and verifies the upstream <code>Release</code> and <code>Packages</code> index, mirrors every referenced <code>.deb</code> for the suite/components/architectures, and writes them to a signed bundle. The high side regenerates and (optionally) re-signs the repository. This is <code>/admin/apt/collect</code>.</p>
+    <p class="hint">Paste a deb822 source stanza (the <code>.sources</code> format). ArtiGate downloads and verifies each suite's upstream <code>Release</code> and <code>Packages</code> index, mirrors every referenced <code>.deb</code> for the suites/components/architectures (<code>Suites:</code> may list several, e.g. <code>noble noble-updates noble-security</code>), and writes them to a signed bundle. The high side regenerates and (optionally) re-signs the repository. This is <code>/admin/apt/collect</code>.</p>
     <form class="gomod-form" onsubmit="collectApt(event)">
       <label class="filelabel">Source (deb822)
         <textarea id="aptsrc" rows="6" placeholder="Types: deb&#10;URIs: https://packages.microsoft.com/repos/code&#10;Suites: stable&#10;Components: main&#10;Architectures: amd64&#10;Signed-By: /usr/share/keyrings/microsoft.gpg" autocomplete="off"></textarea>
