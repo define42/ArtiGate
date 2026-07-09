@@ -102,9 +102,10 @@ artigate low \
 
 ### Routes
 
-- `POST /admin/{go,python,maven,apt,rpm,containers,npm,hf}/collect` (add `?stream=1` for streamed progress)
+- `POST /admin/{go,python,maven,apt,rpm,containers,npm,hf}/collect` (add `?stream=1` for streamed progress; every body accepts `"force": true` to bypass export dedup)
 - `POST /admin/reexport?stream=go&sequences=42,45-47` (`stream` defaults to `go`; also accepts a JSON body `{"stream":"go","sequences":"42,45-47"}`)
 - `GET /admin/bundles`
+- `GET /admin/watches`, `POST /admin/watches`, `POST /admin/watches/{run,enable,disable,delete}` — the [watch scheduler](scheduling.md)
 - `GET /healthz` → `ok\n` (always open, even with auth enabled)
 
 !!! warning

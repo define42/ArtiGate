@@ -10,9 +10,9 @@ rebuilds all metadata from the artifacts themselves. See
 !!! note "Source of truth"
     The behaviour described here is defined in `cmd/artigate/main.go` and the
     per-ecosystem collectors (`python.go`, `npm.go`, `apt.go`, `rpm.go`,
-    `java.go`, `container.go`) under `cmd/artigate/`, and summarised in the
-    project `README.md` "Notes and limitations" section. Where this page and the
-    code ever disagree, the code wins.
+    `java.go`, `container.go`, `hf.go`) under `cmd/artigate/`, and summarised in
+    the project `README.md` "Notes and limitations" section. Where this page and
+    the code ever disagree, the code wins.
 
 ## Per-ecosystem limitations
 
@@ -27,9 +27,10 @@ regenerate everything it serves.
 | [Python](ecosystems/python.md) | Wheels only — no source distributions (sdists). | "Wheels only" is on by default (a package with no wheel fails the collect); untick it to mirror what wheels exist and report source-only packages as skipped. |
 | [Maven](ecosystems/maven.md) | Release versions only. | `SNAPSHOT` and dynamic/range versions (`1.+`, `[1.0,2.0)`, `LATEST`, `RELEASE`) are rejected because they resolve differently over time and a mirror could never be reproducible. Pin exact versions. |
 | [NPM](ecosystems/npm.md) | Registry tarballs only; needs npm 7+ on the low side; `dist-tags` carries only `latest`; audit endpoint is not mirrored. | Dependencies that resolve to git or file URLs are skipped and reported. Resolution uses `npm install --package-lock-only` (lockfile v2+, so npm 7 or newer). The high side rebuilds every packument from each tarball's own `package.json`; `dist-tags.latest` points at the highest mirrored release. Set `audit=false` in clients. |
-| [APT](ecosystems/apt.md) | Newest version of each package only (default); each collect is a full re-sync; signing the served repo is optional. | Untick "Newest version only" to mirror every version. Serving is signed only when `--apt-gpg-key` is set — otherwise `InRelease` is served unsigned. |
-| [RPM](ecosystems/rpm.md) | Newest EVR of each package only (default); no `.zck` (zchunk) indexes; each collect is a full re-sync; signing optional. | A `.zck`-only repository cannot be parsed or rewritten — use a repo that publishes `.gz`/`.xz` metadata (or disable newest-only if the index is zchunk-only and you don't need filtering). Serving is signed only when `--rpm-gpg-key` is set (`repomd.xml.asc`). |
+| [APT](ecosystems/apt.md) | Newest version of each package only (default); metadata re-syncs on each collect; signing the served repo is optional. | Untick "Newest version only" to mirror every version. Already-forwarded `.deb`s are skipped before download (delta bundles carry only the churn). Serving is signed only when `--apt-gpg-key` is set — otherwise `InRelease` is served unsigned. |
+| [RPM](ecosystems/rpm.md) | Newest EVR of each package only (default); x86_64 + noarch packages only by default; no `.zck` (zchunk) indexes; signing optional. | List `architectures` explicitly to mirror more (or fewer) arches. A `.zck`-only repository cannot be parsed or rewritten — use a repo that publishes `.gz`/`.xz` metadata (or disable newest-only if the index is zchunk-only and you don't need filtering). Already-forwarded `.rpm`s are skipped before download. Serving is signed only when `--rpm-gpg-key` is set (`repomd.xml.asc`). |
 | [Containers](ecosystems/containers.md) | `linux/amd64` only; anonymous pulls of public images only; registries on non-standard ports can't be mirrored; the high-side registry is read-only. | The `linux/amd64` manifest is picked out of any multi-platform index. Private/auth-required images fail with "only anonymous pulls of public images are supported". A registry with a port (`host:5000/…`) is rejected because the port can't appear in the high-side pull name. Use `--container-registry host=baseURL` on the low side to redirect a registry's API to a private mirror. The high side never accepts pushes. |
+| [AI models](ecosystems/ai-models.md) | GGUF variants need a GGUF repository; digest pins rejected; snapshots serve only the Hub API's download subset; Ollama requires HTTPS. | Mirror a safetensors-only release as a **full repository** instead of a variant. Gated models need `ARTIGATE_HF_TOKEN` on the low side. Enable [TLS](tls.md) or pass `--insecure` to `ollama pull`. `HF_ENDPOINT`-pointed vLLM/transformers/`hf download` work; search and write APIs are not served. |
 
 !!! note "Manifest `type` is always `go-module-bundle`"
     Every bundle manifest carries `"type": "go-module-bundle"` regardless of
@@ -249,11 +250,34 @@ re-running a [scheduled watch](scheduling.md) against an unchanged upstream.
 }
 ```
 
+If only *some* files were already sent, the collect still succeeds but writes a
+**delta bundle** — the response's `prior_files` counts the manifest entries that
+reference earlier content instead of carrying it. That is also intended.
+
 If you genuinely need to re-send bytes the high side already has (for example
 because the high side lost a bundle), use **re-export** from the Status page — it
-replays the archived bundle and bypasses dedup entirely. Dedup is a per-stream,
-content-hash optimisation only; it fails safe (never suppresses content when a
+replays the archived bundle and bypasses dedup entirely — or add `"force": true`
+to the collect body for a fresh, full, self-contained bundle. Dedup is a
+per-stream optimisation only; it fails safe (never suppresses content when a
 lookup errors) and never affects correctness.
+
+### "bundle references prior file … that is not in the repository"
+
+A [delta bundle](architecture.md#export-deduplication-and-delta-bundles) lists
+already-forwarded files as `prior` references and assumes the high side imported
+this stream's earlier bundles. This error means it hasn't — typically a rebuilt
+or brand-new high side, or a stream whose earlier bundles were never carried
+across. The error names the exact file and both remedies:
+
+```text
+bundle references prior file <path> (sha256 <hash>) that is not in the repository:
+import this stream's earlier bundles first, or run a forced (full) re-collect on the low side
+```
+
+Either **re-export the stream's earlier sequences** from the low side's archive
+(Status page → Re-transmit), or run the collect again with `"force": true` so it
+produces a full bundle with no prior references. Pointing a long-running low side
+at a fresh high side always needs one of these two.
 
 ## Other gotchas
 

@@ -13,7 +13,7 @@ ArtiGate is a dependency mirror for **one-way data-diode / air-gapped networks**
 ```
 
 1. **Low side** — from its web dashboard you give it a spec (a `go.mod` or module list, a Python requirements list, Maven coordinates, a `package.json` or NPM package list, an APT source stanza, a `.repo`, a list of container images, or Hugging Face model references). It fetches the closure from upstream and writes a **signed, numbered bundle** — three files per bundle: `<id>.tar.gz`, `<id>.manifest.json`, and `<id>.manifest.json.sig` — into the export directory.
-2. **Diode** — a one-way transfer carries those three files into the high side's landing directory: either something moves the files (ArtiGate never performs that move itself), or the optional **HTTP diode transport** does — the low side uploads each bundle to an HTTP endpoint (`ARTIGATE_DIODE_URL`) and the high side ingests uploads at `/diode/` (`ARTIGATE_DIODE_INGEST=on`).
+2. **Diode** — a one-way transfer carries those three files into the high side's landing directory: something moves the files (ArtiGate never performs that move itself), or the optional **HTTP diode transport** does — the low side uploads each bundle to an HTTP endpoint (`ARTIGATE_DIODE_URL`) and the high side ingests uploads at `/diode/` (`ARTIGATE_DIODE_INGEST=on`) — or the [built-in UDP diode](data-diode.md) drives a one-way fiber directly.
 3. **High side** — it imports each stream's bundles strictly in sequence, verifies the Ed25519 signature and every file's SHA-256 hash, installs artifacts immutably, and **regenerates** all repository metadata from the artifacts actually present. It then serves clients as a GOPROXY, a PyPI index, a Maven 2 repository, an NPM registry, APT/RPM repositories, a read-only OCI registry, and an Ollama-compatible model registry plus the Hub download API for AI models.
 
 Each ecosystem is an independently numbered **stream**, so a stalled or missing bundle in one stream never blocks the others.
@@ -26,8 +26,8 @@ Each ecosystem is an independently numbered **stream**, so a stalled or missing 
 | **Python (PyPI)** | a requirements list; **wheels only** (no sdists), optional cross-target for the high-side interpreter | PEP 503 simple index + wheel downloads | `/simple/`, `/packages/` |
 | **Java (Maven)** | `groupId:artifactId:version` coordinates or an uploaded `pom.xml`; release versions only | Maven 2 repository | `/maven/` |
 | **NPM** | package specs or an uploaded `package.json` (+`package-lock.json`); full graph resolved with `npm`, registry tarballs only | NPM registry | `/npm/` |
-| **APT (Debian/Ubuntu)** | a deb822 source stanza, optional `Signed-By` keyring verified with `gpgv` | APT repository | `/apt/<mirror>` |
-| **RPM (RHEL/Fedora)** | a yum/dnf `.repo` stanza with a concrete `baseurl` | RPM repository | `/rpm/<mirror>` |
+| **APT (Debian/Ubuntu)** | a deb822 source stanza — several `Suites:` per mirror — with optional `Signed-By` keyring verified with `gpgv` | APT repository | `/apt/<mirror>` |
+| **RPM (RHEL/Fedora)** | a yum/dnf `.repo` stanza with a concrete `baseurl`; **x86_64 + noarch** packages by default | RPM repository | `/rpm/<mirror>` |
 | **Container images (OCI)** | image refs (`alpine:3.20`, `ghcr.io/org/app:v1`), optional tag version constraints; **linux/amd64 only** | read-only OCI registry (Docker Registry v2) | `/v2/` |
 | **AI models (Hugging Face)** | GGUF variants (`hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0`) and full repository snapshots (`openai/gpt-oss-20b`) pinned to a commit | Ollama-compatible registry + Hub download API (`HF_ENDPOINT`) | `/v2/`, `/hf/`, `/api/models/` |
 
@@ -39,15 +39,15 @@ See [Ecosystems](ecosystems/index.md) for the per-ecosystem detail pages.
 - **Signed and verified end to end.** Each bundle's manifest is signed with an Ed25519 private key held only on the low side; the high side verifies that signature over the exact manifest bytes, then re-hashes every extracted file against the manifest's SHA-256 before installing. A signature or hash mismatch aborts that bundle's import without advancing state.
 - **The high side regenerates metadata, never trusts it.** Transferred `Release`/`Packages`, packuments, `latest`, and other index files are never treated as truth — the high side rebuilds all repository metadata from the verified artifacts on disk and serves only complete versions.
 - **Immutable installs.** A repository path is write-once: if a later bundle carries different content for an existing path, the import fails with an immutable-file conflict rather than silently mutating it. Re-importing identical content is a no-op.
-- **Export deduplication.** The low side records the content hashes it has forwarded, per stream, in a small SQLite index (`<root>/exported.db`). When a collect resolves entirely to already-forwarded content, no bundle is written and no sequence number is consumed — a daily schedule over an unchanged upstream simply reports "no new content".
+- **Only new content crosses the diode.** The low side records every forwarded file, per stream, in a small SQLite index (`<root>/exported.db`). A collect that resolves entirely to already-forwarded content writes no bundle and consumes no sequence number ("no new content"); a partly-new collect writes a **delta bundle** whose archive carries only the new files, with the rest listed as *prior* references the high side verifies against its accumulated repository. Where upstream declares hashes before the bytes (APT/RPM indexes, container digests, Hugging Face LFS), already-forwarded files are not even downloaded again. `"force": true` on any collect bypasses all of it for a full, self-contained bundle.
 
 !!! tip "Air-gap friendly by construction"
-    ArtiGate leans on the Go standard library, with five direct third-party dependencies: `caddyserver/certmagic` (automatic HTTPS/ACME), `gorilla/securecookie` (signed/encrypted session cookies), `golang.org/x/crypto` (argon2 password hashing), pure-Go `modernc.org/sqlite` (scheduled watches and the export-dedup index), and `hashicorp/go-version` (container tag constraints). Both dashboards are fully self-contained with no external assets.
+    ArtiGate leans on the Go standard library, with six direct third-party dependencies: `caddyserver/certmagic` (automatic HTTPS/ACME), `gorilla/securecookie` (signed/encrypted session cookies), `golang.org/x/crypto` (argon2 password hashing), pure-Go `modernc.org/sqlite` (scheduled watches and the export-dedup index), `hashicorp/go-version` (container tag constraints), and `klauspost/reedsolomon` (forward error correction for the built-in UDP diode). Both dashboards are fully self-contained with no external assets.
 
 ## Where to next
 
 - [Getting started](getting-started.md) — the fastest path to a running low + high stack.
-- [Architecture](architecture.md) — the deep model: streams, bundle format, signing, and the import loop.
+- [Architecture](architecture.md) — the deep model: streams, bundle format, signing, delta bundles, and the import loop.
 - [Low side](low-side.md) — operating the exporter: collecting, scheduling, and re-export.
 - [High side](high-side.md) — operating the mirror: importing, status, and serving clients.
 - [Ecosystems](ecosystems/index.md) — the eight ecosystems and their client setup.

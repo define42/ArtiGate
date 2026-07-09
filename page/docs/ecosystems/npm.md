@@ -6,16 +6,24 @@ The adapter has three parts: **low-side collect** (resolve with `npm`, download 
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A[Package specs<br/>or package.json] --> B[npm install<br/>--package-lock-only]
-    B --> C[Parse package-lock.json<br/>packages map]
-    C --> D[Download every<br/>registry tarball]
-    D --> E[Verify lockfile<br/>SRI integrity]
-    E --> F[Signed ArtiGate bundle]
-    F -.diode.-> G[High side import]
-    G --> H[Regenerate metadata<br/>from each tarball's<br/>package.json]
-    H --> I[npm registry API<br/>under /npm/]
+```text
+  specs / package.json
+        │
+        ▼
+  npm install --package-lock-only        (resolve only; nothing installs,
+        │                                 scripts never run)
+        ▼
+  parse package-lock.json "packages" map
+        │
+        ▼
+  download every registry tarball ──▶ verify lockfile SRI integrity
+        │
+        ▼
+  signed ArtiGate bundle ══ diode ══▶ high side import
+                                          │
+                                          ▼
+                            regenerate metadata from each tarball's
+                            own package.json → npm registry under /npm/
 ```
 
 - The low side never installs anything and **never runs lifecycle scripts** — resolution uses `npm install --package-lock-only --ignore-scripts`.
@@ -39,6 +47,7 @@ flowchart LR
 | `packages` | `[]string` | List of npm install specs. Ignored when `package_json` is set. |
 | `package_json` | `string` | A project's own `package.json`, mirrored exactly as it resolves. |
 | `package_lock` | `string` | Optional `package-lock.json` to pin the exact resolved graph. Requires `package_json`. |
+| `force` | bool | Bypass the export-dedup index — pack every tarball even if already forwarded (full, self-contained bundle). |
 
 ### Mode 1 — package specs
 
@@ -172,7 +181,7 @@ Successful tarballs are packed into the standard numbered, Ed25519-signed ArtiGa
 !!! note
     `integrity` here is the SRI from the resolving lockfile, kept for **audit only**. The high side recomputes `shasum` and `integrity` from the artifact itself and does not trust this value.
 
-The collection is deduplicated: if every resolved tarball was already forwarded on a previous bundle, no new sequence number is burned. See [Low side](../low-side.md) and [Scheduling (watches)](../scheduling.md) for the export and recurring-pull mechanics.
+The collection is deduplicated: if every resolved tarball was already forwarded on a previous bundle, no new sequence number is burned; if only some are new, the bundle is a [delta](../architecture.md#export-deduplication-and-delta-bundles) whose archive carries just those (the rest ride as `prior` manifest references). `"force": true` bypasses the index. See [Low side](../low-side.md) and [Scheduling (watches)](../scheduling.md) for the export and recurring-pull mechanics.
 
 ## High side: import-time metadata regeneration
 

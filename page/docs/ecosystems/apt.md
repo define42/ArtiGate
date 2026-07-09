@@ -27,7 +27,7 @@ Architectures: amd64
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 ```
 
-This posts to `POST /admin/apt/collect`. The request body is capped at **1 MiB**.
+This posts to `POST /admin/apt/collect`. The request body is capped at **1 MiB**. Besides `source_list`, the body accepts `newest_only` and `force` (both booleans), or — instead of a stanza — the explicit fields `name`, `uri`, `suites`, `components`, `architectures`, and `signed_by`, which describe a single mirror; see the [HTTP API reference](../api.md).
 
 ### Multiple stanzas → multiple mirrors
 
@@ -69,6 +69,8 @@ For each mirror, and for **each of its suites** (`distBase = <uri>/dists/<suite>
 1. **`Release`** — fetched, optionally verified, then parsed. Only its **`SHA256:`** section is consulted to locate and verify the index files. (A `Release` with no SHA256 section fails to locate indexes.)
 2. **`Packages` index** — for each component × architecture, ArtiGate looks in `<comp>/binary-<arch>/` and tries, in order, `Packages.gz` (stdlib gzip) then plain `Packages`. The candidate must be listed in the `Release` SHA256 map; it is downloaded, SHA-256-verified, and decompressed.
 3. **Every referenced `.deb`** — each package stanza's `Filename` (a `pool/...` path) is path-safety-checked, downloaded, and SHA-256-verified against the index value. A mismatch is a hard failure. Suites share the archive's `pool/`, so a `.deb` listed by more than one suite is downloaded and bundled **once**.
+
+Because the `Packages` index declares each `.deb`'s SHA-256 *before* the bytes are fetched, APT collects get the full benefit of [export dedup](../architecture.md#export-deduplication-and-delta-bundles): a `.deb` already forwarded on the `apt` stream is **not downloaded again at all** — it rides in the manifest as a `prior` reference — and only genuinely new packages are downloaded and packed into a delta bundle. A re-collect that finds nothing new is skipped entirely (no bundle, no sequence). Add `"force": true` to the collect body to bypass the index and produce a full, self-contained bundle.
 
 !!! warning "Index format support"
     Only `Packages.gz` and plain `Packages` are supported (stdlib gzip). Repositories that publish **only** `.xz`, `.bz2`, or `.zst` indexes are not mirrorable.
