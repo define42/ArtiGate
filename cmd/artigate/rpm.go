@@ -441,11 +441,15 @@ func setPrimaryCount(header string, n int) string {
 	return header[:j] + strconv.Itoa(n) + header[j+end:]
 }
 
-// applyRpmNewestOnly filters pkgs to the newest EVR per (name, arch); when that
-// drops any package, it rewrites the staged primary index (and its manifest and
-// repodata entries) so the served repo advertises only the kept packages.
-func applyRpmNewestOnly(stageRoot, name, primaryRel string, primaryPlain []byte, pkgs []RpmPackage, files []ManifestFile, repodata []RpmData) ([]RpmPackage, error) {
-	kept := filterNewestRpm(pkgs)
+// applyRpmFilters drops packages outside the requested architectures and (when
+// newestOnly) older EVRs; when anything was dropped, it rewrites the staged
+// primary index (and its manifest and repodata entries) so the served repo
+// advertises only the kept packages.
+func applyRpmFilters(stageRoot, name, primaryRel string, primaryPlain []byte, pkgs []RpmPackage, files []ManifestFile, repodata []RpmData, arches []string, newestOnly bool) ([]RpmPackage, error) {
+	kept := filterRpmArch(pkgs, arches)
+	if newestOnly {
+		kept = filterNewestRpm(kept)
+	}
 	if len(kept) == len(pkgs) {
 		return pkgs, nil
 	}
@@ -454,6 +458,33 @@ func applyRpmNewestOnly(stageRoot, name, primaryRel string, primaryPlain []byte,
 		return nil, err
 	}
 	return kept, nil
+}
+
+// filterRpmArch keeps only packages whose architecture is in arches, preserving
+// order.
+func filterRpmArch(pkgs []RpmPackage, arches []string) []RpmPackage {
+	keep := map[string]bool{}
+	for _, a := range arches {
+		keep[a] = true
+	}
+	out := make([]RpmPackage, 0, len(pkgs))
+	for _, p := range pkgs {
+		if keep[p.Arch] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// defaultRpmArches resolves a collect's architecture filter: x86_64 plus
+// noarch when unset. noarch always belongs next to a hardware architecture —
+// x86_64 packages routinely depend on noarch ones.
+func defaultRpmArches(arches []string) []string {
+	arches = dedupeStrings(arches)
+	if len(arches) == 0 {
+		return []string{"x86_64", "noarch"}
+	}
+	return arches
 }
 
 // restagePrimary overwrites the staged primary index with the rewritten XML
@@ -506,6 +537,12 @@ type RpmCollectRequest struct {
 	// NewestOnly keeps only the highest EVR of each package (default true when
 	// absent); set it false to mirror every version in the index.
 	NewestOnly *bool `json:"newest_only,omitempty"`
+	// Architectures filters which package architectures are mirrored; when
+	// empty it defaults to x86_64 plus noarch (noarch packages are
+	// dependencies of hardware-arch packages, so x86_64 alone would not
+	// resolve). List architectures explicitly to override, e.g. add "i686".
+	// The filter applies to every repo in the collect.
+	Architectures []string `json:"architectures,omitempty"`
 }
 
 type rpmMirrorConfig struct {
@@ -535,6 +572,7 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 		return ExportResult{}, err
 	}
 	newest := defaultTrue(req.NewestOnly)
+	arches := defaultRpmArches(req.Architectures)
 	// Hold only the rpm stream's lock across the whole mirror->write->commit, so
 	// a long RPM fetch does not block Python/Go/Maven/APT collects.
 	mu := s.streamLock(streamRpm)
@@ -556,7 +594,7 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	seenFile := map[string]bool{}
 	emitProgress(ctx, "Mirroring %d RPM repo(s)…", len(configs))
 	for _, cfg := range configs {
-		mirror, mf, err := s.mirrorRpmRepo(ctx, cfg, stageRoot, newest)
+		mirror, mf, err := s.mirrorRpmRepo(ctx, cfg, stageRoot, arches, newest)
 		if err != nil {
 			return ExportResult{}, err
 		}
@@ -602,7 +640,7 @@ func (s *LowServer) downloadRpmMetadata(ctx context.Context, base, name string, 
 	return files, repodata, primaryRel, nil
 }
 
-func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stageRoot string, newestOnly bool) (RpmMirror, []ManifestFile, error) {
+func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stageRoot string, arches []string, newestOnly bool) (RpmMirror, []ManifestFile, error) {
 	base := strings.TrimRight(cfg.BaseURL, "/")
 
 	emitProgress(ctx, "→ %s: fetching repomd.xml and primary index…", cfg.Name)
@@ -625,7 +663,8 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 		return RpmMirror{}, nil, errors.New("repomd.xml has no primary metadata")
 	}
 
-	// Parse the staged primary to enumerate and fetch every .rpm.
+	// Parse the staged primary to enumerate and fetch every .rpm of the
+	// requested architectures.
 	primaryPlain, err := readStagedMetadata(stageRoot, cfg.Name, primaryRel)
 	if err != nil {
 		return RpmMirror{}, nil, err
@@ -634,14 +673,12 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 	if err != nil {
 		return RpmMirror{}, nil, err
 	}
-	if newestOnly {
-		pkgs, err = applyRpmNewestOnly(stageRoot, cfg.Name, primaryRel, primaryPlain, pkgs, files, mirror.Repodata)
-		if err != nil {
-			return RpmMirror{}, nil, err
-		}
+	pkgs, err = applyRpmFilters(stageRoot, cfg.Name, primaryRel, primaryPlain, pkgs, files, mirror.Repodata, arches, newestOnly)
+	if err != nil {
+		return RpmMirror{}, nil, err
 	}
 	mirror.Packages = pkgs
-	emitProgress(ctx, "  %s: %d package(s)", cfg.Name, len(pkgs))
+	emitProgress(ctx, "  %s: %d package(s) [%s]", cfg.Name, len(pkgs), strings.Join(arches, " "))
 	for i, pkg := range pkgs {
 		mf, err := s.downloadRpmFile(ctx, base, cfg.Name, pkg.Location, "sha256", pkg.SHA256, stageRoot)
 		if err != nil {
@@ -792,8 +829,9 @@ func xzDecompress(data []byte) ([]byte, error) {
 }
 
 // compressByExt recompresses plain to match an href's extension: .gz via the
-// standard library, .xz by shelling to xz, plain otherwise. Zchunk (.zck) cannot
-// be produced, so newest-only rewriting is unsupported for a zchunk-only index.
+// standard library, .xz by shelling to xz, plain otherwise. Zchunk (.zck)
+// cannot be produced, so filtered (arch/newest-only) rewriting is unsupported
+// for a zchunk-only index.
 func compressByExt(href string, plain []byte) ([]byte, error) {
 	switch {
 	case strings.HasSuffix(href, ".gz"):
@@ -801,7 +839,7 @@ func compressByExt(href string, plain []byte) ([]byte, error) {
 	case strings.HasSuffix(href, ".xz"):
 		return xzCompress(plain)
 	case strings.HasSuffix(href, ".zck"):
-		return nil, fmt.Errorf("cannot rewrite zchunk (.zck) index %s for newest-only; disable newest-only for this repo", href)
+		return nil, fmt.Errorf("cannot rewrite zchunk (.zck) index %s after filtering; disable newest_only and list every architecture the repo carries", href)
 	default:
 		return plain, nil
 	}
@@ -875,7 +913,7 @@ func resolveRpmMirrors(req RpmCollectRequest) ([]rpmMirrorConfig, error) {
 			return nil, err
 		}
 		if names[vc.Name] {
-			return nil, fmt.Errorf("duplicate mirror name %q; give each repo a distinct name", vc.Name)
+			return nil, fmt.Errorf("duplicate mirror name %q; two sections point at the same baseurl — drop the duplicate, or use the explicit name/base_url fields to name a mirror yourself", vc.Name)
 		}
 		names[vc.Name] = true
 		out = append(out, vc)
@@ -883,7 +921,11 @@ func resolveRpmMirrors(req RpmCollectRequest) ([]rpmMirrorConfig, error) {
 	return out, nil
 }
 
-// parseRepoFile parses a yum/dnf .repo (INI) file into one config per [section].
+// parseRepoFile parses a yum/dnf .repo (INI) file into one config per
+// [section]. Section headers are structural only — the mirror name always
+// derives from the section's baseurl (APT-style), because distro repo files
+// ship generic ids ([baseos], [appstream]) that would collide across distros
+// and releases on the high side.
 func parseRepoFile(text string) ([]rpmMirrorConfig, error) {
 	var configs []rpmMirrorConfig
 	var cur *rpmMirrorConfig
@@ -892,11 +934,11 @@ func parseRepoFile(text string) ([]rpmMirrorConfig, error) {
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
 		}
-		if name, ok := iniSection(line); ok {
+		if _, ok := iniSection(line); ok {
 			if cur != nil {
 				configs = append(configs, *cur)
 			}
-			cur = &rpmMirrorConfig{Name: name}
+			cur = &rpmMirrorConfig{}
 			continue
 		}
 		if cur != nil {
