@@ -271,6 +271,16 @@ toolchain when a module requires one.
 For APT and RPM, a **"Newest version only"** checkbox (on by default) mirrors just
 the latest version of each package; untick it to mirror every version.
 
+- **Uploads** — arbitrary files, no ecosystem behind them: pick a folder name
+  and one or more files (`POST /admin/uploads/collect`, multipart form data).
+  The high side serves them at `/uploads/<folder>/<name>`, lists them on its
+  dashboard under **Uploads**, and — uniquely among the streams — lets the
+  operator **delete** a file there again (an emptied folder disappears with its
+  last file). Re-uploading a name replaces the file; uploads always ship in
+  full (the forwarded-content index is not consulted), so a file deleted on
+  the high side comes back by simply uploading it again. Uploads cannot be
+  scheduled — there is no upstream to re-pull.
+
 ### Scheduling
 
 Each ecosystem page can turn its inputs into a **recurring pull**: set an interval

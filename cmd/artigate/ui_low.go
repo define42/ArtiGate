@@ -150,6 +150,7 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="rpm" onclick="setView('rpm')">RPM</button>
     <button type="button" data-view="containers" onclick="setView('containers')">Containers</button>
     <button type="button" data-view="hf" onclick="setView('hf')">AI Models</button>
+    <button type="button" data-view="uploads" onclick="setView('uploads')">Uploads</button>
     <button type="button" data-view="status" onclick="setView('status')">Status</button>
   </nav>
   <button type="button" class="refresh" onclick="loadStatus();loadAllWatches()">Refresh</button>
@@ -399,6 +400,26 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   </section>
 
+  <section class="view" id="view-uploads" hidden>
+  <div class="card">
+    <h2>Upload files</h2>
+    <p class="hint">Send arbitrary files across the diode: pick a folder name and one or more files. The high side serves them under <code>/uploads/&lt;folder&gt;/&lt;name&gt;</code>, shows them on its dashboard, and can delete them again. Re-uploading the same name replaces the file. Uploads always ship in full &mdash; the already-forwarded index is not consulted, so a file deleted on the high side comes back by simply uploading it again. Same as POSTing multipart form data to <code>/admin/uploads/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectUploads(event)">
+      <label class="filelabel">Folder <span class="opt">&mdash; a single name, no slashes; created on the high side if new</span>
+        <input id="upfolder" type="text" placeholder="tools" autocomplete="off">
+      </label>
+      <label class="filelabel">File(s)
+        <input id="upfiles" type="file" multiple>
+      </label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="upBtn">Upload &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('upResult')">Reset</button>
+      </div>
+    </form>
+    <div id="upResult" class="rbox"></div>
+  </div>
+  </section>
+
   <section class="view" id="view-status" hidden>
   <div class="card">
     <h2>Re-transmit bundles</h2>
@@ -413,6 +434,7 @@ const lowUIHTML = `<!DOCTYPE html>
         <option value="rpm">RPM</option>
         <option value="containers">Containers</option>
         <option value="hf">AI Models (Hugging Face)</option>
+        <option value="uploads">Uploads</option>
       </select>
       <input id="seq" type="text" placeholder="42,45-47" autocomplete="off" autofocus>
       <button class="primary" type="submit">Re-export</button>
@@ -446,7 +468,7 @@ const lowUIHTML = `<!DOCTYPE html>
 // If the session has expired, any API call returns 401; bounce to the login page.
 (function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers',hf:'AI Models'})[name]||name;}
+function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers',hf:'AI Models',uploads:'Uploads'})[name]||name;}
 // clearResult hides an ecosystem's inline result box; the Reset button pairs it
 // with the form's native field reset (type="reset").
 function clearResult(id){const el=document.getElementById(id); if(el){ el.className='rbox'; el.innerHTML=''; }}
@@ -539,7 +561,12 @@ function closeCollectModal(){
 // ExportResult, or throws with the server's error message (or AbortError when
 // the Stop button aborted the signal).
 async function streamCollect(url, body, signal){
-  const res=await fetch(url+'?stream=1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:signal});
+  // Collect bodies are JSON, except the uploads form which posts its files as
+  // FormData (fetch sets the multipart boundary header itself).
+  const isForm=(typeof FormData!=='undefined') && body instanceof FormData;
+  const res=await fetch(url+'?stream=1',{method:'POST',
+    headers:isForm?{}:{'Content-Type':'application/json'},
+    body:isForm?body:JSON.stringify(body), signal:signal});
   if(!res.ok || !res.body){
     const t=await res.text().catch(()=>''); throw new Error((t&&t.trim())||('HTTP '+res.status));
   }
@@ -977,6 +1004,26 @@ async function scheduleHF(){
   if(!body){ showHFResult('err','List at least one model or repository reference to schedule.'); return; }
   const refs=hfModels().concat(hfRepos());
   createWatch('hf','AI Models: '+refs.slice(0,3).join(', '), body, 'hfEvery','hfUnit', showHFResult);
+}
+
+function showUpResult(cls, html){
+  const el=document.getElementById('upResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+async function collectUploads(ev){
+  ev.preventDefault();
+  const folder=document.getElementById('upfolder').value.trim();
+  const files=document.getElementById('upfiles').files;
+  if(!folder){ showUpResult('err','Enter a folder name.'); return; }
+  if(!files || !files.length){ showUpResult('err','Pick at least one file.'); return; }
+  const fd=new FormData();
+  fd.append('folder', folder);
+  for(const f of files) fd.append('file', f);
+  runCollect({btnId:'upBtn', busyLabel:'Uploading…', showFn:showUpResult, title:'Uploading files',
+    url:'/admin/uploads/collect', body:fd,
+    render:d=>({cls:'ok', msg:collectedMsg(d,'Uploaded','file(s)')+' They will appear on the high side under <code>/uploads/'+esc(folder)+'/</code>.'})});
 }
 
 async function loadStatus(){

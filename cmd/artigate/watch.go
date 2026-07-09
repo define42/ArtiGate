@@ -218,6 +218,11 @@ func validateWatch(w Watch) error {
 	if !isKnownStream(w.Stream) {
 		return fmt.Errorf("unknown stream %q", w.Stream)
 	}
+	// An upload has no upstream to re-pull — the file bytes arrive with the
+	// request — so scheduling one can never do anything useful.
+	if w.Stream == streamUploads {
+		return errors.New("uploads cannot be scheduled; upload again when the content changes")
+	}
 	if time.Duration(w.IntervalSeconds)*time.Second < minWatchInterval {
 		return fmt.Errorf("interval must be at least %s", minWatchInterval)
 	}

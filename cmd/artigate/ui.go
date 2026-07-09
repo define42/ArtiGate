@@ -75,6 +75,7 @@ type treeCache struct {
 	containers []UIModule
 	npm        []UIModule
 	hf         []UIModule
+	uploads    []UploadedFolder
 }
 
 func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
@@ -222,6 +223,8 @@ func (s *HighServer) handleUITree(w http.ResponseWriter, r *http.Request) {
 		// npm names are flat (a scope is part of the name, not a directory), so
 		// the two-level package -> versions tree applies.
 		nodes = npmTreeChildren(lists.npm, path)
+	case "uploads":
+		nodes = uploadsTreeChildren(lists.uploads, path)
 	default:
 		nodes = goTreeChildren(lists.mods, path)
 	}
@@ -238,6 +241,7 @@ type ecoLists struct {
 	containers []UIModule
 	npm        []UIModule
 	hf         []UIModule
+	uploads    []UploadedFolder
 }
 
 // cachedLists returns the mirrored inventory across ecosystems, memoized for a
@@ -246,7 +250,7 @@ func (s *HighServer) cachedLists() (ecoLists, error) {
 	s.tree.mu.Lock()
 	defer s.tree.mu.Unlock()
 	if time.Now().Before(s.tree.expiry) {
-		return ecoLists{mods: s.tree.mods, python: s.tree.python, maven: s.tree.maven, apt: s.tree.apt, rpm: s.tree.rpm, containers: s.tree.containers, npm: s.tree.npm, hf: s.tree.hf}, nil
+		return ecoLists{mods: s.tree.mods, python: s.tree.python, maven: s.tree.maven, apt: s.tree.apt, rpm: s.tree.rpm, containers: s.tree.containers, npm: s.tree.npm, hf: s.tree.hf, uploads: s.tree.uploads}, nil
 	}
 	mods, err := s.listGoModules()
 	if err != nil {
@@ -280,9 +284,13 @@ func (s *HighServer) cachedLists() (ecoLists, error) {
 	if err != nil {
 		return ecoLists{}, err
 	}
-	s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt, s.tree.rpm, s.tree.containers, s.tree.npm, s.tree.hf = mods, python, maven, apt, rpm, containers, npm, hf
+	uploads, err := s.listUploadedFolders()
+	if err != nil {
+		return ecoLists{}, err
+	}
+	s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt, s.tree.rpm, s.tree.containers, s.tree.npm, s.tree.hf, s.tree.uploads = mods, python, maven, apt, rpm, containers, npm, hf, uploads
 	s.tree.expiry = time.Now().Add(3 * time.Second)
-	return ecoLists{mods: mods, python: python, maven: maven, apt: apt, rpm: rpm, containers: containers, npm: npm, hf: hf}, nil
+	return ecoLists{mods: mods, python: python, maven: maven, apt: apt, rpm: rpm, containers: containers, npm: npm, hf: hf, uploads: uploads}, nil
 }
 
 // goTreeChildren returns the immediate children of prefix in the Go module path
@@ -527,6 +535,8 @@ func (s *HighServer) handleUIDetail(w http.ResponseWriter, r *http.Request) {
 		detail, err = s.npmDetail(path)
 	case "hf":
 		detail, err = s.hfDetail(path)
+	case "uploads":
+		detail, err = s.uploadsDetail(path)
 	default:
 		detail, err = s.goDetail(path)
 	}
