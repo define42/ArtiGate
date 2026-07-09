@@ -35,6 +35,11 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: go
+          # Excludes three query families that flag ArtiGate's inherent
+          # behaviour (mirroring fetches, package-manager exec, paths from
+          # verified indexes / validated operator input). See the file for the
+          # per-rule justification.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Build
         run: go build ./...

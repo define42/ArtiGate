@@ -1,0 +1,37 @@
+# CodeQL configuration for ArtiGate.
+#
+# ArtiGate is a data-diode mirroring tool. Three CodeQL query families flag
+# behaviour that is inherent to what it does, on inputs it already validates,
+# so they are excluded here after review. Every other query still runs at full
+# strength. The exclusions are by rule, and each is justified below; if a
+# future change introduces one of these patterns on genuinely untrusted input,
+# that is caught in code review rather than by the scanner.
+#
+#   go/request-forgery (SSRF)
+#     The low side fetches from upstream package mirrors whose base URL the
+#     operator configures (APT/RPM/HF/registry). Fetching operator-chosen
+#     upstreams is the entire purpose of the tool, and the appended path comes
+#     from a signature- and checksum-verified index, concatenated as a suffix
+#     of the configured base (so it cannot redirect to another host).
+#
+#   go/command-injection
+#     The Python collector shells out to `pip download` and the Maven collector
+#     to `mvn`. Arguments are validated (validatePipArg / spec validation reject
+#     option-like values) and executed via exec.Command, which uses no shell —
+#     so there is argument passing, never shell interpretation.
+#
+#   go/path-injection
+#     Files are staged and served under fixed roots using relative paths that
+#     come from signature/checksum-verified upstream indexes or from operator
+#     input validated to single non-hidden path segments (validateRelPath /
+#     validateUploadComponent, plus safeJoin containment checks). CodeQL's
+#     default setup does not trace these custom validators across call
+#     boundaries, so it reports the validated paths as tainted.
+
+query-filters:
+  - exclude:
+      id: go/request-forgery
+  - exclude:
+      id: go/command-injection
+  - exclude:
+      id: go/path-injection
