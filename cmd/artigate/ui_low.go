@@ -561,12 +561,10 @@ function closeCollectModal(){
 // ExportResult, or throws with the server's error message (or AbortError when
 // the Stop button aborted the signal).
 async function streamCollect(url, body, signal){
-  // Collect bodies are JSON, except the uploads form which posts its files as
-  // FormData (fetch sets the multipart boundary header itself).
-  const isForm=(typeof FormData!=='undefined') && body instanceof FormData;
-  const res=await fetch(url+'?stream=1',{method:'POST',
-    headers:isForm?{}:{'Content-Type':'application/json'},
-    body:isForm?body:JSON.stringify(body), signal:signal});
+  // The uploads form posts FormData, which takes the XHR path: the file
+  // transfer itself is the long part, and only XHR reports upload progress.
+  if((typeof FormData!=='undefined') && body instanceof FormData) return uploadCollect(url, body, signal);
+  const res=await fetch(url+'?stream=1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:signal});
   if(!res.ok || !res.body){
     const t=await res.text().catch(()=>''); throw new Error((t&&t.trim())||('HTTP '+res.status));
   }
@@ -1005,6 +1003,41 @@ async function scheduleHF(){
   if(!body){ showHFResult('err','List at least one model or repository reference to schedule.'); return; }
   const refs=hfModels().concat(hfRepos());
   createWatch('hf','AI Models: '+refs.slice(0,3).join(', '), body, 'hfEvery','hfUnit', showHFResult);
+}
+
+// uploadCollect POSTs multipart form data with XMLHttpRequest instead of the
+// NDJSON stream: fetch exposes no upload progress, and streaming a response
+// while the browser is still sending the body trips HTTP/1.1's half-duplex
+// default (large uploads died as opaque network errors). The modal's progress
+// bar is driven from the browser's own upload progress instead, and the
+// response is one buffered JSON result.
+function uploadCollect(url, fd, signal){
+  return new Promise((resolve, reject)=>{
+    const abortErr=()=>{ const e=new Error('upload aborted'); e.name='AbortError'; return e; };
+    if(signal && signal.aborted){ reject(abortErr()); return; }
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST', url);
+    const started=Date.now();
+    const files=fd.getAll('file').length;
+    xhr.upload.onprogress=e=>{
+      if(!e.lengthComputable) return;
+      const secs=Math.max(0.001,(Date.now()-started)/1000);
+      updateCollectDl({name:'uploading '+files+' file'+(files===1?'':'s'), done:e.loaded, total:e.total, bps:Math.round(e.loaded/secs)});
+    };
+    xhr.upload.onload=()=>{ hideCollectDl(); appendCollectLog('Upload received; packing the signed bundle…'); };
+    xhr.onload=()=>{
+      if(xhr.status>=200 && xhr.status<300){
+        try{ resolve(JSON.parse(xhr.responseText||'{}')); }
+        catch(_){ reject(new Error('unexpected response from the server')); }
+      }else{
+        reject(new Error((xhr.responseText||'').trim()||('HTTP '+xhr.status)));
+      }
+    };
+    xhr.onerror=()=>reject(new Error('network error during the upload'));
+    xhr.onabort=()=>reject(abortErr());
+    if(signal) signal.addEventListener('abort', ()=>xhr.abort(), {once:true});
+    xhr.send(fd);
+  });
 }
 
 function showUpResult(cls, html){

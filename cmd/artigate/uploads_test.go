@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -153,6 +154,91 @@ func TestUploadsRoundTrip(t *testing.T) {
 	}
 	if len(folders) != 0 {
 		t.Fatalf("folders after deleting everything = %+v, want none", folders)
+	}
+}
+
+// TestUploadsStreamedCollectLargeBody proves a streamed (?stream=1) multipart
+// upload larger than the streaming body cap arrives whole: the server switches
+// the connection to full duplex instead of buffering. (A large upload used to
+// be silently truncated at the cap, surfacing in the browser as an opaque
+// network error.)
+func TestUploadsStreamedCollectLargeBody(t *testing.T) {
+	ls, _ := newAptLowServer(t)
+	srv := httptest.NewServer(ls)
+	defer srv.Close()
+
+	unit := []byte("large-upload-content-")
+	big := bytes.Repeat(unit, (maxStreamCollectBody+(1<<20))/len(unit)+1)
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("folder", "big"); err != nil {
+		t.Fatal(err)
+	}
+	fw, err := mw.CreateFormFile("file", "blob.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write(big); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Post(srv.URL+"/admin/uploads/collect?stream=1", mw.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("streamed upload status = %d", resp.StatusCode)
+	}
+	var result ExportResult
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		var ev struct {
+			Type   string        `json:"type"`
+			Error  string        `json:"error"`
+			Result *ExportResult `json:"result"`
+		}
+		if json.Unmarshal(sc.Bytes(), &ev) != nil {
+			continue
+		}
+		if ev.Type == "error" {
+			t.Fatalf("stream reported: %s", ev.Error)
+		}
+		if ev.Type == "done" && ev.Result != nil {
+			result = *ev.Result
+		}
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if result.BundleID == "" {
+		t.Fatal("stream ended without a done event")
+	}
+	m := readBundleManifest(t, ls, result.BundleID)
+	if len(m.Files) != 1 || m.Files[0].Size != int64(len(big)) {
+		t.Fatalf("staged file = %+v, want the full %d bytes", m.Files, len(big))
+	}
+}
+
+// TestStreamCollectBodyCap keeps the buffered streaming path honest: a JSON
+// collect body over the cap is refused with an actionable error, never
+// silently truncated.
+func TestStreamCollectBodyCap(t *testing.T) {
+	ls, _ := newAptLowServer(t)
+	srv := httptest.NewServer(ls)
+	defer srv.Close()
+	body := bytes.Repeat([]byte("x"), maxStreamCollectBody+1)
+	resp, err := http.Post(srv.URL+"/admin/npm/collect?stream=1", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	msg, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(msg), "exceeds") {
+		t.Fatalf("oversized stream body = %d %q, want 400 mentioning the cap", resp.StatusCode, msg)
 	}
 }
 
