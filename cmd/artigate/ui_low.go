@@ -178,6 +178,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">go.sum <span class="opt">&mdash; optional, with go.mod; pins the exact versions</span>
         <input id="gosum" type="file" accept=".sum,text/plain">
       </label>
+      <label class="pytarget-check"><input id="goForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="goBtn">Collect &amp; export</button>
         <button class="secondary" type="reset" onclick="clearResult('goResult')">Reset</button>
@@ -215,6 +216,7 @@ const lowUIHTML = `<!DOCTYPE html>
         </div>
         <p class="hint">Set these to download wheels for the high-side interpreter rather than this host; any of them forces <code>--only-binary=:all:</code> (wheels only) regardless of the checkbox above.</p>
       </details>
+      <label class="pytarget-check"><input id="pyForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="pyBtn">Collect &amp; export</button>
         <button class="secondary" type="reset" onclick="clearResult('pyResult')">Reset</button>
@@ -241,6 +243,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or upload a pom.xml <span class="opt">&mdash; takes precedence over the list</span>
         <input id="mvnpom" type="file" accept=".xml,text/xml">
       </label>
+      <label class="pytarget-check"><input id="mvnForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="mvnBtn">Collect &amp; export</button>
         <button class="secondary" type="reset" onclick="clearResult('mvnResult')">Reset</button>
@@ -270,6 +273,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">package-lock.json <span class="opt">&mdash; optional, with package.json; pins the exact resolved versions</span>
         <input id="npmlock" type="file" accept=".json,application/json">
       </label>
+      <label class="pytarget-check"><input id="npmForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="npmBtn">Collect &amp; export</button>
         <button class="secondary" type="reset" onclick="clearResult('npmResult')">Reset</button>
@@ -297,6 +301,7 @@ const lowUIHTML = `<!DOCTYPE html>
         <input id="aptfile" type="file" accept=".sources,.list,text/plain" onchange="loadAptFile()">
       </label>
       <label class="pytarget-check"><input id="aptnewest" type="checkbox" checked> Newest version of each package only (uncheck to mirror every version)</label>
+      <label class="pytarget-check"><input id="aptForce" type="checkbox"> Full bundle &mdash; re-download and re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="aptBtn">Collect &amp; export</button>
         <button class="secondary" type="reset" onclick="clearResult('aptResult')">Reset</button>
@@ -324,6 +329,7 @@ const lowUIHTML = `<!DOCTYPE html>
         <input id="rpmfile" type="file" accept=".repo,text/plain" onchange="loadRpmFile()">
       </label>
       <label class="pytarget-check"><input id="rpmnewest" type="checkbox" checked> Newest version of each package only (uncheck to mirror every version)</label>
+      <label class="pytarget-check"><input id="rpmForce" type="checkbox"> Full bundle &mdash; re-download and re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="rpmBtn">Collect &amp; export</button>
         <button class="secondary" type="reset" onclick="clearResult('rpmResult')">Reset</button>
@@ -347,6 +353,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">Images <span class="opt">&mdash; one per line; a missing tag means <code>latest</code>; scheduled pulls re-resolve constraints each run</span>
         <textarea id="ctrimages" rows="5" placeholder="alpine:3.20&#10;golang:1.26.x&#10;ghcr.io/org/app:v1" autocomplete="off"></textarea>
       </label>
+      <label class="pytarget-check"><input id="ctrForce" type="checkbox"> Full bundle &mdash; re-download and re-send even blobs the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="ctrBtn">Collect &amp; export</button>
         <button class="secondary" type="reset" onclick="clearResult('ctrResult')">Reset</button>
@@ -376,6 +383,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">Skip repository paths <span class="opt">&mdash; optional, comma-separated; a folder name skips its whole subtree (e.g. the extra <code>original</code>/<code>metal</code> copies in gpt-oss)</span>
         <input id="hfexclude" type="text" placeholder="original, metal" autocomplete="off">
       </label>
+      <label class="pytarget-check"><input id="hfForce" type="checkbox"> Full bundle &mdash; re-download and re-send even blobs the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="hfBtn">Collect &amp; export</button>
         <button class="secondary" type="reset" onclick="clearResult('hfResult')">Reset</button>
@@ -568,6 +576,10 @@ async function runCollect(o){
   openCollectModal(o.title);
   try{
     const d=await streamCollect(o.url, o.body, cmAbort.signal);
+    // A forced "full bundle" is a one-shot recovery action: clear the checkbox
+    // once the collect worked, so the next collect returns to delta exports
+    // instead of silently re-sending everything each time.
+    if(o.forceId && o.body.force) document.getElementById(o.forceId).checked=false;
     let out = (d && d.skipped)
       ? {cls:'ok', msg:'&#10003; No new content since the last export &mdash; nothing to send across the diode.'}
       : o.render(d);
@@ -593,6 +605,16 @@ async function runCollect(o){
       o.showFn('err','Error: '+esc(e.message));
     }
   }finally{ btn.disabled=false; btn.textContent=label; }
+}
+
+// applyForce adds force to a collect body when the page's "full bundle"
+// checkbox is ticked, bypassing the forwarded-content index so everything is
+// re-downloaded and re-packed. Only the immediate collect carries it — the
+// schedule builders never call this, because a recurring forced pull would
+// re-send the whole mirror on every run.
+function applyForce(body, boxId){
+  if(document.getElementById(boxId).checked) body.force=true;
+  return body;
 }
 
 // collectedMsg / skippedListHTML build the shared success line and the optional
@@ -704,7 +726,7 @@ async function collectGoMod(ev){
   const built=await goSpec();
   if(!built){ showGoResult('err','List at least one module, or upload a go.mod.'); return; }
   runCollect({btnId:'goBtn', showFn:showGoResult, title:'Collecting Go modules',
-    url:'/admin/go/collect', body:built.spec, render:d=>{
+    url:'/admin/go/collect', body:applyForce(built.spec,'goForce'), forceId:'goForce', render:d=>{
       const msg=collectedMsg(d,'Collected','module(s)');
       const sk=d.skipped_modules||[];
       if(sk.length) return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' unfetchable module(s); re-run the collect to retry them:', sk, m=>'<code>'+esc(m.module)+'@'+esc(m.version)+'</code>')};
@@ -776,7 +798,7 @@ async function collectPython(ev){
   const body={requirements:parsed.reqs};
   const target=pyTarget(); if(target) body.target=target;
   runCollect({btnId:'pyBtn', showFn:showPyResult, title:'Collecting Python packages',
-    url:'/admin/python/collect', body:body, render:d=>{
+    url:'/admin/python/collect', body:applyForce(body,'pyForce'), forceId:'pyForce', render:d=>{
       let msg=collectedMsg(d,'Collected','package(s)'), warn=false;
       const sd=d.skipped_modules||[];
       if(sd.length){ warn=true; msg+=skippedListHTML(esc(sd.length)+' package(s) had no wheel (source distribution only) and were not mirrored &mdash; pin a version that ships a wheel, or exclude them:', sd, m=>'<code>'+esc(m.module)+(m.version?' '+esc(m.version):'')+'</code>'); }
@@ -801,7 +823,8 @@ async function collectMaven(ev){
   if(!pomFile && !coords.length){ showMvnResult('err','Enter Maven coordinates or upload a pom.xml.'); return; }
   const body = pomFile ? {pom_xml: await pomFile.text()} : {coordinates: coords};
   runCollect({btnId:'mvnBtn', showFn:showMvnResult, title:'Collecting Maven artifacts',
-    url:'/admin/maven/collect', body:body, render:d=>({cls:'ok', msg:collectedMsg(d,'Collected','artifact(s)')})});
+    url:'/admin/maven/collect', body:applyForce(body,'mvnForce'), forceId:'mvnForce',
+    render:d=>({cls:'ok', msg:collectedMsg(d,'Collected','artifact(s)')})});
 }
 
 function showNpmResult(cls, html){
@@ -834,7 +857,7 @@ async function collectNpm(ev){
   const built=await npmSpec();
   if(!built){ showNpmResult('err','List at least one package, or upload a package.json.'); return; }
   runCollect({btnId:'npmBtn', showFn:showNpmResult, title:'Collecting NPM packages',
-    url:'/admin/npm/collect', body:built.spec, render:d=>{
+    url:'/admin/npm/collect', body:applyForce(built.spec,'npmForce'), forceId:'npmForce', render:d=>{
       const msg=collectedMsg(d,'Collected','package(s)');
       const sk=d.skipped_modules||[];
       if(sk.length) return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' package(s) that could not be mirrored:', sk, m=>'<code>'+esc(m.module)+'@'+esc(m.version)+'</code> &mdash; '+esc(m.error))};
@@ -859,7 +882,8 @@ async function collectApt(ev){
   const src=document.getElementById('aptsrc').value.trim();
   if(!src){ showAptResult('err','Paste a deb822 source stanza.'); return; }
   runCollect({btnId:'aptBtn', busyLabel:'Mirroring…', showFn:showAptResult, title:'Mirroring APT repository',
-    url:'/admin/apt/collect', body:{source_list:src, newest_only:document.getElementById('aptnewest').checked},
+    url:'/admin/apt/collect', forceId:'aptForce',
+    body:applyForce({source_list:src, newest_only:document.getElementById('aptnewest').checked},'aptForce'),
     render:d=>({cls:'ok', msg:collectedMsg(d,'Mirrored','package(s)')})});
 }
 
@@ -874,7 +898,8 @@ async function collectRpm(ev){
   const repo=document.getElementById('rpmrepo').value.trim();
   if(!repo){ showRpmResult('err','Paste a yum/dnf .repo stanza.'); return; }
   runCollect({btnId:'rpmBtn', busyLabel:'Mirroring…', showFn:showRpmResult, title:'Mirroring RPM repository',
-    url:'/admin/rpm/collect', body:{repo_file:repo, newest_only:document.getElementById('rpmnewest').checked},
+    url:'/admin/rpm/collect', forceId:'rpmForce',
+    body:applyForce({repo_file:repo, newest_only:document.getElementById('rpmnewest').checked},'rpmForce'),
     render:d=>({cls:'ok', msg:collectedMsg(d,'Mirrored','package(s)')})});
 }
 
@@ -895,7 +920,7 @@ async function collectContainers(ev){
   const images=ctrImages();
   if(!images.length){ showCtrResult('err','List at least one image reference.'); return; }
   runCollect({btnId:'ctrBtn', showFn:showCtrResult, title:'Collecting container images',
-    url:'/admin/containers/collect', body:{images:images}, render:d=>{
+    url:'/admin/containers/collect', body:applyForce({images:images},'ctrForce'), forceId:'ctrForce', render:d=>{
       const msg=collectedMsg(d,'Collected','image(s)');
       const sk=d.skipped_modules||[];
       if(sk.length) return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' unfetchable image(s):', sk, m=>'<code>'+esc(m.module)+':'+esc(m.version)+'</code> &mdash; '+esc(m.error))};
@@ -939,7 +964,7 @@ async function collectHF(ev){
   const body=hfBody();
   if(!body){ showHFResult('err','List at least one model or repository reference.'); return; }
   runCollect({btnId:'hfBtn', showFn:showHFResult, title:'Collecting AI models',
-    url:'/admin/hf/collect', body:body, render:d=>{
+    url:'/admin/hf/collect', body:applyForce(body,'hfForce'), forceId:'hfForce', render:d=>{
       const msg=collectedMsg(d,'Collected','model(s)');
       const sk=d.skipped_modules||[];
       if(sk.length) return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' unfetchable model(s):', sk, m=>'<code>'+esc(m.module)+':'+esc(m.version)+'</code> &mdash; '+esc(m.error))};

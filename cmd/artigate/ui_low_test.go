@@ -88,6 +88,10 @@ func TestLowServerUIPage(t *testing.T) {
 		`id="aptnewest" type="checkbox" checked`, "newest_only",
 		"Mirror an RPM (yum/dnf) repository", `id="rpmrepo"`, `id="rpmfile"`, "loadRpmFile", "collectRpm", "/admin/rpm/collect",
 		`id="rpmnewest" type="checkbox" checked`,
+		// Every ecosystem offers a one-shot "full bundle" checkbox that adds
+		// force to the immediate collect (never to a schedule).
+		"applyForce", `id="goForce"`, `id="pyForce"`, `id="mvnForce"`, `id="npmForce"`,
+		`id="aptForce"`, `id="rpmForce"`, `id="ctrForce"`, `id="hfForce"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("low-side index page missing %q", want)
