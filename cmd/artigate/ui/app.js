@@ -13,6 +13,7 @@ const VIEW_TITLES = {
     rpm: "RPM packages",
     containers: "Container images",
     hf: "AI models (Hugging Face)",
+    uploads: "Uploaded files",
 };
 let currentView = "overview";
 let selectedLeaf = null;
@@ -54,6 +55,7 @@ const STREAM_LABELS = {
     rpm: "RPM",
     containers: "Containers",
     hf: "AI Models",
+    uploads: "Uploads",
 };
 function streamLabel(name) {
     return STREAM_LABELS[name] ?? name;
@@ -316,10 +318,74 @@ async function selectLeaf(el, node) {
             throw new Error(`HTTP ${resp.status}`);
         }
         renderDetail((await resp.json()));
+        if (currentView === "uploads") {
+            panel.appendChild(uploadActions(node.path));
+        }
     }
     catch (err) {
         setMessage(panel, `Failed to load details: ${err.message}`);
     }
+}
+// splitUploadPath splits a tree path "folder/name" into its two parts.
+function splitUploadPath(path) {
+    const i = path.indexOf("/");
+    if (i <= 0 || i === path.length - 1) {
+        return ["", ""];
+    }
+    return [path.slice(0, i), path.slice(i + 1)];
+}
+// uploadActions is the action row under an uploaded file's details: a plain
+// download link for the file's public URL, and the delete button. Uploaded
+// files are the one deletable kind of content — operator-owned, not a
+// mirrored artifact some client build depends on staying immutable.
+function uploadActions(treePath) {
+    const row = document.createElement("div");
+    row.className = "upload-actions";
+    const [folder, name] = splitUploadPath(treePath);
+    if (folder && name) {
+        const dl = document.createElement("a");
+        dl.className = "upload-download";
+        dl.href = `/uploads/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`;
+        dl.setAttribute("download", name);
+        dl.textContent = "Download";
+        row.appendChild(dl);
+    }
+    row.appendChild(uploadDeleteButton(treePath));
+    return row;
+}
+// uploadDeleteButton removes one uploaded file from the repository, after a
+// confirmation. The tree reloads afterwards, so an emptied folder disappears
+// with its last file; the low side can bring a file back by uploading again.
+function uploadDeleteButton(treePath) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "delete-upload";
+    btn.textContent = "Delete this file";
+    btn.addEventListener("click", () => {
+        void (async () => {
+            const [folder, name] = splitUploadPath(treePath);
+            if (!folder || !name || !window.confirm(`Delete ${folder}/${name} from this server?`)) {
+                return;
+            }
+            btn.disabled = true;
+            try {
+                const resp = await fetch("/admin/uploads/delete", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ folder, name }),
+                });
+                if (!resp.ok) {
+                    throw new Error((await resp.text()).trim() || `HTTP ${resp.status}`);
+                }
+                await loadTree(); // re-renders the tree and clears the detail panel
+            }
+            catch (err) {
+                btn.disabled = false;
+                btn.textContent = `Delete failed: ${err.message}`;
+            }
+        })();
+    });
+    return btn;
 }
 // hideLayers clears and hides the layers box (no selection, a non-container
 // leaf, or a failed load).
@@ -394,9 +460,10 @@ async function loadTree() {
     // APT/RPM set up per repository, so the top "Set me up" button is hidden:
     // RPM repo nodes and APT component nodes carry their own instead.
     // (Containers group by upstream registry at the top level, so they keep the
-    // whole-ecosystem button.)
+    // whole-ecosystem button.) Uploads need no client setup at all — each file's
+    // detail panel shows its plain download URL.
     const perRepo = currentView === "apt" || currentView === "rpm";
-    byId("guideBtn").hidden = perRepo;
+    byId("guideBtn").hidden = perRepo || currentView === "uploads";
     clearDetail();
     setMessage(tree, "loading…");
     try {

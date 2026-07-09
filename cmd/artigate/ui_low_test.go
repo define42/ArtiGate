@@ -92,6 +92,10 @@ func TestLowServerUIPage(t *testing.T) {
 		// force to the immediate collect (never to a schedule).
 		"applyForce", `id="goForce"`, `id="pyForce"`, `id="mvnForce"`, `id="npmForce"`,
 		`id="aptForce"`, `id="rpmForce"`, `id="ctrForce"`, `id="hfForce"`,
+		// The uploads page sends arbitrary files as multipart form data over
+		// XHR, so the modal can show real upload progress.
+		`data-view="uploads"`, "Upload files", `id="upfolder"`, `id="upfiles"`,
+		"collectUploads", "/admin/uploads/collect", "function uploadCollect", "xhr.upload",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("low-side index page missing %q", want)

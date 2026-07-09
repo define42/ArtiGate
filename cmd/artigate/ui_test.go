@@ -309,11 +309,13 @@ func TestHighServerUIPage(t *testing.T) {
 		`data-view="maven"`,
 		`data-view="apt"`,
 		`data-view="rpm"`,
+		`data-view="uploads"`,
 		">Go</button>",
 		">Python</button>",
 		">Maven</button>",
 		">APT</button>",
 		">RPM</button>",
+		">Uploads</button>",
 		`id="guideBtn"`,
 		"Set me up",
 		`<dialog id="guide"`,
@@ -348,8 +350,9 @@ func TestHighServerUIAppJS(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The compiled bundle drives the lazy tree fetch, the view switch, the
-	// detail panel, and the "Set me up" client-setup guide.
-	for _, want := range []string{"/ui/api/tree", "/ui/api/detail", "/ui/api/repos", "fetchChildren", "selectLeaf", "renderDetail", "openGuide", "openRepoGuide", "aptGuideSection", "fetchRepos", "showModal", "GOPROXY", "index-url"} {
+	// detail panel, the "Set me up" client-setup guide, and the uploads
+	// download/delete actions.
+	for _, want := range []string{"/ui/api/tree", "/ui/api/detail", "/ui/api/repos", "fetchChildren", "selectLeaf", "renderDetail", "openGuide", "openRepoGuide", "aptGuideSection", "fetchRepos", "showModal", "GOPROXY", "index-url", "uploadActions", "upload-download", "uploadDeleteButton", "/admin/uploads/delete"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("app.js missing %q", want)
 		}

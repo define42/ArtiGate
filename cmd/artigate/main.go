@@ -59,12 +59,13 @@ const (
 	streamContainers = "containers"
 	streamNpm        = "npm"
 	streamHF         = "hf"
+	streamUploads    = "uploads"
 )
 
 // knownStreams is the set of built-in ecosystem streams, shown in the low-side
 // status even before anything has been exported.
 func knownStreams() []string {
-	return []string{streamGo, streamPython, streamMaven, streamApt, streamRpm, streamContainers, streamNpm, streamHF}
+	return []string{streamGo, streamPython, streamMaven, streamApt, streamRpm, streamContainers, streamNpm, streamHF, streamUploads}
 }
 
 func main() {
@@ -177,6 +178,7 @@ type BundleManifest struct {
 	Containers       *ContainerManifest `json:"containers,omitempty"`
 	Npm              *NpmManifest       `json:"npm,omitempty"`
 	HuggingFace      *HFManifest        `json:"huggingface,omitempty"`
+	Uploads          *UploadsManifest   `json:"uploads,omitempty"`
 	Files            []ManifestFile     `json:"files"`
 }
 
@@ -577,6 +579,8 @@ func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool
 		run = func(ctx context.Context) (ExportResult, error) { return s.HandleNpmCollect(ctx, r) }
 	case "/admin/hf/collect":
 		run = func(ctx context.Context) (ExportResult, error) { return s.HandleHFCollect(ctx, r) }
+	case "/admin/uploads/collect":
+		run = func(ctx context.Context) (ExportResult, error) { return s.HandleUploadsCollect(ctx, r) }
 	default:
 		return false
 	}
@@ -1443,6 +1447,12 @@ func (s *LowServer) HandleReexportRequest(r *http.Request) (ReexportResult, erro
 	if spec == "" {
 		return ReexportResult{}, errors.New("missing sequence range; use ?stream=go&sequences=42,45-47 or JSON {\"stream\":\"go\",\"sequences\":\"42,45-47\"}")
 	}
+	// The stream becomes a path component of the archived bundle files, so
+	// only known stream names may pass — anything else could point the replay
+	// outside the bundle archive.
+	if !isKnownStream(stream) {
+		return ReexportResult{}, fmt.Errorf("unknown stream %q", stream)
+	}
 	ranges, err := parseSequenceSpec(spec)
 	if err != nil {
 		return ReexportResult{}, err
@@ -1851,7 +1861,7 @@ func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// request; anything unclaimed is not found.
 	for _, serve := range []func(http.ResponseWriter, *http.Request) bool{
 		s.serveHighAdmin, s.serveDiode, s.serveGo, s.servePython, s.serveMaven, s.serveApt,
-		s.serveRpm, s.serveHF, s.serveContainers, s.serveNpm, s.serveUI,
+		s.serveRpm, s.serveHF, s.serveContainers, s.serveNpm, s.serveUploads, s.serveUI,
 	} {
 		if serve(w, r) {
 			return
@@ -1918,6 +1928,10 @@ func (s *HighServer) serveHighAdmin(w http.ResponseWriter, r *http.Request) bool
 			return true
 		}
 		writeJSON(w, status)
+	case strings.HasPrefix(r.URL.Path, "/admin/uploads"):
+		if !s.serveUploadsAdmin(w, r) {
+			http.Error(w, "not found", http.StatusNotFound)
+		}
 	case strings.HasPrefix(r.URL.Path, "/admin/"):
 		http.Error(w, "not found", http.StatusNotFound)
 	default:
@@ -2384,15 +2398,15 @@ func markPresentComplete(dir, stream string, seqs []int64, present map[int64]boo
 	return maxSeen
 }
 
-func validateManifestCompleteness(m BundleManifest) error {
-	seen, err := validateManifestFiles(m.Files)
-	if err != nil {
-		return err
-	}
-	ecosystems := []struct {
-		present bool
-		check   func(map[string]bool) error
-	}{
+// manifestEcoCheck pairs "this ecosystem has content in the manifest" with the
+// validator to run over it.
+type manifestEcoCheck struct {
+	present bool
+	check   func(map[string]bool) error
+}
+
+func manifestEcoChecks(m BundleManifest) []manifestEcoCheck {
+	return []manifestEcoCheck{
 		{len(m.Modules) > 0, func(s map[string]bool) error { return validateManifestModules(m.Modules, s) }},
 		{m.Python != nil && len(m.Python.Projects) > 0, func(s map[string]bool) error { return validatePythonProjects(m.Python.Projects, s) }},
 		{m.Maven != nil && len(m.Maven.Artifacts) > 0, func(s map[string]bool) error { return validateMavenArtifacts(m.Maven.Artifacts, s) }},
@@ -2401,9 +2415,17 @@ func validateManifestCompleteness(m BundleManifest) error {
 		{m.Containers != nil && len(m.Containers.Repos) > 0, func(s map[string]bool) error { return validateContainerRepos(m.Containers.Repos, s, m.Files) }},
 		{m.Npm != nil && len(m.Npm.Packages) > 0, func(s map[string]bool) error { return validateNpmPackages(m.Npm.Packages, s) }},
 		{m.HuggingFace != nil && (len(m.HuggingFace.Models) > 0 || len(m.HuggingFace.Repos) > 0), func(s map[string]bool) error { return validateHF(m.HuggingFace, s, m.Files) }},
+		{m.Uploads != nil && len(m.Uploads.Files) > 0, func(s map[string]bool) error { return validateUploadsManifest(m.Uploads, s, m.Files) }},
+	}
+}
+
+func validateManifestCompleteness(m BundleManifest) error {
+	seen, err := validateManifestFiles(m.Files)
+	if err != nil {
+		return err
 	}
 	matched := false
-	for _, e := range ecosystems {
+	for _, e := range manifestEcoChecks(m) {
 		if !e.present {
 			continue
 		}
@@ -2413,7 +2435,7 @@ func validateManifestCompleteness(m BundleManifest) error {
 		}
 	}
 	if !matched {
-		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, container repos, npm packages, or hugging face models")
+		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, container repos, npm packages, hugging face models, or uploaded files")
 	}
 	return nil
 }
@@ -2533,10 +2555,15 @@ func installVerifiedFile(staging, base string, f ManifestFile) error {
 		if err != nil {
 			return err
 		}
-		if existing != f.SHA256 {
+		if existing == f.SHA256 {
+			return nil
+		}
+		// Operator-uploaded files are the one mutable subtree: re-uploading a
+		// name legitimately replaces its content (copyFileAtomic renames over
+		// the old file). Every mirrored ecosystem stays immutable.
+		if !strings.HasPrefix(f.Path, "uploads/") {
 			return fmt.Errorf("immutable file conflict for %s", f.Path)
 		}
-		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err

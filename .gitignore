@@ -8,3 +8,6 @@ coverage.txt
 # Local signing keys — never commit these
 *.ed25519
 *.ed25519.pub
+
+# Local Claude preview config (machine-specific paths)
+.claude/launch.json

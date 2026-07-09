@@ -16,13 +16,14 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strings"
 	"time"
 )
 
 // maxStreamCollectBody caps the buffered request body for a streaming collect.
-// It sits above every collect handler's own body limit, so a valid request is
-// never truncated; it only guards against an unbounded upload before the
-// handler's own limit would apply.
+// It sits above every JSON collect handler's own body limit, so a valid
+// request is never truncated (multipart uploads are not buffered at all — see
+// prepareStreamCollectBody); an oversized body is refused with a clear error.
 const maxStreamCollectBody = 16 << 20
 
 // progressSink receives one progress line at a time. Sends must never block the
@@ -179,6 +180,33 @@ func wantsStreamingCollect(r *http.Request) bool {
 	return r.URL.Query().Get("stream") == "1"
 }
 
+// prepareStreamCollectBody arranges for the collect goroutine to read the
+// request body while progress events are already streaming back. HTTP/1.x is
+// half-duplex by default — the server shuts the request body down once the
+// response starts — so a multipart upload (arbitrarily large, cannot be
+// buffered) switches the connection to full duplex instead. Everything else
+// (the JSON collects, all small) is buffered in memory, erroring clearly when
+// a body exceeds the cap rather than silently truncating it and leaving the
+// client with an opaque network error.
+func prepareStreamCollectBody(w http.ResponseWriter, r *http.Request) error {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+		if err := http.NewResponseController(w).EnableFullDuplex(); err == nil {
+			return nil
+		}
+		// A transport that cannot interleave reads and writes falls through to
+		// buffering — and, for a big upload, to the clear size error below.
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxStreamCollectBody+1))
+	if err != nil {
+		return err
+	}
+	if len(body) > maxStreamCollectBody {
+		return fmt.Errorf("request body exceeds %s; POST without ?stream=1 to send more", formatBytes(maxStreamCollectBody))
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	return nil
+}
+
 // streamCollect runs a collect while streaming its progress to the client as
 // newline-delimited JSON (application/x-ndjson): one {"type":"log","message":…}
 // object per progress line, then a terminal {"type":"done","result":…} or
@@ -194,16 +222,10 @@ func (s *LowServer) streamCollect(w http.ResponseWriter, r *http.Request, run fu
 		respondJSONOrError(w, http.StatusBadRequest, res, err)
 		return
 	}
-	// Buffer the request body before writing any response: once the streaming
-	// headers go out, the server closes the request body, so the collect
-	// goroutine — which reads r.Body — must read an in-memory copy instead, or
-	// it fails with "invalid Read on closed Body".
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxStreamCollectBody))
-	if err != nil {
+	if err := prepareStreamCollectBody(w, r); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
 
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-store")

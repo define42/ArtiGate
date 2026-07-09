@@ -416,6 +416,9 @@ func (s *LowServer) downloadAptDeb(ctx context.Context, base, mirror string, pkg
 		return ManifestFile{}, fmt.Errorf("%s: %w", pkg.Filename, err)
 	}
 	rel := aptFileRel(mirror, pkg.Filename)
+	if err := validateRelPath(rel); err != nil {
+		return ManifestFile{}, fmt.Errorf("unsafe staging path %q: %w", rel, err)
+	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return ManifestFile{}, err

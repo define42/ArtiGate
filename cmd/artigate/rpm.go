@@ -497,6 +497,9 @@ func restagePrimary(stageRoot, name, primaryRel string, newPlain []byte, files [
 		return err
 	}
 	rel := rpmFileRel(name, primaryRel)
+	if err := validateRelPath(rel); err != nil {
+		return fmt.Errorf("unsafe staging path %q: %w", rel, err)
+	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
 	if err := os.WriteFile(abs, compressed, 0o644); err != nil {
 		return fmt.Errorf("write rewritten primary: %w", err)
@@ -741,6 +744,9 @@ func (s *LowServer) downloadRpmFile(ctx context.Context, base, mirror, relHref, 
 		return ManifestFile{}, fmt.Errorf("%s: %w", relHref, err)
 	}
 	rel := rpmFileRel(mirror, relHref)
+	if err := validateRelPath(rel); err != nil {
+		return ManifestFile{}, fmt.Errorf("unsafe staging path %q: %w", rel, err)
+	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return ManifestFile{}, err
