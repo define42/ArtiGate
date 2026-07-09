@@ -560,7 +560,7 @@ async function streamCollect(url, body, signal){
 
 // runCollect wires one ecosystem's button to the progress modal: it disables the
 // button, streams the collect, then renders the per-ecosystem summary (o.render)
-// in both the modal and the page's inline result box. A Tier-1 dedup skip is
+// in both the modal and the page's inline result box. A dedup skip is
 // rendered uniformly here.
 async function runCollect(o){
   const btn=document.getElementById(o.btnId), label=btn.textContent;
@@ -598,7 +598,9 @@ async function runCollect(o){
 // collectedMsg / skippedListHTML build the shared success line and the optional
 // "skipped items" list each ecosystem appends to it.
 function collectedMsg(d, verb, noun){
-  return '&#10003; '+verb+' '+esc(d.exported_modules)+' '+noun+' into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
+  let msg='&#10003; '+verb+' '+esc(d.exported_modules)+' '+noun+' into <code>'+esc(d.bundle_id)+'</code> (sequence #'+esc(d.sequence)+').';
+  if(d.prior_files>0) msg+=' '+esc(d.prior_files)+' file(s) were already forwarded and ride along as prior references (not re-sent).';
+  return msg;
 }
 function skippedListHTML(intro, items, fmt){
   return '<br>&#9888; '+intro+'<ul>'+items.map(m=>'<li>'+fmt(m)+'</li>').join('')+'</ul>';

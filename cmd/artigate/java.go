@@ -429,6 +429,10 @@ func validateMavenArtifacts(arts []MavenArtifact, seen map[string]bool) error {
 type MavenCollectRequest struct {
 	Coordinates []string `json:"coordinates"`
 	PomXML      string   `json:"pom_xml"`
+	// Force disables export dedup for this collect: every artifact is packed
+	// even when already forwarded, producing a full self-contained bundle (for
+	// disaster recovery or rebuilding a high side from scratch).
+	Force bool `json:"force,omitempty"`
 }
 
 // HandleMavenCollect parses a JSON collect request and runs the collection.
@@ -500,7 +504,7 @@ func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (
 	}
 
 	emitProgress(ctx, "Packing %d artifact file(s) into a signed bundle…", len(files))
-	return s.exportIfNew(ctx, streamMaven, files, func(seq int64) (ExportResult, error) {
+	return s.exportIfNew(ctx, streamMaven, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeMavenBundle(ctx, seq, stageRoot, files, artifacts)
 	})
 }

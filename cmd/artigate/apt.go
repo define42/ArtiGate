@@ -173,6 +173,10 @@ type AptCollectRequest struct {
 	// when the field is absent); set it false to mirror every version in the
 	// index.
 	NewestOnly *bool `json:"newest_only,omitempty"`
+	// Force disables export dedup for this collect: every .deb is downloaded
+	// and packed even when already forwarded, producing a full self-contained
+	// bundle (for disaster recovery or rebuilding a high side from scratch).
+	Force bool `json:"force,omitempty"`
 }
 
 // defaultTrue resolves an optional bool flag that defaults to true when absent.
@@ -231,9 +235,10 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 	var mirrors []AptMirror
 	var files []ManifestFile
 	seenFile := map[string]bool{}
+	prior := s.priorFileCheck(streamApt, req.Force)
 	emitProgress(ctx, "Mirroring %d APT source(s)…", len(configs))
 	for _, cfg := range configs {
-		mirror, mf, err := s.mirrorAptRepo(ctx, cfg, stageRoot, newest)
+		mirror, mf, err := s.mirrorAptRepo(ctx, cfg, stageRoot, newest, prior)
 		if err != nil {
 			return ExportResult{}, err
 		}
@@ -250,7 +255,7 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 	}
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	return s.exportIfNew(ctx, streamApt, files, func(seq int64) (ExportResult, error) {
+	return s.exportIfNew(ctx, streamApt, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeAptBundle(ctx, seq, stageRoot, files, mirrors)
 	})
 }
@@ -259,7 +264,7 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 // every suite of one mirror, staging the .deb files under stageRoot and
 // returning the mirror metadata plus the manifest file list. Suites share the
 // archive pool, so seenFile dedupes .debs listed in more than one suite.
-func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stageRoot string, newestOnly bool) (AptMirror, []ManifestFile, error) {
+func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stageRoot string, newestOnly bool, prior func(path, sha256 string) bool) (AptMirror, []ManifestFile, error) {
 	base := strings.TrimRight(cfg.URI, "/")
 	mirror := AptMirror{Name: cfg.Name, URI: base, SignedBy: filepath.Base(cfg.SignedBy)}
 	var files []ManifestFile
@@ -284,7 +289,7 @@ func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stag
 
 		for _, comp := range cfg.Components {
 			for _, arch := range cfg.Architectures {
-				cf, pkgs, err := s.collectAptIndex(ctx, base, distBase, cfg.Name, suite, comp, arch, checksums, stageRoot, seenFile, newestOnly)
+				cf, pkgs, err := s.collectAptIndex(ctx, base, distBase, cfg.Name, suite, comp, arch, checksums, stageRoot, seenFile, newestOnly, prior)
 				if err != nil {
 					return AptMirror{}, nil, err
 				}
@@ -299,7 +304,7 @@ func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stag
 // collectAptIndex fetches one suite/component/architecture Packages index and
 // downloads every referenced .deb, returning the new manifest files (deduped
 // via seenFile) and the parsed package records.
-func (s *LowServer) collectAptIndex(ctx context.Context, base, distBase, name, suite, comp, arch string, checksums map[string]aptChecksum, stageRoot string, seenFile map[string]bool, newestOnly bool) ([]ManifestFile, []AptPackage, error) {
+func (s *LowServer) collectAptIndex(ctx context.Context, base, distBase, name, suite, comp, arch string, checksums map[string]aptChecksum, stageRoot string, seenFile map[string]bool, newestOnly bool, prior func(path, sha256 string) bool) ([]ManifestFile, []AptPackage, error) {
 	pkgs, err := s.fetchAptPackagesIndex(ctx, distBase, suite, comp, arch, checksums)
 	if err != nil {
 		return nil, nil, err
@@ -310,12 +315,16 @@ func (s *LowServer) collectAptIndex(ctx context.Context, base, distBase, name, s
 	emitProgress(ctx, "  %s %s/%s/%s: %d package(s)", name, suite, comp, arch, len(pkgs))
 	var files []ManifestFile
 	for _, pkg := range pkgs {
-		mf, err := s.downloadAptDeb(ctx, base, name, pkg, stageRoot)
+		mf, err := s.downloadAptDeb(ctx, base, name, pkg, stageRoot, prior)
 		if err != nil {
 			return nil, nil, err
 		}
 		if !seenFile[mf.Path] {
-			emitProgress(ctx, "    ↓ %s (%s)", path.Base(mf.Path), formatBytes(mf.Size))
+			if mf.Prior {
+				emitProgress(ctx, "    ≡ %s already forwarded (download skipped)", path.Base(mf.Path))
+			} else {
+				emitProgress(ctx, "    ↓ %s (%s)", path.Base(mf.Path), formatBytes(mf.Size))
+			}
 			files = append(files, mf)
 			seenFile[mf.Path] = true
 		}
@@ -388,10 +397,16 @@ func (s *LowServer) fetchAptPackagesIndex(ctx context.Context, distBase, suite, 
 }
 
 // downloadAptDeb fetches one .deb, verifies its SHA256 against the index, and
-// stages it under the bundle's apt/<mirror>/<filename> path.
-func (s *LowServer) downloadAptDeb(ctx context.Context, base, mirror string, pkg AptPackage, stageRoot string) (ManifestFile, error) {
+// stages it under the bundle's apt/<mirror>/<filename> path. A .deb whose
+// index-declared SHA256 and size this stream has already forwarded is not
+// downloaded at all — it becomes a prior manifest reference (the signed index
+// supplies everything the manifest entry needs).
+func (s *LowServer) downloadAptDeb(ctx context.Context, base, mirror string, pkg AptPackage, stageRoot string, prior func(path, sha256 string) bool) (ManifestFile, error) {
 	if err := validateRelPath(pkg.Filename); err != nil {
 		return ManifestFile{}, fmt.Errorf("unsafe package Filename %q: %w", pkg.Filename, err)
+	}
+	if pkg.Size > 0 && prior(aptFileRel(mirror, pkg.Filename), pkg.SHA256) {
+		return ManifestFile{Path: aptFileRel(mirror, pkg.Filename), SHA256: pkg.SHA256, Size: pkg.Size, Prior: true}, nil
 	}
 	data, err := s.aptGet(ctx, base+"/"+pkg.Filename)
 	if err != nil {

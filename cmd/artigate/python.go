@@ -247,6 +247,10 @@ type PythonTarget struct {
 type PythonCollectRequest struct {
 	Requirements []string      `json:"requirements"`
 	Target       *PythonTarget `json:"target,omitempty"`
+	// Force disables export dedup for this collect: every wheel is packed even
+	// when already forwarded, producing a full self-contained bundle (for
+	// disaster recovery or rebuilding a high side from scratch).
+	Force bool `json:"force,omitempty"`
 }
 
 // validatePipArg rejects a user-supplied pip argument that pip would otherwise
@@ -417,7 +421,7 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 	// exportIfNew peeks/commits the sequence around the write (so a failed
 	// collection never burns a number) and skips entirely when every wheel was
 	// already forwarded.
-	res, err := s.exportIfNew(ctx, streamPython, files, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamPython, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writePythonBundle(ctx, seq, stageRoot, files, projects)
 	})
 	if err != nil {

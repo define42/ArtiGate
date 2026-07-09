@@ -2,9 +2,10 @@
 // read-only repository server for data-diode use.
 //
 // It intentionally sticks to the Go standard library (the only exceptions:
-// pure-Go SQLite for scheduled watches, hashicorp/go-version for container
-// tag constraints, and klauspost/reedsolomon for the built-in UDP diode's
-// forward error correction). The low side delegates fetching to the installed
+// pure-Go SQLite for scheduled watches and the exported-content index,
+// hashicorp/go-version for container tag constraints, and
+// klauspost/reedsolomon for the built-in UDP diode's forward error
+// correction). The low side delegates fetching to the installed
 // `go`/`git`/`pip`/`mvn`/`npm` tools; the high side never invokes them and
 // never fetches upstream.
 package main
@@ -189,6 +190,11 @@ type ManifestFile struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
+	// Prior marks a file whose content an earlier bundle on this stream
+	// already delivered: it is listed (so module/repo references stay
+	// complete) but not packed into this bundle's archive. The high side
+	// verifies it against the accumulated repository instead of extracting it.
+	Prior bool `json:"prior,omitempty"`
 }
 
 type ModuleInfo struct {
@@ -339,8 +345,9 @@ type LowServer struct {
 	streamLocks   map[string]*sync.Mutex
 	mu            sync.Mutex
 	state         LowState
-	// exported is the SQLite-backed per-stream index of content hashes already
-	// forwarded across the diode (Tier-1 dedup). It is separate from the
+	// exported is the SQLite-backed per-stream index of files (path + content
+	// hash) already forwarded across the diode, driving the skip/delta dedup
+	// and the collectors' pre-download skip. It is separate from the
 	// stdlib-JSON sequence state so a SQLite problem can never wedge the core
 	// export pipeline: the index is only an optimization (collectors fail safe).
 	exported *ExportedStore
@@ -798,9 +805,14 @@ type ExportResult struct {
 	ExportedModules int    `json:"exported_modules"`
 	BundleID        string `json:"bundle_id,omitempty"`
 	// Skipped is set when a collect produced no bundle because every resolved
-	// file had already been forwarded on this stream (Tier-1 dedup). No sequence
-	// number is consumed.
-	Skipped        bool           `json:"skipped,omitempty"`
+	// file had already been forwarded on this stream. No sequence number is
+	// consumed.
+	Skipped bool `json:"skipped,omitempty"`
+	// PriorFiles counts manifest entries that reference content already
+	// forwarded on this stream (a delta bundle): listed and verified on
+	// import, but neither downloaded again where the upstream declares hashes
+	// nor packed into the archive.
+	PriorFiles     int            `json:"prior_files,omitempty"`
 	Message        string         `json:"message,omitempty"`
 	SkippedModules []FailedModule `json:"skipped_modules,omitempty"`
 	// DiodeError reports a failed upload to the HTTP diode endpoint. The
@@ -835,6 +847,10 @@ type GoCollectRequest struct {
 	ResolveDeps bool     `json:"resolve_deps"`
 	GoMod       string   `json:"go_mod"`
 	GoSum       string   `json:"go_sum"`
+	// Force disables export dedup for this collect: everything is downloaded
+	// and packed even when already forwarded, producing a full self-contained
+	// bundle (for disaster recovery or rebuilding a high side from scratch).
+	Force bool `json:"force,omitempty"`
 }
 
 // HandleGoCollect parses a JSON collect request and runs the collection. The
@@ -876,7 +892,8 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 	sortRequestRecords(records)
 	emitProgress(ctx, "Resolved %d module(s); fetching…", len(records))
 	// Fetch before allocating a sequence so the resolved file set can be
-	// dedup-checked (Tier-1): a re-collect of already-forwarded modules skips.
+	// dedup-checked: a re-collect of already-forwarded modules skips, and a
+	// partly-new one exports only the delta.
 	mods, files, failed, err := s.fetchBundleContent(ctx, records)
 	if err != nil {
 		return ExportResult{}, err
@@ -887,7 +904,7 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 		return ExportResult{}, fmt.Errorf("no modules could be fetched: %s", summarizeFailures(failed))
 	}
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	res, err := s.exportIfNew(ctx, streamGo, files, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamGo, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeGoBundle(ctx, streamGo, seq, mods, files)
 	})
 	if err != nil {
@@ -1092,10 +1109,12 @@ func (s *LowServer) commitSequence(stream string, seq int64) error {
 }
 
 // exportIfNew runs the shared allocate -> write -> commit -> record steps for a
-// stream, but first applies Tier-1 dedup: when every file's content has already
-// been forwarded on this stream, it writes no bundle and burns no sequence
-// number, returning a skipped result. write builds and writes the bundle for
-// the allocated sequence. The caller must hold the stream lock (every collector
+// stream, but first applies export dedup: files whose content this stream has
+// already forwarded are marked prior (listed in the manifest, left out of the
+// archive), and when nothing at all is new it writes no bundle and burns no
+// sequence number, returning a skipped result. force disables both, producing
+// a full self-contained bundle. write builds and writes the bundle for the
+// allocated sequence. The caller must hold the stream lock (every collector
 // does) so the peek/commit stay race-free.
 //
 // A cancelled collect (the dashboard's Stop button aborts the streaming
@@ -1104,12 +1123,19 @@ func (s *LowServer) commitSequence(stream string, seq int64) error {
 // temp file is removed, no sequence is committed); only the final
 // sign-and-archive steps run to completion, so a bundle is either fully
 // produced or not at all.
-func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []ManifestFile, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
+func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []ManifestFile, force bool, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ExportResult{}, fmt.Errorf("collect stopped before export: %w", err)
 	}
-	if s.allForwarded(stream, files) {
+	if !force {
+		s.markPriorFiles(stream, files)
+	}
+	delivered := countDelivered(files)
+	if delivered == 0 {
 		return ExportResult{Stream: stream, Skipped: true, Message: "no new content since the last export"}, nil
+	}
+	if prior := len(files) - delivered; prior > 0 {
+		emitProgress(ctx, "%d of %d file(s) already forwarded; the bundle carries the %d new one(s)", prior, len(files), delivered)
 	}
 	seq := s.peekSequence(stream)
 	res, err := write(seq)
@@ -1119,6 +1145,7 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []Mani
 	if err := s.commitSequence(stream, seq); err != nil {
 		return ExportResult{}, err
 	}
+	res.PriorFiles = len(files) - delivered
 	// Record only after the sequence is committed. If the commit fails the
 	// content is not durably part of the stream, so a retry must re-export it
 	// rather than see it as already forwarded and skip.
@@ -1130,40 +1157,79 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []Mani
 	return res, nil
 }
 
-// allForwarded reports whether every file's content hash is already recorded
-// for the stream, so this collect would add nothing new to the diode. It fails
-// safe: an empty file set or any store error returns false (never skip when
-// unsure), so content is never wrongly suppressed.
-func (s *LowServer) allForwarded(stream string, files []ManifestFile) bool {
+// markPriorFiles flags, in place, every file the exported index already
+// records as forwarded on this stream. It is additive: files a collector
+// already marked prior (it skipped their download, so no bytes are staged)
+// stay prior regardless. It fails safe — on a store error nothing more is
+// marked, so content is exported rather than wrongly suppressed.
+func (s *LowServer) markPriorFiles(stream string, files []ManifestFile) {
 	if len(files) == 0 {
-		return false
+		return
 	}
-	all, err := s.exported.AllForwarded(stream, manifestHashes(files))
+	flags, err := s.exported.ForwardedFlags(stream, files)
 	if err != nil {
 		log.Printf("export index %s: %v; exporting without dedup", stream, err)
-		return false
+		return
 	}
-	return all
+	for i := range files {
+		if flags[i] {
+			files[i].Prior = true
+		}
+	}
 }
 
-// recordForwarded adds every file's content hash to the stream's permanent
-// exported index. It logs but does not fail on error: the bundle is already
-// committed, and a missed update only forgoes a future skip.
+// countDelivered reports how many files the bundle's archive will carry.
+func countDelivered(files []ManifestFile) int {
+	n := 0
+	for _, f := range files {
+		if !f.Prior {
+			n++
+		}
+	}
+	return n
+}
+
+// deliveredFiles returns the subset of files the archive must carry (everything
+// not marked prior).
+func deliveredFiles(files []ManifestFile) []ManifestFile {
+	out := make([]ManifestFile, 0, len(files))
+	for _, f := range files {
+		if !f.Prior {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// recordForwarded adds every file to the stream's permanent exported index. It
+// logs but does not fail on error: the bundle is already committed, and a
+// missed update only forgoes a future skip.
 func (s *LowServer) recordForwarded(stream string, files []ManifestFile) {
 	if len(files) == 0 {
 		return
 	}
-	if err := s.exported.Record(stream, manifestHashes(files)); err != nil {
+	if err := s.exported.Record(stream, files); err != nil {
 		log.Printf("export index %s: record failed: %v", stream, err)
 	}
 }
 
-func manifestHashes(files []ManifestFile) []string {
-	hashes := make([]string, 0, len(files))
-	for _, f := range files {
-		hashes = append(hashes, f.SHA256)
+// priorFileCheck returns the pre-download skip predicate for one collect: it
+// reports whether a file (bundle path plus upstream-declared SHA-256) was
+// already forwarded on the stream, so the collector can emit a prior manifest
+// entry without fetching the bytes at all. force disables skipping (a full
+// bundle is wanted); store errors fail safe (download).
+func (s *LowServer) priorFileCheck(stream string, force bool) func(path, sha256 string) bool {
+	return func(path, sha256 string) bool {
+		if force || sha256 == "" {
+			return false
+		}
+		ok, err := s.exported.IsForwarded(stream, path, sha256)
+		if err != nil {
+			log.Printf("export index %s: %v; downloading without dedup", stream, err)
+			return false
+		}
+		return ok
 	}
-	return hashes
 }
 
 // writeGoBundle builds, signs, and writes a Go bundle for already-fetched
@@ -1255,7 +1321,8 @@ func bundleSuffixes() []string {
 // into the export directory, then retains a copy in the persistent bundle
 // archive so the exact signed bytes can be replayed on re-export. baseDir is the
 // root the manifest file paths are relative to (the Go module cache for Go
-// bundles, a staging dir for Python).
+// bundles, a staging dir for Python). Files marked prior are listed in the
+// manifest only — the archive carries just the new content.
 func (s *LowServer) writeBundleArtifacts(ctx context.Context, bundleID, baseDir string, manifestBytes, sig []byte, files []ManifestFile) error {
 	if err := os.MkdirAll(s.cfg.ExportDir, 0o755); err != nil {
 		return err
@@ -1264,7 +1331,7 @@ func (s *LowServer) writeBundleArtifacts(ctx context.Context, bundleID, baseDir 
 	manifestPath := filepath.Join(s.cfg.ExportDir, bundleID+".manifest.json")
 	sigPath := filepath.Join(s.cfg.ExportDir, bundleID+".manifest.json.sig")
 
-	if err := createTarGzAtomic(ctx, archivePath, baseDir, files); err != nil {
+	if err := createTarGzAtomic(ctx, archivePath, baseDir, deliveredFiles(files)); err != nil {
 		return err
 	}
 	if err := writeBytesAtomic(manifestPath, manifestBytes, 0o644); err != nil {
@@ -2450,11 +2517,16 @@ func (s *HighServer) installVerifiedFiles(staging string, files []ManifestFile, 
 // installVerifiedFile copies one verified file from staging into base, refusing
 // to overwrite an existing immutable file with different content. An existing
 // file whose content already matches is a no-op, so re-imports are idempotent.
+// A prior file (delta bundles) is not in staging at all: it must already sit in
+// the accumulated repository from an earlier bundle.
 func installVerifiedFile(staging, base string, f ManifestFile) error {
 	src := filepath.Join(staging, filepath.FromSlash(f.Path))
 	dst := filepath.Join(base, filepath.FromSlash(f.Path))
 	if !safeJoin(base, dst) {
 		return fmt.Errorf("unsafe destination %s", f.Path)
+	}
+	if f.Prior {
+		return requirePriorFile(dst, f)
 	}
 	if fileExists(dst) {
 		existing, err := sha256File(dst)
@@ -2470,6 +2542,28 @@ func installVerifiedFile(staging, base string, f ManifestFile) error {
 		return err
 	}
 	return copyFileAtomic(src, dst, 0o644)
+}
+
+// requirePriorFile verifies a delta bundle's claim that an earlier bundle
+// already delivered this file. Existence and size are checked, not the hash:
+// the content was verified byte-for-byte when it first landed, files in the
+// repository are immutable, and re-hashing every prior file would make a large
+// mirror's delta import cost as much as a full one. A miss means the earlier
+// bundles of this stream were never imported here (or the repository was
+// rebuilt) — recovered by importing them, or by a forced full re-collect on
+// the low side.
+func requirePriorFile(dst string, f ManifestFile) error {
+	st, err := os.Stat(dst)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("bundle references prior file %s (sha256 %s) that is not in the repository: import this stream's earlier bundles first, or run a forced (full) re-collect on the low side", f.Path, f.SHA256)
+	}
+	if err != nil {
+		return err
+	}
+	if st.Size() != f.Size {
+		return fmt.Errorf("prior file %s: size %d on disk does not match manifest size %d", f.Path, st.Size(), f.Size)
+	}
+	return nil
 }
 
 // writeCompleteMarkers writes a .complete marker for each module once all of
@@ -2918,6 +3012,13 @@ func extractAndVerifyTarGz(archivePath, staging string, files []ManifestFile) er
 	for _, f := range files {
 		if err := validateRelPath(f.Path); err != nil {
 			return err
+		}
+		// Prior files are not in a delta bundle's archive; the install step
+		// verifies them against the accumulated repository instead. A bundle
+		// whose archive carries a file it also marks prior fails below as
+		// "unexpected file" — the two claims contradict each other.
+		if f.Prior {
+			continue
 		}
 		expected[f.Path] = f
 	}

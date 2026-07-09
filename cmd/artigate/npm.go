@@ -636,6 +636,10 @@ type NpmCollectRequest struct {
 	Packages    []string `json:"packages"`
 	PackageJSON string   `json:"package_json"`
 	PackageLock string   `json:"package_lock"`
+	// Force disables export dedup for this collect: every tarball is packed
+	// even when already forwarded, producing a full self-contained bundle (for
+	// disaster recovery or rebuilding a high side from scratch).
+	Force bool `json:"force,omitempty"`
 }
 
 // validateNpmSpecArg rejects a user-supplied package spec that npm would
@@ -743,7 +747,7 @@ func (s *LowServer) CollectNpm(ctx context.Context, req NpmCollectRequest) (Expo
 	// exportIfNew peeks/commits the sequence around the write (so a failed
 	// collection never burns a number) and skips entirely when every tarball was
 	// already forwarded.
-	res, err := s.exportIfNew(ctx, streamNpm, files, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamNpm, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeNpmBundle(ctx, seq, stageRoot, files, pkgs)
 	})
 	if err != nil {
