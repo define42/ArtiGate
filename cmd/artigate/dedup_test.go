@@ -407,8 +407,10 @@ func TestAptDeltaPipeline(t *testing.T) {
 	t.Cleanup(up2.Close)
 
 	ls, priv := newAptLowServer(t)
-	req := AptCollectRequest{Name: "m", URI: up1.URL + "/repo",
-		Suites: []string{"stable"}, Components: []string{"main"}, Architectures: []string{"amd64"}}
+	req := AptCollectRequest{
+		Name: "m", URI: up1.URL + "/repo",
+		Suites: []string{"stable"}, Components: []string{"main"}, Architectures: []string{"amd64"},
+	}
 	res1, err := ls.CollectApt(context.Background(), req)
 	if err != nil {
 		t.Fatalf("first CollectApt: %v", err)

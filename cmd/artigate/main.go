@@ -3007,20 +3007,28 @@ func (p *packSource) Read(b []byte) (int, error) {
 	return n, err
 }
 
-func extractAndVerifyTarGz(archivePath, staging string, files []ManifestFile) error {
+// expectedArchiveFiles maps the file paths a bundle's archive must contain:
+// every manifest file except prior references, which are not packed — the
+// install step verifies those against the accumulated repository instead. A
+// bundle whose archive carries a file it also marks prior fails extraction as
+// "unexpected file", since the two claims contradict each other.
+func expectedArchiveFiles(files []ManifestFile) (map[string]ManifestFile, error) {
 	expected := map[string]ManifestFile{}
 	for _, f := range files {
 		if err := validateRelPath(f.Path); err != nil {
-			return err
+			return nil, err
 		}
-		// Prior files are not in a delta bundle's archive; the install step
-		// verifies them against the accumulated repository instead. A bundle
-		// whose archive carries a file it also marks prior fails below as
-		// "unexpected file" — the two claims contradict each other.
-		if f.Prior {
-			continue
+		if !f.Prior {
+			expected[f.Path] = f
 		}
-		expected[f.Path] = f
+	}
+	return expected, nil
+}
+
+func extractAndVerifyTarGz(archivePath, staging string, files []ManifestFile) error {
+	expected, err := expectedArchiveFiles(files)
+	if err != nil {
+		return err
 	}
 	seen := map[string]bool{}
 
