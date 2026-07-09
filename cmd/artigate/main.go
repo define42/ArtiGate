@@ -1447,6 +1447,12 @@ func (s *LowServer) HandleReexportRequest(r *http.Request) (ReexportResult, erro
 	if spec == "" {
 		return ReexportResult{}, errors.New("missing sequence range; use ?stream=go&sequences=42,45-47 or JSON {\"stream\":\"go\",\"sequences\":\"42,45-47\"}")
 	}
+	// The stream becomes a path component of the archived bundle files, so
+	// only known stream names may pass — anything else could point the replay
+	// outside the bundle archive.
+	if !isKnownStream(stream) {
+		return ReexportResult{}, fmt.Errorf("unknown stream %q", stream)
+	}
 	ranges, err := parseSequenceSpec(spec)
 	if err != nil {
 		return ReexportResult{}, err

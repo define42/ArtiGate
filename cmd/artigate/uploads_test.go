@@ -314,6 +314,31 @@ func TestValidateUploadsManifest(t *testing.T) {
 	}
 }
 
+// TestReexportRejectsUnknownStream keeps the re-export endpoint from building
+// archive paths out of arbitrary request input: the stream must be one of the
+// known stream names, because it becomes a path component of the replayed
+// bundle files.
+func TestReexportRejectsUnknownStream(t *testing.T) {
+	ls, _ := newAptLowServer(t)
+	for _, stream := range []string{"../../../etc", "go/../evil", "bogus"} {
+		req := httptest.NewRequest(http.MethodPost, "/admin/reexport?stream="+strings.ReplaceAll(stream, "/", "%2F")+"&sequences=1", nil)
+		_, err := ls.HandleReexportRequest(req)
+		if err == nil || !strings.Contains(err.Error(), "unknown stream") {
+			t.Errorf("stream %q: err = %v, want an 'unknown stream' error", stream, err)
+		}
+	}
+	// A known stream still passes stream validation (it fails later only
+	// because nothing is archived yet).
+	req := httptest.NewRequest(http.MethodPost, "/admin/reexport?stream=uploads&sequences=1", nil)
+	res, err := ls.HandleReexportRequest(req)
+	if err != nil {
+		t.Fatalf("known stream rejected: %v", err)
+	}
+	if len(res.Failed) != 1 || !strings.Contains(res.Failed[0], "no archived bundle") {
+		t.Fatalf("re-export of empty archive = %+v, want a 'no archived bundle' failure", res)
+	}
+}
+
 // TestUploadsCannotBeScheduled keeps the watch API away from a stream that has
 // no upstream to re-pull.
 func TestUploadsCannotBeScheduled(t *testing.T) {

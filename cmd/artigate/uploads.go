@@ -249,6 +249,9 @@ func (s *LowServer) collectUploads(ctx context.Context, folder string, staged []
 	var entries []UploadFile
 	for _, up := range staged {
 		rel := uploadsFileRel(folder, up.name)
+		if err := validateRelPath(rel); err != nil {
+			return ExportResult{}, fmt.Errorf("unsafe staging path %q: %w", rel, err)
+		}
 		abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 			return ExportResult{}, err
@@ -390,7 +393,12 @@ func (s *HighServer) handleDeleteUpload(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return true
 	}
-	abs := filepath.Join(s.uploadsDir(), req.Folder, req.Name)
+	rel := uploadsFileRel(req.Folder, req.Name)
+	if err := validateRelPath(rel); err != nil {
+		http.Error(w, "unsafe path", http.StatusBadRequest)
+		return true
+	}
+	abs := filepath.Join(s.downloadDir, filepath.FromSlash(rel))
 	if !safeJoin(s.uploadsDir(), abs) {
 		http.Error(w, "unsafe path", http.StatusBadRequest)
 		return true
