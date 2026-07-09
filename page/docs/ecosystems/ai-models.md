@@ -15,9 +15,12 @@ Drive a collect with `POST /admin/hf/collect`. The request body (max 1 MiB) carr
 {
   "models": ["hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0"],
   "repos": ["openai/gpt-oss-20b"],
-  "repo_exclude": ["original", "metal"]
+  "repo_exclude": ["original", "metal"],
+  "force": false
 }
 ```
+
+`force: true` bypasses the export-dedup index — every blob is downloaded and packed even when already forwarded, producing a full self-contained bundle.
 
 ### GGUF variant references (`models`)
 
@@ -63,7 +66,7 @@ hf/blobs/sha256/<first-3-hex>/<full-64-hex>
 
 the same first-3-hex sharding as the [container](containers.md) store. Blobs already staged in a run are skipped, and `manifest.files` lists each blob once even when several variants reference it.
 
-**Resilient batches.** Per-reference failures (an unknown quantization, a gated model without a token) are skipped into `skipped_modules` rather than aborting the batch; only if *nothing* succeeds does the run fail. Tier-1 export dedup applies: an unchanged re-collect writes no bundle and burns no sequence number.
+**Resilient batches.** Per-reference failures (an unknown quantization, a gated model without a token) are skipped into `skipped_modules` rather than aborting the batch; only if *nothing* succeeds does the run fail. [Export dedup](../architecture.md#export-deduplication-and-delta-bundles) applies with the pre-download skip: manifest blob digests and LFS SHA-256s are known *before* the bytes are fetched, so already-forwarded model files are **not downloaded again** — they ride as `prior` manifest references while only new content is downloaded and packed into a delta bundle. An unchanged re-collect writes no bundle and burns no sequence number. (Small non-LFS files carry no upstream hash, so they are re-downloaded and deduped after hashing.)
 
 **Bundle manifest.** The bundle carries an `HFManifest` with both forms:
 

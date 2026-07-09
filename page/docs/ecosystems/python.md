@@ -65,6 +65,7 @@ Endpoint: **`POST /admin/python/collect`** (add `?stream=1` for streamed progres
 | `target.abi` | string | pip `--abi` (e.g. `cp312`). |
 | `target.platforms` | `[]string` | one pip `--platform` per entry (e.g. `manylinux_2_28_x86_64`). |
 | `target.only_binary` | bool | the "Wheels only" switch — forces `--only-binary=:all:` (see below). |
+| `force` | bool | bypass the export-dedup index for this collect — pack every wheel even if already forwarded (full, self-contained bundle). |
 
 See the full HTTP surface in the [API reference](../api.md).
 
@@ -153,7 +154,7 @@ Collection then:
 - Holds the **per-stream lock** for the `python` stream across the whole download → write → commit, so a concurrent Python collect cannot claim the same sequence number. Other ecosystem streams run in parallel.
 - Stages into `<root>/python/staging/collect-*` (removed on return); pip's `--dest` is `<stage>/python/packages`.
 - Hashes each wheel with SHA-256 and records the manifest path `python/packages/<filename>`.
-- Applies **tier-1 dedup**: a failed collect burns no sequence number, and if every wheel was already forwarded on the `python` stream the collect skips entirely (no bundle written).
+- Applies **export dedup**: a failed collect burns no sequence number; if every wheel was already forwarded on the `python` stream the collect skips entirely (no bundle written), and if only some are new the bundle is a [delta](../architecture.md#export-deduplication-and-delta-bundles) carrying just those (the rest ride as `prior` manifest references). `"force": true` bypasses the index.
 
 The signed bundle manifest carries a `python` block grouping wheels per `project@version`, with each file's filename, path, and SHA-256. (The manifest's `requires_python` and `yanked` fields exist but are not populated by the collector.)
 

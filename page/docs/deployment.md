@@ -26,13 +26,16 @@ Each tool maps to a low-side ecosystem:
 | Tool (package) | Used by the low side for |
 |---|---|
 | `go` (from the base image) + `git` | Go modules — fetching and VCS resolution |
-| `pip` (`python3`, `py3-pip`) | Python wheels/sdists |
+| `pip` (`python3`, `py3-pip`) | Python wheels |
 | `mvn` (`maven` + `openjdk17-jre-headless`) | Java / Maven artifacts |
 | `npm` (`nodejs`, `npm`) | NPM dependency-graph resolution |
 | `gpgv` (`gnupg`) | Verifying upstream APT / RPM repository signatures |
 | `xz` | Decompressing some RPM indexes |
 
-APT, RPM, NPM, and container files themselves are fetched **over HTTP with the Go standard library**, not with external CLIs — only the tools above are shelled out to. See [Low side](low-side.md) for how each collector works.
+APT, RPM, NPM, container, and Hugging Face files themselves are fetched **over HTTP with the Go standard library**, not with external CLIs — only the tools above are shelled out to. See [Low side](low-side.md) for how each collector works.
+
+!!! tip "A prebuilt image is published on every merge"
+    CI builds and pushes this image to **`ghcr.io/define42/artigate`** on every push to `main`, tagged `latest`, with the commit SHA, and with an automatically bumped semver tag.
 
 !!! note "The high side needs almost none of this"
     The **high side never invokes** `go`, `git`, `pip`, `mvn`, or `npm` and never fetches upstream. It uses `gnupg` only when signing regenerated APT/RPM repositories (`--apt-gpg-key` / `--rpm-gpg-key`); otherwise it needs nothing but the binary. A high-only deployment can therefore use a much slimmer image (binary + optionally gnupg). The shared image above is convenient but over-provisioned for the high side.
@@ -181,8 +184,8 @@ ProtectHome=false
 ReadWritePaths=/var/lib/artigate-low /var/spool/diode-out /etc/artigate
 ```
 
-!!! warning "Remove the `--export-interval 60s` line from the shipped example"
-    The example unit as committed passes `--export-interval 60s`, but **no such flag exists**. The `low` subcommand uses `flag.ExitOnError`, so an unrecognised flag makes the process exit non-zero and the unit fails to start. Delete that line. The low side has **no export loop or interval** at all — it exports **synchronously at collect time**. The nearest real flag is `--watch-interval` (default `60s`), which controls the scheduled-watch scheduler, not exporting; see [Scheduling (watches)](scheduling.md). The `--goprivate` and `--gonosumdb` flags in the example are valid.
+!!! note "The low side has no export loop"
+    There is no export interval to configure — the low side exports **synchronously at collect time**. The only timer flag is `--watch-interval` (default `60s`), which controls how often the scheduled-watch scheduler checks for due watches; see [Scheduling (watches)](scheduling.md).
 
 **`artigate-high.service`** runs `artigate high`. The high side needs no `HOME` or Go cache (consistent with the image note above), so it sets `ProtectHome=true`:
 
@@ -280,11 +283,12 @@ Each side keeps durable state under its `--root`. Plan capacity and backups for 
 | Path | Contents |
 |---|---|
 | `<root>/low-state.json` | Per-stream next-sequence counters (mode `0600`) |
-| `<root>/exported.db` | SQLite content-dedup index — which file hashes have already been shipped per stream |
+| `<root>/exported.db` | SQLite export-dedup index — which files (path + hash) have already been shipped per stream; what enables skips and delta bundles |
 | `<root>/watches.db` | SQLite scheduled-watch definitions and history |
 | `<root>/bundles` | Persistent archive of every generated bundle, retained for re-export |
 | `<root>/gopath/...` | Go module download cache |
-| `<export-dir>` (default `/var/spool/diode-out`) | Freshly written bundles staged for the diode transfer (cleared automatically after a successful HTTP diode upload) |
+| `<root>/session.key` | Login-session cookie keys (only when `ARTIGATE_LOW_AUTH` is set; mode `0600`) |
+| `<export-dir>` (default `/var/spool/diode-out`) | Freshly written bundles staged for the diode transfer (cleared automatically after a successful HTTP/UDP diode upload) |
 
 **High side** (`--root`, default `/var/lib/artigate-high`):
 
@@ -301,6 +305,8 @@ Each side keeps durable state under its `--root`. Plan capacity and backups for 
 
 !!! note "Backups"
     Back up each side's `<root>` to preserve state across host loss. On the low side the critical items are `low-state.json`, `exported.db`, `watches.db`, and the `bundles` archive; the Go cache is reconstructible. On the high side, `import-state.json` plus `cache/download` are the mirror itself. The Ed25519 private key (low) and public key (high) live outside `<root>` (for example `/etc/artigate/` or the `keys` volume) — back these up separately and keep the private key on the low side only.
+
+    Losing `exported.db` alone is safe but wasteful (the next collects re-download and re-send content the high side already has). Losing it *while keeping* `low-state.json` and re-pointing at a **fresh** high side is the one combination to avoid — recover a rebuilt high side with a **forced** collect (`"force": true`) or by re-exporting the archived bundles, since normal collects emit delta bundles that assume the stream's earlier content is present.
 
 ## Related pages
 

@@ -47,6 +47,7 @@ The request body is JSON (`MavenCollectRequest`), capped at **8 MiB**:
 |---|---|---|
 | `coordinates` | `[]string` | One `groupId:artifactId:version` per entry |
 | `pom_xml` | `string` | A complete `pom.xml` to resolve as-is |
+| `force` | bool | Bypass the export-dedup index — pack every artifact even if already forwarded (full, self-contained bundle) |
 
 !!! warning "`pom_xml` wins; `coordinates` is ignored when it is set"
     If `pom_xml` is non-empty (after trimming whitespace), `coordinates` is ignored **entirely**. Provide one or the other. If neither is supplied the collect fails with `no maven coordinates or pom_xml provided`.
@@ -108,7 +109,7 @@ The release-only policy is enforced on every coordinate before resolution:
    `dependency:go-offline` pulls the full transitive dependency and plugin closure. The invocation has a **15-minute** timeout; on failure the last 4096 bytes of `mvn` output are returned as diagnostics.
 4. **Walk & filter.** The resolved repo is walked; each artifact file becomes a manifest entry. If nothing resolved, the collect errors with `maven resolution produced no artifacts` rather than emit an empty bundle.
 5. **Reject SNAPSHOTs.** Any resolved artifact whose version contains `SNAPSHOT` aborts the collect.
-6. **Dedup & export.** If every resolved file's hash was already exported on the `maven` stream, the collect is skipped (no sequence consumed); otherwise a signed bundle is written.
+6. **Dedup & export.** If every resolved file was already exported on the `maven` stream, the collect is skipped (no sequence consumed). If only some are new, the signed bundle is a [delta](../architecture.md#export-deduplication-and-delta-bundles): its archive carries the new files and the rest ride as `prior` manifest references. `"force": true` bypasses the index for a full bundle.
 
 ### The `mvn` binary
 

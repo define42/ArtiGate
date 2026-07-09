@@ -1,13 +1,14 @@
 # ArtiGate
 
 [![codecov](https://codecov.io/gh/define42/ArtiGate/graph/badge.svg?token=RBKT8U26R8)](https://codecov.io/gh/define42/ArtiGate)
+[![docs](https://img.shields.io/badge/docs-define42.github.io%2FArtiGate-green)](https://define42.github.io/ArtiGate/)
 
 ArtiGate is a dependency mirror for **one-way data-diode networks**. It mirrors
 Go modules, Python (PyPI) wheels, Java (Maven) artifacts, NPM packages, APT
 (`.deb`) and RPM (`.rpm`) repositories, container images (Docker/OCI,
-linux/amd64), and AI models from Hugging Face (GGUF, for Ollama) from the
-internet into an air-gapped network, and serves them there in each ecosystem's
-native format.
+linux/amd64), and AI models from Hugging Face (GGUF for Ollama, plus full
+safetensors repositories) from the internet into an air-gapped network, and
+serves them there in each ecosystem's native format.
 
 One binary, two modes:
 
@@ -19,7 +20,8 @@ One binary, two modes:
 - **`high`** — runs air-gapped. It imports the bundles (in order, verifying every
   signature and hash) and serves them as a GOPROXY, a PyPI index, a Maven 2
   repository, an NPM registry, APT/RPM repositories, a read-only OCI
-  container registry, and an Ollama-compatible model registry.
+  container registry, and an Ollama-compatible model registry with a
+  Hugging Face Hub download API.
 
 ```
   spec ──▶ [ low ] ──▶ signed bundles ──▶ ((diode)) ──▶ [ high ] ──▶ clients
@@ -27,13 +29,11 @@ One binary, two modes:
 ```
 
 Each ecosystem is an independently numbered **stream**, so a stalled or missing
-bundle in one never blocks the others.
+bundle in one never blocks the others. The high side never trusts transferred
+metadata: it verifies every byte against the signed manifest and regenerates
+all repository indexes from the artifacts actually present.
 
-## Build
-
-```bash
-go build -o artigate ./cmd/artigate
-```
+Full documentation lives at **<https://define42.github.io/ArtiGate/>**.
 
 ## Quick start (Docker Compose)
 
@@ -51,6 +51,18 @@ enter a spec (or upload a `go.mod`), and click **Collect & export**. Watch it
 appear on the high-side dashboard at <http://localhost:8081/>, then point a client
 at the high side (see below).
 
+## Build
+
+```bash
+go build -o artigate ./cmd/artigate     # or: make build
+```
+
+CI publishes a container image on every push to `main`:
+`ghcr.io/define42/artigate` (tags: `latest`, the commit SHA, and a
+semver tag). The image bundles the fetch toolchains the low side shells out to
+(`go`/`git`, `pip`, `mvn` + JDK, `npm`, `gpgv`, `xz`); a high-only deployment
+needs none of them except `gnupg` when signing served APT/RPM repos.
+
 ## Signing keys
 
 ```bash
@@ -58,81 +70,6 @@ at the high side (see below).
 ```
 
 Keep the private key on the low side only; install the public key on the high side.
-
-## TLS / HTTPS
-
-Both servers serve plain HTTP by default. Enable HTTPS entirely through environment
-variables (no flags) — the same set applies to `low` and `high`.
-`ARTIGATE_TLS_MODE` selects one of:
-
-- `unencrypted` (default) — plain HTTP.
-- `acme` — obtain and renew certificates automatically via ACME (certmagic).
-- `own-certificate` — use a certificate and key you provide.
-- `auto-generate-certificate` — a self-signed certificate made at startup (handy
-  for testing; clients must trust it or skip verification).
-
-| Variable | Modes | Meaning |
-|---|---|---|
-| `ARTIGATE_TLS_MODE` | all | `unencrypted` / `acme` / `own-certificate` / `auto-generate-certificate` |
-| `ARTIGATE_TLS_DOMAINS` | acme, auto-generate | comma-separated domains/IPs (ACME cert names; self-signed SANs) |
-| `ARTIGATE_TLS_CERT`, `ARTIGATE_TLS_KEY` | own-certificate | PEM certificate and private-key paths |
-| `ARTIGATE_ACME_EMAIL` | acme | account email |
-| `ARTIGATE_ACME_DIRECTORY` | acme | ACME server directory URL (defaults to Let's Encrypt) |
-| `ARTIGATE_ACME_CA_ROOT` | acme | PEM root CA to trust, for a private ACME server |
-| `ARTIGATE_ACME_STORAGE` | acme | certificate cache directory (default `<root>/acme`) |
-
-Example against a private ACME server (e.g. step-ca):
-
-```bash
-export ARTIGATE_TLS_MODE=acme
-export ARTIGATE_TLS_DOMAINS=mirror.internal
-export ARTIGATE_ACME_EMAIL=ops@internal
-export ARTIGATE_ACME_DIRECTORY=https://ca.internal/acme/acme/directory
-export ARTIGATE_ACME_CA_ROOT=/etc/artigate/ca-root.pem
-```
-
-ACME uses the TLS-ALPN-01 challenge on the server's own listen port, so that port
-must be reachable by the ACME server as the configured domain.
-
-## Authentication (low side)
-
-The low-side dashboard can require a login. It is off by default and enabled
-through a single environment variable, `ARTIGATE_LOW_AUTH`, holding one or more
-credentials. Passwords are stored as argon2id hashes, never in plaintext —
-generate one with the `hashpw` subcommand (it reads the password from stdin so it
-never appears in your shell history):
-
-```bash
-./artigate hashpw --user alice
-# prompts on stdin, then prints:  alice:$argon2id$v=19$m=65536,t=3,p=1$...$...
-```
-
-Put one or more `username:hash` credentials in the variable, separated by `;` or
-newlines (not commas — the argon2 parameters inside a hash contain commas):
-
-```bash
-export ARTIGATE_LOW_AUTH='alice:$argon2id$v=19$...;bob:$argon2id$v=19$...'
-```
-
-When set, the dashboard presents a sign-in page and, after a successful login,
-carries the session in an encrypted, signed cookie (gorilla/securecookie); a
-**Log out** button in the header clears it. Sessions last 12 hours and survive a
-restart (the cookie keys are persisted to `<root>/session.key`). The `/healthz`
-probe stays open so container health checks keep working. The **high side is
-never authenticated** — it serves only already-verified public mirror content.
-
-**When `ARTIGATE_LOW_AUTH` is unset the low-side dashboard is unauthenticated** —
-including the mutating `/admin/*` endpoints — so bind it to localhost or a trusted
-network, or set credentials.
-
-The session cookie's `Secure` flag defaults to whether ArtiGate itself terminates
-TLS. If ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy, set
-`ARTIGATE_LOW_COOKIE_SECURE=true` so the cookie is still marked `Secure` (values:
-`auto` (default), `true`, `false`).
-
-> In `docker-compose.yml`, remember that Compose treats `$` as a variable
-> reference, so every `$` in the hash must be written `$$` (see the `low`
-> service). This does not apply to shell `export`s with single quotes.
 
 ## Low side
 
@@ -154,7 +91,9 @@ the export directory (three files per bundle: `.tar.gz`, `.manifest.json`,
 Fetching uses the host's normal tools and credentials (`go`/`git`, `pip`, `mvn`,
 `npm`, `gpgv`). For private Go modules, configure the service user's Git/SSH
 before starting. `--gotoolchain` (default `auto`) lets `go` download a newer
-toolchain when a module requires one.
+toolchain when a module requires one. The [configuration
+reference](https://define42.github.io/ArtiGate/configuration/) lists every flag
+and environment variable.
 
 ### What each page mirrors
 
@@ -183,7 +122,8 @@ toolchain when a module requires one.
 - **APT** — a deb822 source stanza (paste or upload a `.sources` file). `Suites:`
   may list several suites of the archive (they share one mirror and its pool); an
   optional `Signed-By` keyring verifies each suite's upstream release with `gpgv`;
-  several stanzas mirror several repositories. Example:
+  several stanzas mirror several repositories. The mirror is named after the
+  repository URI. Example:
 
   ```text
   Types: deb
@@ -195,8 +135,10 @@ toolchain when a module requires one.
   ```
 
 - **RPM** — a yum/dnf `.repo` stanza (paste or upload). `baseurl` must be concrete
-  (no `$releasever`/`$basearch`). Mirrors the repository's full metadata plus its
-  `.rpm`s. Example:
+  (no `$releasever`/`$basearch`) and names the mirror. Mirrors the repository's
+  metadata plus its `.rpm`s — by default only the **x86_64 and noarch**
+  packages (noarch rides along because hardware-arch packages depend on it);
+  list architectures explicitly in the collect request to override. Example:
 
   ```text
   [code]
@@ -275,8 +217,9 @@ the latest version of each package; untick it to mirror every version.
 
 Each ecosystem page can turn its inputs into a **recurring pull**: set an interval
 (hours or days) and click *Add schedule* — e.g. re-pull a `go.mod` or a
-requirements list every day. Schedules run in the background and can be paused,
-run immediately, or deleted from the same page.
+requirements list every day. Schedules run in the background (due schedules are
+checked every `--watch-interval`, default one minute) and can be paused, run
+immediately, or deleted from the same page.
 
 ### Export deduplication
 
@@ -313,8 +256,10 @@ simply downloads and exports as normal rather than wrongly skipping.
 ### Status and re-export
 
 The **Status** page shows each stream's next bundle number and the exported
-bundles (with sizes). If the high side reports a bundle missing, use its
-re-transmit form to regenerate that bundle number or range from the archive.
+bundles (with sizes, and whether each is still staged in the export directory
+or already sent). If the high side reports a bundle missing, use its
+re-transmit form to regenerate that bundle number or range from the archive
+(`<root>/bundles`), which keeps a copy of every bundle ever exported.
 
 ## Data diode
 
@@ -489,7 +434,8 @@ hf download openai/gpt-oss-20b
 Docker/podman require HTTPS for remote registries — enable TLS on the high side,
 or, for a plain-HTTP mirror, trust it explicitly (then `systemctl restart docker`).
 The high-side **"Set me up"** guide renders this block ready to copy, with the
-actual host and port filled in:
+actual host and port filled in — for APT it even offers a per-suite release
+picker with component checkboxes:
 
 ```json
 // /etc/docker/daemon.json
@@ -504,6 +450,81 @@ On the high side, use **only** ArtiGate as the source — don't add
 `--extra-index-url`, `mavenCentral()`, or other upstreams, which reopens
 dependency-confusion risk. If a repo is published unsigned, relax the client's
 signature check (`repo_gpgcheck=0`, `[trusted=yes]`, etc.).
+
+## TLS / HTTPS
+
+Both servers serve plain HTTP by default. Enable HTTPS entirely through environment
+variables (no flags) — the same set applies to `low` and `high`.
+`ARTIGATE_TLS_MODE` selects one of:
+
+- `unencrypted` (default) — plain HTTP.
+- `acme` — obtain and renew certificates automatically via ACME (certmagic).
+- `own-certificate` — use a certificate and key you provide.
+- `auto-generate-certificate` — a self-signed certificate made at startup (handy
+  for testing; clients must trust it or skip verification).
+
+| Variable | Modes | Meaning |
+|---|---|---|
+| `ARTIGATE_TLS_MODE` | all | `unencrypted` / `acme` / `own-certificate` / `auto-generate-certificate` |
+| `ARTIGATE_TLS_DOMAINS` | acme, auto-generate | comma-separated domains/IPs (ACME cert names; self-signed SANs) |
+| `ARTIGATE_TLS_CERT`, `ARTIGATE_TLS_KEY` | own-certificate | PEM certificate and private-key paths |
+| `ARTIGATE_ACME_EMAIL` | acme | account email |
+| `ARTIGATE_ACME_DIRECTORY` | acme | ACME server directory URL (defaults to Let's Encrypt) |
+| `ARTIGATE_ACME_CA_ROOT` | acme | PEM root CA to trust, for a private ACME server |
+| `ARTIGATE_ACME_STORAGE` | acme | certificate cache directory (default `<root>/acme`) |
+
+Example against a private ACME server (e.g. step-ca):
+
+```bash
+export ARTIGATE_TLS_MODE=acme
+export ARTIGATE_TLS_DOMAINS=mirror.internal
+export ARTIGATE_ACME_EMAIL=ops@internal
+export ARTIGATE_ACME_DIRECTORY=https://ca.internal/acme/acme/directory
+export ARTIGATE_ACME_CA_ROOT=/etc/artigate/ca-root.pem
+```
+
+ACME uses the TLS-ALPN-01 challenge on the server's own listen port, so that port
+must be reachable by the ACME server as the configured domain.
+
+## Authentication (low side)
+
+The low-side dashboard can require a login. It is off by default and enabled
+through a single environment variable, `ARTIGATE_LOW_AUTH`, holding one or more
+credentials. Passwords are stored as argon2id hashes, never in plaintext —
+generate one with the `hashpw` subcommand (it reads the password from stdin so it
+never appears in your shell history):
+
+```bash
+./artigate hashpw --user alice
+# prompts on stdin, then prints:  alice:$argon2id$v=19$m=65536,t=3,p=1$...$...
+```
+
+Put one or more `username:hash` credentials in the variable, separated by `;` or
+newlines (not commas — the argon2 parameters inside a hash contain commas):
+
+```bash
+export ARTIGATE_LOW_AUTH='alice:$argon2id$v=19$...;bob:$argon2id$v=19$...'
+```
+
+When set, the dashboard presents a sign-in page and, after a successful login,
+carries the session in an encrypted, signed cookie (gorilla/securecookie); a
+**Log out** button in the header clears it. Sessions last 12 hours and survive a
+restart (the cookie keys are persisted to `<root>/session.key`). The `/healthz`
+probe stays open so container health checks keep working. The **high side is
+never authenticated** — it serves only already-verified public mirror content.
+
+**When `ARTIGATE_LOW_AUTH` is unset the low-side dashboard is unauthenticated** —
+including the mutating `/admin/*` endpoints — so bind it to localhost or a trusted
+network, or set credentials.
+
+The session cookie's `Secure` flag defaults to whether ArtiGate itself terminates
+TLS. If ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy, set
+`ARTIGATE_LOW_COOKIE_SECURE=true` so the cookie is still marked `Secure` (values:
+`auto` (default), `true`, `false`).
+
+> In `docker-compose.yml`, remember that Compose treats `$` as a variable
+> reference, so every `$` in the hash must be written `$$` (see the `low`
+> service). This does not apply to shell `export`s with single quotes.
 
 ## Notes and limitations
 
@@ -526,8 +547,10 @@ signature check (`repo_gpgcheck=0`, `[trusted=yes]`, etc.).
   (the highest mirrored release). Set `audit=false` in clients — the advisory
   endpoint needs the public registry.
 - **APT/RPM**: mirror the newest version of each package by default; untick
-  "Newest version only" to mirror every version. RPM `.zck`-only indexes aren't
-  supported (use `.gz`/`.xz`). Each collect is a full re-sync.
+  "Newest version only" to mirror every version. RPM collects default to
+  x86_64 + noarch packages. RPM `.zck`-only indexes aren't supported (use
+  `.gz`/`.xz`). Each collect re-syncs against upstream, but the export dedup
+  index keeps it from re-downloading or re-sending what already crossed.
 - **Signing the served repos** is optional (`--apt-gpg-key`/`--rpm-gpg-key`);
   otherwise APT/RPM repositories are published unsigned.
 - **Containers**: linux/amd64 only, anonymous pulls of public images only, and
@@ -550,3 +573,10 @@ signature check (`repo_gpgcheck=0`, `[trusted=yes]`, etc.).
   name to it (old snapshots stay pullable by commit hash).
 - Low-side collects for different ecosystems run concurrently; the high side never
   runs `go`/`pip`/`mvn` and does no upstream fetching.
+
+## Documentation
+
+The full manual — architecture, per-ecosystem guides, configuration and HTTP
+API references, deployment and troubleshooting — is at
+**<https://define42.github.io/ArtiGate/>** (source under `page/`, built with
+MkDocs Material). ArtiGate is released under the [Apache 2.0 license](LICENSE).

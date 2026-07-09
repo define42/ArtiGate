@@ -12,10 +12,10 @@ Container work travels on the `containers` stream. Like every ecosystem, that st
 Drive a collect with `POST /admin/containers/collect`. The request body (max 1 MiB) is a list of image references:
 
 ```json
-{ "images": ["alpine:3.20", "ghcr.io/org/app:v1", "golang:1.26.x"] }
+{ "images": ["alpine:3.20", "ghcr.io/org/app:v1", "golang:1.26.x"], "force": false }
 ```
 
-References are parsed docker-style and de-duplicated before fetching. Each reference may carry a tag, a digest, or a version constraint in the tag slot.
+References are parsed docker-style and de-duplicated before fetching. Each reference may carry a tag, a digest, or a version constraint in the tag slot. `force: true` bypasses the export-dedup index — every blob is downloaded and packed even when already forwarded, producing a full self-contained bundle.
 
 ### Image reference forms
 
@@ -106,11 +106,11 @@ Each base must parse as an `http`/`https` URL; a trailing `/` is trimmed and the
 containers/blobs/sha256/<first-3-hex>/<full-64-hex>
 ```
 
-The first **3 hex characters** of the digest form the shard directory, spreading blobs across 16³ = **4096 directories** (the same first-N-hex scheme Docker's own registry and git use). The store is **shared across all repositories**, so a layer common to many images is stored exactly once (dedup). Blobs already staged in a run are skipped.
+The first **3 hex characters** of the digest form the shard directory, spreading blobs across 16³ = **4096 directories** (the same first-N-hex scheme Docker's own registry and git use). The store is **shared across all repositories**, so a layer common to many images is stored exactly once (dedup). Blobs already staged in a run are skipped — and because the manifest declares every blob's digest *before* the bytes are fetched, blobs already forwarded on the `containers` stream in an earlier bundle are **not downloaded at all**: they ride in the manifest as [`prior` references](../architecture.md#export-deduplication-and-delta-bundles) while only new blobs are downloaded and packed. A base image shared by many tags therefore crosses the diode exactly once.
 
 **Streaming download & verification.** Blobs are streamed to disk through `io.MultiWriter(file, sha256)` under a 30-minute context — never buffered in memory — and verified against both the expected size and digest; a mismatch removes the file and fails. Foreign / non-distributable layers (media type containing `foreign`) are rejected outright. Manifest bodies are capped at 8 MiB and token responses at 1 MiB; the upstream `tags/list` pager follows RFC 5988 `Link` headers up to a hard cap of 100 pages (≈1M tags).
 
-**Resilient batches.** Per-image failures are non-fatal: a broken reference is skipped and reported in `SkippedModules`. Only if *zero* images succeed does the whole run fail with `no images could be fetched`. If nothing new was produced, `exportIfNew` writes no bundle and burns no sequence (content-addressed dedup).
+**Resilient batches.** Per-image failures are non-fatal: a broken reference is skipped and reported in `SkippedModules`. Only if *zero* images succeed does the whole run fail with `no images could be fetched`. If nothing new was produced at all, `exportIfNew` writes no bundle and burns no sequence; if only some blobs are new, the bundle is a delta carrying just those.
 
 **Bundle manifest.** Each bundle carries a `ContainerManifest` of repos, keeping `registry` and `repository` separate:
 

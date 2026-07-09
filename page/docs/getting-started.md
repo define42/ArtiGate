@@ -7,7 +7,7 @@ ArtiGate is a single Go binary with four subcommands (`keygen`, `low`, `high`, `
 
 ## Build from source
 
-ArtiGate leans heavily on the Go standard library, with a handful of small pure-Go modules: `modernc.org/sqlite` for watches, `hashicorp/go-version` for container tag constraints, `caddyserver/certmagic` for ACME/TLS, `gorilla/securecookie` for login sessions, and `golang.org/x/crypto` for argon2id password hashing. These are ordinary `go.mod` requires (no `vendor/` directory), so a build is quick.
+ArtiGate leans heavily on the Go standard library, with a handful of small pure-Go modules: `modernc.org/sqlite` for watches and the export-dedup index, `hashicorp/go-version` for container tag constraints, `caddyserver/certmagic` for ACME/TLS, `gorilla/securecookie` for login sessions, `golang.org/x/crypto` for argon2id password hashing, and `klauspost/reedsolomon` for the built-in UDP diode's forward error correction. These are ordinary `go.mod` requires (no `vendor/` directory), so a build is quick.
 
 ```bash
 # The default make target builds the binary into ./artigate
@@ -35,6 +35,8 @@ Confirm the binary works:
 ```bash
 ./artigate --help
 ```
+
+CI also publishes a ready-made container image on every push to `main`: `ghcr.io/define42/artigate` (tags `latest`, the commit SHA, and a semver tag). It bundles the low side's fetch toolchains; see [Deployment](deployment.md).
 
 ## Quick start with Docker Compose
 
@@ -122,11 +124,11 @@ curl -XPOST localhost:8080/admin/python/collect \
 See [Ecosystems](ecosystems/index.md) for every collector's payload — Go, Python, Maven, npm, APT, RPM, containers, and AI models.
 
 !!! note "Nothing new? Nothing sent."
-    If every file in a collect was already exported on that stream, the low side reports `"skipped": true` with `"no new content since the last export"` and consumes **no** sequence number — a re-pull of an unchanged upstream ships zero bytes across the diode.
+    If every file in a collect was already exported on that stream, the low side reports `"skipped": true` with `"no new content since the last export"` and consumes **no** sequence number. If only *some* files are new, it writes a **delta bundle** carrying just those (the response's `prior_files` counts the rest) — a re-pull of a slowly-changing upstream ships only the churn across the diode. Add `"force": true` to any collect body to bypass this and produce a full, self-contained bundle. See [Low side](low-side.md).
 
 ### 2. Watch it import on the high side
 
-In the demo, the `diode` volume moves the three files from the low export dir to the high landing dir automatically. The high side scans that landing dir every `--import-interval` (10s in the demo) and imports bundles **strictly in sequence order, per stream**. For each bundle it verifies the Ed25519 signature over the manifest, re-hashes every file against the manifest, installs the artifacts immutably, and regenerates all repository metadata from the artifacts actually present.
+In the demo, the low side uploads each bundle's three files straight to the high side's `/diode` ingest endpoint (the HTTP diode transport), and a completed upload is imported immediately. With a folder diode the high side instead scans its landing dir every `--import-interval` (10s in the demo). Either way, bundles import **strictly in sequence order, per stream**: for each bundle the high side verifies the Ed25519 signature over the manifest, re-hashes every file against the manifest, installs the artifacts immutably, and regenerates all repository metadata from the artifacts actually present.
 
 Open the high dashboard at <http://localhost:8081/> and watch the Go tree populate. You can also query the import status directly:
 
@@ -208,7 +210,7 @@ Carry all three files of each bundle from the low side's `--export-dir` across t
 
 ## Where to next
 
-- [Low side](low-side.md) — collectors, streaming progress, re-export, status.
+- [Low side](low-side.md) — collectors, export dedup, streaming progress, re-export, status.
 - [High side](high-side.md) — import loop, quarantine, serving clients.
 - [Deployment](deployment.md) — real diode transfer, systemd units, hardening.
 - [Ecosystems](ecosystems/index.md) — per-ecosystem collect payloads and client setup.
