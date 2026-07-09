@@ -94,7 +94,10 @@
   .code code { font-family: ui-monospace, monospace; white-space: pre; font-size: .8rem; color: #c7cedb; }
   .copy { position: absolute; top: .4rem; right: .4rem; background: #2a2f3a; color: #c7cedb; border: 1px solid #3a4150; border-radius: 5px; padding: .22rem .55rem; font-size: .72rem; cursor: pointer; font-family: system-ui, sans-serif; }
   .copy:hover { background: #333a48; }
-  .delete-upload { margin-top: .9rem; background: #2e1416; color: #ff9ea3; border: 1px solid #7f2a30; border-radius: 6px; padding: .45rem .9rem; cursor: pointer; font: inherit; }
+  .upload-actions { display: flex; gap: .6rem; margin-top: .9rem; flex-wrap: wrap; }
+  .upload-download { display: inline-block; background: #1f6f43; color: #eafff2; border: 1px solid #2b8f59; border-radius: 6px; padding: .45rem .9rem; text-decoration: none; font: inherit; }
+  .upload-download:hover { background: #26824f; }
+  .delete-upload { background: #2e1416; color: #ff9ea3; border: 1px solid #7f2a30; border-radius: 6px; padding: .45rem .9rem; cursor: pointer; font: inherit; }
   .delete-upload:hover:enabled { background: #3a181b; }
   .delete-upload:disabled { opacity: .6; cursor: default; }
 </style>

@@ -318,10 +318,8 @@ async function selectLeaf(el, node) {
             throw new Error(`HTTP ${resp.status}`);
         }
         renderDetail((await resp.json()));
-        // Uploaded files are the one deletable kind of content: operator-owned,
-        // not a mirrored artifact some client build depends on staying immutable.
         if (currentView === "uploads") {
-            panel.appendChild(uploadDeleteButton(node.path));
+            panel.appendChild(uploadActions(node.path));
         }
     }
     catch (err) {
@@ -335,6 +333,25 @@ function splitUploadPath(path) {
         return ["", ""];
     }
     return [path.slice(0, i), path.slice(i + 1)];
+}
+// uploadActions is the action row under an uploaded file's details: a plain
+// download link for the file's public URL, and the delete button. Uploaded
+// files are the one deletable kind of content — operator-owned, not a
+// mirrored artifact some client build depends on staying immutable.
+function uploadActions(treePath) {
+    const row = document.createElement("div");
+    row.className = "upload-actions";
+    const [folder, name] = splitUploadPath(treePath);
+    if (folder && name) {
+        const dl = document.createElement("a");
+        dl.className = "upload-download";
+        dl.href = `/uploads/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`;
+        dl.setAttribute("download", name);
+        dl.textContent = "Download";
+        row.appendChild(dl);
+    }
+    row.appendChild(uploadDeleteButton(treePath));
+    return row;
 }
 // uploadDeleteButton removes one uploaded file from the repository, after a
 // confirmation. The tree reloads afterwards, so an emptied folder disappears
