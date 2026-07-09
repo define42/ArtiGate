@@ -301,6 +301,9 @@ func watchRunMessage(res ExportResult) string {
 		return "no bundle produced"
 	}
 	msg := fmt.Sprintf("bundle %s: %d unit(s)", res.BundleID, res.ExportedModules)
+	if res.PriorFiles > 0 {
+		msg += fmt.Sprintf(", %d file(s) already forwarded", res.PriorFiles)
+	}
 	if n := len(res.SkippedModules); n > 0 {
 		msg += fmt.Sprintf(", %d skipped", n)
 	}

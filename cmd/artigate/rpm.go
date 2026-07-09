@@ -543,6 +543,10 @@ type RpmCollectRequest struct {
 	// resolve). List architectures explicitly to override, e.g. add "i686".
 	// The filter applies to every repo in the collect.
 	Architectures []string `json:"architectures,omitempty"`
+	// Force disables export dedup for this collect: every .rpm is downloaded
+	// and packed even when already forwarded, producing a full self-contained
+	// bundle (for disaster recovery or rebuilding a high side from scratch).
+	Force bool `json:"force,omitempty"`
 }
 
 type rpmMirrorConfig struct {
@@ -592,9 +596,10 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	var mirrors []RpmMirror
 	var files []ManifestFile
 	seenFile := map[string]bool{}
+	prior := s.priorFileCheck(streamRpm, req.Force)
 	emitProgress(ctx, "Mirroring %d RPM repo(s)…", len(configs))
 	for _, cfg := range configs {
-		mirror, mf, err := s.mirrorRpmRepo(ctx, cfg, stageRoot, arches, newest)
+		mirror, mf, err := s.mirrorRpmRepo(ctx, cfg, stageRoot, arches, newest, prior)
 		if err != nil {
 			return ExportResult{}, err
 		}
@@ -611,7 +616,7 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	}
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	return s.exportIfNew(ctx, streamRpm, files, func(seq int64) (ExportResult, error) {
+	return s.exportIfNew(ctx, streamRpm, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeRpmBundle(ctx, seq, stageRoot, files, mirrors)
 	})
 }
@@ -640,7 +645,7 @@ func (s *LowServer) downloadRpmMetadata(ctx context.Context, base, name string, 
 	return files, repodata, primaryRel, nil
 }
 
-func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stageRoot string, arches []string, newestOnly bool) (RpmMirror, []ManifestFile, error) {
+func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stageRoot string, arches []string, newestOnly bool, prior func(path, sha256 string) bool) (RpmMirror, []ManifestFile, error) {
 	base := strings.TrimRight(cfg.BaseURL, "/")
 
 	emitProgress(ctx, "→ %s: fetching repomd.xml and primary index…", cfg.Name)
@@ -680,6 +685,19 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 	mirror.Packages = pkgs
 	emitProgress(ctx, "  %s: %d package(s) [%s]", cfg.Name, len(pkgs), strings.Join(arches, " "))
 	for i, pkg := range pkgs {
+		// primary.xml already declares each .rpm's SHA-256 and size (the
+		// download below is verified against the same values), so packages
+		// this stream has already forwarded are not downloaded at all — they
+		// become prior manifest references. The metadata files above are
+		// always fetched: they are parsed (and possibly rewritten) locally.
+		if err := validateRelPath(pkg.Location); err != nil {
+			return RpmMirror{}, nil, fmt.Errorf("package %s: unsafe location %q: %w", pkg.Name, pkg.Location, err)
+		}
+		if rel := rpmFileRel(cfg.Name, pkg.Location); pkg.Size > 0 && prior(rel, pkg.SHA256) {
+			emitProgress(ctx, "    ≡ [%d/%d] %s already forwarded (download skipped)", i+1, len(pkgs), path.Base(pkg.Location))
+			files = append(files, ManifestFile{Path: rel, SHA256: pkg.SHA256, Size: pkg.Size, Prior: true})
+			continue
+		}
 		mf, err := s.downloadRpmFile(ctx, base, cfg.Name, pkg.Location, "sha256", pkg.SHA256, stageRoot)
 		if err != nil {
 			return RpmMirror{}, nil, fmt.Errorf("package %s: %w", pkg.Name, err)

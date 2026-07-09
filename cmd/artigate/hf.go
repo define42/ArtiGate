@@ -304,6 +304,10 @@ type hfClient struct {
 	// Authorization header on the cross-host CDN redirects blob downloads
 	// follow, so the token is never leaked downstream.
 	token string
+	// prior reports whether a blob (bundle path + sha256) was already
+	// forwarded on the hf stream, letting the collector skip the download and
+	// emit a prior manifest reference. Nil means never skip.
+	prior func(path, sha256 string) bool
 }
 
 func (s *LowServer) newHFClient() *hfClient {
@@ -405,7 +409,10 @@ func hfManifestMediaType(contentType, bodyType string) string {
 
 // downloadHFBlob streams one blob into the staging blob store, verifying its
 // size and SHA-256 against the manifest's descriptor. Blobs already staged
-// (shared between variants) are skipped.
+// (shared between variants) are skipped, and a blob whose digest this stream
+// has already forwarded is not downloaded at all — it becomes a prior manifest
+// reference (blobs are content-addressed, so the descriptor supplies
+// everything the manifest entry needs).
 func (c *hfClient) downloadHFBlob(ctx context.Context, ref hfRef, desc ociDescriptor, stageRoot string, staged map[string]bool) (ManifestFile, error) {
 	if !containerDigestRE.MatchString(desc.Digest) {
 		return ManifestFile{}, fmt.Errorf("%s: unsupported blob digest %q (only sha256 is supported)", ref, desc.Digest)
@@ -416,6 +423,12 @@ func (c *hfClient) downloadHFBlob(ctx context.Context, ref hfRef, desc ociDescri
 	rel := hfBlobRel(desc.Digest)
 	mf := ManifestFile{Path: rel, SHA256: strings.TrimPrefix(desc.Digest, "sha256:"), Size: desc.Size}
 	if staged[rel] {
+		return mf, nil
+	}
+	if c.prior != nil && c.prior(rel, mf.SHA256) {
+		emitProgress(ctx, "    ≡ blob %s already forwarded (download skipped)", shortDigest(desc.Digest))
+		staged[rel] = true
+		mf.Prior = true
 		return mf, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, hfBlobDownloadTimeout)
@@ -526,12 +539,21 @@ func (c *hfClient) downloadHFRepoFile(ctx context.Context, ref hfRepoRef, commit
 }
 
 // downloadHFRepoLFSFile streams an LFS-backed file straight to its blob path,
-// verifying the upstream SHA-256 and size.
+// verifying the upstream SHA-256 and size. The Hub API declares LFS files'
+// SHA-256 up front, so one this stream has already forwarded is not downloaded
+// at all — it becomes a prior manifest reference. (Non-LFS files carry no
+// upstream hash and are always fetched.)
 func (c *hfClient) downloadHFRepoLFSFile(ctx context.Context, ref hfRepoRef, meta hfRepoFileMeta, rawURL, stageRoot string, staged map[string]bool) (HFRepoFile, ManifestFile, error) {
 	rel := hfBlobRel("sha256:" + meta.LFS)
 	rf := HFRepoFile{Path: meta.Path, SHA256: meta.LFS, Size: meta.Size}
 	mf := ManifestFile{Path: rel, SHA256: meta.LFS, Size: meta.Size}
 	if staged[rel] {
+		return rf, mf, nil
+	}
+	if c.prior != nil && c.prior(rel, meta.LFS) {
+		emitProgress(ctx, "    ≡ %s already forwarded (download skipped)", meta.Path)
+		staged[rel] = true
+		mf.Prior = true
 		return rf, mf, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, hfBlobDownloadTimeout)
@@ -638,6 +660,10 @@ type HFCollectRequest struct {
 	Models      []string `json:"models"`
 	Repos       []string `json:"repos"`
 	RepoExclude []string `json:"repo_exclude"`
+	// Force disables export dedup for this collect: every blob is downloaded
+	// and packed even when already forwarded, producing a full self-contained
+	// bundle (for disaster recovery or rebuilding a high side from scratch).
+	Force bool `json:"force,omitempty"`
 }
 
 func (s *LowServer) HandleHFCollect(ctx context.Context, r *http.Request) (ExportResult, error) {
@@ -679,8 +705,8 @@ func (s *LowServer) CollectHF(ctx context.Context, req HFCollectRequest) (Export
 	defer os.RemoveAll(stageRoot)
 
 	emitProgress(ctx, "Resolving %d reference(s) on Hugging Face…", len(refs)+len(repoRefs))
-	models, files, failed := s.mirrorHFModels(ctx, refs, stageRoot)
-	repos, repoFiles, repoFailed := s.mirrorHFRepos(ctx, repoRefs, req.RepoExclude, stageRoot)
+	models, files, failed := s.mirrorHFModels(ctx, refs, stageRoot, req.Force)
+	repos, repoFiles, repoFailed := s.mirrorHFRepos(ctx, repoRefs, req.RepoExclude, stageRoot, req.Force)
 	files = mergeManifestFiles(files, repoFiles)
 	failed = append(failed, repoFailed...)
 	if len(models)+len(repos) == 0 {
@@ -688,7 +714,7 @@ func (s *LowServer) CollectHF(ctx context.Context, req HFCollectRequest) (Export
 	}
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	res, err := s.exportIfNew(ctx, streamHF, files, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamHF, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeHFBundle(ctx, seq, stageRoot, files, models, repos)
 	})
 	if err != nil {
@@ -752,8 +778,9 @@ func mergeManifestFiles(a, b []ManifestFile) []ManifestFile {
 
 // mirrorHFModels fetches every requested variant into stageRoot, grouping the
 // results by model repository. Per-model failures are collected, not fatal.
-func (s *LowServer) mirrorHFModels(ctx context.Context, refs []hfRef, stageRoot string) ([]HFModel, []ManifestFile, []FailedModule) {
+func (s *LowServer) mirrorHFModels(ctx context.Context, refs []hfRef, stageRoot string, force bool) ([]HFModel, []ManifestFile, []FailedModule) {
 	client := s.newHFClient()
+	client.prior = s.priorFileCheck(streamHF, force)
 	byModel := map[string]*HFModel{}
 	var order []string
 	var files []ManifestFile
@@ -827,11 +854,12 @@ func (c *hfClient) mirrorHFVariant(ctx context.Context, ref hfRef, stageRoot str
 
 // mirrorHFRepos snapshots every requested repository into stageRoot.
 // Per-repository failures are collected, not fatal.
-func (s *LowServer) mirrorHFRepos(ctx context.Context, refs []hfRepoRef, exclude []string, stageRoot string) ([]HFRepo, []ManifestFile, []FailedModule) {
+func (s *LowServer) mirrorHFRepos(ctx context.Context, refs []hfRepoRef, exclude []string, stageRoot string, force bool) ([]HFRepo, []ManifestFile, []FailedModule) {
 	if len(refs) == 0 {
 		return nil, nil, nil
 	}
 	client := s.newHFClient()
+	client.prior = s.priorFileCheck(streamHF, force)
 	staged := map[string]bool{}
 	listed := map[string]bool{}
 	var repos []HFRepo

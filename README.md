@@ -280,19 +280,35 @@ run immediately, or deleted from the same page.
 
 ### Export deduplication
 
-A collect only bundles content it has not already sent. The low side records the
-content hashes it has forwarded, per stream, in a small SQLite index
-(`<root>/exported.db`); when a collect resolves to a file set that is *entirely*
-already-forwarded, no bundle is written and no bundle number is consumed — the
-dashboard (and a schedule's status) simply reports "no new content". So a daily
-schedule over an unchanged upstream stops re-sending bytes the high side already
-has. This runs after the fetch (a wheel's hash is only known once downloaded), so
-it saves diode bandwidth and low-side archive disk, not the upstream fetch
-itself. The index is independent of the re-export archive: re-transmitting a
-bundle never consults or updates it, and if the index is ever unavailable a
-collect simply exports as normal rather than wrongly skipping. (Partial-overlap
-collects still send the whole bundle for now; the high side dedups the
-already-present files by content hash on import.)
+A collect only bundles — and where possible only downloads — content it has not
+already sent. The low side records every forwarded file (bundle path plus
+content hash), per stream, in a small SQLite index (`<root>/exported.db`):
+
+- **Nothing new** — when a collect resolves to a file set that is *entirely*
+  already-forwarded, no bundle is written and no bundle number is consumed; the
+  dashboard (and a schedule's status) simply reports "no new content".
+- **Partly new** — the bundle's archive carries only the new files. The rest are
+  listed in the manifest as *prior* references, which the high side verifies
+  against its accumulated repository instead of receiving again. A daily
+  schedule over a slowly-changing mirror therefore sends only the churn.
+- **Download skip** — collectors whose upstream declares each file's SHA-256
+  before the bytes are fetched (APT `Packages` indexes, RPM `primary.xml`,
+  container image digests, Hugging Face LFS files) check the index first and
+  skip the download entirely. pip-, mvn-, npm-, and go-driven fetches still
+  download as before (their upstreams declare no usable pre-download SHA-256;
+  the Go module cache already avoids re-downloads on its own), and their
+  unchanged files are still deduplicated from the bundle after hashing.
+
+Every collect request accepts `"force": true` to bypass the index and produce a
+full, self-contained bundle — the disaster-recovery path when a high side is
+rebuilt from scratch or bundles were pruned before it caught up. Note that a
+delta bundle imports only on a high side that holds the stream's earlier
+bundles; importing out of order fails with a "prior file … not in the
+repository" error naming the missing content.
+
+The index is independent of the re-export archive: re-transmitting a bundle
+never consults or updates it, and if the index is ever unavailable a collect
+simply downloads and exports as normal rather than wrongly skipping.
 
 ### Status and re-export
 

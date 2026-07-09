@@ -571,7 +571,7 @@ func TestExportIfNewStoppedBeforeExport(t *testing.T) {
 	cancel()
 	called := false
 	_, err := ls.exportIfNew(ctx, streamHF, []ManifestFile{{Path: "hf/x", SHA256: strings.Repeat("a", 64), Size: 1}},
-		func(int64) (ExportResult, error) {
+		false, func(int64) (ExportResult, error) {
 			called = true
 			return ExportResult{}, nil
 		})

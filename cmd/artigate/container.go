@@ -449,6 +449,10 @@ func parseContainerRegistryOverrides(spec string) (map[string]string, error) {
 type containerClient struct {
 	ls     *LowServer
 	tokens map[string]string // "<registry>/<repository>" -> Bearer token
+	// prior reports whether a blob (bundle path + sha256) was already
+	// forwarded on the containers stream, letting the collector skip the
+	// download and emit a prior manifest reference. Nil means never skip.
+	prior func(path, sha256 string) bool
 }
 
 func (s *LowServer) newContainerClient() *containerClient {
@@ -747,8 +751,11 @@ func nextTagPage(link string) string {
 
 // downloadContainerBlob streams one blob into the staging blob store,
 // verifying its size and SHA-256 against the manifest's descriptor. Blobs
-// already staged (shared layers) are skipped.
-func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRef, desc ociDescriptor, stageRoot string, seen map[string]bool) (ManifestFile, error) {
+// already staged (shared layers) are skipped. When allowPrior is set, a blob
+// whose digest this stream has already forwarded is not downloaded at all —
+// it becomes a prior manifest reference (blobs are content-addressed, so the
+// descriptor supplies everything the manifest entry needs).
+func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRef, desc ociDescriptor, stageRoot string, seen map[string]bool, allowPrior bool) (ManifestFile, error) {
 	if !containerDigestRE.MatchString(desc.Digest) {
 		return ManifestFile{}, fmt.Errorf("%s: unsupported blob digest %q (only sha256 is supported)", ref, desc.Digest)
 	}
@@ -758,6 +765,12 @@ func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRe
 	rel := containerBlobRel(desc.Digest)
 	mf := ManifestFile{Path: rel, SHA256: strings.TrimPrefix(desc.Digest, "sha256:"), Size: desc.Size}
 	if seen[rel] {
+		return mf, nil
+	}
+	if allowPrior && c.prior != nil && c.prior(rel, mf.SHA256) {
+		emitProgress(ctx, "    ≡ blob %s already forwarded (download skipped)", shortDigest(desc.Digest))
+		seen[rel] = true
+		mf.Prior = true
 		return mf, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
@@ -818,6 +831,10 @@ func writeVerifiedBlob(abs string, r io.Reader, wantSize int64, wantSHA string) 
 // "ghcr.io/org/app@sha256:...". Only linux/amd64 is mirrored.
 type ContainerCollectRequest struct {
 	Images []string `json:"images"`
+	// Force disables export dedup for this collect: every blob is downloaded
+	// and packed even when already forwarded, producing a full self-contained
+	// bundle (for disaster recovery or rebuilding a high side from scratch).
+	Force bool `json:"force,omitempty"`
 }
 
 func (s *LowServer) HandleContainerCollect(ctx context.Context, r *http.Request) (ExportResult, error) {
@@ -858,13 +875,13 @@ func (s *LowServer) CollectContainers(ctx context.Context, req ContainerCollectR
 	defer os.RemoveAll(stageRoot)
 
 	emitProgress(ctx, "Resolving %d image reference(s) (linux/amd64)…", len(refs))
-	repos, files, failed := s.mirrorContainerImages(ctx, refs, stageRoot)
+	repos, files, failed := s.mirrorContainerImages(ctx, refs, stageRoot, req.Force)
 	if len(repos) == 0 {
 		return ExportResult{}, fmt.Errorf("no images could be fetched: %s", summarizeFailures(failed))
 	}
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	res, err := s.exportIfNew(ctx, streamContainers, files, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamContainers, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeContainerBundle(ctx, seq, stageRoot, files, repos)
 	})
 	if err != nil {
@@ -902,8 +919,9 @@ func parseContainerCollectRefs(images []string) ([]imageRef, error) {
 
 // mirrorContainerImages fetches every requested image into stageRoot, grouping
 // the results by repository. Per-image failures are collected, not fatal.
-func (s *LowServer) mirrorContainerImages(ctx context.Context, refs []imageRef, stageRoot string) ([]ContainerRepo, []ManifestFile, []FailedModule) {
+func (s *LowServer) mirrorContainerImages(ctx context.Context, refs []imageRef, stageRoot string, force bool) ([]ContainerRepo, []ManifestFile, []FailedModule) {
 	client := s.newContainerClient()
+	client.prior = s.priorFileCheck(streamContainers, force)
 	byRepo := map[string]*ContainerRepo{}
 	var order []string
 	var files []ManifestFile
@@ -1014,11 +1032,13 @@ func (c *containerClient) downloadImageBlobs(ctx context.Context, ref imageRef, 
 	var blobs []ContainerBlob
 	var files []ManifestFile
 	inImage := map[string]bool{}
-	for _, desc := range append([]ociDescriptor{m.Config}, m.Layers...) {
+	for i, desc := range append([]ociDescriptor{m.Config}, m.Layers...) {
 		if strings.Contains(desc.MediaType, "foreign") {
 			return nil, nil, fmt.Errorf("%s: layer %s is a foreign (non-distributable) layer", ref, desc.Digest)
 		}
-		mf, err := c.downloadContainerBlob(ctx, ref, desc, stageRoot, seenFile)
+		// The config blob (index 0) is read back from staging for the platform
+		// check, so only layers may skip their download as prior content.
+		mf, err := c.downloadContainerBlob(ctx, ref, desc, stageRoot, seenFile, i > 0)
 		if err != nil {
 			return nil, nil, err
 		}
