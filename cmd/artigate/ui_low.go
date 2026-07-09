@@ -686,9 +686,10 @@ function outboundCell(inOutbound){
 // the "is this an ecosystem page" test.
 const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers',hf:'hf'};
 function setView(view){
-  for(const v of ['overview','go','python','maven','npm','apt','rpm','containers','hf','status']){
-    document.getElementById('view-'+v).hidden = (v!==view);
-  }
+  // The sections themselves are the source of truth (every <section class="view">
+  // has id "view-<name>"), so a newly added page can never be missing here and
+  // render blank.
+  document.querySelectorAll('section.view').forEach(s=>{ s.hidden = (s.id!=='view-'+view); });
   document.querySelectorAll('nav button[data-view]').forEach(b=>{
     b.classList.toggle('active', b.dataset.view===view);
   });
