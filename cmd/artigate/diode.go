@@ -195,7 +195,7 @@ func writeStreamAtomicLimit(dst string, r io.Reader, limit int64) (int64, error)
 	closeErr := f.Close()
 	if err := firstErr(syncErr, closeErr); err != nil {
 		_ = os.Remove(tmp)
-		return 0, err
+		return n, err
 	}
 	if err := os.Rename(tmp, dst); err != nil {
 		_ = os.Remove(tmp)

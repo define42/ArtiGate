@@ -110,7 +110,10 @@ func TestHighDiodeIngest(t *testing.T) {
 	}
 
 	// A declared oversized body is rejected before anything reaches disk.
-	req, _ := http.NewRequest(http.MethodPut, "/diode/hf-bundle-000002.tar.gz", strings.NewReader("x")) //nolint:noctx // test request
+	req, err := http.NewRequest(http.MethodPut, "/diode/hf-bundle-000002.tar.gz", strings.NewReader("x")) //nolint:noctx // test request
+	if err != nil {
+		t.Fatal(err)
+	}
 	req.Header.Set("Authorization", "Bearer "+hs.cfg.DiodeToken)
 	req.ContentLength = diodeMaxUploadBytes + 1
 	rec := httptest.NewRecorder()
