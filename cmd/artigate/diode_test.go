@@ -145,10 +145,13 @@ func TestWriteStreamAtomicLimitRejectsOversizedBody(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := writeStreamAtomicLimit(dst, strings.NewReader("123456789"), 8)
+	n, err := writeStreamAtomicLimit(dst, strings.NewReader("123456789"), 8)
 	var maxBytesErr *http.MaxBytesError
 	if !errors.As(err, &maxBytesErr) {
 		t.Fatalf("writeStreamAtomicLimit error = %v, want MaxBytesError", err)
+	}
+	if n != 9 {
+		t.Fatalf("writeStreamAtomicLimit wrote %d bytes, want 9", n)
 	}
 	if maxBytesErr.Limit != 8 {
 		t.Fatalf("MaxBytesError limit = %d, want 8", maxBytesErr.Limit)
