@@ -700,15 +700,9 @@ func httpGetBytes(ctx context.Context, rawURL string, limit int64) ([]byte, erro
 // partial file is removed. It returns the file's SHA-256 and size for the
 // bundle manifest.
 func downloadVerifiedFile(ctx context.Context, rawURL, abs string, wantSize int64, checksumType, checksum string) (string, int64, error) {
-	verifier, err := newRepoHash(checksumType)
+	verifier, manifestSHA, writers, err := newDownloadHashers(checksumType)
 	if err != nil {
 		return "", 0, err
-	}
-	manifestSHA := verifier
-	writers := []io.Writer{verifier}
-	if algo := strings.ToLower(strings.TrimSpace(checksumType)); algo != "" && algo != "sha256" {
-		manifestSHA = sha256.New()
-		writers = append(writers, manifestSHA)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
@@ -732,37 +726,59 @@ func downloadVerifiedFile(ctx context.Context, rawURL, abs string, wantSize int6
 	if err != nil {
 		return "", 0, err
 	}
-	total := wantSize
-	if total <= 0 {
-		total = resp.ContentLength
-	}
 	limit := wantSize
 	if limit <= 0 {
 		limit = maxMirroredFileBytes
 	}
+	total := wantSize
+	if total <= 0 {
+		total = resp.ContentLength
+	}
 	r := newProgressReader(ctx, resp.Body, dlNameFromURL(rawURL), total)
 	n, copyErr := io.Copy(io.MultiWriter(append(writers, f)...), io.LimitReader(r, limit+1))
-	err = errors.Join(copyErr, f.Close())
-	if err != nil {
-		err = fmt.Errorf("GET %s: %w", rawURL, err)
+	if err := errors.Join(copyErr, f.Close()); err != nil {
+		_ = os.Remove(abs)
+		return "", 0, fmt.Errorf("GET %s: %w", rawURL, err)
 	}
-	if err == nil {
-		switch {
-		case wantSize > 0 && n != wantSize:
-			err = fmt.Errorf("size mismatch: got %d want %d", n, wantSize)
-		case wantSize <= 0 && n > limit:
-			err = fmt.Errorf("response exceeds the %s cap", formatBytes(limit))
-		default:
-			if got := hex.EncodeToString(verifier.Sum(nil)); !strings.EqualFold(got, strings.TrimSpace(checksum)) {
-				err = fmt.Errorf("%s mismatch: got %s want %s", orDefault(strings.ToLower(checksumType), "sha256"), got, checksum)
-			}
-		}
-	}
-	if err != nil {
+	if err := checkDownloadResult(n, wantSize, limit, verifier, checksumType, checksum); err != nil {
 		_ = os.Remove(abs)
 		return "", 0, err
 	}
 	return hex.EncodeToString(manifestSHA.Sum(nil)), n, nil
+}
+
+// newDownloadHashers builds the hashers a streamed download writes through: a
+// verifier for the repo-declared checksum type, and the SHA-256 recorded in
+// the bundle manifest. When the repo checksum already is SHA-256 the two are
+// the same hasher; otherwise a second SHA-256 is added.
+func newDownloadHashers(checksumType string) (verifier, manifestSHA hash.Hash, writers []io.Writer, err error) {
+	verifier, err = newRepoHash(checksumType)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	manifestSHA = verifier
+	writers = []io.Writer{verifier}
+	if algo := strings.ToLower(strings.TrimSpace(checksumType)); algo != "" && algo != "sha256" {
+		manifestSHA = sha256.New()
+		writers = append(writers, manifestSHA)
+	}
+	return verifier, manifestSHA, writers, nil
+}
+
+// checkDownloadResult validates a completed stream: the byte count against the
+// index-declared size (or the cap when none was declared), then the accumulated
+// checksum against the repo-declared value.
+func checkDownloadResult(n, wantSize, limit int64, verifier hash.Hash, checksumType, checksum string) error {
+	switch {
+	case wantSize > 0 && n != wantSize:
+		return fmt.Errorf("size mismatch: got %d want %d", n, wantSize)
+	case wantSize <= 0 && n > limit:
+		return fmt.Errorf("response exceeds the %s cap", formatBytes(limit))
+	}
+	if got := hex.EncodeToString(verifier.Sum(nil)); !strings.EqualFold(got, strings.TrimSpace(checksum)) {
+		return fmt.Errorf("%s mismatch: got %s want %s", orDefault(strings.ToLower(checksumType), "sha256"), got, checksum)
+	}
+	return nil
 }
 
 // newRepoHash returns the hash implementing a repo-declared checksum type.

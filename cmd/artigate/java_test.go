@@ -211,7 +211,10 @@ func TestRejectMavenSnapshots(t *testing.T) {
 	if err := rejectMavenSnapshots(ok); err != nil {
 		t.Errorf("rejectMavenSnapshots(release) = %v, want nil", err)
 	}
-	bad := append(ok, MavenArtifact{GroupID: "c", ArtifactID: "d", Version: "2.0-SNAPSHOT"})
+	bad := []MavenArtifact{
+		{GroupID: "a", ArtifactID: "b", Version: "1.0"},
+		{GroupID: "c", ArtifactID: "d", Version: "2.0-SNAPSHOT"},
+	}
 	if err := rejectMavenSnapshots(bad); err == nil || !strings.Contains(err.Error(), "c:d:2.0-SNAPSHOT") {
 		t.Errorf("rejectMavenSnapshots(snapshot) = %v, want error naming c:d:2.0-SNAPSHOT", err)
 	}

@@ -603,32 +603,46 @@ type uploadedPom struct {
 	Deps       []pomDependency
 }
 
-// pomIgnoredElements are top-level project elements with no resolution or
-// execution semantics; they are dropped from the regenerated project.
-// distributionManagement only affects deploy, which never runs here.
-var pomIgnoredElements = map[string]bool{
-	"modelVersion": true, "name": true, "description": true, "url": true,
-	"inceptionYear": true, "organization": true, "licenses": true,
-	"developers": true, "contributors": true, "mailingLists": true,
-	"scm": true, "issueManagement": true, "ciManagement": true,
-	"distributionManagement": true, "prerequisites": true,
+// pomElementIgnored reports whether a top-level <project> element has no
+// resolution or execution semantics and can be dropped from the regenerated
+// project. distributionManagement only affects deploy, which never runs here.
+func pomElementIgnored(name string) bool {
+	switch name {
+	case "modelVersion", "name", "description", "url", "inceptionYear",
+		"organization", "licenses", "developers", "contributors", "mailingLists",
+		"scm", "issueManagement", "ciManagement", "distributionManagement", "prerequisites":
+		return true
+	}
+	return false
 }
 
-// pomRejectedElements maps forbidden top-level project elements to the reason
-// they are forbidden.
-var pomRejectedElements = map[string]string{
-	"build":              "build plugins and extensions execute code inside Maven during resolution",
-	"reporting":          "reporting plugins execute code inside Maven",
-	"profiles":           "profiles can conditionally activate plugins, repositories, and modules",
-	"repositories":       "resolution sources are fixed by the low side's Maven settings",
-	"pluginRepositories": "resolution sources are fixed by the low side's Maven settings",
-	"modules":            "multi-module builds are not supported; collect each module separately",
+// pomElementRejection returns the reason a forbidden top-level <project>
+// element is rejected, and ok=false for elements that are not on the reject
+// list.
+func pomElementRejection(name string) (string, bool) {
+	switch name {
+	case "build":
+		return "build plugins and extensions execute code inside Maven during resolution", true
+	case "reporting":
+		return "reporting plugins execute code inside Maven", true
+	case "profiles":
+		return "profiles can conditionally activate plugins, repositories, and modules", true
+	case "repositories", "pluginRepositories":
+		return "resolution sources are fixed by the low side's Maven settings", true
+	case "modules":
+		return "multi-module builds are not supported; collect each module separately", true
+	}
+	return "", false
 }
 
-// pomAllowedPackagings are standard packagings whose default lifecycle plugins
+// pomPackagingAllowed reports whether a packaging's default lifecycle plugins
 // Maven resolves without loading custom extensions.
-var pomAllowedPackagings = map[string]bool{
-	"pom": true, "jar": true, "war": true, "ear": true, "ejb": true, "maven-plugin": true,
+func pomPackagingAllowed(packaging string) bool {
+	switch packaging {
+	case "pom", "jar", "war", "ear", "ejb", "maven-plugin":
+		return true
+	}
+	return false
 }
 
 // sanitizeUploadedPom parses an uploaded pom.xml, keeps only validated
@@ -648,7 +662,7 @@ func sanitizeUploadedPom(pomXML string) (string, error) {
 	if packaging = strings.TrimSpace(packaging); packaging == "" {
 		packaging = "jar"
 	}
-	if !pomAllowedPackagings[packaging] {
+	if !pomPackagingAllowed(packaging) {
 		return "", fmt.Errorf("packaging %q is not supported for collection (custom packagings require build extensions)", packaging)
 	}
 
@@ -772,10 +786,10 @@ func (p *uploadedPom) readProjectChild(dec *xml.Decoder, se xml.StartElement) er
 		p.Management = append(p.Management, wrap.Deps...)
 		return nil
 	}
-	if pomIgnoredElements[name] {
+	if pomElementIgnored(name) {
 		return dec.Skip()
 	}
-	if reason, ok := pomRejectedElements[name]; ok {
+	if reason, ok := pomElementRejection(name); ok {
 		return fmt.Errorf("<%s> is not allowed in an uploaded pom.xml: %s", name, reason)
 	}
 	return fmt.Errorf("unsupported element <%s> in uploaded pom.xml: only dependency information (parent, properties, dependencies, dependencyManagement) is honored", name)
@@ -862,7 +876,15 @@ func expandPomProps(s string, props map[string]string) (string, error) {
 	return "", fmt.Errorf("property expansion did not converge in %q (reference cycle?)", s)
 }
 
-var pomDependencyScopes = map[string]bool{"": true, "compile": true, "provided": true, "runtime": true, "test": true}
+// pomScopeAllowed reports whether a plain (non-import) dependency scope is one
+// ArtiGate resolves. The empty scope means Maven's default (compile).
+func pomScopeAllowed(scope string) bool {
+	switch scope {
+	case "", "compile", "provided", "runtime", "test":
+		return true
+	}
+	return false
+}
 
 // validatePomDependency interpolates and validates one dependency. management
 // entries (<dependencyManagement>) additionally allow scope=import BOMs and
@@ -889,49 +911,88 @@ func validatePomDependency(d pomDependency, props map[string]string, management 
 	if !mavenTokenRE.MatchString(d.ArtifactID) {
 		return d, fmt.Errorf("invalid dependency artifactId %q (groupId %s)", d.ArtifactID, d.GroupID)
 	}
-	if d.Scope == "system" {
-		return d, fmt.Errorf("dependency %s: system-scoped dependencies are not allowed (they read files from the low-side host)", where)
+	if err := validatePomScope(d, where, management); err != nil {
+		return d, err
 	}
-	switch {
-	case d.Scope == "import":
-		if !management {
-			return d, fmt.Errorf("dependency %s: scope \"import\" is only valid in <dependencyManagement>", where)
-		}
-		if d.Type != "pom" {
-			return d, fmt.Errorf("BOM import %s must have <type>pom</type>", where)
-		}
-	case !pomDependencyScopes[d.Scope]:
-		return d, fmt.Errorf("dependency %s: unsupported scope %q", where, d.Scope)
+	if err := validatePomVersion(d, where, management); err != nil {
+		return d, err
 	}
-	if d.Version == "" {
-		if management {
-			return d, fmt.Errorf("dependencyManagement entry %s is missing a version", where)
-		}
-	} else if err := validateMavenVersion(d.Version); err != nil {
-		return d, fmt.Errorf("dependency %s: %w", where, err)
+	if err := validatePomDependencyFields(d, where); err != nil {
+		return d, err
 	}
+	if err := validatePomExclusions(&d, props, where); err != nil {
+		return d, err
+	}
+	return d, nil
+}
+
+// validatePomDependencyFields checks the optional token-shaped fields (type,
+// classifier) and the boolean <optional> flag of an interpolated dependency.
+func validatePomDependencyFields(d pomDependency, where string) error {
 	if d.Type != "" && !mavenTokenRE.MatchString(d.Type) {
-		return d, fmt.Errorf("dependency %s: invalid type %q", where, d.Type)
+		return fmt.Errorf("dependency %s: invalid type %q", where, d.Type)
 	}
 	if d.Classifier != "" && !mavenTokenRE.MatchString(d.Classifier) {
-		return d, fmt.Errorf("dependency %s: invalid classifier %q", where, d.Classifier)
+		return fmt.Errorf("dependency %s: invalid classifier %q", where, d.Classifier)
 	}
 	if d.Optional != "" && d.Optional != "true" && d.Optional != "false" {
-		return d, fmt.Errorf("dependency %s: invalid <optional> value %q", where, d.Optional)
+		return fmt.Errorf("dependency %s: invalid <optional> value %q", where, d.Optional)
 	}
+	return nil
+}
+
+// validatePomScope enforces the scope rules: system is forbidden, import is
+// valid only in <dependencyManagement> and only as a pom BOM, and every other
+// scope must be a recognized one.
+func validatePomScope(d pomDependency, where string, management bool) error {
+	switch {
+	case d.Scope == "system":
+		return fmt.Errorf("dependency %s: system-scoped dependencies are not allowed (they read files from the low-side host)", where)
+	case d.Scope == "import":
+		if !management {
+			return fmt.Errorf("dependency %s: scope \"import\" is only valid in <dependencyManagement>", where)
+		}
+		if d.Type != "pom" {
+			return fmt.Errorf("BOM import %s must have <type>pom</type>", where)
+		}
+	case !pomScopeAllowed(d.Scope):
+		return fmt.Errorf("dependency %s: unsupported scope %q", where, d.Scope)
+	}
+	return nil
+}
+
+// validatePomVersion applies the release-only policy: a management entry must
+// pin a version, a plain dependency may omit it (dependencyManagement or a BOM
+// supplies it), and any present version must satisfy validateMavenVersion.
+func validatePomVersion(d pomDependency, where string, management bool) error {
+	if d.Version == "" {
+		if management {
+			return fmt.Errorf("dependencyManagement entry %s is missing a version", where)
+		}
+		return nil
+	}
+	if err := validateMavenVersion(d.Version); err != nil {
+		return fmt.Errorf("dependency %s: %w", where, err)
+	}
+	return nil
+}
+
+// validatePomExclusions interpolates and validates each <exclusion>, writing
+// the normalized values back into d. "*" wildcards are allowed on either side.
+func validatePomExclusions(d *pomDependency, props map[string]string, where string) error {
 	for i, ex := range d.Exclusions {
 		g, gErr := expandPomProps(strings.TrimSpace(ex.GroupID), props)
 		a, aErr := expandPomProps(strings.TrimSpace(ex.ArtifactID), props)
 		if gErr != nil || aErr != nil {
-			return d, fmt.Errorf("dependency %s: exclusion: %w", where, errors.Join(gErr, aErr))
+			return fmt.Errorf("dependency %s: exclusion: %w", where, errors.Join(gErr, aErr))
 		}
 		g, a = strings.TrimSpace(g), strings.TrimSpace(a)
 		if (g != "*" && !mavenTokenRE.MatchString(g)) || (a != "*" && !mavenTokenRE.MatchString(a)) {
-			return d, fmt.Errorf("dependency %s: invalid exclusion %q:%q", where, g, a)
+			return fmt.Errorf("dependency %s: invalid exclusion %q:%q", where, g, a)
 		}
 		d.Exclusions[i] = pomExclusion{GroupID: g, ArtifactID: a}
 	}
-	return d, nil
+	return nil
 }
 
 // parentAsBOMImport converts <parent> into a scope=import BOM entry. Importing
