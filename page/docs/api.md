@@ -140,9 +140,9 @@ Content-Type: application/json
 | Field | Type | Notes |
 |---|---|---|
 | `coordinates` | `[]string` | Each `groupId:artifactId:version` |
-| `pom_xml` | string | A full pom.xml; **when set, `coordinates` is ignored** (resolved via `mvn -B dependency:go-offline`) |
+| `pom_xml` | string | A full pom.xml; **when set, `coordinates` is ignored**. Only its dependency information (parent, properties, dependencies, dependencyManagement) is extracted into a sanitized project for `mvn -B dependency:go-offline`; `<build>`, `<profiles>`, `<repositories>`, and unknown elements are rejected |
 
-Both empty → error `"no maven coordinates or pom_xml provided"`. SNAPSHOT artifacts are rejected.
+Both empty → error `"no maven coordinates or pom_xml provided"`. SNAPSHOT and dynamic/range versions are rejected.
 
 ---
 

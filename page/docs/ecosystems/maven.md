@@ -46,10 +46,26 @@ The request body is JSON (`MavenCollectRequest`), capped at **8 MiB**:
 | Field | Type | Meaning |
 |---|---|---|
 | `coordinates` | `[]string` | One `groupId:artifactId:version` per entry |
-| `pom_xml` | `string` | A complete `pom.xml` to resolve as-is |
+| `pom_xml` | `string` | A complete `pom.xml`; only its dependency information is used — see [Uploaded `pom.xml` sanitization](#uploaded-pomxml-sanitization) |
 
 !!! warning "`pom_xml` wins; `coordinates` is ignored when it is set"
     If `pom_xml` is non-empty (after trimming whitespace), `coordinates` is ignored **entirely**. Provide one or the other. If neither is supplied the collect fails with `no maven coordinates or pom_xml provided`.
+
+### Uploaded `pom.xml` sanitization
+
+A full POM is a build program, not just a dependency list: `<build>` extensions and plugins are **loaded and executed inside the `mvn` process** during resolution, and `<repositories>`/`<pluginRepositories>` would pull artifacts from caller-chosen hosts into the signed bundle. An uploaded `pom.xml` is therefore **never handed to Maven verbatim**. ArtiGate parses it, keeps a strict dependency-only subset, re-validates every value against the coordinate and [version policy](#version-policy), and regenerates the synthetic project Maven actually resolves — Maven never parses caller-supplied bytes.
+
+| Elements | Treatment |
+|---|---|
+| `packaging` (standard packagings: `pom`, `jar`, `war`, `ear`, `ejb`, `maven-plugin`), `properties`, `dependencies`, `dependencyManagement`, `parent` | **Extracted.** `${…}` property references in coordinates are interpolated by ArtiGate (properties themselves are then discarded). `<parent>` is translated into a `scope=import` BOM entry, which supplies the parent's `dependencyManagement` — what versionless dependencies need — without inheriting its `<build>`. |
+| `name`, `description`, `url`, `licenses`, `developers`, `scm`, and other purely informational elements | **Ignored** (dropped). |
+| `build`, `reporting`, `profiles`, `repositories`, `pluginRepositories`, `modules`, `<!DOCTYPE …>` directives, `scope=system` dependencies, custom packagings — and **any element not listed above** (fail closed) | **Rejected** with an explanatory error. |
+
+Consequences worth knowing:
+
+- SNAPSHOT and dynamic/range versions in an uploaded pom are now rejected **at input time**, same as the coordinates path (the post-resolution SNAPSHOT check remains as a backstop for transitively resolved artifacts).
+- Build plugins declared in your pom are not resolved for mirroring (declaring them would require honoring `<build>`). The default lifecycle plugins for the declared packaging still are, via `dependency:go-offline`. To mirror a specific plugin, request it as a coordinate.
+- Property references that cannot be resolved from the pom's own `<properties>` (including `${env.*}` and `${settings.*}`) fail the collect — pin the value instead.
 
 Drive it directly with `curl`:
 
@@ -92,8 +108,7 @@ The release-only policy is enforced on every coordinate before resolution:
 | not matching `^[A-Za-z0-9._-]+$` | rejected — `invalid version` |
 | e.g. `2.0.16`, `33.2.1-jre` | accepted |
 
-!!! warning "An uploaded `pom.xml` bypasses input validation"
-    Coordinate-level validation only runs on the `coordinates` path. An uploaded `pom_xml` is passed to Maven **verbatim** — it is not scanned for `SNAPSHOT` or range versions at input time. The only backstop on that path is a post-resolution check that rejects any resolved artifact whose version contains `SNAPSHOT`. A range in an uploaded pom that resolves to a concrete release will pass. Pin exact release versions in poms you upload.
+The same policy applies to every dependency extracted from an uploaded `pom.xml` (after property interpolation) — see [Uploaded `pom.xml` sanitization](#uploaded-pomxml-sanitization). A post-resolution check additionally rejects any **transitively** resolved artifact whose version contains `SNAPSHOT`.
 
 ### Resolution internals
 
@@ -226,8 +241,8 @@ Any Maven collect can be turned into a recurring **watch** so an unchanged upstr
 
 ## Limitations
 
-- **Release, exact versions only.** `SNAPSHOT`, `LATEST`, `RELEASE`, `1.+`, and `[1.0,2.0)` are rejected on the coordinate path.
-- **Uploaded `pom.xml` is trusted verbatim** — not scanned for `SNAPSHOT`/range at input; only what actually resolves is re-checked (for `SNAPSHOT` only).
+- **Release, exact versions only.** `SNAPSHOT`, `LATEST`, `RELEASE`, `1.+`, and `[1.0,2.0)` are rejected on both input paths.
+- **Uploaded `pom.xml` is reduced to dependency information.** `build`, `profiles`, `repositories`, multi-module `modules`, and `scope=system` are rejected; your build plugins are not mirrored from a pom (request them as coordinates). See [Uploaded `pom.xml` sanitization](#uploaded-pomxml-sanitization).
 - **`coordinates` is silently ignored** whenever `pom_xml` is set.
 - **`maven-metadata.xml` is always regenerated** from present `.pom` files; transferred metadata is never bundled or served. A version directory counts only if it holds a `.pom`.
 - **Best-effort version ordering** — cosmetic only.

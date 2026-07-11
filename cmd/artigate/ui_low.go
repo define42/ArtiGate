@@ -236,7 +236,7 @@ const lowUIHTML = `<!DOCTYPE html>
   <section class="view" id="view-maven" hidden>
   <div class="card">
     <h2>Mirror Maven artifacts</h2>
-    <p class="hint">List Maven coordinates (one <code>groupId:artifactId:version</code> per line) or upload a <code>pom.xml</code>. ArtiGate runs <code>mvn dependency:go-offline</code> to resolve the full closure (including plugins) and writes it to a signed bundle, the same as POSTing to <code>/admin/maven/collect</code>. Release versions only &mdash; SNAPSHOTs and version ranges are rejected.</p>
+    <p class="hint">List Maven coordinates (one <code>groupId:artifactId:version</code> per line) or upload a <code>pom.xml</code>. Only the pom's dependency information is used (parent as a BOM import, properties, dependencies, dependencyManagement) &mdash; <code>&lt;build&gt;</code>, <code>&lt;profiles&gt;</code>, and <code>&lt;repositories&gt;</code> are rejected, so a pom can never execute code through Maven. ArtiGate runs <code>mvn dependency:go-offline</code> on the sanitized project to resolve the full closure and writes it to a signed bundle, the same as POSTing to <code>/admin/maven/collect</code>. Release versions only &mdash; SNAPSHOTs and version ranges are rejected.</p>
     <form class="gomod-form" onsubmit="collectMaven(event)">
       <label class="filelabel">Coordinates <span class="opt">&mdash; groupId:artifactId:version, one per line</span>
         <textarea id="mvncoords" rows="4" placeholder="org.slf4j:slf4j-api:2.0.16" autocomplete="off"></textarea>
