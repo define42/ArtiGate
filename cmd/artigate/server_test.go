@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -732,6 +733,117 @@ func TestLowServerSequencePersists(t *testing.T) {
 	}
 	if got := reloaded.BundleStatus().Stream(streamGo).NextSequence; got != 2 {
 		t.Errorf("reloaded go NextSequence = %d, want 2", got)
+	}
+}
+
+// TestExportStateSaveFailureDoesNotReuseSequence is the low-side mirror of
+// TestImportStateSaveFailureDoesNotStrandBundle, guarding the opposite
+// invariant: a sequence number must never be reused once a signed bundle for
+// it was written to the export dir (it may already have crossed the diode).
+// The bundle is written before the sequence claim is persisted, so a failed
+// state save followed by a restart leaves low-state.json still pointing at
+// the claimed number; the naive counter would hand it out again and silently
+// overwrite the original signed bundle in both the export dir and the
+// archive, forking the stream. Allocation must instead skip past any sequence
+// whose bundle already exists on disk.
+func TestExportStateSaveFailureDoesNotReuseSequence(t *testing.T) {
+	_, priv := newTestKeys(t)
+	cfg := LowConfig{
+		Root:            filepath.Join(t.TempDir(), "root"),
+		ExportDir:       filepath.Join(t.TempDir(), "out"),
+		GoBinary:        writeFakeGo(t),
+		UpstreamGOPROXY: "off",
+		GOSUMDB:         "off",
+	}
+	ls, err := NewLowServer(cfg, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ls.Close() }) // idempotent; also closed mid-test for the restart
+	ctx := context.Background()
+	archiveDir := filepath.Join(cfg.Root, "bundles")
+
+	// Point the state file under a path whose parent is a regular file, so the
+	// atomic write fails deterministically (MkdirAll returns ENOTDIR).
+	blocker := filepath.Join(cfg.Root, "state-blocker")
+	writeFile(t, blocker, []byte("x"))
+	ls.statePath = filepath.Join(blocker, "low-state.json")
+
+	// The collect writes and archives bundle 1 in full, then fails to persist
+	// the claim on its sequence number.
+	_, err = ls.CollectGo(ctx, GoCollectRequest{Modules: []string{"example.com/foo/bar@v1.0.0"}})
+	if err == nil || !strings.Contains(err.Error(), "not persisted") {
+		t.Fatalf("CollectGo with failing state save = %v, want persistence error", err)
+	}
+	if !bundleCompleteInDir(cfg.ExportDir, "go-bundle-000001") || !bundleCompleteInDir(archiveDir, "go-bundle-000001") {
+		t.Fatal("bundle 1 must be complete in the export dir and the archive despite the failed save")
+	}
+	// While the process lives, the in-memory counter stays ahead of disk on
+	// purpose (the opposite of the high side's rollback): serving 1 again
+	// in-process would overwrite the bundle that already exists.
+	if got := ls.peekSequence(streamGo); got != 2 {
+		t.Fatalf("in-process next sequence after failed save = %d, want 2", got)
+	}
+
+	manifest1, err := os.ReadFile(filepath.Join(cfg.ExportDir, "go-bundle-000001.manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Restart over the same root: disk state never recorded the claim, so the
+	// counter alone would allocate sequence 1 again.
+	if err := ls.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ls2, err := NewLowServer(cfg, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ls2.Close() })
+
+	// Retrying the same module must ship it under a fresh sequence: the failed
+	// commit never recorded the content as forwarded, so dedup must not skip
+	// it, and allocation must step past the bundle already on disk.
+	res, err := ls2.CollectGo(ctx, GoCollectRequest{Modules: []string{"example.com/foo/bar@v1.0.0"}})
+	if err != nil {
+		t.Fatalf("retried CollectGo after restart: %v", err)
+	}
+	if res.Skipped || res.Sequence != 2 || res.BundleID != "go-bundle-000002" {
+		t.Fatalf("retried collect = %+v, want a full export as go-bundle-000002", res)
+	}
+	if got, err := os.ReadFile(filepath.Join(cfg.ExportDir, "go-bundle-000001.manifest.json")); err != nil || !bytes.Equal(got, manifest1) {
+		t.Fatalf("bundle 1 must survive the retry byte-for-byte (err=%v, changed=%v)", err, !bytes.Equal(got, manifest1))
+	}
+	if got := ls2.peekSequence(streamGo); got != 3 {
+		t.Errorf("next sequence after retry = %d, want 3", got)
+	}
+
+	// Both bundles must flow through the diode: the high side imports 1 then 2
+	// in order (re-installing identical content is idempotent), so nothing is
+	// shelved as a duplicate and the stream never wedges on a gap.
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	for _, id := range []string{"go-bundle-000001", "go-bundle-000002"} {
+		for _, suffix := range bundleSuffixes() {
+			b, err := os.ReadFile(filepath.Join(cfg.ExportDir, id+suffix))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(hs.cfg.Landing, id+suffix), b)
+		}
+	}
+	imp, err := hs.ImportNext()
+	if err != nil {
+		t.Fatalf("high-side import of both bundles: %v", err)
+	}
+	if len(imp.ImportedBundles) != 2 {
+		t.Fatalf("imported bundles = %v, want both", imp.ImportedBundles)
+	}
+	if got := hs.state.Imported[streamGo]; got != 2 {
+		t.Errorf("high-side imported sequence = %d, want 2", got)
+	}
+	if !hs.isComplete("example.com/foo/bar", "v1.0.0") {
+		t.Error("module should be complete on the high side")
 	}
 }
 

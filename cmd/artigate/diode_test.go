@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -127,11 +128,27 @@ func TestHighDiodeIngest(t *testing.T) {
 		t.Fatal("stored file does not match the uploaded bytes")
 	}
 
+	// A declared oversized body is rejected before anything reaches disk.
+	req, err := http.NewRequest(http.MethodPut, "/diode/hf-bundle-000002.tar.gz", strings.NewReader("x")) //nolint:noctx // test request
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+hs.cfg.DiodeToken)
+	req.ContentLength = diodeMaxUploadBytes + 1
+	rec := httptest.NewRecorder()
+	hs.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized upload = %d, want 413", rec.Code)
+	}
+	if _, err := os.Stat(filepath.Join(hs.cfg.Landing, "hf-bundle-000002.tar.gz")); !os.IsNotExist(err) {
+		t.Fatalf("oversized upload reached landing directory: %v", err)
+	}
+
 	// Disabled ingest refuses uploads outright.
 	hs2 := newTestHighServer(t, pub)
 	srv2 := httptest.NewServer(hs2)
 	defer srv2.Close()
-	req, _ := http.NewRequest(http.MethodPut, srv2.URL+"/diode/hf-bundle-000001.tar.gz", strings.NewReader("x")) //nolint:noctx // test request
+	req, _ = http.NewRequest(http.MethodPut, srv2.URL+"/diode/hf-bundle-000001.tar.gz", strings.NewReader("x")) //nolint:noctx // test request
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +156,57 @@ func TestHighDiodeIngest(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("disabled ingest = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestWriteStreamAtomicLimitRejectsOversizedBody(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "hf-bundle-000001.tar.gz")
+	const original = "existing bundle"
+	if err := os.WriteFile(dst, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := writeStreamAtomicLimit(dst, strings.NewReader("123456789"), 8)
+	var maxBytesErr *http.MaxBytesError
+	if !errors.As(err, &maxBytesErr) {
+		t.Fatalf("writeStreamAtomicLimit error = %v, want MaxBytesError", err)
+	}
+	if n != 9 {
+		t.Fatalf("writeStreamAtomicLimit wrote %d bytes, want 9", n)
+	}
+	if maxBytesErr.Limit != 8 {
+		t.Fatalf("MaxBytesError limit = %d, want 8", maxBytesErr.Limit)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("oversized upload replaced destination with %q", got)
+	}
+	temps, err := filepath.Glob(dst + ".upload-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temps) != 0 {
+		t.Fatalf("oversized upload left temporary files: %v", temps)
+	}
+
+	exactDst := filepath.Join(dir, "hf-bundle-000002.tar.gz")
+	n, err = writeStreamAtomicLimit(exactDst, strings.NewReader("12345678"), 8)
+	if err != nil {
+		t.Fatalf("exact-limit upload: %v", err)
+	}
+	if n != 8 {
+		t.Fatalf("exact-limit upload wrote %d bytes, want 8", n)
+	}
+	got, err = os.ReadFile(exactDst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "12345678" {
+		t.Fatalf("exact-limit upload stored %q", got)
 	}
 }
 

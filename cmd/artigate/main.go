@@ -1094,18 +1094,54 @@ func (s *LowServer) streamLock(stream string) *sync.Mutex {
 // Callers must hold the stream's streamLock across the matching
 // peek/write/commitSequence so two exporters cannot observe and write the same
 // sequence.
+//
+// A sequence number must never be reused once a complete signed bundle for it
+// exists on disk: the bundle is written and archived before the claim is
+// persisted, so a crash — or a failed state save followed by a restart —
+// leaves low-state.json behind the bundles. The naive counter would then hand
+// the same number out again and silently overwrite a signed bundle that may
+// already have crossed the diode, forking the stream (the high side shelves
+// the replacement as a duplicate and its content is lost). So allocation
+// skips past any sequence whose bundle is already complete in the export dir
+// or the persistent archive; the original bundle stays intact and
+// transferable, and the retry's content ships under the next free number.
+// Incomplete artifacts (a crash mid-write) do not burn the number: such a
+// bundle can never be imported, and burning it would leave a gap the
+// strictly-sequential high side could never fill.
 func (s *LowServer) peekSequence(stream string) int64 {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	seq := s.state.Sequences[stream]
+	s.mu.Unlock()
 	if seq < 1 {
 		seq = 1
+	}
+	first := seq
+	for s.bundleExistsForSequence(stream, seq) {
+		seq++
+	}
+	if seq != first {
+		log.Printf("stream %s: sequence(s) %d-%d already have complete bundles on disk (state save lost before a restart?); continuing at %d", stream, first, seq-1, seq)
 	}
 	return seq
 }
 
+// bundleExistsForSequence reports whether a complete signed bundle for the
+// stream's sequence already exists anywhere durable — still staged in the
+// export dir, retained in the archive, or both.
+func (s *LowServer) bundleExistsForSequence(stream string, seq int64) bool {
+	id := bundleIDFor(stream, seq)
+	return bundleCompleteInDir(s.cfg.ExportDir, id) || bundleCompleteInDir(s.bundleArchiveDir(), id)
+}
+
 // commitSequence advances the stream past seq after a bundle for it has been
 // written successfully.
+//
+// On a failed save the in-memory counter deliberately stays advanced — the
+// opposite of the high side's import counter, which rolls back to match disk.
+// The low side's invariant is never-reuse: the bundle for seq is already on
+// disk, so serving the old number again in this process would overwrite it.
+// Memory running ahead only risks the restart case, which peekSequence covers
+// by skipping past sequences whose bundles already exist.
 func (s *LowServer) commitSequence(stream string, seq int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1150,7 +1186,11 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []Mani
 		return ExportResult{}, err
 	}
 	if err := s.commitSequence(stream, seq); err != nil {
-		return ExportResult{}, err
+		// The bundle exists and is transferable, but the claim on its number
+		// is not durable. peekSequence sees the bundle on disk, so a retry —
+		// even after a restart — allocates a fresh sequence rather than
+		// overwriting this one.
+		return ExportResult{}, fmt.Errorf("bundle %s written, but its sequence claim was not persisted (a retry will use a fresh sequence): %w", bundleIDFor(stream, seq), err)
 	}
 	res.PriorFiles = len(files) - delivered
 	// Record only after the sequence is committed. If the commit fails the
@@ -1331,6 +1371,14 @@ func bundleSuffixes() []string {
 // bundles, a staging dir for Python). Files marked prior are listed in the
 // manifest only — the archive carries just the new content.
 func (s *LowServer) writeBundleArtifacts(ctx context.Context, bundleID, baseDir string, manifestBytes, sig []byte, files []ManifestFile) error {
+	// A complete bundle already carrying this id means its sequence was used:
+	// overwriting would fork the stream into two different signed bundles with
+	// the same number, one of which may already have crossed the diode.
+	// Sequence allocation skips such numbers, so reaching this is a bug — fail
+	// loudly rather than clobber the original.
+	if bundleCompleteInDir(s.cfg.ExportDir, bundleID) || bundleCompleteInDir(s.bundleArchiveDir(), bundleID) {
+		return fmt.Errorf("bundle %s already exists; refusing to overwrite a previously produced signed bundle", bundleID)
+	}
 	if err := os.MkdirAll(s.cfg.ExportDir, 0o755); err != nil {
 		return err
 	}
