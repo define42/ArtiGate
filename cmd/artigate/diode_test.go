@@ -126,7 +126,7 @@ func TestHighDiodeIngest(t *testing.T) {
 	hs2 := newTestHighServer(t, pub)
 	srv2 := httptest.NewServer(hs2)
 	defer srv2.Close()
-	req, _ := http.NewRequest(http.MethodPut, srv2.URL+"/diode/hf-bundle-000001.tar.gz", strings.NewReader("x")) //nolint:noctx // test request
+	req, _ = http.NewRequest(http.MethodPut, srv2.URL+"/diode/hf-bundle-000001.tar.gz", strings.NewReader("x")) //nolint:noctx // test request
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
