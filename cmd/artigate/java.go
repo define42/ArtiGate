@@ -20,7 +20,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/md5"  //nolint:gosec // md5 is only a legacy Maven checksum, not a security control
 	"crypto/sha1" //nolint:gosec // sha1 is only a legacy Maven checksum, not a security control
 	"encoding/hex"
@@ -1203,8 +1202,7 @@ func (s *LowServer) writeMavenBundle(ctx context.Context, seq int64, stageRoot s
 	if err != nil {
 		return ExportResult{}, err
 	}
-	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, files); err != nil {
 		return ExportResult{}, err
 	}
 	return ExportResult{Stream: streamMaven, Sequence: seq, ExportedModules: len(artifacts), BundleID: id}, nil

@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -293,8 +292,7 @@ func (s *LowServer) writeUploadsBundle(ctx context.Context, seq int64, stageRoot
 	if err != nil {
 		return ExportResult{}, err
 	}
-	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, files); err != nil {
 		return ExportResult{}, err
 	}
 	return ExportResult{Stream: streamUploads, Sequence: seq, ExportedModules: len(files), BundleID: id}, nil

@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -241,7 +240,9 @@ type PythonTarget struct {
 	Implementation string   `json:"implementation,omitempty"`
 	ABI            string   `json:"abi,omitempty"`
 	Platforms      []string `json:"platforms,omitempty"`
-	OnlyBinary     bool     `json:"only_binary,omitempty"`
+	// OnlyBinary is retained for API compatibility. Omission and true both use
+	// the mandatory wheels-only policy; false is rejected at validation.
+	OnlyBinary *bool `json:"only_binary,omitempty"`
 }
 
 type PythonCollectRequest struct {
@@ -285,6 +286,9 @@ func validatePythonRequest(req PythonCollectRequest) error {
 	if req.Target == nil {
 		return nil
 	}
+	if req.Target.OnlyBinary != nil && !*req.Target.OnlyBinary {
+		return errors.New("target.only_binary=false is not supported; Python collection is wheels-only")
+	}
 	for _, f := range []struct{ kind, val string }{
 		{"python_version", req.Target.PythonVersion},
 		{"implementation", req.Target.Implementation},
@@ -305,23 +309,20 @@ func validatePythonRequest(req PythonCollectRequest) error {
 	return nil
 }
 
-// pipDownloadArgs builds the argument list for `python -m pip download`. When a
-// cross-target is requested pip requires --only-binary=:all:.
+// pipDownloadArgs builds the argument list for `python -m pip download`.
 func pipDownloadArgs(dest string, req PythonCollectRequest) []string {
 	args := []string{"-m", "pip", "download", "--dest", dest}
 	args = append(args, pipTargetArgs(req.Target)...)
 	return append(args, req.Requirements...)
 }
 
-// pipTargetArgs renders the cross-target flags for `pip download`. pip requires
-// --only-binary=:all: whenever any target selector is supplied.
+// pipTargetArgs renders the mandatory wheels-only flag and any cross-target
+// selectors for `pip download`. This invariant keeps package-controlled source
+// build hooks away from the process that holds ArtiGate signing credentials.
 func pipTargetArgs(t *PythonTarget) []string {
+	args := []string{"--only-binary=:all:"}
 	if t == nil {
-		return nil
-	}
-	var args []string
-	if t.OnlyBinary || len(t.Platforms) > 0 || t.ABI != "" || t.PythonVersion != "" {
-		args = append(args, "--only-binary=:all:")
+		return args
 	}
 	if t.PythonVersion != "" {
 		args = append(args, "--python-version", t.PythonVersion)
@@ -539,8 +540,7 @@ func (s *LowServer) writePythonBundle(ctx context.Context, seq int64, stageRoot 
 	if err != nil {
 		return ExportResult{}, err
 	}
-	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, files); err != nil {
 		return ExportResult{}, err
 	}
 	return ExportResult{Stream: streamPython, Sequence: seq, ExportedModules: len(projects), BundleID: id}, nil

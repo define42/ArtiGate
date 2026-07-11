@@ -184,7 +184,7 @@ if not force:
         markPriorFiles(stream, files)     # flag every already-forwarded file as prior
 if countDelivered(files) == 0:            # nothing new at all
         return {Skipped: true, "no new content since the last export"}   # NO sequence consumed
-seq := peekSequence(stream)     # reads Sequences[stream], clamped ≥1; does NOT advance
+seq := allocateSequence(stream) # skips complete durable bundles; rejects partial same-ID crash residue
 res := write(seq)               # build + sign + write bundle (archive carries non-prior files only)
 commitSequence(stream, seq)     # sets Sequences[stream] = seq+1, persists state
 res.PriorFiles = <prior count>  # reported back to the dashboard / schedule
@@ -194,6 +194,8 @@ uploadBundleIfConfigured()      # HTTP diode, if ARTIGATE_DIODE_URL is set — f
 
 !!! note "Ordering is a correctness invariant"
     Hashes are recorded in the dedup index **only after** the sequence commit succeeds. If the commit fails, the content is not durably part of the stream, so a retry must re-export it rather than see it as "already forwarded" and wrongly skip.
+
+    A completed bundle is durable before its next-sequence counter is saved. After a crash, allocation scans the outbound spool and bundle archive and skips any complete sequence already present. Writers refuse to replace any existing same-ID artifact; partial crash residue must be recovered or removed explicitly, because overwriting it could fork an already-observed sequence while skipping it would create a permanent gap.
 
 Collectors also refuse to burn a sequence on an empty bundle — "the high side would then wait on it forever." The Go collector, for example, fetches *before* allocating a sequence, skips individually-unfetchable modules into `SkippedModules` rather than aborting the batch, and never writes an empty bundle.
 

@@ -3,7 +3,7 @@
 ArtiGate mirrors Python packages by running `pip download` on the low side and serving the resulting wheels through the PEP 503 "Simple Repository API" on the high side. It mirrors **wheels only** — source distributions (sdists) are never served.
 
 !!! note "Wheels only, by design"
-    ArtiGate never mirrors sdists. The high side serves wheels exclusively, so on the collect side a source-only package is either a hard failure (wheels-only mode) or reported as skipped (see [Wheels-only default](#wheels-only-default-and-the-sdist-policy)). This is a deliberate architectural constraint, not a limitation to be worked around: air-gapped installs get prebuilt wheels with no compilers or build backends required.
+    ArtiGate always passes `--only-binary=:all:` to pip and never mirrors sdists. This keeps package-controlled build backends and metadata hooks away from the low-side signing key and credentials. Air-gapped installs receive prebuilt wheels with no compilers or build backends required.
 
 For the shared bundle/diode model see [Architecture](../architecture.md); for running the two sides see [Low side](../low-side.md) and [High side](../high-side.md).
 
@@ -64,7 +64,7 @@ Endpoint: **`POST /admin/python/collect`** (add `?stream=1` for streamed progres
 | `target.implementation` | string | pip `--implementation` (e.g. `cp`). |
 | `target.abi` | string | pip `--abi` (e.g. `cp312`). |
 | `target.platforms` | `[]string` | one pip `--platform` per entry (e.g. `manylinux_2_28_x86_64`). |
-| `target.only_binary` | bool | the "Wheels only" switch — forces `--only-binary=:all:` (see below). |
+| `target.only_binary` | bool | Compatibility field: omit or set `true`. `false` is rejected because wheels-only collection is mandatory. |
 | `force` | bool | bypass the export-dedup index for this collect — pack every wheel even if already forwarded (full, self-contained bundle). |
 
 See the full HTTP surface in the [API reference](../api.md).
@@ -72,41 +72,11 @@ See the full HTTP surface in the [API reference](../api.md).
 !!! warning "Argument-injection defense"
     Every caller-supplied string that becomes a pip argument — each requirement plus `python_version`, `implementation`, `abi`, and each platform — is validated. A value is **rejected if it starts with `-`**, is empty/whitespace-only, or contains a control character. This blocks smuggling a flag in as a requirement (e.g. `-r/etc/passwd` or `--index-url=http://attacker/`). Spaces are allowed on purpose, because PEP 508 environment markers contain them (e.g. `requests; python_version < "3.9"`).
 
-## Wheels-only default and the sdist policy
+## Mandatory wheels-only policy
 
-There are **two distinct mechanisms** — do not conflate them.
+Every invocation includes `--only-binary=:all:`. If any requirement has no compatible wheel, pip fails the collect before ArtiGate writes or signs a bundle. Pin a version that publishes a wheel, select the correct cross-target, or exclude that package.
 
-### 1. Serving-side hard rule (always on)
-
-During collection ArtiGate walks pip's download directory: `*.whl` files are hashed and bundled; **a recognized source-distribution archive (`.tar.gz`, `.tgz`, `.tar.bz2`, `.tar.xz`, `.zip`) is recorded as skipped**, never bundled:
-
-```text
-no wheel available (source distribution only); not mirrored
-```
-
-Skipped items come back in the collect result's `skipped_modules` field so you can pin a version that ships a wheel, or exclude the package.
-
-### 2. The `only_binary` flag / "Wheels only" checkbox
-
-This governs whether pip is even *allowed* to fetch an sdist. The UI checkbox **"Wheels only"** is **checked by default**.
-
-| Mode | pip invocation | Behaviour on an sdist-only package |
-|------|----------------|------------------------------------|
-| **Ticked** (`only_binary: true`) | forces `--only-binary=:all:` | pip refuses to download any package without a compatible wheel, so `pip download` **fails hard** and the whole collect aborts with the pip error. |
-| **Unticked** (`only_binary: false`) | no `--only-binary` forced (unless a cross-target forces it) | pip may download sdists; ArtiGate mirrors the wheels it got and **reports the sdist-only packages as `skipped_modules`**. |
-
-!!! tip "The label spells it out"
-    *"Wheels only — fail if any package has no wheel (uncheck to mirror the wheels available and list the rest)."*
-
-### The "no wheels at all" case
-
-Even in unticked mode, if the download produces **zero** wheels the collect errors rather than writing an empty bundle. If some packages were sdist-only it names them:
-
-```text
-no wheels to mirror; 2 package(s) publish only a source distribution: <names>
-```
-
-Otherwise: `pip download produced no wheels`.
+As defense in depth, ArtiGate also ignores and reports any recognized source-distribution archive (`.tar.gz`, `.tgz`, `.tar.bz2`, `.tar.xz`, `.zip`) produced by a broken or substituted pip executable. Those files are never bundled. If no wheels result, the collect errors rather than writing an empty bundle.
 
 ## Cross-target (a different interpreter or platform)
 
@@ -115,7 +85,7 @@ By default pip downloads wheels for the **low-side host's own** interpreter. To 
 pip renders these in this order:
 
 ```text
---only-binary=:all:              # if forced (see below)
+--only-binary=:all:              # always present
 --python-version 3.12
 --implementation cp
 --abi cp312
@@ -123,18 +93,7 @@ pip renders these in this order:
 --platform manylinux_2_34_x86_64
 ```
 
-### The forcing rule
-
-pip **requires** `--only-binary=:all:` whenever a cross-target selector is used — you cannot build an sdist for a foreign interpreter — so ArtiGate injects it automatically. The exact condition is:
-
-```go
-if t.OnlyBinary || len(t.Platforms) > 0 || t.ABI != "" || t.PythonVersion != "" {
-    args = append(args, "--only-binary=:all:")
-}
-```
-
-!!! warning "`implementation` alone does not force wheels-only"
-    The forcing condition checks `only_binary`, `platforms`, `abi`, and `python_version` — it does **not** include `implementation`. A raw API request of `{"target":{"implementation":"cp"}}` produces `--implementation cp` with **no** `--only-binary=:all:`. In practice this rarely matters: the UI's target builder returns no target at all when every field (including the checkbox) is empty, and the checkbox defaults to checked, so real UI requests almost always carry `only_binary: true`. The UI hint's phrasing — *"any of them forces `--only-binary=:all:`"* — is accurate for the version/abi/platform fields.
+Wheels-only applies equally to native and cross-target collects, including an `implementation`-only target.
 
 ## Internals — how collection runs
 
@@ -228,8 +187,7 @@ Note the mirror is set as `index-url`, not `--extra-index-url`. For scheduled/re
 
 ## Limitations
 
-- **Wheels only, period.** sdist-only packages are never served. They either abort the collect (wheels-only mode) or are reported as `skipped_modules` (unticked mode). If *no* wheels result, the collect errors regardless. Pin a version that ships a wheel, or exclude the package.
-- **`implementation`-only targets don't force wheels-only.** A raw API target that sets only `implementation` omits `--only-binary=:all:` (see the warning above). Minor, but real for API callers.
+- **Wheels only, period.** Sdist-only packages fail collection. Pin a version that ships a compatible wheel, choose the correct target, or exclude the package.
 - **10-minute pip timeout.** A large dependency closure can exceed it; split the requirements or run a narrower target.
 - **No `requires-python` / `yanked` metadata.** These manifest fields exist but are never populated, and the `/simple/` HTML emits no `data-requires-python` or `data-yanked` attributes.
 - **Legacy HTML Simple API only.** ArtiGate serves PEP 503 HTML, not the PEP 691 JSON API. Hashes are attached as live-computed `#sha256=` fragments.

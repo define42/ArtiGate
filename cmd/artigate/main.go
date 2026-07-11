@@ -15,9 +15,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime"
 	"net/http"
 	"os"
@@ -67,6 +70,13 @@ const (
 func knownStreams() []string {
 	return []string{streamGo, streamPython, streamMaven, streamApt, streamRpm, streamContainers, streamNpm, streamHF, streamUploads}
 }
+
+// maxFutureSequenceGap bounds untrusted quarantine state. Normal operation
+// produces consecutive bundles, so ten thousand outstanding predecessors is
+// already far beyond a credible delivery reordering window.
+const maxFutureSequenceGap int64 = 10_000
+
+const manifestSignaturePHPrefix = "ed25519ph:"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
@@ -1117,12 +1127,33 @@ func (s *LowServer) peekSequence(stream string) int64 {
 	}
 	first := seq
 	for s.bundleExistsForSequence(stream, seq) {
+		if seq == math.MaxInt64 {
+			break
+		}
 		seq++
 	}
 	if seq != first {
 		log.Printf("stream %s: sequence(s) %d-%d already have complete bundles on disk (state save lost before a restart?); continuing at %d", stream, first, seq-1, seq)
 	}
 	return seq
+}
+
+// allocateSequence validates the candidate selected from durable state and
+// completed bundles. Any partial same-ID artifact is treated as crash residue
+// requiring operator attention: overwriting it could replace bytes that were
+// already observed, while skipping it would create an unfillable sequence gap.
+func (s *LowServer) allocateSequence(stream string) (int64, error) {
+	seq := s.peekSequence(stream)
+	if seq == math.MaxInt64 {
+		return 0, fmt.Errorf("stream %s exhausted its sequence space", stream)
+	}
+	id := bundleIDFor(stream, seq)
+	for _, dir := range []string{s.cfg.ExportDir, s.bundleArchiveDir()} {
+		if bundleArtifactsExistInDir(dir, id) {
+			return 0, fmt.Errorf("bundle %s has incomplete artifacts in %s; refusing to overwrite crash residue (remove or recover those files before retrying)", id, dir)
+		}
+	}
+	return seq, nil
 }
 
 // bundleExistsForSequence reports whether a complete signed bundle for the
@@ -1180,7 +1211,10 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []Mani
 	if prior := len(files) - delivered; prior > 0 {
 		emitProgress(ctx, "%d of %d file(s) already forwarded; the bundle carries the %d new one(s)", prior, len(files), delivered)
 	}
-	seq := s.peekSequence(stream)
+	seq, err := s.allocateSequence(stream)
+	if err != nil {
+		return ExportResult{}, err
+	}
 	res, err := write(seq)
 	if err != nil {
 		return ExportResult{}, err
@@ -1304,9 +1338,7 @@ func (s *LowServer) writeGoBundle(ctx context.Context, stream string, seq int64,
 	if err != nil {
 		return ExportResult{}, err
 	}
-	sig := ed25519.Sign(s.privateKey, manifestBytes)
-
-	if err := s.writeBundleArtifacts(ctx, id, s.downloadDir, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, s.downloadDir, manifestBytes, files); err != nil {
 		return ExportResult{}, err
 	}
 
@@ -1370,14 +1402,15 @@ func bundleSuffixes() []string {
 // root the manifest file paths are relative to (the Go module cache for Go
 // bundles, a staging dir for Python). Files marked prior are listed in the
 // manifest only — the archive carries just the new content.
-func (s *LowServer) writeBundleArtifacts(ctx context.Context, bundleID, baseDir string, manifestBytes, sig []byte, files []ManifestFile) error {
-	// A complete bundle already carrying this id means its sequence was used:
+func (s *LowServer) writeBundleArtifacts(ctx context.Context, bundleID, baseDir string, manifestBytes []byte, files []ManifestFile) error {
+	// Any bundle artifact already carrying this id means its sequence may have
+	// been observed:
 	// overwriting would fork the stream into two different signed bundles with
 	// the same number, one of which may already have crossed the diode.
 	// Sequence allocation skips such numbers, so reaching this is a bug — fail
 	// loudly rather than clobber the original.
-	if bundleCompleteInDir(s.cfg.ExportDir, bundleID) || bundleCompleteInDir(s.bundleArchiveDir(), bundleID) {
-		return fmt.Errorf("bundle %s already exists; refusing to overwrite a previously produced signed bundle", bundleID)
+	if bundleArtifactsExistInDir(s.cfg.ExportDir, bundleID) || bundleArtifactsExistInDir(s.bundleArchiveDir(), bundleID) {
+		return fmt.Errorf("bundle %s already has artifacts on disk; refusing to overwrite a previously produced bundle", bundleID)
 	}
 	if err := os.MkdirAll(s.cfg.ExportDir, 0o755); err != nil {
 		return err
@@ -1392,10 +1425,20 @@ func (s *LowServer) writeBundleArtifacts(ctx context.Context, bundleID, baseDir 
 	if err := writeBytesAtomic(manifestPath, manifestBytes, 0o644); err != nil {
 		return err
 	}
-	if err := writeBytesAtomic(sigPath, []byte(base64.StdEncoding.EncodeToString(sig)+"\n"), 0o644); err != nil {
+	sig, err := signManifestPH(s.privateKey, manifestBytes)
+	if err != nil {
+		return err
+	}
+	encodedSig := manifestSignaturePHPrefix + base64.StdEncoding.EncodeToString(sig) + "\n"
+	if err := writeBytesAtomic(sigPath, []byte(encodedSig), 0o644); err != nil {
 		return err
 	}
 	return s.archiveBundle(bundleID)
+}
+
+func signManifestPH(privateKey ed25519.PrivateKey, manifestBytes []byte) ([]byte, error) {
+	digest := sha512.Sum512(manifestBytes)
+	return privateKey.Sign(nil, digest[:], &ed25519.Options{Hash: crypto.SHA512})
 }
 
 // bundleArchiveDir is where every produced bundle is retained so re-export can
@@ -1822,8 +1865,11 @@ type HighServer struct {
 	downloadDir string
 	statePath   string
 	mu          sync.Mutex
+	ingestMu    sync.Mutex
 	state       HighState
 	tree        treeCache
+	importKick  chan struct{}
+	importOnce  sync.Once
 }
 
 func runHigh(args []string) {
@@ -1902,11 +1948,45 @@ func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
 		publicKey:   pub,
 		downloadDir: dl,
 		statePath:   filepath.Join(cfg.Root, "import-state.json"),
+		importKick:  make(chan struct{}, 1),
 	}
 	if err := hs.loadState(); err != nil {
 		return nil, err
 	}
 	return hs, nil
+}
+
+// requestImport coalesces any number of HTTP/UDP completion notifications onto
+// one worker and one pending slot. A burst can never create unbounded goroutines.
+func (s *HighServer) requestImport() {
+	s.importOnce.Do(func() {
+		go func() {
+			for range s.importKick {
+				if _, err := s.ImportNext(); err != nil {
+					log.Printf("diode import after landing: %v", err)
+				}
+			}
+		}()
+	})
+	select {
+	case s.importKick <- struct{}{}:
+	default:
+	}
+}
+
+func (s *HighServer) unverifiedTransportBytes() (int64, error) {
+	var total int64
+	for _, dir := range []string{s.cfg.Landing, s.cfg.Quarantine, filepath.Join(s.cfg.Root, "rejected")} {
+		n, err := directoryRegularFileBytes(dir)
+		if err != nil {
+			return 0, err
+		}
+		if n > math.MaxInt64-total {
+			return 0, errors.New("unverified storage size overflow")
+		}
+		total += n
+	}
+	return total, nil
 }
 
 func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -2145,6 +2225,7 @@ func (s *HighServer) importLoop() {
 type ImportResult struct {
 	Imported        bool     `json:"imported"`
 	ImportedBundles []string `json:"imported_bundles,omitempty"`
+	RejectedBundles []string `json:"rejected_bundles,omitempty"`
 	Message         string   `json:"message,omitempty"`
 }
 
@@ -2185,12 +2266,15 @@ func (s *HighServer) ImportStatus() (ImportStatus, error) {
 	return s.importStatusLocked()
 }
 
-// knownStreamsLocked returns every stream that has imported state or bundles
-// waiting in landing/quarantine, sorted for stable output.
+// knownStreamsLocked returns supported streams that have imported state or
+// bundles waiting in landing/quarantine, sorted for stable output. Untrusted
+// filename prefixes can never create importer streams.
 func (s *HighServer) knownStreamsLocked() ([]string, error) {
 	set := map[string]bool{}
 	for stream := range s.state.Imported {
-		set[stream] = true
+		if isKnownStream(stream) {
+			set[stream] = true
+		}
 	}
 	for _, dir := range []string{s.cfg.Landing, s.cfg.Quarantine} {
 		byStream, err := findBundleStreams(dir)
@@ -2198,7 +2282,9 @@ func (s *HighServer) knownStreamsLocked() ([]string, error) {
 			return nil, err
 		}
 		for stream := range byStream {
-			set[stream] = true
+			if isKnownStream(stream) {
+				set[stream] = true
+			}
 		}
 	}
 	streams := make([]string, 0, len(set))
@@ -2221,21 +2307,19 @@ func (s *HighServer) ImportNext() (ImportResult, error) {
 		return ImportResult{}, err
 	}
 
-	// Drain each stream independently: a gap in one stream never blocks another.
-	var imported []string
+	var imported, rejected []string
+	var streamErrors []error
 	for _, stream := range streams {
-		for {
-			next := s.state.Imported[stream] + 1
-			id := bundleIDFor(stream, next)
-			bundleDir, ok := s.findBundleDirLocked(id)
-			if !ok {
-				break
-			}
-			manifest, err := s.importBundleFromDirLocked(bundleDir, stream, id, next)
-			if err != nil {
-				return ImportResult{}, err
-			}
-			imported = append(imported, manifest.BundleID)
+		drained, fatalErr := s.drainStreamLocked(stream)
+		imported = append(imported, drained.imported...)
+		rejected = append(rejected, drained.rejected...)
+		if fatalErr != nil {
+			return ImportResult{
+				Imported: len(imported) > 0, ImportedBundles: imported, RejectedBundles: rejected,
+			}, fatalErr
+		}
+		if drained.operationalErr != nil {
+			streamErrors = append(streamErrors, drained.operationalErr)
 		}
 	}
 
@@ -2243,7 +2327,68 @@ func (s *HighServer) ImportNext() (ImportResult, error) {
 	if err != nil {
 		return ImportResult{}, err
 	}
-	return ImportResult{Imported: len(imported) > 0, ImportedBundles: imported, Message: importWaitMessage(status)}, nil
+	message := importWaitMessage(status)
+	if len(rejected) > 0 {
+		message = fmt.Sprintf("rejected invalid bundle(s): %s; %s", strings.Join(rejected, ", "), message)
+	}
+	result := ImportResult{
+		Imported: len(imported) > 0, ImportedBundles: imported,
+		RejectedBundles: rejected, Message: message,
+	}
+	return result, errors.Join(streamErrors...)
+}
+
+type streamDrainResult struct {
+	imported       []string
+	rejected       []string
+	operationalErr error
+}
+
+// drainStreamLocked imports one stream until it reaches a gap or failure.
+// Invalid bytes are rejected; retryable failures stay in place.
+func (s *HighServer) drainStreamLocked(stream string) (streamDrainResult, error) {
+	var result streamDrainResult
+	for {
+		next := s.state.Imported[stream] + 1
+		id := bundleIDFor(stream, next)
+		bundleDir, ok := s.findBundleDirLocked(id)
+		if !ok {
+			return result, nil
+		}
+		manifest, err := s.importBundleFromDirLocked(bundleDir, stream, id, next)
+		if err == nil {
+			result.imported = append(result.imported, manifest.BundleID)
+			continue
+		}
+		return s.handleStreamImportError(result, bundleDir, id, err)
+	}
+}
+
+func (s *HighServer) handleStreamImportError(result streamDrainResult, bundleDir, id string, err error) (streamDrainResult, error) {
+	var invalid *invalidBundleError
+	if !errors.As(err, &invalid) {
+		result.operationalErr = fmt.Errorf("import %s: %w", id, err)
+		return result, nil
+	}
+	reason := fmt.Sprintf("bundle %s rejected during import: %v", id, err)
+	if moveErr := s.rejectBundleLocked(bundleDir, id, reason); moveErr != nil {
+		return result, fmt.Errorf("%s; additionally failed to move it to rejected/: %w", reason, moveErr)
+	}
+	log.Print(reason)
+	result.rejected = append(result.rejected, id)
+	return result, nil
+}
+
+// invalidBundleError marks bytes that can never become importable without
+// replacement. Operational errors and missing prior delta content are left
+// unmarked so the same signed bundle remains available for retry.
+type invalidBundleError struct{ err error }
+
+func (e *invalidBundleError) Error() string { return e.err.Error() }
+func (e *invalidBundleError) Unwrap() error { return e.err }
+
+func invalidBundle(err error) error {
+	return &invalidBundleError{err: err}
 }
 
 // importWaitMessage summarizes which streams are blocked on a missing bundle.
@@ -2269,10 +2414,13 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 	if !fileExists(manifestPath) || !fileExists(sigPath) || !fileExists(archivePath) {
 		return BundleManifest{}, fmt.Errorf("bundle %s incomplete: need archive, manifest and signature", bundleID)
 	}
+	if err := validateBundleArtifactSizes(archivePath, manifestPath, sigPath); err != nil {
+		return BundleManifest{}, err
+	}
 
 	manifest, err := s.loadVerifiedManifest(manifestPath, sigPath, stream, bundleID, expectedSeq)
 	if err != nil {
-		return BundleManifest{}, err
+		return BundleManifest{}, invalidBundle(err)
 	}
 
 	staging := filepath.Join(s.cfg.Root, "tmp", bundleID)
@@ -2283,7 +2431,7 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 	defer os.RemoveAll(staging)
 
 	if err := extractAndVerifyTarGz(archivePath, staging, manifest.Files); err != nil {
-		return BundleManifest{}, err
+		return BundleManifest{}, invalidBundle(err)
 	}
 	if err := s.installVerifiedBundle(staging, manifest); err != nil {
 		return BundleManifest{}, err
@@ -2296,9 +2444,33 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 	// never searched, wedging the stream there after a restart. On a failed
 	// save, roll back so memory matches disk; the bundle stays in landing and
 	// the next pass retries the whole import (installs are idempotent).
+	if err := s.commitImportedStateLocked(stream, bundleID, manifest.Sequence); err != nil {
+		return BundleManifest{}, err
+	}
+	if err := moveImportedFilesFromDir(bundleDir, filepath.Join(s.cfg.Landing, "imported"), manifest.BundleID); err != nil {
+		log.Printf("move imported files: %v", err)
+	}
+	return manifest, nil
+}
+
+func validateBundleArtifactSizes(paths ...string) error {
+	for _, p := range paths {
+		limit, _ := bundleFileSizeLimit(filepath.Base(p))
+		info, err := os.Stat(p)
+		if err != nil {
+			return err
+		}
+		if info.Size() > limit {
+			return invalidBundle(fmt.Errorf("%s is %s, exceeds %s limit", filepath.Base(p), formatBytes(info.Size()), formatBytes(limit)))
+		}
+	}
+	return nil
+}
+
+func (s *HighServer) commitImportedStateLocked(stream, bundleID string, sequence int64) error {
 	prevSeq, hadStream := s.state.Imported[stream]
 	prevAt := s.state.ImportedAt
-	s.state.Imported[stream] = manifest.Sequence
+	s.state.Imported[stream] = sequence
 	s.state.ImportedAt = time.Now().UTC()
 	if err := s.saveStateLocked(); err != nil {
 		if hadStream {
@@ -2307,30 +2479,49 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 			delete(s.state.Imported, stream)
 		}
 		s.state.ImportedAt = prevAt
-		return BundleManifest{}, fmt.Errorf("bundle %s: files installed but import state was not persisted (will retry): %w", bundleID, err)
+		return fmt.Errorf("bundle %s: files installed but import state was not persisted (will retry): %w", bundleID, err)
 	}
-	if err := moveImportedFilesFromDir(bundleDir, filepath.Join(s.cfg.Landing, "imported"), manifest.BundleID); err != nil {
-		log.Printf("move imported files: %v", err)
-	}
-	return manifest, nil
+	return nil
 }
 
-// loadVerifiedManifest reads the manifest and its detached signature, verifies
-// the signature, and checks the manifest's identifying fields.
+// loadVerifiedManifest verifies new Ed25519ph manifests from a streaming SHA-512
+// digest before loading their bounded JSON. Raw Ed25519 signatures remain
+// readable so bundles archived by older ArtiGate versions can still be replayed.
 func (s *HighServer) loadVerifiedManifest(manifestPath, sigPath, stream, bundleID string, expectedSeq int64) (BundleManifest, error) {
-	manifestBytes, err := os.ReadFile(manifestPath)
+	sigB64, err := readFileLimit(sigPath, diodeMaxSignatureBytes)
 	if err != nil {
 		return BundleManifest{}, err
 	}
-	sigB64, err := os.ReadFile(sigPath)
-	if err != nil {
-		return BundleManifest{}, err
+	sigText := strings.TrimSpace(string(sigB64))
+	prehashed := strings.HasPrefix(sigText, manifestSignaturePHPrefix)
+	if prehashed {
+		sigText = strings.TrimPrefix(sigText, manifestSignaturePHPrefix)
 	}
-	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigB64)))
+	sig, err := base64.StdEncoding.DecodeString(sigText)
 	if err != nil {
 		return BundleManifest{}, fmt.Errorf("decode signature: %w", err)
 	}
-	if !ed25519.Verify(s.publicKey, manifestBytes, sig) {
+	var verifiedDigest []byte
+	if prehashed {
+		verifiedDigest, err = hashFileLimitSHA512(manifestPath, diodeMaxManifestBytes)
+		if err != nil {
+			return BundleManifest{}, err
+		}
+		if err := ed25519.VerifyWithOptions(s.publicKey, verifiedDigest, sig, &ed25519.Options{Hash: crypto.SHA512}); err != nil {
+			return BundleManifest{}, fmt.Errorf("signature verification failed for %s", bundleID)
+		}
+	}
+
+	manifestBytes, err := readFileLimit(manifestPath, diodeMaxManifestBytes)
+	if err != nil {
+		return BundleManifest{}, err
+	}
+	if prehashed {
+		got := sha512.Sum512(manifestBytes)
+		if !bytes.Equal(got[:], verifiedDigest) {
+			return BundleManifest{}, fmt.Errorf("manifest %s changed while it was being verified", bundleID)
+		}
+	} else if !ed25519.Verify(s.publicKey, manifestBytes, sig) {
 		return BundleManifest{}, fmt.Errorf("signature verification failed for %s", bundleID)
 	}
 
@@ -2342,6 +2533,39 @@ func (s *HighServer) loadVerifiedManifest(manifestPath, sigPath, stream, bundleI
 		return BundleManifest{}, err
 	}
 	return manifest, nil
+}
+
+func hashFileLimitSHA512(name string, limit int64) ([]byte, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	h := sha512.New()
+	n, err := io.Copy(h, io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if n > limit {
+		return nil, fmt.Errorf("%s exceeds %s limit", filepath.Base(name), formatBytes(limit))
+	}
+	return h.Sum(nil), nil
+}
+
+func readFileLimit(name string, limit int64) ([]byte, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("%s exceeds %s limit", filepath.Base(name), formatBytes(limit))
+	}
+	return b, nil
 }
 
 // checkManifestFields validates the manifest's type, stream, sequencing, and
@@ -2371,12 +2595,35 @@ func (s *HighServer) quarantineFutureBundlesLocked() error {
 	if err != nil {
 		return err
 	}
+	if err := s.sortLandingStreamsLocked(byStream); err != nil {
+		return err
+	}
+	return s.rejectInvalidQuarantineLocked()
+}
+
+func (s *HighServer) sortLandingStreamsLocked(byStream map[string][]int64) error {
 	for stream, seqs := range byStream {
+		if !isKnownStream(stream) {
+			if err := s.rejectUnsupportedLandingStreamLocked(stream, seqs); err != nil {
+				return err
+			}
+			continue
+		}
 		next := s.state.Imported[stream] + 1
 		for _, seq := range seqs {
 			if err := s.sortLandingBundleLocked(stream, seq, next); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func (s *HighServer) rejectUnsupportedLandingStreamLocked(stream string, seqs []int64) error {
+	for _, seq := range seqs {
+		id := bundleIDFor(stream, seq)
+		if err := s.rejectBundleLocked(s.cfg.Landing, id, fmt.Sprintf("unsupported bundle stream %q", stream)); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2392,12 +2639,56 @@ func (s *HighServer) sortLandingBundleLocked(stream string, seq, next int64) err
 		return nil
 	}
 	switch {
+	case seq > next && seq-next > maxFutureSequenceGap:
+		return s.rejectBundleLocked(s.cfg.Landing, id,
+			fmt.Sprintf("sequence %d is more than %d ahead of next expected sequence %d", seq, maxFutureSequenceGap, next))
 	case seq > next:
 		return moveBundleFiles(s.cfg.Landing, s.cfg.Quarantine, id)
 	case seq <= s.state.Imported[stream]:
 		return moveBundleFiles(s.cfg.Landing, filepath.Join(s.cfg.Landing, "duplicates"), id)
 	}
 	return nil
+}
+
+// rejectInvalidQuarantineLocked also cleans hostile files already placed in
+// quarantine by an older release or by a folder transport.
+func (s *HighServer) rejectInvalidQuarantineLocked() error {
+	byStream, err := findBundleStreams(s.cfg.Quarantine)
+	if err != nil {
+		return err
+	}
+	for stream, seqs := range byStream {
+		next := s.state.Imported[stream] + 1
+		for _, seq := range seqs {
+			if isKnownStream(stream) && !(seq > next && seq-next > maxFutureSequenceGap) {
+				continue
+			}
+			id := bundleIDFor(stream, seq)
+			reason := fmt.Sprintf("unsupported bundle stream %q", stream)
+			if isKnownStream(stream) {
+				reason = fmt.Sprintf("sequence %d is more than %d ahead of next expected sequence %d", seq, maxFutureSequenceGap, next)
+			}
+			if err := s.rejectBundleLocked(s.cfg.Quarantine, id, reason); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// rejectBundleLocked moves every present file for a bundle into a retained
+// rejected directory and writes a bounded operator-readable reason alongside
+// it. The rejected directory is never scanned as import input.
+func (s *HighServer) rejectBundleLocked(srcDir, bundleID, reason string) error {
+	dstDir := filepath.Join(s.cfg.Root, "rejected")
+	if err := moveBundleFiles(srcDir, dstDir, bundleID); err != nil {
+		return err
+	}
+	const maxReason = 4 << 10
+	if len(reason) > maxReason {
+		reason = reason[:maxReason]
+	}
+	return writeBytesAtomic(filepath.Join(dstDir, bundleID+".reason.txt"), []byte(reason+"\n"), 0o644)
 }
 
 func (s *HighServer) findBundleDirLocked(bundleID string) (string, bool) {
@@ -3398,6 +3689,15 @@ func bundleCompleteInDir(dir, bundleID string) bool {
 	return true
 }
 
+func bundleArtifactsExistInDir(dir, bundleID string) bool {
+	for _, suffix := range bundleSuffixes() {
+		if fileExists(filepath.Join(dir, bundleID+suffix)) {
+			return true
+		}
+	}
+	return false
+}
+
 // bundleSizeInDir returns the total size in bytes of the bundle's files present
 // in dir (archive + manifest + signature); missing files simply contribute 0.
 func bundleSizeInDir(dir, bundleID string) int64 {
@@ -3599,24 +3899,30 @@ func missingRanges(start, end int64, present map[int64]bool) []SequenceRange {
 	if end < start {
 		return nil
 	}
-	var out []SequenceRange
-	var cur *SequenceRange
-	for n := start; n <= end; n++ {
-		if present[n] {
-			if cur != nil {
-				out = append(out, *cur)
-				cur = nil
-			}
-			continue
-		}
-		if cur == nil {
-			cur = &SequenceRange{Start: n, End: n}
-		} else {
-			cur.End = n
+	seen := make([]int64, 0, len(present))
+	for seq, ok := range present {
+		if ok && seq >= start && seq <= end {
+			seen = append(seen, seq)
 		}
 	}
-	if cur != nil {
-		out = append(out, *cur)
+	sort.Slice(seen, func(i, j int) bool { return seen[i] < seen[j] })
+
+	var out []SequenceRange
+	cursor := start
+	for _, seq := range seen {
+		if seq < cursor {
+			continue
+		}
+		if seq > cursor {
+			out = append(out, SequenceRange{Start: cursor, End: seq - 1})
+		}
+		if seq == math.MaxInt64 {
+			return out
+		}
+		cursor = seq + 1
+	}
+	if cursor <= end {
+		out = append(out, SequenceRange{Start: cursor, End: end})
 	}
 	return out
 }

@@ -209,18 +209,13 @@ func (c *diodeCatcher) run() {
 
 // onDiodeFileLanded is the catcher→importer bridge: when a landed file
 // completes its bundle, import right away instead of waiting for the next
-// timer tick — the same immediate hand-off the HTTP ingest endpoint does.
-// ImportNext serializes on the server mutex, so a concurrent tick is
-// harmless.
+// timer tick — the same bounded/coalesced hand-off the HTTP ingest endpoint
+// uses.
 func (s *HighServer) onDiodeFileLanded(name string) {
 	if !bundleCompleteInDir(s.cfg.Landing, bundleBaseName(name)) {
 		return
 	}
-	go func() {
-		if _, err := s.ImportNext(); err != nil {
-			log.Printf("diode catch: import after landing: %v", err)
-		}
-	}()
+	s.requestImport()
 }
 
 // bundleBaseName strips a bundle file's suffix ("go-bundle-000042.tar.gz" →

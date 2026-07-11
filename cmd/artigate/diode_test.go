@@ -34,6 +34,8 @@ func TestValidBundleFileName(t *testing.T) {
 		"../hf-bundle-000001.tar.gz", // traversal
 		"HF-bundle-000001.tar.gz",    // uppercase stream
 		"hf-bundle-1.tar.gz",         // too few digits
+		"0-bundle-000001.tar.gz",     // unsupported stream
+		"go-bundle-000000.tar.gz",    // sequences start at one
 		"exported.db",                // arbitrary file
 		"hf-bundle-000001.manifest.json.sig.tar.gz",
 	}
@@ -134,7 +136,7 @@ func TestHighDiodeIngest(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+hs.cfg.DiodeToken)
-	req.ContentLength = diodeMaxUploadBytes + 1
+	req.ContentLength = diodeMaxArchiveBytes + 1
 	rec := httptest.NewRecorder()
 	hs.ServeHTTP(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -207,6 +209,62 @@ func TestWriteStreamAtomicLimitRejectsOversizedBody(t *testing.T) {
 	}
 	if string(got) != "12345678" {
 		t.Fatalf("exact-limit upload stored %q", got)
+	}
+}
+
+func TestHighDiodeIngestSuffixLimitsAndQuota(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	hs.cfg.DiodeIngest = true
+	hs.cfg.DiodeToken = "diode-secret"
+
+	request := func(name string, length int64) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/diode/"+name, strings.NewReader("x"))
+		req.Header.Set("Authorization", "Bearer "+hs.cfg.DiodeToken)
+		req.ContentLength = length
+		rec := httptest.NewRecorder()
+		hs.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for _, tc := range []struct {
+		name  string
+		limit int64
+	}{
+		{"go-bundle-000001.manifest.json", diodeMaxManifestBytes},
+		{"go-bundle-000001.manifest.json.sig", diodeMaxSignatureBytes},
+	} {
+		if got := request(tc.name, tc.limit+1).Code; got != http.StatusRequestEntityTooLarge {
+			t.Errorf("%s oversized status = %d, want 413", tc.name, got)
+		}
+	}
+
+	rejected := filepath.Join(hs.cfg.Root, "rejected")
+	if err := os.MkdirAll(rejected, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	quotaFile := filepath.Join(rejected, "retained-unverified.bin")
+	if err := os.WriteFile(quotaFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(quotaFile, diodeMaxUnverifiedBytes); err != nil {
+		t.Fatal(err)
+	}
+	if got := request("go-bundle-000002.tar.gz", 1).Code; got != http.StatusInsufficientStorage {
+		t.Fatalf("exhausted quota status = %d, want 507", got)
+	}
+}
+
+func TestReadFileLimitRejectsOversizedMetadata(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "manifest")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(p, diodeMaxManifestBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readFileLimit(p, diodeMaxManifestBytes); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("readFileLimit oversized error = %v", err)
 	}
 }
 

@@ -107,12 +107,11 @@ and environment variable.
   `go.sum`) to mirror exactly what it builds. The full dependency graph is always
   fetched.
 - **Python** — a requirements list (paste or upload `requirements.txt`). Wheels
-  only (no sdists). **"Wheels only"** is on by default: the collect fails if any
-  package in the closure has no wheel, so you never ship a silently incomplete
-  mirror. Untick it to mirror the wheels that *are* available and get back a list
-  of the source-only packages that were skipped. An optional cross-target
+  only (no sdists), enforced with `--only-binary=:all:` for every collect so
+  package build hooks never run beside the signing key. The collect fails when a
+  package in the closure has no compatible wheel. An optional cross-target
   downloads wheels for the high-side interpreter/platform rather than the
-  low-side host (which forces wheels-only regardless).
+  low-side host.
 - **Java** — Maven coordinates (`groupId:artifactId:version`, one per line) or an
   uploaded `pom.xml`. Only the pom's dependency information is used — build
   sections, profiles, and repository overrides are rejected, so an uploaded pom
@@ -284,7 +283,9 @@ Carry each bundle's three files across the diode into the high side's landing
 directory. The high side imports each **stream** strictly in order. An
 out-of-order bundle (e.g. `go-bundle-000043` before `000042`) is quarantined, not
 rejected, and imported automatically once the gap is filled; duplicates and old
-replays are ignored. A gap in one stream never blocks the others.
+replays are ignored. Future gaps are capped at 10,000 sequences; unsupported,
+excessively-future, or cryptographically invalid bundles move to
+`<root>/rejected` and do not block the other streams.
 
 ### HTTP transport (optional)
 
@@ -315,7 +316,8 @@ out over HTTP. A failed upload never loses a bundle — the collect still
 succeeds, the dashboard (and a schedule's status) reports the upload error,
 and the bundle stays staged for a re-transmit from the Status page. A complete
 bundle received over HTTP is imported immediately rather than on the next scan
-tick.
+tick. Completion notifications use one coalescing worker rather than creating a
+goroutine per upload.
 
 The transport carries no trust: uploads land in the landing directory exactly
 as diode-carried files would, and the importer still verifies the Ed25519
@@ -328,6 +330,10 @@ works as a sender, e.g.:
 curl -fT go-bundle-000042.tar.gz -H "Authorization: Bearer $TOKEN" \
   https://artigate-high.local/diode/go-bundle-000042.tar.gz
 ```
+
+Ingress is bounded before verification: archives are limited to 64 GiB,
+manifests to 16 MiB, signatures to 4 KiB, and pending/quarantined/rejected files
+to 128 GiB in aggregate.
 
 ### Built-in UDP diode transport (optional)
 
@@ -553,9 +559,8 @@ TLS. If ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy, set
   it to localhost or a trusted network too.
 - **Go**: no sumdb mirroring — use `GOSUMDB=off` on the high side and rely on your
   committed `go.sum` plus the signed bundles.
-- **Python**: wheels only (no sdists). "Wheels only" is on by default (fail if a
-  package has no wheel); untick it to mirror what's available and report the
-  source-only packages as skipped.
+- **Python**: wheels only (no sdists), always enforced. A package with no
+  compatible wheel fails the collect; pin a wheel-bearing version or exclude it.
 - **Java/Maven**: release versions only; SNAPSHOT and dynamic/range versions are
   rejected.
 - **NPM**: registry tarballs only — dependencies resolved to git or file URLs

@@ -206,7 +206,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or load a requirements.txt
         <input id="pyfile" type="file" accept=".txt,text/plain" onchange="loadPyFile()">
       </label>
-      <label class="pytarget-check"><input id="pyonly" type="checkbox" checked> Wheels only &mdash; fail if any package has no wheel (uncheck to mirror the wheels available and list the rest)</label>
+	      <p class="hint"><strong>Wheels only:</strong> source distributions are never downloaded, because package build hooks must not run beside the signing key. The collect fails when a requirement has no compatible wheel.</p>
       <details class="pytarget">
         <summary>Cross-target for a different interpreter (optional)</summary>
         <div class="pytarget-grid">
@@ -215,7 +215,7 @@ const lowUIHTML = `<!DOCTYPE html>
           <label>ABI<input id="pyabi" type="text" placeholder="cp312" autocomplete="off"></label>
           <label>Platforms (comma-separated)<input id="pyplat" type="text" placeholder="manylinux_2_28_x86_64, manylinux_2_34_x86_64" autocomplete="off"></label>
         </div>
-        <p class="hint">Set these to download wheels for the high-side interpreter rather than this host; any of them forces <code>--only-binary=:all:</code> (wheels only) regardless of the checkbox above.</p>
+	        <p class="hint">Set these to download wheels for the high-side interpreter rather than this host. Wheels-only mode is always enforced.</p>
       </details>
       <label class="pytarget-check"><input id="pyForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
@@ -803,13 +803,11 @@ function parseRequirements(text){
 }
 
 function pyTarget(){
-  const g=id=>document.getElementById(id).value.trim();
-  const ver=g('pyver'), impl=g('pyimpl'), abi=g('pyabi'), platRaw=g('pyplat');
-  const onlyBin=document.getElementById('pyonly').checked;
-  const plats=platRaw?platRaw.split(',').map(s=>s.trim()).filter(Boolean):[];
-  if(!ver && !impl && !abi && !plats.length && !onlyBin) return null;
-  const t={};
-  if(onlyBin) t.only_binary=true;
+	  const g=id=>document.getElementById(id).value.trim();
+	  const ver=g('pyver'), impl=g('pyimpl'), abi=g('pyabi'), platRaw=g('pyplat');
+	  const plats=platRaw?platRaw.split(',').map(s=>s.trim()).filter(Boolean):[];
+	  if(!ver && !impl && !abi && !plats.length) return null;
+	  const t={};
   if(ver) t.python_version=ver;
   if(impl) t.implementation=impl;
   if(abi) t.abi=abi;

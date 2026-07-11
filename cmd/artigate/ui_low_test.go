@@ -83,6 +83,7 @@ func TestLowServerUIPage(t *testing.T) {
 		"Mirror Go modules", `id="gomods"`, `id="gomod"`, `id="gosum"`, "collectGoMod", "/admin/go/collect",
 
 		"Mirror Python packages", `id="pyreqs"`, "collectPython", "/admin/python/collect",
+		"source distributions are never downloaded", "Wheels-only mode is always enforced",
 		"Mirror Maven artifacts", `id="mvncoords"`, `id="mvnpom"`, "collectMaven", "/admin/maven/collect",
 		"Mirror an APT (deb) repository", `id="aptsrc"`, `id="aptfile"`, "loadAptFile", "collectApt", "/admin/apt/collect",
 		`id="aptnewest" type="checkbox" checked`, "newest_only",
@@ -99,6 +100,9 @@ func TestLowServerUIPage(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("low-side index page missing %q", want)
+		}
+		if strings.Contains(body, `id="pyonly"`) {
+			t.Error("low-side UI still exposes a switch that can disable mandatory wheels-only collection")
 		}
 	}
 }

@@ -84,8 +84,8 @@ func TestValidatePythonProjects(t *testing.T) {
 
 func TestPipDownloadArgs(t *testing.T) {
 	plain := pipDownloadArgs("/dest", PythonCollectRequest{Requirements: []string{"requests"}})
-	if strings.Contains(strings.Join(plain, " "), "--only-binary") {
-		t.Errorf("plain request should not force --only-binary: %v", plain)
+	if !strings.Contains(strings.Join(plain, " "), "--only-binary=:all:") {
+		t.Errorf("plain request must enforce wheels-only: %v", plain)
 	}
 	if plain[len(plain)-1] != "requests" {
 		t.Errorf("requirement not appended last: %v", plain)
@@ -103,6 +103,17 @@ func TestPipDownloadArgs(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("targeted args missing %q: %v", want, targeted)
 		}
+	}
+}
+
+func TestPythonRejectsOnlyBinaryFalse(t *testing.T) {
+	no := false
+	err := validatePythonRequest(PythonCollectRequest{
+		Requirements: []string{"requests"},
+		Target:       &PythonTarget{OnlyBinary: &no},
+	})
+	if err == nil || !strings.Contains(err.Error(), "wheels-only") {
+		t.Fatalf("only_binary=false validation = %v, want wheels-only error", err)
 	}
 }
 
@@ -467,10 +478,10 @@ func newPyLowServerWithPip(t *testing.T, script string) (*LowServer, ed25519.Pri
 	return ls, priv
 }
 
-// TestCollectPythonReportsSdists proves the wheels in a requirements set still
-// export while a source-only package is reported as skipped (not silently
-// dropped) — the lenient "uncheck Wheels only" behaviour.
-func TestCollectPythonReportsSdists(t *testing.T) {
+// TestCollectPythonReportsUnexpectedSdists is defense in depth for a broken or
+// replaced pip executable that ignores --only-binary: unexpected sdists are
+// never bundled, while any wheels it produced remain usable.
+func TestCollectPythonReportsUnexpectedSdists(t *testing.T) {
 	ls, _ := newPyLowServerWithPip(t, fakePipMixedScript)
 
 	res, err := ls.CollectPython(context.Background(), PythonCollectRequest{Requirements: []string{"requests", "legacypkg"}})

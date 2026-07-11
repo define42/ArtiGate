@@ -3,7 +3,7 @@
 ArtiGate is a two-process data-diode gateway. The **low side** fetches, verifies, signs and exports content bundles; the **high side** imports them, re-verifies every byte, regenerates its own repository metadata and serves the result read-only. This page explains the trust chain that makes that safe and the hardening you are responsible for at deployment time.
 
 !!! note "The one-sentence trust model"
-    The high side serves only content that (a) was covered by a valid Ed25519 signature, (b) hash-matches the signed manifest byte-for-byte, and (c) chains by sequence to the previously imported bundle — and it rebuilds all index/metadata itself rather than trusting anything transferred. The high side never fetches upstream.
+    The high side serves only content that (a) was covered by a valid Ed25519 signature, (b) hash-matches the signed manifest byte-for-byte, and (c) chains by sequence to the previously imported bundle — and it rebuilds all index/metadata itself rather than trusting anything transferred. New bundles use standard Ed25519ph so manifest hashing is streamed before verification; legacy raw-Ed25519 bundles remain readable under the manifest size cap. The high side never fetches upstream.
 
 ## Signing keys
 
@@ -207,7 +207,7 @@ The high side's integrity comes from **signature + hash verification at import**
 
 ### The one optional write surface: diode ingest
 
-With `ARTIGATE_DIODE_INGEST=on` (off by default), the high side accepts bundle uploads at `PUT/POST /diode/<file>` — the receiving end of the [HTTP diode transport](deployment.md). This does **not** weaken the trust model: an uploaded file lands in the landing directory exactly as a diode-carried file would, only strictly-validated bundle file names are accepted, and nothing is served until the import's signature, sequencing, and hash checks pass. Because an uploader can still consume disk, enabling HTTP ingest requires `ARTIGATE_DIODE_TOKEN`: a shared, whitespace-free bearer token of at least 32 bytes, compared in constant time. Leave ingest off entirely when you use the folder flow.
+With `ARTIGATE_DIODE_INGEST=on` (off by default), the high side accepts bundle uploads at `PUT/POST /diode/<file>` — the receiving end of the [HTTP diode transport](deployment.md). This does **not** weaken the trust model: only supported stream names and positive bundle sequences are accepted, and nothing is served until signature, sequencing, and hash checks pass. Enabling ingest requires a whitespace-free bearer token of at least 32 bytes, compared in constant time. Before verification, archives are capped at 64 GiB, manifests at 16 MiB, signatures at 4 KiB, and direct unverified files across landing, quarantine, and rejected storage at 128 GiB. Completed uploads feed one bounded, coalescing import worker. Leave ingest off entirely when you use the folder flow.
 
 ### Upstream credentials on the low side
 

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/ed25519"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -163,21 +165,7 @@ func TestLowServerExportAndReexport(t *testing.T) {
 
 	// The three signed bundle files must exist and the signature must verify.
 	pub := priv.Public().(ed25519.PublicKey)
-	manifestBytes, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, "go-bundle-000001.manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sigB64, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, "go-bundle-000001.manifest.json.sig"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigB64)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ed25519.Verify(pub, manifestBytes, sig) {
-		t.Error("exported bundle signature does not verify")
-	}
+	assertBundleSigned(t, ls.cfg.ExportDir, "go-bundle-000001", pub)
 
 	// Re-exporting the same sequence must succeed and regenerate it.
 	r := httptest.NewRequest(http.MethodPost, "/admin/reexport?sequences=1", nil)
@@ -359,11 +347,19 @@ func assertBundleSigned(t *testing.T, dir, bundleID string, pub ed25519.PublicKe
 	if err != nil {
 		t.Fatalf("read sig %s: %v", bundleID, err)
 	}
-	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigB64)))
+	sigText := strings.TrimSpace(string(sigB64))
+	prehashed := strings.HasPrefix(sigText, manifestSignaturePHPrefix)
+	sigText = strings.TrimPrefix(sigText, manifestSignaturePHPrefix)
+	sig, err := base64.StdEncoding.DecodeString(sigText)
 	if err != nil {
 		t.Fatalf("decode sig %s: %v", bundleID, err)
 	}
-	if !ed25519.Verify(pub, manifestBytes, sig) {
+	valid := ed25519.Verify(pub, manifestBytes, sig)
+	if prehashed {
+		digest := sha512.Sum512(manifestBytes)
+		valid = ed25519.VerifyWithOptions(pub, digest[:], sig, &ed25519.Options{Hash: crypto.SHA512}) == nil
+	}
+	if !valid {
 		t.Errorf("bundle %s signature does not verify", bundleID)
 	}
 }

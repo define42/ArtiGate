@@ -129,10 +129,10 @@ Content-Type: application/json
 | `target.implementation` | string | omitempty, e.g. `cp` |
 | `target.abi` | string | omitempty, e.g. `cp311` |
 | `target.platforms` | `[]string` | e.g. `manylinux2014_x86_64` |
-| `target.only_binary` | bool | omitempty |
+| `target.only_binary` | bool | Compatibility field: omit it or set `true`; `false` is rejected because wheels-only collection is mandatory |
 
-!!! tip "Any target selector forces wheels"
-    When any `target` selector is present, ArtiGate adds `--only-binary=:all:`, so only wheels are fetched.
+!!! warning "Wheels only is mandatory"
+    Every collect adds `--only-binary=:all:`, with or without a target selector. This prevents pip from invoking source-package build backends in the signing process.
 
 ---
 

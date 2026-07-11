@@ -24,7 +24,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/ed25519"
 	"crypto/md5"  //nolint:gosec // APT metadata carries MD5Sum for legacy clients, not a security control
 	"crypto/sha1" //nolint:gosec // APT metadata carries SHA1 for legacy clients, not a security control
 	"crypto/sha256"
@@ -635,8 +634,7 @@ func (s *LowServer) writeAptBundle(ctx context.Context, seq int64, stageRoot str
 	if err != nil {
 		return ExportResult{}, err
 	}
-	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, files); err != nil {
 		return ExportResult{}, err
 	}
 	total := 0

@@ -113,6 +113,22 @@ func TestDiodePacketRoundtrip(t *testing.T) {
 	if _, err := marshalDiodePacket(nil, &diodePacket{Name: strings.Repeat("n", diodeNameMax+1)}); err == nil {
 		t.Error("marshal accepted an oversized name")
 	}
+	hostile := in
+	hostile.FileSize = 1
+	hostile.BlockCount = diodeMaxBlockCount
+	hostile.BlockIndex = 0
+	hostile.BlockOffset = 0
+	hostile.BlockLen = 1
+	if err := hostile.validate(); err == nil {
+		t.Error("packet with more blocks than file bytes was accepted")
+	}
+	hostile = in
+	hostile.FileSize = int64(^uint64(0) >> 1)
+	hostile.BlockOffset = hostile.FileSize - 1
+	hostile.BlockLen = 10
+	if err := hostile.validate(); err == nil {
+		t.Error("overflowing block extent was accepted")
+	}
 }
 
 func TestSplitDiodeBlock(t *testing.T) {
@@ -276,6 +292,63 @@ func TestDiodeAssemblerHostileAndLossyInput(t *testing.T) {
 		}
 		if len(asm.active) != 0 {
 			t.Fatal("stragglers reopened the transfer")
+		}
+	})
+}
+
+func TestDiodeAssemblerResourceBounds(t *testing.T) {
+	t.Run("suffix file limit", func(t *testing.T) {
+		asm := newDiodeAssembler(t.TempDir(), validBundleFileName, nil)
+		p := diodePacket{
+			Name:       "go-bundle-000001.manifest.json",
+			FileSize:   diodeMaxManifestBytes + 1,
+			BlockCount: 1,
+		}
+		if _, err := asm.transferFor(&p, time.Now()); err == nil || !strings.Contains(err.Error(), "transport limit") {
+			t.Fatalf("oversized manifest transfer = %v, want transport-limit error", err)
+		}
+		if len(asm.active) != 0 {
+			t.Fatal("oversized transfer allocated active state")
+		}
+	})
+
+	t.Run("global reassembly memory", func(t *testing.T) {
+		asm := newDiodeAssembler(t.TempDir(), validBundleFileName, nil)
+		var bounded bool
+		for ti := 0; ti < diodeMaxTransfers && !bounded; ti++ {
+			tx := &diodeTransfer{name: "go-bundle-000001.tar.gz", blocks: map[uint32]*diodeBlock{}}
+			for bi := range uint32(4) {
+				p := diodePacket{
+					BlockIndex: bi, DataShards: 255, ParityShards: 1,
+					ShardSize: diodeMaxShardSize, BlockLen: 255 * diodeMaxShardSize,
+				}
+				if _, err := asm.blockFor(tx, &p); err != nil {
+					if !strings.Contains(err.Error(), "global budget") {
+						t.Fatalf("blockFor failed for the wrong bound: %v", err)
+					}
+					bounded = true
+					break
+				}
+			}
+		}
+		if !bounded {
+			t.Fatal("hostile block geometries did not reach the global reassembly bound")
+		}
+		if asm.buffered > diodeMaxBufferedBytes {
+			t.Fatalf("reserved %d bytes, above %d-byte global bound", asm.buffered, diodeMaxBufferedBytes)
+		}
+	})
+
+	t.Run("completed transfer cache", func(t *testing.T) {
+		asm := newDiodeAssembler(t.TempDir(), validBundleFileName, nil)
+		now := time.Now()
+		for i := 0; i < diodeMaxRememberedTransfers+1000; i++ {
+			var id [16]byte
+			id[0], id[1], id[2] = byte(i), byte(i>>8), byte(i>>16)
+			asm.rememberDone(id, now)
+		}
+		if len(asm.done) != diodeMaxRememberedTransfers || len(asm.doneOrder) != diodeMaxRememberedTransfers {
+			t.Fatalf("done cache sizes = %d/%d, want %d", len(asm.done), len(asm.doneOrder), diodeMaxRememberedTransfers)
 		}
 	})
 }

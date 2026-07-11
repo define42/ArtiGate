@@ -227,7 +227,7 @@ func TestExportDeltaBundle(t *testing.T) {
 	export := func(files []ManifestFile, force bool) (ExportResult, error) {
 		return ls.exportIfNew(ctx, streamNpm, files, force, func(seq int64) (ExportResult, error) {
 			id := bundleIDFor(streamNpm, seq)
-			if err := ls.writeBundleArtifacts(ctx, id, stage, []byte("{}"), []byte("sig"), files); err != nil {
+			if err := ls.writeBundleArtifacts(ctx, id, stage, []byte("{}"), files); err != nil {
 				return ExportResult{}, err
 			}
 			return ExportResult{Stream: streamNpm, Sequence: seq, BundleID: id}, nil

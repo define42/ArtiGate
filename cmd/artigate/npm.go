@@ -18,7 +18,6 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
-	"crypto/ed25519"
 	"crypto/sha1" //nolint:gosec // sha1 is only the legacy npm dist.shasum field, not a security control
 	"crypto/sha256"
 	"crypto/sha512"
@@ -1095,8 +1094,7 @@ func (s *LowServer) writeNpmBundle(ctx context.Context, seq int64, stageRoot str
 	if err != nil {
 		return ExportResult{}, err
 	}
-	sig := ed25519.Sign(s.privateKey, manifestBytes)
-	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, sig, files); err != nil {
+	if err := s.writeBundleArtifacts(ctx, id, stageRoot, manifestBytes, files); err != nil {
 		return ExportResult{}, err
 	}
 	return ExportResult{Stream: streamNpm, Sequence: seq, ExportedModules: len(pkgs), BundleID: id}, nil

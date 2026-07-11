@@ -123,6 +123,13 @@ bytes received, drops, **blocks repaired** (parity actually used), files
 landed / expired / failed. A steadily climbing repair count means the link or
 the rate limit needs attention *before* transfers start failing.
 
+The receiver also applies hard resource ceilings before content authentication:
+the same 64 GiB / 16 MiB / 4 KiB suffix limits as HTTP ingest, at most 16 active
+transfers and 32 open blocks per transfer, 64 MiB reserved reconstruction memory
+per transfer and 256 MiB globally, one million blocks per file, 4,096 remembered
+completed transfer IDs, and 64 cached Reed-Solomon encoder geometries. A block
+reserves its full data-plus-parity footprint before the first shard is retained.
+
 The pitcher clears each bundle from the export dir after the send finishes
 (it shows as *sent* on the Status page) and keeps the archive copy for
 re-transmits — identical bookkeeping to the HTTP transport, including the

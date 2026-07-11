@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -463,6 +464,13 @@ func TestMissingRanges(t *testing.T) {
 	allPresent := map[int64]bool{1: true, 2: true, 3: true}
 	if got := missingRanges(1, 3, allPresent); got != nil {
 		t.Errorf("missingRanges all present = %v, want nil", got)
+	}
+
+	// A hostile far-future sequence must be constant in the numeric distance,
+	// not loop through every missing integer (and must not overflow at MaxInt64).
+	huge := missingRanges(1, math.MaxInt64, map[int64]bool{math.MaxInt64: true})
+	if want := []SequenceRange{{Start: 1, End: math.MaxInt64 - 1}}; !reflect.DeepEqual(huge, want) {
+		t.Errorf("missingRanges huge sparse gap = %v, want %v", huge, want)
 	}
 }
 

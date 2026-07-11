@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -45,8 +46,13 @@ const (
 	// diodeUploadTimeout bounds one file's upload; bundle archives can be tens
 	// of gigabytes.
 	diodeUploadTimeout = 4 * time.Hour
-	// diodeMaxUploadBytes bounds unverified data written to the landing disk.
-	diodeMaxUploadBytes int64 = 64 << 30
+	// Per-suffix limits keep manifests/signatures small enough for bounded
+	// verification while still allowing large model/container archives.
+	diodeMaxArchiveBytes   int64 = 64 << 30
+	diodeMaxManifestBytes  int64 = 16 << 20
+	diodeMaxSignatureBytes int64 = 4 << 10
+	// diodeMaxUnverifiedBytes bounds aggregate pending/rejected transport data.
+	diodeMaxUnverifiedBytes int64 = 128 << 30
 )
 
 // minDiodeTokenBytes prevents an enabled HTTP diode endpoint from being
@@ -63,10 +69,29 @@ var bundleFileBaseRE = regexp.MustCompile(`^[a-z0-9]+-bundle-[0-9]{6,}$`)
 func validBundleFileName(name string) bool {
 	for _, suffix := range bundleSuffixes() {
 		if base, ok := strings.CutSuffix(name, suffix); ok {
-			return bundleFileBaseRE.MatchString(base)
+			if !bundleFileBaseRE.MatchString(base) {
+				return false
+			}
+			stream, seq, parsed := parseBundleName(base + ".manifest.json")
+			return parsed && seq > 0 && isKnownStream(stream)
 		}
 	}
 	return false
+}
+
+// bundleFileSizeLimit returns the maximum wire/disk size for one of the three
+// supported bundle file suffixes.
+func bundleFileSizeLimit(name string) (int64, bool) {
+	switch {
+	case strings.HasSuffix(name, ".manifest.json.sig"):
+		return diodeMaxSignatureBytes, true
+	case strings.HasSuffix(name, ".manifest.json"):
+		return diodeMaxManifestBytes, true
+	case strings.HasSuffix(name, ".tar.gz"):
+		return diodeMaxArchiveBytes, true
+	default:
+		return 0, false
+	}
 }
 
 // parseOnOff reads an on/off environment value; empty means off.
@@ -141,51 +166,97 @@ func (s *HighServer) serveDiode(w http.ResponseWriter, r *http.Request) bool {
 	if r.URL.Path != "/diode" && !strings.HasPrefix(r.URL.Path, "/diode/") {
 		return false
 	}
+	s.handleDiodeUpload(w, r)
+	return true
+}
+
+func (s *HighServer) handleDiodeUpload(w http.ResponseWriter, r *http.Request) {
+	name, fileLimit, ok := s.validateDiodeUpload(w, r)
+	if !ok {
+		return
+	}
+	s.ingestMu.Lock()
+	defer s.ingestMu.Unlock()
+	n, status, err := s.storeDiodeUpload(name, r, fileLimit)
+	if err != nil {
+		http.Error(w, err.Error(), status)
+		return
+	}
+	log.Printf("diode ingest: stored %s (%s)", name, formatBytes(n))
+	// If this file completed its bundle, request a coalesced import instead of
+	// creating one goroutine per upload.
+	if bundleCompleteInDir(s.cfg.Landing, bundleBaseName(name)) {
+		s.requestImport()
+	}
+	writeJSON(w, map[string]any{"stored": name, "size": n})
+}
+
+func (s *HighServer) validateDiodeUpload(w http.ResponseWriter, r *http.Request) (string, int64, bool) {
 	if !s.cfg.DiodeIngest {
 		http.Error(w, "diode ingest is disabled; set ARTIGATE_DIODE_INGEST=on", http.StatusForbidden)
-		return true
+		return "", 0, false
 	}
 	if !diodeTokenOK(r, s.cfg.DiodeToken) {
 		http.Error(w, "missing or wrong diode token", http.StatusUnauthorized)
-		return true
+		return "", 0, false
 	}
 	if r.Method != http.MethodPut && r.Method != http.MethodPost {
 		http.Error(w, "method not allowed; PUT the bundle file", http.StatusMethodNotAllowed)
-		return true
+		return "", 0, false
 	}
 	name := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/diode"), "/")
 	if !validBundleFileName(name) {
 		http.Error(w, "not a bundle file name (want <stream>-bundle-<seq>{.tar.gz,.manifest.json,.manifest.json.sig})", http.StatusBadRequest)
-		return true
+		return "", 0, false
 	}
-	if r.ContentLength > diodeMaxUploadBytes {
-		http.Error(w, fmt.Sprintf("diode upload exceeds %s limit", formatBytes(diodeMaxUploadBytes)), http.StatusRequestEntityTooLarge)
-		return true
+	fileLimit, _ := bundleFileSizeLimit(name)
+	if r.ContentLength > fileLimit {
+		http.Error(w, fmt.Sprintf("diode upload exceeds %s limit for this file type", formatBytes(fileLimit)), http.StatusRequestEntityTooLarge)
+		return "", 0, false
 	}
-	dst := filepath.Join(s.cfg.Landing, name)
-	n, err := writeStreamAtomicLimit(dst, r.Body, diodeMaxUploadBytes)
+	return name, fileLimit, true
+}
+
+func (s *HighServer) storeDiodeUpload(name string, r *http.Request, fileLimit int64) (int64, int, error) {
+	usage, err := s.unverifiedTransportBytes()
 	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			http.Error(w, fmt.Sprintf("diode upload exceeds %s limit", formatBytes(maxBytesErr.Limit)), http.StatusRequestEntityTooLarge)
-			return true
-		}
-		http.Error(w, fmt.Sprintf("store %s: %v", name, err), http.StatusInternalServerError)
-		return true
+		return 0, http.StatusInternalServerError, fmt.Errorf("measure unverified storage: %w", err)
 	}
-	log.Printf("diode ingest: stored %s (%s)", name, formatBytes(n))
-	// If this file completed its bundle, import right away instead of waiting
-	// for the next timer tick. ImportNext serializes on the server mutex, so a
-	// concurrent tick is harmless.
-	if bundleCompleteInDir(s.cfg.Landing, bundleBaseName(name)) {
-		go func() {
-			if _, err := s.ImportNext(); err != nil {
-				log.Printf("diode ingest: import after upload: %v", err)
-			}
-		}()
+	available := diodeMaxUnverifiedBytes - usage
+	if available <= 0 {
+		return 0, http.StatusInsufficientStorage, errors.New("unverified diode storage quota exhausted")
 	}
-	writeJSON(w, map[string]any{"stored": name, "size": n})
-	return true
+	limit := min(fileLimit, available)
+	if r.ContentLength > limit {
+		return 0, http.StatusInsufficientStorage, errors.New("unverified diode storage quota would be exceeded")
+	}
+	n, err := writeStreamAtomicLimit(filepath.Join(s.cfg.Landing, name), r.Body, limit)
+	if err != nil {
+		return 0, diodeStoreErrorStatus(err, limit, fileLimit), diodeStoreError(name, err, limit, fileLimit)
+	}
+	return n, http.StatusOK, nil
+}
+
+func diodeStoreErrorStatus(err error, limit, fileLimit int64) int {
+	var maxBytesErr *http.MaxBytesError
+	if !errors.As(err, &maxBytesErr) {
+		return http.StatusInternalServerError
+	}
+	if limit < fileLimit {
+		return http.StatusInsufficientStorage
+	}
+	return http.StatusRequestEntityTooLarge
+}
+
+func diodeStoreError(name string, err error, limit, fileLimit int64) error {
+	var maxBytesErr *http.MaxBytesError
+	if !errors.As(err, &maxBytesErr) {
+		return fmt.Errorf("store %s: %w", name, err)
+	}
+	if limit < fileLimit {
+		return errors.New("unverified diode storage quota would be exceeded")
+	}
+	return fmt.Errorf("diode upload exceeds %s limit", formatBytes(maxBytesErr.Limit))
 }
 
 // writeStreamAtomicLimit streams at most limit bytes from r into dst via a temp
@@ -223,7 +294,45 @@ func writeStreamAtomicLimit(dst string, r io.Reader, limit int64) (int64, error)
 		_ = os.Remove(tmp)
 		return 0, err
 	}
+	fsyncDir(dir)
 	return n, nil
+}
+
+// directoryRegularFileBytes totals only direct regular-file children. Processed
+// bundle subdirectories are intentionally excluded from the unverified quota.
+func directoryRegularFileBytes(dir string) (int64, error) {
+	return directoryRegularFileBytesExcept(dir, nil)
+}
+
+func directoryRegularFileBytesExcept(dir string, skip func(string) bool) (int64, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, entry := range entries {
+		if entry.IsDir() || (skip != nil && skip(entry.Name())) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return 0, err
+		}
+		if info.Mode().IsRegular() {
+			if info.Size() > math.MaxInt64-total {
+				return 0, errors.New("unverified storage size overflow")
+			}
+			total += info.Size()
+		}
+	}
+	return total, nil
+}
+
+func isUDPTempName(name string) bool {
+	return strings.Contains(name, ".udp-")
 }
 
 func firstErr(errs ...error) error {

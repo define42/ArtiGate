@@ -63,9 +63,17 @@ const (
 	// without limit.
 	diodeMaxShardSize   = 60000
 	diodeMaxTotalShards = 256 // GF(2^8) Reed-Solomon limit
-	diodeMaxBlockCount  = 1 << 24
+	diodeMaxBlockCount  = 1 << 20
 	diodeMaxTransfers   = 16
 	diodeMaxOpenBlocks  = 32
+
+	// Memory and cache budgets apply across all unauthenticated UDP transfers.
+	// A block reserves its complete reconstruction geometry up front, including
+	// missing shards Reed-Solomon may allocate later.
+	diodeMaxBufferedBytes         int64 = 256 << 20
+	diodeMaxTransferBufferedBytes int64 = 64 << 20
+	diodeMaxRememberedTransfers         = 4096
+	diodeMaxEncoders                    = 64
 
 	// diodeStaleAfter is how long a partial transfer may go without a packet
 	// before the catcher gives up on it; diodeDoneRemember is how long a
@@ -187,10 +195,12 @@ func (p *diodePacket) validate() error {
 	switch {
 	case p.BlockCount < 1 || p.BlockCount > diodeMaxBlockCount || p.BlockIndex >= p.BlockCount:
 		return fmt.Errorf("bad block index %d/%d", p.BlockIndex, p.BlockCount)
+	case p.FileSize < 1 || int64(p.BlockCount) > p.FileSize:
+		return fmt.Errorf("bad file size %d for %d block(s)", p.FileSize, p.BlockCount)
 	case p.BlockLen < 1 || p.BlockLen > p.DataShards*p.ShardSize:
 		return fmt.Errorf("bad block length %d", p.BlockLen)
-	case p.FileSize < 1 || p.BlockOffset < 0 || p.BlockOffset+int64(p.BlockLen) > p.FileSize:
-		return fmt.Errorf("block %d..%d outside file of %d bytes", p.BlockOffset, p.BlockOffset+int64(p.BlockLen), p.FileSize)
+	case p.BlockOffset < 0 || p.BlockOffset > p.FileSize-int64(p.BlockLen):
+		return fmt.Errorf("block at %d with length %d outside file of %d bytes", p.BlockOffset, p.BlockLen, p.FileSize)
 	}
 	return nil
 }
@@ -334,8 +344,17 @@ type diodeAssembler struct {
 	encoders   map[uint32]reedsolomon.Encoder
 	active     map[[16]byte]*diodeTransfer
 	done       map[[16]byte]time.Time
+	doneOrder  []diodeDoneRecord
+	doneNext   int
+	buffered   int64
+	activeSize int64
 	stats      diodeCatchStats
 	lastLogged diodeCatchStats
+}
+
+type diodeDoneRecord struct {
+	id [16]byte
+	at time.Time
 }
 
 // diodeCatchStats are the catcher's operational counters, logged periodically.
@@ -362,6 +381,7 @@ type diodeTransfer struct {
 	written    int64 // sum of landed block lengths; must equal fileSize
 	started    time.Time
 	lastSeen   time.Time
+	buffered   int64
 }
 
 type diodeBlock struct {
@@ -372,6 +392,7 @@ type diodeBlock struct {
 	offset       int64
 	shards       [][]byte
 	have         int
+	reserved     int64
 }
 
 func newDiodeAssembler(dir string, validName func(string) bool, onComplete func(string)) *diodeAssembler {
@@ -407,7 +428,7 @@ func (a *diodeAssembler) handleDatagram(b []byte, now time.Time) {
 	if t.blockDone(p.BlockIndex) {
 		return
 	}
-	blk, err := t.blockFor(&p)
+	blk, err := a.blockFor(t, &p)
 	if err != nil {
 		a.drop(err.Error())
 		return
@@ -447,8 +468,19 @@ func (a *diodeAssembler) transferFor(p *diodePacket, now time.Time) (*diodeTrans
 	if !a.validName(p.Name) {
 		return nil, fmt.Errorf("not a bundle file name: %q", p.Name)
 	}
+	fileLimit, ok := bundleFileSizeLimit(p.Name)
+	if !ok || p.FileSize > fileLimit {
+		return nil, fmt.Errorf("%s is %d bytes; transport limit is %d", p.Name, p.FileSize, fileLimit)
+	}
 	if len(a.active) >= diodeMaxTransfers {
 		return nil, fmt.Errorf("more than %d transfers in flight", diodeMaxTransfers)
+	}
+	stored, err := directoryRegularFileBytesExcept(a.dir, isUDPTempName)
+	if err != nil {
+		return nil, fmt.Errorf("measure landing quota: %w", err)
+	}
+	if stored > diodeMaxUnverifiedBytes-a.activeSize || p.FileSize > diodeMaxUnverifiedBytes-stored-a.activeSize {
+		return nil, fmt.Errorf("unverified transport quota of %d bytes would be exceeded", diodeMaxUnverifiedBytes)
 	}
 	if err := os.MkdirAll(a.dir, 0o755); err != nil {
 		return nil, err
@@ -469,6 +501,7 @@ func (a *diodeAssembler) transferFor(p *diodePacket, now time.Time) (*diodeTrans
 		started:    now,
 	}
 	a.active[p.TransferID] = t
+	a.activeSize += t.fileSize
 	log.Printf("diode catch: receiving %s (%s, %d block(s))", t.name, formatBytes(t.fileSize), t.blockCount)
 	return t, nil
 }
@@ -483,8 +516,9 @@ func (t *diodeTransfer) setBlockDone(bi uint32) {
 }
 
 // blockFor finds or opens the in-progress block a packet belongs to, holding
-// every packet of a block to the geometry its first packet declared.
-func (t *diodeTransfer) blockFor(p *diodePacket) (*diodeBlock, error) {
+// every packet of a block to the geometry its first packet declared. New
+// blocks reserve their full reconstruction footprint before retaining data.
+func (a *diodeAssembler) blockFor(t *diodeTransfer, p *diodePacket) (*diodeBlock, error) {
 	if blk, ok := t.blocks[p.BlockIndex]; ok {
 		if blk.dataShards != p.DataShards || blk.parityShards != p.ParityShards ||
 			blk.shardSize != p.ShardSize || blk.blockLen != p.BlockLen || blk.offset != p.BlockOffset {
@@ -495,6 +529,13 @@ func (t *diodeTransfer) blockFor(p *diodePacket) (*diodeBlock, error) {
 	if len(t.blocks) >= diodeMaxOpenBlocks {
 		return nil, fmt.Errorf("more than %d half-received blocks in %s", diodeMaxOpenBlocks, t.name)
 	}
+	reserved := int64(p.DataShards+p.ParityShards) * int64(p.ShardSize)
+	if reserved > diodeMaxTransferBufferedBytes-t.buffered {
+		return nil, fmt.Errorf("transfer %s exceeds the %d-byte reassembly budget", t.name, diodeMaxTransferBufferedBytes)
+	}
+	if reserved > diodeMaxBufferedBytes-a.buffered {
+		return nil, fmt.Errorf("UDP reassembly exceeds the %d-byte global budget", diodeMaxBufferedBytes)
+	}
 	blk := &diodeBlock{
 		dataShards:   p.DataShards,
 		parityShards: p.ParityShards,
@@ -502,8 +543,11 @@ func (t *diodeTransfer) blockFor(p *diodePacket) (*diodeBlock, error) {
 		blockLen:     p.BlockLen,
 		offset:       p.BlockOffset,
 		shards:       make([][]byte, p.DataShards+p.ParityShards),
+		reserved:     reserved,
 	}
 	t.blocks[p.BlockIndex] = blk
+	t.buffered += reserved
+	a.buffered += reserved
 	return blk, nil
 }
 
@@ -534,9 +578,19 @@ func (a *diodeAssembler) completeBlock(t *diodeTransfer, bi uint32, blk *diodeBl
 		remaining -= n
 	}
 	delete(t.blocks, bi)
+	a.releaseBlock(t, blk)
 	t.setBlockDone(bi)
 	t.written += int64(blk.blockLen)
 	return nil
+}
+
+func (a *diodeAssembler) releaseBlock(t *diodeTransfer, blk *diodeBlock) {
+	if blk.reserved == 0 {
+		return
+	}
+	t.buffered -= blk.reserved
+	a.buffered -= blk.reserved
+	blk.reserved = 0
 }
 
 // reconstruct fills in missing data shards from parity. With all data shards
@@ -572,15 +626,17 @@ func (a *diodeAssembler) encoder(dataShards, parityShards int) (reedsolomon.Enco
 	if err != nil {
 		return nil, err
 	}
-	a.encoders[key] = enc
+	if len(a.encoders) < diodeMaxEncoders {
+		a.encoders[key] = enc
+	}
 	return enc, nil
 }
 
 // finishTransfer verifies and lands a fully reassembled file, remembering the
 // transfer ID so its still-in-flight parity tail is ignored quietly.
 func (a *diodeAssembler) finishTransfer(t *diodeTransfer, now time.Time) {
-	delete(a.active, t.id)
-	a.done[t.id] = now
+	a.removeActive(t)
+	a.rememberDone(t.id, now)
 	if err := a.landFile(t); err != nil {
 		a.stats.filesFailed++
 		a.removeTemp(t)
@@ -634,11 +690,38 @@ func (a *diodeAssembler) landFile(t *diodeTransfer) error {
 // failTransfer drops a transfer whose temp file can no longer be written
 // (disk full, reconstruction error) — its remaining packets will be ignored.
 func (a *diodeAssembler) failTransfer(t *diodeTransfer, now time.Time, err error) {
-	delete(a.active, t.id)
-	a.done[t.id] = now
+	a.removeActive(t)
+	a.rememberDone(t.id, now)
 	a.stats.filesFailed++
 	a.removeTemp(t)
 	log.Printf("diode catch: abandoned %s: %v", t.name, err)
+}
+
+func (a *diodeAssembler) removeActive(t *diodeTransfer) {
+	delete(a.active, t.id)
+	a.activeSize -= t.fileSize
+	for _, blk := range t.blocks {
+		a.releaseBlock(t, blk)
+	}
+	t.blocks = nil
+}
+
+func (a *diodeAssembler) rememberDone(id [16]byte, now time.Time) {
+	if _, exists := a.done[id]; exists {
+		a.done[id] = now
+		return
+	}
+	if len(a.doneOrder) < diodeMaxRememberedTransfers {
+		a.doneOrder = append(a.doneOrder, diodeDoneRecord{id: id, at: now})
+	} else {
+		old := a.doneOrder[a.doneNext]
+		if a.done[old.id] == old.at {
+			delete(a.done, old.id)
+		}
+		a.doneOrder[a.doneNext] = diodeDoneRecord{id: id, at: now}
+		a.doneNext = (a.doneNext + 1) % diodeMaxRememberedTransfers
+	}
+	a.done[id] = now
 }
 
 func (a *diodeAssembler) removeTemp(t *diodeTransfer) {
@@ -655,11 +738,11 @@ func (a *diodeAssembler) removeTemp(t *diodeTransfer) {
 // the parity budget, or a pitcher that died mid-file) and forgets old
 // completed-transfer IDs.
 func (a *diodeAssembler) expireStale(now time.Time) {
-	for id, t := range a.active {
+	for _, t := range a.active {
 		if now.Sub(t.lastSeen) <= diodeStaleAfter {
 			continue
 		}
-		delete(a.active, id)
+		a.removeActive(t)
 		a.stats.filesExpired++
 		a.removeTemp(t)
 		log.Printf("diode catch: gave up on %s after %s of silence (%d/%d blocks received) — re-export it from the low side",

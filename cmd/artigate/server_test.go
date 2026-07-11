@@ -384,10 +384,47 @@ func TestHighServerPerStreamIsolation(t *testing.T) {
 	assertStreamProgress(t, hs, streamPython, 1, 0)
 }
 
+func TestHighServerRejectsHostileStreamAndFutureGap(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+
+	writeSignedStreamBundle(t, hs.cfg.Landing, priv, "0", 1, 0)
+	writeSignedStreamBundle(t, hs.cfg.Landing, priv, streamGo, maxFutureSequenceGap+2, maxFutureSequenceGap+1)
+	writeSignedStreamBundle(t, hs.cfg.Landing, priv, streamPython, 1, 0)
+
+	res, err := hs.ImportNext()
+	if err != nil {
+		t.Fatalf("ImportNext: %v", err)
+	}
+	if !res.Imported || len(res.ImportedBundles) != 1 || res.ImportedBundles[0] != "python-bundle-000001" {
+		t.Fatalf("hostile bundles blocked the valid stream: %+v", res)
+	}
+	rejectedDir := filepath.Join(hs.cfg.Root, "rejected")
+	for _, id := range []string{"0-bundle-000001", bundleIDFor(streamGo, maxFutureSequenceGap+2)} {
+		if !bundleCompleteInDir(rejectedDir, id) {
+			t.Errorf("%s was not retained in rejected/", id)
+		}
+		if !fileExists(filepath.Join(rejectedDir, id+".reason.txt")) {
+			t.Errorf("%s has no rejection reason", id)
+		}
+	}
+	status, err := hs.ImportStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := status.Stream("0"); got.LastImportedSequence != 0 || got.HighestSeenSequence != 0 {
+		t.Errorf("unknown stream leaked into status: %+v", got)
+	}
+	if got := status.Stream(streamGo).HighestSeenSequence; got != 0 {
+		t.Errorf("excessive future sequence leaked into status: %d", got)
+	}
+}
+
 func TestHighServerRejectsTamperedManifest(t *testing.T) {
 	pub, priv := newTestKeys(t)
 	hs := newTestHighServer(t, pub)
 	writeSignedBundle(t, hs.cfg.Landing, priv, 1, 0, []moduleSpec{{"m", "v1.0.0"}})
+	writeSignedStreamBundle(t, hs.cfg.Landing, priv, streamPython, 1, 0)
 
 	// Corrupt the manifest so its signature no longer verifies.
 	manifestPath := filepath.Join(hs.cfg.Landing, "go-bundle-000001.manifest.json")
@@ -397,8 +434,18 @@ func TestHighServerRejectsTamperedManifest(t *testing.T) {
 	}
 	writeFile(t, manifestPath, append(b, ' '))
 
-	if _, err := hs.ImportNext(); err == nil {
-		t.Fatal("ImportNext accepted a tampered manifest")
+	res, err := hs.ImportNext()
+	if err != nil {
+		t.Fatalf("invalid stream should be isolated, got: %v", err)
+	}
+	if len(res.RejectedBundles) != 1 || res.RejectedBundles[0] != "go-bundle-000001" {
+		t.Fatalf("tampered bundle was not reported as rejected: %+v", res)
+	}
+	if len(res.ImportedBundles) != 1 || res.ImportedBundles[0] != "python-bundle-000001" {
+		t.Fatalf("tampered go bundle blocked valid python import: %+v", res)
+	}
+	if !bundleCompleteInDir(filepath.Join(hs.cfg.Root, "rejected"), "go-bundle-000001") {
+		t.Fatal("tampered bundle was not moved out of the import path")
 	}
 }
 
@@ -778,6 +825,13 @@ func TestExportStateSaveFailureDoesNotReuseSequence(t *testing.T) {
 	if !bundleCompleteInDir(cfg.ExportDir, "go-bundle-000001") || !bundleCompleteInDir(archiveDir, "go-bundle-000001") {
 		t.Fatal("bundle 1 must be complete in the export dir and the archive despite the failed save")
 	}
+	sigFile, err := os.ReadFile(filepath.Join(cfg.ExportDir, "go-bundle-000001.manifest.json.sig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(sigFile), manifestSignaturePHPrefix) {
+		t.Fatalf("new bundle signature does not use streaming Ed25519ph format: %q", sigFile)
+	}
 	// While the process lives, the in-memory counter stays ahead of disk on
 	// purpose (the opposite of the high side's rollback): serving 1 again
 	// in-process would overwrite the bundle that already exists.
@@ -844,6 +898,41 @@ func TestExportStateSaveFailureDoesNotReuseSequence(t *testing.T) {
 	}
 	if !hs.isComplete("example.com/foo/bar", "v1.0.0") {
 		t.Error("module should be complete on the high side")
+	}
+}
+
+func TestExportRefusesToOverwritePartialBundle(t *testing.T) {
+	_, priv := newTestKeys(t)
+	cfg := LowConfig{
+		Root:            filepath.Join(t.TempDir(), "root"),
+		ExportDir:       filepath.Join(t.TempDir(), "out"),
+		GoBinary:        writeFakeGo(t),
+		UpstreamGOPROXY: "off",
+		GOSUMDB:         "off",
+	}
+	ls, err := NewLowServer(cfg, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ls.Close() })
+
+	partial := filepath.Join(cfg.ExportDir, "go-bundle-000001.tar.gz")
+	original := []byte("crash residue that must not be replaced")
+	writeFile(t, partial, original)
+
+	_, err = ls.CollectGo(context.Background(), GoCollectRequest{Modules: []string{"example.com/foo/bar@v1.0.0"}})
+	if err == nil || !strings.Contains(err.Error(), "refusing to overwrite crash residue") {
+		t.Fatalf("CollectGo with a partial existing bundle = %v, want crash-residue error", err)
+	}
+	got, readErr := os.ReadFile(partial)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatal("partial same-sequence artifact was overwritten")
+	}
+	if gotSeq := ls.peekSequence(streamGo); gotSeq != 1 {
+		t.Fatalf("partial artifact burned a sequence: next = %d, want 1", gotSeq)
 	}
 }
 
