@@ -13,8 +13,7 @@ ExecStart=/usr/local/bin/artigate low \
   --private-key /etc/artigate/low.ed25519 \
   --upstream-goproxy https://proxy.golang.org,direct \
   --goprivate github.com/your-org/* \
-  --gonosumdb github.com/your-org/* \
-  --export-interval 60s
+  --gonosumdb github.com/your-org/*
 Restart=always
 RestartSec=5
 NoNewPrivileges=true

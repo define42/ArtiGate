@@ -22,7 +22,7 @@ Every ecosystem follows the same **collect → bundle → import → serve** pat
 | [Python (PyPI)](python.md) | pip requirement specifiers (`requests`, `flask==3.0.0`) | PEP 503 simple index | `/simple/` (index) + `/packages/` (wheels) | `pip` |
 | [Java (Maven)](maven.md) | Maven coordinates (`com.google.guava:guava:33.0.0-jre`), or a `pom.xml` | Maven repository | `/maven/` | `mvn` |
 | [NPM](npm.md) | Package specs (`lodash`), or `package.json` + `package-lock.json` | npm registry | `/npm/` | `npm` |
-| [APT (Debian/Ubuntu)](apt.md) | deb822 source stanza, or explicit `uri`/`suite`/`components`/`architectures` | APT (deb822) repository | `/apt/` | `apt-get` |
+| [APT (Debian/Ubuntu)](apt.md) | deb822 source stanza (several `Suites:` per mirror), or explicit `uri`/`suites`/`components`/`architectures` | APT (deb822) repository | `/apt/` | `apt-get` |
 | [RPM (RHEL/Fedora)](rpm.md) | A `.repo` file, or explicit `name`/`base_url` (e.g. `packages.microsoft.com`) | yum/dnf repository | `/rpm/` | `dnf` / `yum` |
 | [Container images (OCI)](containers.md) | Docker-style image refs (`alpine:3.20`, `ghcr.io/org/app@sha256:…`) | OCI / Docker registry (v2) | `/v2/` | `docker` / `podman` |
 | [AI models (Hugging Face)](ai-models.md) | GGUF variant refs (`hf.co/org/model-GGUF:Q4_0`) and full repositories (`openai/gpt-oss-20b[@rev]`) | Ollama-compatible registry + Hub download API | `/v2/`, `/hf/`, `/api/models/` | `ollama`, `vllm` / `hf` via `HF_ENDPOINT` |
@@ -50,15 +50,15 @@ Collect takes package specs or a `package.json` + `package-lock.json` and pulls 
 
 ### APT (Debian/Ubuntu) → [apt.md](apt.md)
 
-Collect takes a deb822 source stanza (`source_list`) or explicit fields. By default it keeps **newest-only** — the highest version of each package — set `newest_only: false` to mirror every version in the index. The high side regenerates `Release`/`Packages` from the accumulated `.deb` stanzas (never trusting the transferred index) and optionally signs `InRelease` with `--apt-gpg-key`. Served under `/apt/`.
+Collect takes a deb822 source stanza (`source_list`) or explicit fields; one stanza's `Suites:` may list several releases (`noble noble-updates noble-security`), which share one mirror and its pool. By default it keeps **newest-only** — the highest version of each package — set `newest_only: false` to mirror every version in the index. The high side regenerates `Release`/`Packages` per suite from the accumulated `.deb` stanzas (never trusting the transferred index) and optionally signs `InRelease` with `--apt-gpg-key`. Served under `/apt/`.
 
 ### RPM (RHEL/Fedora) → [rpm.md](rpm.md)
 
-Collect takes a `.repo` file or explicit `name`/`base_url` (e.g. `packages.microsoft.com`). Like APT it is **newest-only** by default (highest EVR per package); set `newest_only: false` for every version. The high side regenerates repodata and optionally signs `repomd.xml.asc` with `--rpm-gpg-key`. Served under `/rpm/`.
+Collect takes a `.repo` file or explicit `name`/`base_url` (e.g. `packages.microsoft.com`). Like APT it is **newest-only** by default (highest EVR per package); set `newest_only: false` for every version. Only **x86_64 + noarch** packages are mirrored unless the `architectures` field lists others, and the mirror is named after its `baseurl`. The high side regenerates repodata and optionally signs `repomd.xml.asc` with `--rpm-gpg-key`. Served under `/rpm/`.
 
 ### Container images (OCI) → [containers.md](containers.md)
 
-The richest ecosystem: collect takes docker-style image references (`alpine:3.20`, or a digest pin) and mirrors the `linux/amd64` image. The high side reassembles blobs and manifests and serves an OCI/Docker v2 registry under `/v2/`. Tag constraints use `hashicorp/go-version` (ArtiGate's only non-stdlib dependency besides SQLite).
+The richest ecosystem: collect takes docker-style image references (`alpine:3.20`, a digest pin, or a **version constraint** like `golang:1.26.x` resolved against the upstream tag list at collect time) and mirrors the `linux/amd64` image. The high side reassembles blobs and manifests and serves an OCI/Docker v2 registry under `/v2/`. Tag constraints are parsed with `hashicorp/go-version`.
 
 ### AI models (Hugging Face) → [ai-models.md](ai-models.md)
 
@@ -77,7 +77,7 @@ Each ecosystem trades completeness for airgap-friendliness in a different way. K
 | AI models | **Exactly what you name** — one variant per reference; a repository snapshot is every file at one pinned commit (minus `repo_exclude`) |
 
 !!! warning "Content dedup is per stream"
-    The low side's Tier-1 export dedup ([`exported.db`](../architecture.md)) is content-hash based and **per stream**. A re-collect of an unchanged upstream is skipped and consumes no sequence number; it does not dedup across ecosystems, and [re-export](../low-side.md) bypasses dedup entirely.
+    The low side's export dedup ([`exported.db`](../architecture.md#export-deduplication-and-delta-bundles)) is **per stream**. A re-collect of an unchanged upstream is skipped and consumes no sequence number; a partly-changed one ships a **delta bundle** carrying only the new files. APT, RPM, container, and Hugging Face LFS collects even skip *downloading* files the index says were already forwarded. It does not dedup across ecosystems, `"force": true` bypasses it per collect, and [re-export](../low-side.md) bypasses it entirely.
 
 !!! tip "Live progress"
     Append `?stream=1` to any collect (e.g. `POST /admin/containers/collect?stream=1`) for NDJSON live progress instead of a single JSON result — useful for long mirrors. See the [HTTP API reference](../api.md).

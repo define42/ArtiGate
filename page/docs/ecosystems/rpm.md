@@ -4,7 +4,7 @@ ArtiGate mirrors yum/dnf repositories at full metadata fidelity: the [low side](
 
 RPM work travels on the `rpm` stream. Like every ecosystem, that stream has its own sequence counter and export lock, so an RPM collect never blocks or interleaves with Go, Python, Maven, npm, APT, container, or AI model work — only the `rpm` stream lock is held across the whole mirror → write → commit.
 
-Unlike a pull-through cache, ArtiGate is a **full repository mirror** (Fedora/RHEL/EPEL-scale): each collect is a complete re-sync of the current upstream repository into one new sequenced, Ed25519-signed bundle. There is no incremental/delta logic.
+Unlike a pull-through cache, ArtiGate is a **full repository mirror** (Fedora/RHEL/EPEL-scale): each collect re-syncs against the current upstream repository into one new sequenced, Ed25519-signed bundle. [Export dedup](../architecture.md#export-deduplication-and-delta-bundles) keeps the re-sync cheap: the primary index declares each `.rpm`'s SHA-256 before the bytes are fetched, so packages already forwarded on the `rpm` stream are **not downloaded again** — they ride in the manifest as `prior` references while only the genuinely new packages are downloaded and packed into a delta bundle. An unchanged repository produces no bundle at all, and `"force": true` bypasses the index for a full, self-contained bundle.
 
 ## What it mirrors
 
@@ -44,6 +44,7 @@ Drive a collect with `POST /admin/rpm/collect`. Provide **either** a full yum/dn
 | `repo_file` | string | A full `.repo` (INI) file, one or more `[section]`s. Wins when non-blank. |
 | `newest_only` | *bool | Keep only the newest version of each package. **Defaults to `true`** when omitted. |
 | `architectures` | []string | Package architectures to mirror. **Defaults to `["x86_64", "noarch"]`** when omitted — `noarch` stays in because hardware-arch packages routinely depend on noarch ones. List explicitly to override (e.g. add `i686`, or `["x86_64"]` to drop noarch). Applies to every repo in the collect. |
+| `force` | bool | Bypass the export-dedup index — download and pack every `.rpm` even if already forwarded (full, self-contained bundle). |
 
 When `repo_file` is present and non-blank it wins: each `[section]` becomes one mirror. A top-level `gpg_key` in the request **overrides** the `gpgkey=` parsed from every section.
 
@@ -229,7 +230,7 @@ dnf --disablerepo='*' --enablerepo='artigate-packages-microsoft' makecache
 
 - **The primary index must be `.gz`, `.xz`, or uncompressed.** ArtiGate must parse it to enumerate packages; a primary offered **only as `.zck` (zchunk)** cannot be parsed and the collect fails with `zchunk (.zck) index cannot be parsed`. Metadata files ArtiGate never parses (it only stores and re-serves them) may still be `.zck`.
 - **Newest-only cannot rewrite a `.zck` primary.** If newest-only would drop packages but the primary is zchunk-only, disable newest-only for that repo.
-- **Each collect is a full re-sync.** There is no incremental fetch — every collect re-fetches the current `repomd.xml` and re-mirrors everything it points at into a new sequenced bundle. Content-level dedup means an unchanged repository writes no new bundle and burns no sequence.
+- **Each collect re-syncs the metadata.** Every collect re-fetches the current `repomd.xml` and its indexes. The packages themselves are incremental: `.rpm`s already forwarded are skipped before download and ride as `prior` references in a delta bundle; an unchanged repository writes no new bundle and burns no sequence.
 - **`baseurl` variables are not expanded.** Any `$releasever`/`$basearch` (any `$`) is rejected; pin concrete URLs.
 - **Remote `gpgkey=https://…` is not used for verification.** Only `file://`/absolute local keyrings are honoured on the low side.
 - **External binaries.** `xz` must be installed on the **low** side for `.xz` metadata (parsing the primary index and recompressing it for newest-only) — the high side never decompresses or re-hashes RPM metadata, so it needs no `xz`; `gpgv` on the low side for repomd verification; `gpg` on the high side for signing.

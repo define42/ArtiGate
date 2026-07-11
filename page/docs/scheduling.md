@@ -11,7 +11,7 @@ A watch stores the **exact JSON body its page's collect would POST** (the `spec`
 Because it re-runs the real collect every time, a watch inherits all of that collect's behaviour:
 
 - Moving references re-resolve on each run (see [below](#version-constraint-re-resolution)).
-- [Tier-1 dedup](architecture.md) still applies: if every resolved file was already forwarded on that stream, no bundle is produced and no sequence number is consumed — the watch just records a "skipped" run.
+- [Export dedup](architecture.md#export-deduplication-and-delta-bundles) still applies: if every resolved file was already forwarded on that stream, no bundle is produced and no sequence number is consumed — the watch just records a "skipped" run. If only some files are new, the run emits a **delta bundle** carrying just the churn (the watch message counts the already-forwarded files).
 - Per-unit fetch failures are collected as skipped units, not fatal, so one broken reference never blocks the batch.
 
 A watch can target any of the eight known streams:
@@ -74,9 +74,11 @@ The stored spec is replayed literally, but the *upstream resolution* happens fre
 
 | Spec references | Behaviour on each run |
 |---|---|
+| Container version constraint (e.g. `golang:1.26.x`, `golang:>=1.24,<2.0`) | Re-resolved against the upstream tag list **at that run** — the schedule tracks new matching releases through the diode automatically |
 | Moving container tag (e.g. `alpine:3.20`) | Re-resolved to whatever manifest/digest the tag points to **at that run** — new pushes are picked up |
 | Pinned digest (e.g. `ghcr.io/org/app@sha256:…`) | Always the same content; dedup decides whether a new bundle is emitted |
 | Go `module@latest` or `resolve_deps: true` | The module graph is re-resolved each run, so newly published versions are pulled |
+| Hugging Face branch (e.g. `openai/gpt-oss-20b@main`) | Re-resolved to the branch's current commit; a moved branch adds the new snapshot |
 | Pinned version (e.g. `requests==2.32.3`) | Same content each run; only dedup decides whether anything is sent |
 
 For containers specifically, every run re-parses the image refs and re-mirrors them. Only `linux/amd64` is mirrored; per-image fetch failures are collected as skipped units (surfaced in the watch message as "N skipped") rather than aborting the batch. See [Container images](ecosystems/containers.md) for details.
@@ -119,9 +121,10 @@ The `last_message` is built from the run result:
 
 | Outcome | Message |
 |---|---|
-| New content exported | `bundle <bundle-id>: <N> unit(s)` (with `, <n> skipped` appended if any units failed) |
+| New content exported | `bundle <bundle-id>: <N> unit(s)` — with `, <n> file(s) already forwarded` appended for a delta bundle, and `, <n> skipped` if any units failed |
 | Dedup skip (nothing new) | `no new content since last export; skipped` |
 | No bundle produced | `no bundle produced` |
+| HTTP diode upload failed | the success message plus `; diode upload failed: <error>` — the bundle is committed and staged for re-transmit |
 | Failure | the error string |
 
 !!! note "Next-run is computed from the run's finish time"
@@ -129,7 +132,7 @@ The `last_message` is built from the run result:
 
 ## Where watches are stored
 
-Watches are persisted in a dedicated SQLite database at `<root>/watches.db`, where `<root>` is the low-side `--root` (default `/var/lib/artigate-low`). It is opened during low-side startup and is separate from the low side's other state (`exported.db`, the Tier-1 dedup index, and `low-state.json`, the sequence state).
+Watches are persisted in a dedicated SQLite database at `<root>/watches.db`, where `<root>` is the low-side `--root` (default `/var/lib/artigate-low`). It is opened during low-side startup and is separate from the low side's other state (`exported.db`, the export-dedup index, and `low-state.json`, the sequence state).
 
 - The driver is the pure-Go `modernc.org/sqlite` — no cgo.
 - The connection pool is capped at a single writer (`SetMaxOpenConns(1)`) with `PRAGMA busy_timeout=5000`, so the scheduler and the UI serialize instead of hitting "database is locked".

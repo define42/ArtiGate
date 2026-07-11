@@ -25,9 +25,12 @@ Drive a collect with `POST /admin/go/collect`. The request body (max 8 MiB, to l
   "modules": ["rsc.io/quote@v1.5.2", "golang.org/x/text"],
   "resolve_deps": false,
   "go_mod": "",
-  "go_sum": ""
+  "go_sum": "",
+  "force": false
 }
 ```
+
+`force: true` bypasses the export-dedup index for this collect, producing a full self-contained bundle (see [Dedup](#internals) below).
 
 There are four ways to describe what to fetch. They are dispatched by **precedence — `go_mod` wins**: when it is set, `modules` and `resolve_deps` are ignored.
 
@@ -139,7 +142,7 @@ artigate low \
 
 **Resilient batches.** A module version that fails to fetch is recorded (module, version, error) and **skipped**, not fatal — one bad version never blocks the rest of the batch. Failed modules surface in the collect result as `SkippedModules`. If *nothing* fetches, the collect errors with `no modules could be fetched` and **no sequence is burned** — an all-failed collect must never leave a permanent gap the high side would wait on forever.
 
-**Dedup.** After fetching, ArtiGate checks every file's SHA-256 against the per-stream export index. If all content was already exported, it writes no bundle and burns no sequence (the result is marked skipped, "no new content since the last export"). Dedup fails safe: an empty file set or any store error means *not* skipped.
+**Dedup.** After fetching, ArtiGate checks every file against the per-stream export index. If all content was already exported, it writes no bundle and burns no sequence (the result is marked skipped, "no new content since the last export"). If only some files are new, it writes a **delta bundle**: the archive carries the new files, the rest ride in the manifest as `prior` references (counted in the result's `prior_files`), and the high side verifies them against its accumulated repository. `"force": true` bypasses the index for a full, self-contained bundle. Dedup fails safe: an empty file set or any store error means *not* skipped. Go has no pre-download hash from upstream, so files are always fetched (the module cache makes re-fetches cheap) and deduped after hashing.
 
 **Flag-injection safety.** Caller-supplied module paths and versions become `go` command-line arguments, so both are validated before any `go` call:
 

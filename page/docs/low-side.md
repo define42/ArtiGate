@@ -32,6 +32,7 @@ On startup the server creates `<root>`, `<export-dir>`, and the Go module cache 
 | `--maven` | `mvn` | Maven command |
 | `--npm` | `npm` | npm command |
 | `--container-registry` | *(empty)* | Comma-separated `host=baseURL` registry overrides, e.g. `docker.io=https://mirror.example.com` |
+| `--hf-endpoint` | *(empty)* | Alternative Hugging Face endpoint (private mirror); empty means `https://huggingface.co` |
 | `--watch-interval` | `60s` | How often the scheduler checks for due watches; `0` disables scheduled pulls |
 
 !!! note
@@ -60,9 +61,9 @@ A collect resolves a set of artifacts, fetches them with the host toolchain, and
 
 1. **Lock the stream.** Each stream has its own mutex, so two exports on the same stream can never claim the same sequence number, while different streams (say a long APT mirror and a Python collect) run concurrently.
 2. **Resolve** the request into concrete artifacts.
-3. **Fetch** with the native tool *before* allocating a sequence. A single artifact that fails to download is recorded and skipped — one bad version never aborts the batch. If *nothing* could be fetched, the collect errors out rather than emit an empty bundle (which would leave the high side waiting forever).
-4. **Dedup check.** If every fetched file's SHA-256 was already exported on this stream, the collect is skipped — **no sequence is consumed and no bundle is written**.
-5. **Allocate → write → sign → commit.** Otherwise the next sequence is taken, the bundle is built, the manifest is signed, the sequence counter advances, and the file hashes are recorded in the dedup index (only *after* the commit succeeds).
+3. **Fetch** with the native tool *before* allocating a sequence. A single artifact that fails to download is recorded and skipped — one bad version never aborts the batch. If *nothing* could be fetched, the collect errors out rather than emit an empty bundle (which would leave the high side waiting forever). Collectors whose upstream declares each file's SHA-256 up front (APT, RPM, containers, Hugging Face LFS) don't even download files the dedup index says were already forwarded.
+4. **Mark prior content.** Every resolved file whose `(path, sha256)` was already exported on this stream is flagged as *prior*. If **everything** is prior, the collect is skipped — **no sequence is consumed and no bundle is written**.
+5. **Allocate → write → sign → commit.** Otherwise the next sequence is taken and the bundle is built — the archive carries only the *new* files, while prior files ride in the manifest as references (a **delta bundle**). The manifest is signed, the sequence counter advances, and only then are the file hashes recorded in the dedup index.
 
 You can drive a collect from the dashboard, or directly over HTTP:
 
@@ -86,7 +87,7 @@ A buffered (non-streaming) collect responds with a JSON `ExportResult`:
 }
 ```
 
-A dedup skip instead returns `{"stream":"go","exported_modules":0,"skipped":true,"message":"no new content since the last export"}`.
+A dedup skip instead returns `{"stream":"go","exported_modules":0,"skipped":true,"message":"no new content since the last export"}`, and a delta bundle carries a `"prior_files"` count of the manifest entries that reference already-forwarded content. Every collect body also accepts `"force": true` to bypass the dedup index entirely and produce a full, self-contained bundle.
 
 ### What lands in the export dir
 
@@ -94,7 +95,7 @@ Bundle IDs are `<stream>-bundle-<seq>` zero-padded to six digits — for example
 
 | File | Contents |
 |---|---|
-| `<id>.tar.gz` | The artifact archive (built deterministically) |
+| `<id>.tar.gz` | The artifact archive (built deterministically; delta bundles carry only the new files) |
 | `<id>.manifest.json` | The manifest — the exact bytes that are signed |
 | `<id>.manifest.json.sig` | Detached base64 Ed25519 signature of the manifest bytes |
 
@@ -120,7 +121,7 @@ There are four event types: `log` (a human-readable progress line), `dl` (a thro
 ```bash
 curl -N -X POST 'http://localhost:8080/admin/python/collect?stream=1' \
   -H 'Content-Type: application/json' \
-  -d '{"requirements":"requests"}'
+  -d '{"requirements":["requests"]}'
 ```
 
 In the browser this drives a shared **progress modal**: a spinner, a live-tailing log, a **per-file progress bar** (percentage, bytes, transfer rate, ETA — shown for direct HTTP downloads, bundle packing, and diode uploads once a transfer outlasts half a second), and a result box. A **Stop** button aborts the running collect server-side — downloads, spawned tools, and packing all cancel, nothing is exported, and no sequence number is burned; only a stop landing in the final signing moment still exports, which the stopped message calls out. Close is disabled while a collect runs, and Esc / backdrop dismissal is blocked until it finishes. A dedup skip renders uniformly as "No new content since the last export — nothing to send across the diode." The modal always refreshes the Status page afterward.
@@ -130,9 +131,15 @@ With an [HTTP diode endpoint](deployment.md) configured, each successful collect
 !!! tip
     Without `?stream=1` the collect runs buffered and emits no progress lines — the progress sink is a no-op, which is exactly how scheduled watches run. Streaming is purely a UI/observability aid; the export result is identical either way.
 
-## Export deduplication
+## Export deduplication and delta bundles
 
-ArtiGate keeps a per-stream index of the SHA-256 of every file it has ever exported (SQLite, `<root>/exported.db`). Before writing a bundle, a collect checks whether **every** resolved file is already in that index; if so it skips, consuming no sequence and producing no diode traffic. This is what makes a scheduled re-pull of an unchanged upstream cheap.
+ArtiGate keeps a per-stream index of every file it has ever exported — `(stream, sha256, path)` rows in SQLite at `<root>/exported.db`. It buys three things:
+
+- **Whole-collect skip.** When every resolved file is already in the index, the collect is skipped: no sequence consumed, no bundle written, no diode traffic. This is what makes a scheduled re-pull of an unchanged upstream free.
+- **Delta bundles.** When only some files are new, the bundle's archive carries just those; the rest are listed in the manifest as `prior` references that the high side verifies against its accumulated repository. A daily schedule over a slowly-changing mirror sends only the churn.
+- **Download skip.** Collectors whose upstream declares each file's SHA-256 before the bytes are fetched — APT `Packages` indexes, RPM `primary.xml`, container image digests, Hugging Face LFS files — consult the index first and skip the download entirely. The pip/mvn/npm/go-driven fetches have no usable pre-download hash, so they download as before and dedup after hashing.
+
+`"force": true` on any collect bypasses the index for that run and produces a full, self-contained bundle — use it when a high side is rebuilt from scratch or its earlier bundles were pruned, because **a delta bundle imports only on a high side that already holds this stream's earlier content** (the import error names the missing prior file and this exact remedy).
 
 The index is an optimization, never correctness state: an empty file set or any store error fails safe (it exports rather than wrongly skips), and it records hashes only *after* the sequence commit succeeds. Re-export bypasses the index entirely. The full rationale is in the [architecture](architecture.md) page.
 
@@ -172,7 +179,7 @@ Re-export takes the same per-stream lock as a fresh export (so it cannot collide
 ```
 
 !!! warning
-    Re-export only works while the archive copy exists. A bundle showing `✗ not kept` on the Status page has been pruned and can no longer be replayed.
+    Re-export only works while the archive copy exists. A bundle showing `✗ not kept` on the Status page has been pruned and can no longer be replayed. And because a *re-collect* after pruning would produce delta bundles referencing content the rebuilt high side lacks, recovery from a from-scratch high side is a **forced** collect (`"force": true`), not a normal one.
 
 ## Scheduling
 
@@ -189,11 +196,13 @@ The low side deliberately **delegates fetching to the tools already installed on
 | Maven | `mvn` |
 | npm | `npm` |
 | APT | `gpgv` (to verify the upstream `Release` against a supplied keyring) |
-| RPM | `gpgv` (optional, for repo signature verification) |
+| RPM | `gpgv` (optional, for repo signature verification), `xz` (for `.xz`-compressed indexes) |
+| Containers, AI models | none — fetched over HTTP with the Go standard library |
 
 Because fetching runs as native tooling, upstream credentials and proxy settings come from the host environment. In particular:
 
 - **Private Go modules** need Git and SSH configured on the low-side host (working `~/.ssh`, `~/.gitconfig`, credential helpers), plus the matching `--goprivate` / `--gonoproxy` / `--gonosumdb` flags so `go` fetches them directly from the VCS instead of the public proxy and sum database.
 - ArtiGate always forces `GIT_TERMINAL_PROMPT=0`, so Git never blocks on an interactive password prompt — configure non-interactive auth (SSH keys or a credential helper) or the fetch fails fast.
+- **Gated Hugging Face models** need `ARTIGATE_HF_TOKEN` set in the low side's environment.
 
 The Go `GO*` environment knobs are only applied when their flags are non-empty. Per-ecosystem fetching details live on the [ecosystems](ecosystems/index.md) pages.

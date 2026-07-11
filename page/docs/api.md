@@ -33,6 +33,12 @@ ArtiGate is a single binary with two roles that never share routes: `artigate lo
 
 Every ecosystem exposes `POST /admin/{eco}/collect`. The dispatch is POST-only; a non-POST request falls through to UI routing. Without `?stream=1` the handler returns a single buffered JSON `ExportResult` on success, or `http.Error` at **400** on failure. An empty body is JSON-valid but every collector then rejects it for missing required fields.
 
+Every collect request additionally accepts one shared field:
+
+| Field | Type | Notes |
+|---|---|---|
+| `force` | bool | omitempty; `true` bypasses the [export-dedup index](architecture.md#export-deduplication-and-delta-bundles) for this collect — everything is downloaded and packed even when already forwarded, producing a full self-contained bundle (disaster recovery / rebuilding a high side from scratch) |
+
 #### Shared response — `ExportResult`
 
 ```json
@@ -55,7 +61,8 @@ Every ecosystem exposes `POST /admin/{eco}/collect`. The dispatch is POST-only; 
 | `sequence` | int64 | omitempty; the sequence this bundle consumed |
 | `exported_modules` | int | **always emitted**; a *unit* count (Go modules, Python projects, container repos, Maven artifacts…) |
 | `bundle_id` | string | omitempty |
-| `skipped` | bool | omitempty; `true` when Tier-1 dedup found every resolved file already forwarded on this stream — **no bundle written, no sequence consumed** |
+| `skipped` | bool | omitempty; `true` when export dedup found every resolved file already forwarded on this stream — **no bundle written, no sequence consumed** |
+| `prior_files` | int | omitempty; the count of manifest entries that reference already-forwarded content (a [delta bundle](architecture.md#export-deduplication-and-delta-bundles)): listed and verified on import, but neither re-downloaded where the upstream declares hashes nor packed into the archive |
 | `message` | string | omitempty; `"no new content since the last export"` on a dedup skip, or `"re-exported from archive"` on a replay |
 | `skipped_modules` | `[]FailedModule` | omitempty; per-item fetch failures that were skipped so the rest of the batch still exports. `FailedModule` = `{module, version, error}` |
 | `diode_error` | string | omitempty; set when the upload to the [HTTP diode endpoint](deployment.md) failed. The bundle itself is committed, archived, and still staged — a "re-transmit me" signal, not a lost export |
@@ -553,8 +560,8 @@ Client: `pip install --index-url <base>/simple <pkg>`. See [Python (PyPI)](ecosy
 | URL | Returns |
 |---|---|
 | `/simple` or `/simple/` | HTML anchor list of normalized project names |
-| `/simple/<project>/` | HTML "Links for `<project>`" with `<a href="/packages/<file>#sha256=<hash>">` per wheel/sdist |
-| `/packages/<filename>` | The file (no slashes allowed in `<filename>`) |
+| `/simple/<project>/` | HTML "Links for `<project>`" with `<a href="/packages/<file>#sha256=<hash>">` per wheel |
+| `/packages/<filename>` | The wheel file (no slashes allowed in `<filename>`) |
 
 #### Maven — prefix `/maven`
 
