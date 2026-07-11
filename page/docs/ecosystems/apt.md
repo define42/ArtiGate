@@ -73,7 +73,7 @@ For each mirror, and for **each of its suites** (`distBase = <uri>/dists/<suite>
 !!! warning "Index format support"
     Only `Packages.gz` and plain `Packages` are supported (stdlib gzip). Repositories that publish **only** `.xz`, `.bz2`, or `.zst` indexes are not mirrorable.
 
-Downloads use a **10-minute per-request timeout** and a **2 GiB per-file cap**. An empty result (no packages) produces no bundle: `apt mirror produced no packages`.
+`.deb` files **stream to disk** while being hashed — a package is never buffered in memory, and its byte count must match the index-declared `Size` exactly (files without a declared size are capped at 8 GiB). Streamed downloads have a 30-minute timeout. In-memory fetches are small and capped: `Release`/`InRelease`/`Release.gpg` at 16 MiB, a `Packages` index at 1 GiB (10-minute timeout), and gzip decompression of an index refuses to expand beyond 2 GiB (decompression-bomb guard). An empty result (no packages) produces no bundle: `apt mirror produced no packages`.
 
 ### "Newest version only" (default) vs every version
 
@@ -217,7 +217,7 @@ sudo apt-get install code
 - **Minimal regenerated `Release`.** `Origin: ArtiGate`, `Suite == Codename`, no `Valid-Until`, no by-hash; upstream `Release` metadata is discarded.
 - **High side accumulates versions and suites.** Newest-only filtering happens only on the low side; the high side keeps every version/arch/suite ever imported.
 - **External binaries required.** `gpgv` on the low side (only when `Signed-By` is used) and `gpg` on the high side (only when `--apt-gpg-key` is set).
-- **Size/time caps.** Request body 1 MiB; per-file 2 GiB; per-request 10-minute timeout.
+- **Size/time caps.** Request body 1 MiB. `.deb` files stream to disk (never through memory): exact index-declared size enforced, 8 GiB cap without one, 30-minute timeout. In-memory metadata: Release 16 MiB, Packages index 1 GiB, decompressed index 2 GiB, 10-minute timeout.
 - **Unsigned by default.** `--apt-gpg-key` is unset by default, so repositories are served unsigned and clients need `Trusted: yes` until you configure a key.
 
 ## Related pages

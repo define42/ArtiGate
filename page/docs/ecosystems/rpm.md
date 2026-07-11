@@ -232,7 +232,8 @@ dnf --disablerepo='*' --enablerepo='artigate-packages-microsoft' makecache
 - **Each collect is a full re-sync.** There is no incremental fetch — every collect re-fetches the current `repomd.xml` and re-mirrors everything it points at into a new sequenced bundle. Content-level dedup means an unchanged repository writes no new bundle and burns no sequence.
 - **`baseurl` variables are not expanded.** Any `$releasever`/`$basearch` (any `$`) is rejected; pin concrete URLs.
 - **Remote `gpgkey=https://…` is not used for verification.** Only `file://`/absolute local keyrings are honoured on the low side.
-- **External binaries.** `xz` must be installed on the **low** side for `.xz` metadata (parsing the primary index and recompressing it for newest-only) — the high side never decompresses or re-hashes RPM metadata, so it needs no `xz`; `gpgv` on the low side for repomd verification; `gpg` on the high side for signing. Each download has a 10-minute timeout and a 4 GiB response cap.
+- **External binaries.** `xz` must be installed on the **low** side for `.xz` metadata (parsing the primary index and recompressing it for newest-only) — the high side never decompresses or re-hashes RPM metadata, so it needs no `xz`; `gpgv` on the low side for repomd verification; `gpg` on the high side for signing.
+- **Size/time caps.** `.rpm` and metadata files **stream to disk** while being hashed (never buffered in memory), with the repo-declared size enforced exactly (8 GiB cap when none is declared) and a 30-minute timeout. In-memory reads are capped: `repomd.xml(.asc)` at 16 MiB, the compressed primary index at 1 GiB, and gzip/xz decompression refuses to expand beyond 2 GiB (decompression-bomb guard).
 
 ## Related pages
 

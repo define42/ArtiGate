@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -42,7 +43,10 @@ func registerAptRepo(t *testing.T, mux *http.ServeMux, prefix, suite, pkg, versi
 		fmt.Sprintf(" %s %d main/binary-amd64/Packages\n", aptSHA256(packages), len(packages))
 	served := deb
 	if tamper {
-		served = []byte("CORRUPTED-DIFFERENT-BYTES")
+		// Same length as the real .deb: the streaming download enforces the
+		// index-declared size first, so only same-length corruption proves the
+		// SHA256 check itself.
+		served = []byte(strings.Repeat("X", len(deb)))
 	}
 	distBase := prefix + "/dists/" + suite
 	mux.HandleFunc(distBase+"/InRelease", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(release)) })
@@ -488,5 +492,88 @@ func TestServeAptRejectsTraversal(t *testing.T) {
 		if code, _ := httpGet(t, srv.URL+p); code == http.StatusOK {
 			t.Errorf("traversal %s returned 200, want rejection", p)
 		}
+	}
+}
+
+// TestDownloadVerifiedFile covers the streaming download helper: hashing while
+// writing (no in-memory buffering), exact index-declared-size enforcement,
+// legacy checksum types, and removal of rejected files.
+func TestDownloadVerifiedFile(t *testing.T) {
+	payload := []byte("streamed package payload")
+	mux := http.NewServeMux()
+	mux.HandleFunc("/file", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(payload) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// Happy path: file staged (parent dirs created), manifest SHA-256 and size
+	// returned.
+	abs := filepath.Join(dir, "sub", "file.deb")
+	sum, size, err := downloadVerifiedFile(ctx, srv.URL+"/file", abs, int64(len(payload)), "sha256", aptSHA256(payload))
+	if err != nil || sum != aptSHA256(payload) || size != int64(len(payload)) {
+		t.Fatalf("downloadVerifiedFile = %q, %d, %v", sum, size, err)
+	}
+	if got, err := os.ReadFile(abs); err != nil || string(got) != string(payload) {
+		t.Fatalf("staged file = %q, %v", got, err)
+	}
+
+	// A repo-declared sha512 checksum verifies, and the returned manifest hash
+	// is still the SHA-256.
+	h := sha512.Sum512(payload)
+	sum, _, err = downloadVerifiedFile(ctx, srv.URL+"/file", filepath.Join(dir, "file512"), 0, "sha512", hex.EncodeToString(h[:]))
+	if err != nil || sum != aptSHA256(payload) {
+		t.Fatalf("sha512 download = %q, %v, want manifest sha256 %s", sum, err, aptSHA256(payload))
+	}
+
+	// Checksum mismatch: rejected, and the partial file is removed.
+	absBad := filepath.Join(dir, "bad.deb")
+	if _, _, err := downloadVerifiedFile(ctx, srv.URL+"/file", absBad, int64(len(payload)), "sha256", strings.Repeat("0", 64)); err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("tampered download = %v, want sha256 mismatch", err)
+	}
+	if _, err := os.Stat(absBad); !os.IsNotExist(err) {
+		t.Errorf("rejected file must be removed, stat = %v", err)
+	}
+
+	// The body disagreeing with the index-declared size is rejected up front.
+	absShort := filepath.Join(dir, "short.deb")
+	if _, _, err := downloadVerifiedFile(ctx, srv.URL+"/file", absShort, int64(len(payload))-1, "sha256", aptSHA256(payload)); err == nil || !strings.Contains(err.Error(), "size mismatch") {
+		t.Fatalf("oversize download = %v, want size mismatch", err)
+	}
+	if _, err := os.Stat(absShort); !os.IsNotExist(err) {
+		t.Errorf("size-mismatched file must be removed, stat = %v", err)
+	}
+
+	// HTTP errors do not leave files behind.
+	abs404 := filepath.Join(dir, "missing.deb")
+	if _, _, err := downloadVerifiedFile(ctx, srv.URL+"/nope", abs404, 0, "sha256", aptSHA256(payload)); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("404 download = %v, want HTTP 404", err)
+	}
+	if _, err := os.Stat(abs404); !os.IsNotExist(err) {
+		t.Errorf("404 must not create a file, stat = %v", err)
+	}
+
+	// Unknown checksum types fail closed.
+	if _, _, err := downloadVerifiedFile(ctx, srv.URL+"/file", filepath.Join(dir, "x"), 0, "md5", "irrelevant"); err == nil || !strings.Contains(err.Error(), "unsupported checksum type") {
+		t.Fatalf("md5 download = %v, want unsupported checksum type", err)
+	}
+}
+
+// TestGunzipCap proves a decompression bomb fails instead of ballooning into
+// memory, while normal payloads still round-trip.
+func TestGunzipCap(t *testing.T) {
+	bomb, err := gzipBytes(make([]byte, 1<<20)) // 1 MiB of zeros, ~1 KiB gzipped
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gunzip(bomb, 64<<10); err == nil || !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("gunzip(bomb) = %v, want cap error", err)
+	}
+	gz, err := gzipBytes([]byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := gunzip(gz, 64<<10); err != nil || string(out) != "hello" {
+		t.Fatalf("gunzip = %q, %v", out, err)
 	}
 }

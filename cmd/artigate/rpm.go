@@ -20,11 +20,10 @@ package main
 // entry point without ever trusting a transferred repomd/signature as final.
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/sha1" //nolint:gosec // used only to verify legacy repo checksums, not as a security primitive
 	"crypto/sha256"
-	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -635,7 +634,7 @@ func (s *LowServer) downloadRpmMetadata(ctx context.Context, base, name string, 
 	var primaryRel string
 	for _, d := range data {
 		entry := d.toRpmData()
-		mf, err := s.downloadRpmFile(ctx, base, name, entry.Href, entry.ChecksumType, entry.Checksum, stageRoot)
+		mf, err := s.downloadRpmFile(ctx, base, name, entry.Href, entry.ChecksumType, entry.Checksum, entry.Size, stageRoot)
 		if err != nil {
 			return nil, nil, "", fmt.Errorf("metadata %s: %w", entry.Type, err)
 		}
@@ -701,7 +700,7 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 			files = append(files, ManifestFile{Path: rel, SHA256: pkg.SHA256, Size: pkg.Size, Prior: true})
 			continue
 		}
-		mf, err := s.downloadRpmFile(ctx, base, cfg.Name, pkg.Location, "sha256", pkg.SHA256, stageRoot)
+		mf, err := s.downloadRpmFile(ctx, base, cfg.Name, pkg.Location, "sha256", pkg.SHA256, pkg.Size, stageRoot)
 		if err != nil {
 			return RpmMirror{}, nil, fmt.Errorf("package %s: %w", pkg.Name, err)
 		}
@@ -714,12 +713,12 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 // fetchRepomd downloads repodata/repomd.xml and verifies repomd.xml.asc against
 // the caller's keyring when one is supplied.
 func (s *LowServer) fetchRepomd(ctx context.Context, base, gpgKey string) ([]byte, error) {
-	repomd, err := httpDownload(ctx, base+"/repodata/repomd.xml")
+	repomd, err := httpGetBytes(ctx, base+"/repodata/repomd.xml", maxSignedMetaBytes)
 	if err != nil {
 		return nil, fmt.Errorf("fetch repomd.xml: %w", err)
 	}
 	if gpgKey != "" {
-		sig, err := httpDownload(ctx, base+"/repodata/repomd.xml.asc")
+		sig, err := httpGetBytes(ctx, base+"/repodata/repomd.xml.asc", maxSignedMetaBytes)
 		if err != nil {
 			return nil, fmt.Errorf("fetch repomd.xml.asc: %w", err)
 		}
@@ -730,37 +729,34 @@ func (s *LowServer) fetchRepomd(ctx context.Context, base, gpgKey string) ([]byt
 	return repomd, nil
 }
 
-// downloadRpmFile fetches one repository file (metadata or .rpm), verifies it
-// against the repo-declared checksum, and stages it under rpm/<mirror>/<rel>.
-func (s *LowServer) downloadRpmFile(ctx context.Context, base, mirror, relHref, checksumType, checksum string, stageRoot string) (ManifestFile, error) {
+// downloadRpmFile fetches one repository file (metadata or .rpm), verifying it
+// against the repo-declared checksum as it streams to rpm/<mirror>/<rel> under
+// stageRoot — a multi-GiB .rpm is never buffered in memory. wantSize is the
+// repo-declared byte count (0 when the repo does not declare one).
+func (s *LowServer) downloadRpmFile(ctx context.Context, base, mirror, relHref, checksumType, checksum string, wantSize int64, stageRoot string) (ManifestFile, error) {
 	if err := validateRelPath(relHref); err != nil {
 		return ManifestFile{}, fmt.Errorf("unsafe location %q: %w", relHref, err)
-	}
-	data, err := httpDownload(ctx, base+"/"+relHref)
-	if err != nil {
-		return ManifestFile{}, err
-	}
-	if err := verifyChecksum(data, checksumType, checksum); err != nil {
-		return ManifestFile{}, fmt.Errorf("%s: %w", relHref, err)
 	}
 	rel := rpmFileRel(mirror, relHref)
 	if err := validateRelPath(rel); err != nil {
 		return ManifestFile{}, fmt.Errorf("unsafe staging path %q: %w", rel, err)
 	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return ManifestFile{}, err
+	sum, size, err := downloadVerifiedFile(ctx, base+"/"+relHref, abs, wantSize, checksumType, checksum)
+	if err != nil {
+		return ManifestFile{}, fmt.Errorf("%s: %w", relHref, err)
 	}
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
-		return ManifestFile{}, err
-	}
-	return ManifestFile{Path: rel, SHA256: sha256Hex(data), Size: int64(len(data))}, nil
+	return ManifestFile{Path: rel, SHA256: sum, Size: size}, nil
 }
 
 // readStagedMetadata reads a staged metadata file and decompresses it by
-// extension.
+// extension. Both the compressed bytes and the decompressed result are held in
+// memory for parsing, so each is capped.
 func readStagedMetadata(stageRoot, mirror, relHref string) ([]byte, error) {
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rpmFileRel(mirror, relHref)))
+	if info, err := os.Stat(abs); err == nil && info.Size() > maxIndexFetchBytes {
+		return nil, fmt.Errorf("%s: %s index exceeds the %s parse cap", relHref, formatBytes(info.Size()), formatBytes(maxIndexFetchBytes))
+	}
 	raw, err := os.ReadFile(abs)
 	if err != nil {
 		return nil, err
@@ -799,38 +795,18 @@ func (s *LowServer) writeRpmBundle(ctx context.Context, seq int64, stageRoot str
 }
 
 // -----------------------------------------------------------------------------
-// Helpers (HTTP, decompression, checksums)
+// Helpers (decompression, checksums) — HTTP fetching is shared with the APT
+// adapter: httpGetBytes for small in-memory metadata, downloadVerifiedFile for
+// streamed packages.
 // -----------------------------------------------------------------------------
 
-func httpDownload(ctx context.Context, rawURL string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	r := newProgressReader(ctx, resp.Body, dlNameFromURL(rawURL), resp.ContentLength)
-	body, err := io.ReadAll(io.LimitReader(r, 4<<30))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: HTTP %d", rawURL, resp.StatusCode)
-	}
-	return body, nil
-}
-
 // decompressByExt decompresses by href extension: .gz via the standard library,
-// .xz by shelling to xz, and plain otherwise.
+// .xz by shelling to xz, and plain otherwise. Output is capped at
+// maxIndexPlainBytes (the result is parsed in memory).
 func decompressByExt(href string, data []byte) ([]byte, error) {
 	switch {
 	case strings.HasSuffix(href, ".gz"):
-		return gunzip(data)
+		return gunzip(data, maxIndexPlainBytes)
 	case strings.HasSuffix(href, ".xz"):
 		return xzDecompress(data)
 	case strings.HasSuffix(href, ".zck"):
@@ -841,15 +817,7 @@ func decompressByExt(href string, data []byte) ([]byte, error) {
 }
 
 func xzDecompress(data []byte) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "xz", "--decompress", "--stdout")
-	cmd.Stdin = strings.NewReader(string(data))
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("xz decompress: %w", err)
-	}
-	return out, nil
+	return runXZ(data, maxIndexPlainBytes, "--decompress", "--stdout")
 }
 
 // compressByExt recompresses plain to match an href's extension: .gz via the
@@ -870,13 +838,37 @@ func compressByExt(href string, plain []byte) ([]byte, error) {
 }
 
 func xzCompress(data []byte) ([]byte, error) {
+	return runXZ(data, maxMirroredFileBytes, "--compress", "--stdout")
+}
+
+// runXZ pipes data through the xz binary, failing once the output exceeds
+// limit rather than buffering an unbounded expansion (decompression-bomb
+// guard; the input is never copied, unlike a string round-trip).
+func runXZ(data []byte, limit int64, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "xz", "--compress", "--stdout")
-	cmd.Stdin = strings.NewReader(string(data))
-	out, err := cmd.Output()
+	cmd := exec.CommandContext(ctx, "xz", args...)
+	cmd.Stdin = bytes.NewReader(data)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("xz compress: %w", err)
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("xz %s: %w", strings.Join(args, " "), err)
+	}
+	out, readErr := io.ReadAll(io.LimitReader(stdout, limit+1))
+	if int64(len(out)) > limit {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("xz %s: output exceeds the %s cap", strings.Join(args, " "), formatBytes(limit))
+	}
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Errorf("xz %s: %w\n%s", strings.Join(args, " "), err, tailBytes(stderr.Bytes(), 2048))
+	}
+	if readErr != nil {
+		return nil, readErr
 	}
 	return out, nil
 }
@@ -884,29 +876,6 @@ func xzCompress(data []byte) ([]byte, error) {
 func sha256Hex(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
-}
-
-// verifyChecksum verifies data against a repo-declared checksum of the named
-// type (sha256/sha512/sha1). ArtiGate's own bundle integrity always uses
-// sha256; this only mirrors what the upstream repomd declares.
-func verifyChecksum(data []byte, algo, want string) error {
-	var got string
-	switch strings.ToLower(algo) {
-	case "sha256", "":
-		got = sha256Hex(data)
-	case "sha512":
-		h := sha512.Sum512(data)
-		got = hex.EncodeToString(h[:])
-	case "sha1", "sha":
-		h := sha1.Sum(data) //nolint:gosec // verifying a legacy repo-declared checksum
-		got = hex.EncodeToString(h[:])
-	default:
-		return fmt.Errorf("unsupported checksum type %q", algo)
-	}
-	if !strings.EqualFold(got, strings.TrimSpace(want)) {
-		return fmt.Errorf("%s mismatch: got %s want %s", algo, got, want)
-	}
-	return nil
 }
 
 // -----------------------------------------------------------------------------
