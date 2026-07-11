@@ -42,9 +42,9 @@ COPY --from=build /out/artigate /usr/local/bin/artigate
 ENV HOME=/home/artigate \
     GOCACHE=/home/artigate/.cache/go-build \
     GOMODCACHE=/home/artigate/go/pkg/mod
-RUN mkdir -p /var/lib/artigate /var/spool/diode-out /var/spool/diode-in /keys \
+RUN mkdir -p /var/lib/artigate /var/spool/diode-out /var/spool/diode-in /keys /low-keys /high-keys \
              "$GOCACHE" "$GOMODCACHE" \
-    && chown -R artigate:artigate /home/artigate /var/lib/artigate /var/spool/diode-out /var/spool/diode-in /keys
+    && chown -R artigate:artigate /home/artigate /var/lib/artigate /var/spool/diode-out /var/spool/diode-in /keys /low-keys /high-keys
 
 USER artigate
 WORKDIR /home/artigate

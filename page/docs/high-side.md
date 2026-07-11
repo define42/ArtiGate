@@ -130,7 +130,7 @@ The high side therefore **serves only complete versions** of fully verified cont
 ### Always unauthenticated
 
 !!! warning
-    The high side is **never authenticated**. There is no auth flag or environment variable for it — every route (the dashboard, `/admin/import`, `/admin/status`, `/admin/missing`, `/healthz`, and all ecosystem proxies) is open. The one exception is the optional diode ingest endpoint, which can require a bearer token (`ARTIGATE_DIODE_TOKEN`) — that token protects the disk from unauthenticated uploads, nothing more. Access control is expected to come from **network placement**: bind it to the trusted/isolated network, or front it with a reverse proxy. TLS (via the shared `ARTIGATE_TLS_*` variables) provides transport encryption but not authentication. See [Security & trust](security.md).
+    The high side is **never authenticated**. There is no auth flag or environment variable for it — every route (the dashboard, `/admin/import`, `/admin/status`, `/admin/missing`, `/healthz`, and all ecosystem proxies) is open. The one exception is the optional diode ingest endpoint: enabling it requires an `ARTIGATE_DIODE_TOKEN` bearer token of at least 32 bytes. That token protects the disk from unauthenticated uploads, nothing more. Access control is expected to come from **network placement**: bind it to the trusted/isolated network, or front it with a reverse proxy. TLS (via the shared `ARTIGATE_TLS_*` variables) provides transport encryption but not authentication. See [Security & trust](security.md).
 
 ## Pointing clients here
 

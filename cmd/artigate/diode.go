@@ -16,8 +16,8 @@ package main
 //	                       PUT/POST /diode/<file>, streamed atomically into
 //	                       the landing directory where the normal
 //	                       verify-and-import pipeline picks them up.
-//	ARTIGATE_DIODE_TOKEN   both sides: optional shared bearer token for the
-//	                       endpoint.
+//	ARTIGATE_DIODE_TOKEN   both sides: shared bearer token (at least 32 bytes,
+//	                       required whenever HTTP transport is enabled).
 //
 // The transport carries zero trust: bundles are accepted from the wire
 // exactly as from a landing folder, and the importer still verifies the
@@ -27,6 +27,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -37,11 +38,16 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // diodeUploadTimeout bounds one file's upload; bundle archives can be tens of
 // gigabytes.
 const diodeUploadTimeout = 4 * time.Hour
+
+// minDiodeTokenBytes prevents an enabled HTTP diode endpoint from being
+// protected by an empty, default, or trivially guessable bearer token.
+const minDiodeTokenBytes = 32
 
 // bundleFileBaseRE matches a bundle's base name ("hf-bundle-000042") — the
 // only names the ingest endpoint will store, so an upload can never plant an
@@ -69,6 +75,23 @@ func parseOnOff(v string) (bool, error) {
 	default:
 		return false, fmt.Errorf("invalid on/off value %q", v)
 	}
+}
+
+// validateDiodeToken enforces the minimum credential required whenever the
+// HTTP diode transport is enabled. Folder and UDP diode flows do not call it.
+func validateDiodeToken(token string) error {
+	if len(token) < minDiodeTokenBytes {
+		return fmt.Errorf("ARTIGATE_DIODE_TOKEN must be at least %d bytes when HTTP diode transport is enabled", minDiodeTokenBytes)
+	}
+	if strings.TrimSpace(token) != token {
+		return errors.New("ARTIGATE_DIODE_TOKEN must not have leading or trailing whitespace")
+	}
+	for _, r := range token {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return errors.New("ARTIGATE_DIODE_TOKEN must not contain whitespace or control characters")
+		}
+	}
+	return nil
 }
 
 // validateDiodeURL checks the low side's configured endpoint at startup, so a

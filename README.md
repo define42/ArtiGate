@@ -39,9 +39,13 @@ Full documentation lives at **<https://define42.github.io/ArtiGate/>**.
 
 Brings up a low + high stack wired together over the HTTP diode transport (the
 low side uploads each bundle to the high side's `/diode` ingest endpoint), with
-the signing keys generated automatically:
+the signing keys generated automatically. The stack refuses to start until an
+operator login and a random diode token are configured:
 
 ```bash
+cp .env.example .env
+go run ./cmd/artigate hashpw --user admin  # paste into ARTIGATE_LOW_AUTH
+openssl rand -hex 32              # paste the output into ARTIGATE_DIODE_TOKEN
 make run          # foreground   (make run-detach to background)
 make stop         # stop, keep state    make reset  wipe state
 ```
@@ -49,7 +53,8 @@ make stop         # stop, keep state    make reset  wipe state
 Then open the low-side dashboard at <http://localhost:8080/>, pick an ecosystem,
 enter a spec (or upload a `go.mod`), and click **Collect & export**. Watch it
 appear on the high-side dashboard at <http://localhost:8081/>, then point a client
-at the high side (see below).
+at the high side (see below). Both published ports are loopback-only by default;
+terminate TLS in a reverse proxy before deliberately exposing either one.
 
 ## Build
 
@@ -291,7 +296,7 @@ variables — the folder flow stays the default:
 |---|---|---|
 | `ARTIGATE_DIODE_URL` | low | endpoint bundles are uploaded to after every export and re-export (`PUT <url>/<file>`, archive first) |
 | `ARTIGATE_DIODE_INGEST` | high | `on` accepts bundle uploads at `PUT/POST /diode/<file>` into the landing directory (default `off`) |
-| `ARTIGATE_DIODE_TOKEN` | both | optional shared bearer token for the endpoint |
+| `ARTIGATE_DIODE_TOKEN` | both | shared bearer token, at least 32 bytes and required whenever HTTP diode transport is enabled |
 
 ```bash
 # low side — upload each bundle to the diode proxy (or directly to the high side)
@@ -534,9 +539,10 @@ TLS. If ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy, set
 `ARTIGATE_LOW_COOKIE_SECURE=true` so the cookie is still marked `Secure` (values:
 `auto` (default), `true`, `false`).
 
-> In `docker-compose.yml`, remember that Compose treats `$` as a variable
-> reference, so every `$` in the hash must be written `$$` (see the `low`
-> service). This does not apply to shell `export`s with single quotes.
+> The shipped Compose stack requires this value. Put it in the gitignored
+> `.env` file as a single-quoted value so the `$` characters remain literal;
+> see `.env.example`. Direct binary/systemd deployments may still leave auth
+> unset only when strict network controls protect the low-side control plane.
 
 ## Notes and limitations
 

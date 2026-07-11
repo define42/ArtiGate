@@ -207,7 +207,7 @@ The high side's integrity comes from **signature + hash verification at import**
 
 ### The one optional write surface: diode ingest
 
-With `ARTIGATE_DIODE_INGEST=on` (off by default), the high side accepts bundle uploads at `PUT/POST /diode/<file>` — the receiving end of the [HTTP diode transport](deployment.md). This does **not** weaken the trust model: an uploaded file lands in the landing directory exactly as a diode-carried file would, only strictly-validated bundle file names are accepted, and nothing is served until the import's signature, sequencing, and hash checks pass. What an unauthenticated uploader *can* do is consume disk, so set `ARTIGATE_DIODE_TOKEN` (a shared bearer token, compared in constant time) unless the endpoint is reachable only by the diode proxy. Leave ingest off entirely when you use the folder flow.
+With `ARTIGATE_DIODE_INGEST=on` (off by default), the high side accepts bundle uploads at `PUT/POST /diode/<file>` — the receiving end of the [HTTP diode transport](deployment.md). This does **not** weaken the trust model: an uploaded file lands in the landing directory exactly as a diode-carried file would, only strictly-validated bundle file names are accepted, and nothing is served until the import's signature, sequencing, and hash checks pass. Because an uploader can still consume disk, enabling HTTP ingest requires `ARTIGATE_DIODE_TOKEN`: a shared, whitespace-free bearer token of at least 32 bytes, compared in constant time. Leave ingest off entirely when you use the folder flow.
 
 ### Upstream credentials on the low side
 

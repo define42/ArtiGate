@@ -55,6 +55,25 @@ func TestParseOnOff(t *testing.T) {
 	}
 }
 
+func TestValidateDiodeToken(t *testing.T) {
+	valid := strings.Repeat("a", minDiodeTokenBytes)
+	if err := validateDiodeToken(valid); err != nil {
+		t.Fatalf("valid token rejected: %v", err)
+	}
+	for _, token := range []string{
+		"",
+		"change-me-diode-token",
+		strings.Repeat("a", minDiodeTokenBytes-1),
+		valid + " ",
+		strings.Repeat("a", minDiodeTokenBytes-1) + "\n",
+		valid[:16] + "\u00a0" + valid[16:],
+	} {
+		if err := validateDiodeToken(token); err == nil {
+			t.Errorf("validateDiodeToken(%q) accepted an unsafe token", token)
+		}
+	}
+}
+
 // TestHighDiodeIngest checks the upload endpoint: gating, token, name
 // validation, and that stored files land byte-exact in the landing directory.
 func TestHighDiodeIngest(t *testing.T) {

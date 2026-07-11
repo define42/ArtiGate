@@ -132,7 +132,7 @@ Diode transport (env; default is the folder flow via --export-dir/--landing):
                                (PUT <url>/<file>); the export dir becomes the retry spool
   ARTIGATE_DIODE_INGEST  high: on|off — accept bundle uploads at PUT/POST /diode/<file>
                                into the landing directory (default off)
-  ARTIGATE_DIODE_TOKEN   both: optional shared bearer token for the diode endpoint
+  ARTIGATE_DIODE_TOKEN   both: shared bearer token (at least 32 bytes; required for HTTP diode transport)
 
 Built-in UDP data diode (env; a dedicated one-way fiber NIC on each side; the
 bundles cross as rate-limited, Reed-Solomon-coded IPv6 multicast — no return path):
@@ -308,7 +308,7 @@ type LowConfig struct {
 	ContainerRegistries string
 	// DiodeURL optionally names the HTTP endpoint bundles are uploaded to
 	// after every export (ARTIGATE_DIODE_URL); empty keeps the folder-only
-	// flow. DiodeToken is its optional bearer token (ARTIGATE_DIODE_TOKEN).
+	// flow. DiodeToken is its required bearer token (ARTIGATE_DIODE_TOKEN).
 	DiodeURL   string
 	DiodeToken string
 }
@@ -399,6 +399,9 @@ func runLow(args []string) {
 	cfg.DiodeURL = strings.TrimSpace(os.Getenv("ARTIGATE_DIODE_URL"))
 	cfg.DiodeToken = os.Getenv("ARTIGATE_DIODE_TOKEN")
 	must(validateDiodeURL(cfg.DiodeURL))
+	if cfg.DiodeURL != "" {
+		must(validateDiodeToken(cfg.DiodeToken))
+	}
 	pitcherCfg := mustPitcherConfig(cfg.DiodeURL)
 
 	if cfg.PrivateKeyPath == "" {
@@ -1750,8 +1753,8 @@ type HighConfig struct {
 	AptGPGKey      string
 	RpmGPGKey      string
 	// DiodeIngest accepts bundle uploads at PUT/POST /diode/<file> into the
-	// landing directory (ARTIGATE_DIODE_INGEST=on); DiodeToken optionally
-	// requires a bearer token on those uploads (ARTIGATE_DIODE_TOKEN).
+	// landing directory (ARTIGATE_DIODE_INGEST=on); DiodeToken requires a
+	// bearer token on those uploads (ARTIGATE_DIODE_TOKEN).
 	DiodeIngest bool
 	DiodeToken  string
 }
@@ -1796,6 +1799,9 @@ func runHigh(args []string) {
 	}
 	cfg.DiodeIngest = ingest
 	cfg.DiodeToken = os.Getenv("ARTIGATE_DIODE_TOKEN")
+	if cfg.DiodeIngest {
+		must(validateDiodeToken(cfg.DiodeToken))
+	}
 	pub, err := readPublicKey(cfg.PublicKeyPath)
 	must(err)
 	hs, err := NewHighServer(cfg, pub)

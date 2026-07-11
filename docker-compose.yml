@@ -1,4 +1,11 @@
-# ArtiGate demo stack: a low side and a high side wired together.
+# ArtiGate local stack: a low side and a high side wired together.
+#
+# SECURITY: this file deliberately has no reusable credentials and refuses to
+# render until ARTIGATE_LOW_AUTH and ARTIGATE_DIODE_TOKEN are set (normally in
+# a gitignored .env copied from .env.example). Published ports bind to loopback
+# unless explicitly overridden. Plain HTTP is suitable only on that local
+# boundary; put a TLS-authenticating reverse proxy in front before overriding
+# either bind address for remote access.
 #
 # In a real deployment the two sides are physically separated by a one-way data
 # diode. Here the HTTP diode transport stands in for that transfer: the low
@@ -16,31 +23,26 @@
 # examples/docker-compose-diode-high.yml — those run one side per host with
 # network_mode: host and CAP_NET_ADMIN.
 #
-# The `keygen` service creates the Ed25519 signing key pair once into the shared
-# `keys` volume (idempotent: it will not overwrite existing keys), then low and
-# high start after it completes.
+# The `keygen` service creates the Ed25519 signing key pair once into separate
+# private/public volumes. The low side can read only the private-key `keys`
+# volume and the high side only the `high-keys` public-key volume. On upgrade,
+# keygen copies a legacy public key out of `keys` without rotating the pair.
 #
-# UIs after `make run`:
+# UIs after configuring .env and running `make run`:
 #   Low side  (exporter dashboard): http://localhost:8080/
 #   High side (repository + tree):  http://localhost:8081/
-#
-# Try it:
-#   # Mirror a Go module (+ its dependency graph) on the low side:
-#   curl -XPOST localhost:8080/admin/go/collect \
-#     -d '{"modules":["rsc.io/quote@latest"],"resolve_deps":true}'
-#   # Mirror Python wheels:
-#   curl -XPOST localhost:8080/admin/python/collect \
-#     -d '{"requirements":["requests"]}'
-#   # Then watch them appear on the high side dashboard at :8081.
+# Sign in to the low-side dashboard with the password whose hash you configured;
+# unauthenticated requests cannot reach its signing and collection endpoints.
 
 services:
   keygen:
     build: .
     entrypoint: ["sh", "-c"]
     command:
-      - 'test -f /keys/low.ed25519 || artigate keygen --private /keys/low.ed25519 --public /keys/high.ed25519.pub'
+      - 'if test -f /low-keys/low.ed25519; then if test -f /high-keys/high.ed25519.pub; then exit 0; elif test -f /low-keys/high.ed25519.pub; then cp /low-keys/high.ed25519.pub /high-keys/high.ed25519.pub; else echo "private key exists but public key is missing; restore it instead of rotating trust" >&2; exit 1; fi; elif test -f /high-keys/high.ed25519.pub; then echo "public key exists but private key is missing; restore it instead of rotating trust" >&2; exit 1; else artigate keygen --private /low-keys/low.ed25519 --public /high-keys/high.ed25519.pub; fi'
     volumes:
-      - keys:/keys
+      - keys:/low-keys
+      - high-keys:/high-keys
 
   low:
     build: .
@@ -60,18 +62,14 @@ services:
       # Upload every exported bundle to the high side's ingest endpoint. The
       # export dir stays the retry spool: a failed upload leaves the bundle
       # staged there for a re-transmit from the Status page.
-      - ARTIGATE_DIODE_URL=http://high:8080/diode
-      - ARTIGATE_DIODE_TOKEN=change-me-diode-token
-      # Optional low-side login. DISABLED by default — uncomment the line below
-      # and replace the hash with your own, generated with:
-      #   ./artigate hashpw --user user
-      # NOTE: Compose treats a single "$" as a variable reference, so every "$"
-      # in the argon2 hash MUST be doubled to "$$" here (it reaches the container
-      # as a single "$"). The example hash below is the password "password" — do
-      # NOT ship it; generate your own.
-      # - ARTIGATE_LOW_AUTH=user:$$argon2id$$v=19$$m=65536,t=3,p=1$$5ba6Q+p3TKhi2kXkU+OtIw$$lg4sRrA78xnKtlOiNCMOAPtaHAG0KoTNzUV8xStZSes
+      ARTIGATE_DIODE_URL: http://high:8080/diode
+      ARTIGATE_DIODE_TOKEN: "${ARTIGATE_DIODE_TOKEN:?Set ARTIGATE_DIODE_TOKEN in .env; use a random value such as openssl rand -hex 32}"
+      # The low side holds the signing key, so its entire UI/API is a privileged
+      # control plane. Compose requires an operator-generated argon2id credential
+      # rather than ever starting it unauthenticated.
+      ARTIGATE_LOW_AUTH: "${ARTIGATE_LOW_AUTH:?Set ARTIGATE_LOW_AUTH in .env; generate it with ./artigate hashpw --user admin}"
     ports:
-      - "8080:8080"
+      - "${ARTIGATE_LOW_BIND:-127.0.0.1}:8080:8080"
     volumes:
       - keys:/keys:ro
       - low-outbound:/var/spool/diode-out
@@ -94,18 +92,19 @@ services:
       # Accept bundle uploads at PUT/POST /diode/<file> into the landing dir.
       # The token must match the low side's; it only guards the disk — bundle
       # trust still comes from the Ed25519 signature check on import.
-      - ARTIGATE_DIODE_INGEST=on
-      - ARTIGATE_DIODE_TOKEN=change-me-diode-token
+      ARTIGATE_DIODE_INGEST: "on"
+      ARTIGATE_DIODE_TOKEN: "${ARTIGATE_DIODE_TOKEN:?Set ARTIGATE_DIODE_TOKEN in .env; use a random value such as openssl rand -hex 32}"
     ports:
-      - "8081:8080"
+      - "${ARTIGATE_HIGH_BIND:-127.0.0.1}:8081:8080"
     volumes:
-      - keys:/keys:ro
+      - high-keys:/keys:ro
       - high-landing:/var/spool/diode-in
       - high-data:/var/lib/artigate
     restart: unless-stopped
 
 volumes:
   keys:
+  high-keys:
   low-outbound:
   high-landing:
   low-data:

@@ -190,7 +190,7 @@ The optional HTTP transfer between the sides — see [Deployment](deployment.md)
 |---|---|---|---|
 | `ARTIGATE_DIODE_URL` | low | unset (folder flow) | HTTP endpoint bundles are uploaded to after every export and re-export (`PUT <url>/<file>`). Must parse as an `http`/`https` URL or startup fails. On success the bundle is cleared from the export dir; on failure it stays staged and the error is reported on the collect result |
 | `ARTIGATE_DIODE_INGEST` | high | `off` | `on`/`1`/`true`/`yes` accepts bundle uploads at `PUT/POST /diode/<file>` into the landing directory; any other non-off value is fatal |
-| `ARTIGATE_DIODE_TOKEN` | both | unset (open) | Shared bearer token: the low side sends it, the high side requires it when set (constant-time compare) |
+| `ARTIGATE_DIODE_TOKEN` | both | unset | Shared bearer token: at least 32 bytes, no whitespace, and required whenever `ARTIGATE_DIODE_URL` or `ARTIGATE_DIODE_INGEST=on` enables HTTP transport; compared in constant time |
 
 ### Built-in UDP data diode
 

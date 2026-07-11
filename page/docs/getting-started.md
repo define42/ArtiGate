@@ -45,6 +45,17 @@ The repository ships a `docker-compose.yml` that runs both sides on one host, wi
 !!! warning "The demo diode is not one-way"
     Compose cannot enforce a one-way transfer: in the demo the low side simply HTTP-uploads to the high side over the shared Docker network. Only physically separate hardware enforces the diode in production. See [Deployment](deployment.md).
 
+`docker-compose.yml` has no reusable credentials and fails closed until you
+provide both an operator login and an independent random diode token. Copy the
+template, generate the two values, and paste them into the gitignored `.env`
+file. Keep the argon2id value single-quoted so its `$` characters stay literal.
+
+```bash
+cp .env.example .env
+./artigate hashpw --user admin
+openssl rand -hex 32
+```
+
 ```bash
 make run          # docker compose up --build   (foreground, low + high)
 make run-detach   # docker compose up --build -d (background)
@@ -59,20 +70,31 @@ Once up, two dashboards are available:
 | **Low side** (exporter) | <http://localhost:8080/> | Pick an ecosystem, collect & export, schedule pulls |
 | **High side** (repository) | <http://localhost:8081/> | Import status, browsable artifact tree, "Set me up" guides |
 
-Both containers listen on `:8080` internally; Compose maps the high side to host port `8081`.
+Both containers listen on `:8080` internally. Compose maps the high side to
+host port `8081`, and binds both published ports to `127.0.0.1` by default.
+Do not override `ARTIGATE_LOW_BIND` or `ARTIGATE_HIGH_BIND` with a remote
+address until a TLS-authenticating reverse proxy and network policy protect it.
 
 ### Auto-generated keys
 
-A one-shot `keygen` service runs first and creates the Ed25519 signing key pair into a shared `keys` volume:
+A one-shot `keygen` service runs first and creates the Ed25519 signing key pair
+into separate `keys` (low/private) and `high-keys` (high/public) volumes:
 
 ```text
-artigate keygen --private /keys/low.ed25519 --public /keys/high.ed25519.pub
+artigate keygen --private /low-keys/low.ed25519 --public /high-keys/high.ed25519.pub
 ```
 
-It is **idempotent** (guarded by `test -f`, so it never overwrites existing keys). The low side mounts the private key read-only and signs bundles with it; the high side is given only the public key via `--public-key` and verifies with it. (For convenience the demo shares one `keys` volume read-only across both services, so the private key is physically present in the high container too but never referenced; a real physically-separated deployment copies only the `.pub` across.) `make stop` keeps the `keys` volume so a later `make run` continues the same sequence chain; `make reset` wipes it for a clean start.
+It is **idempotent** and refuses to regenerate if only one side of the pair is
+present. The low side mounts only `keys` read-only and signs bundles with it;
+the high side mounts only `high-keys` and verifies with the public key. When
+upgrading an older Compose installation, the one-shot service copies the
+existing public key from the legacy `keys` volume into `high-keys`; it never
+rotates the existing pair. `make stop` keeps both volumes so a later
+`make run` continues the same sequence chain; `make reset` wipes both for a
+clean start.
 
 !!! note "The high side is never authenticated"
-    Only the low-side dashboard can require a login (via `ARTIGATE_LOW_AUTH`, disabled by default in the demo). The high side has no auth of its own — protect it with network placement or a fronting proxy. See [Security & trust](security.md).
+    The Compose low-side dashboard requires the `ARTIGATE_LOW_AUTH` login configured in `.env`. The high side has no auth of its own, which is why its published port is loopback-only — protect any remote exposure with network placement or a fronting TLS proxy. See [Security & trust](security.md).
 
 ## Your first end-to-end mirror
 
@@ -80,10 +102,16 @@ This walkthrough mirrors a Go module on the low side, watches it import on the h
 
 ### 1. Collect a module on the low side
 
-Open the low dashboard at <http://localhost:8080/>, select **Go**, enter a module, and click **Collect & export**. Or drive the same endpoint with `curl`:
+Open the low dashboard at <http://localhost:8080/>, sign in, select **Go**,
+enter a module, and click **Collect & export**. An API client first obtains a
+session cookie with the same credentials:
 
 ```bash
-curl -XPOST localhost:8080/admin/go/collect \
+curl -c /tmp/artigate.cookies -XPOST localhost:8080/login \
+  --data-urlencode 'username=admin' \
+  --data-urlencode "password=$ARTIGATE_PASSWORD"
+
+curl -b /tmp/artigate.cookies -XPOST localhost:8080/admin/go/collect \
   -d '{"modules":["rsc.io/quote@latest"],"resolve_deps":true}'
 ```
 
@@ -110,14 +138,14 @@ A successful response looks like:
     The dashboard streams progress line-by-line. To get the same NDJSON stream from `curl`, append `?stream=1`:
 
     ```bash
-    curl -XPOST 'localhost:8080/admin/go/collect?stream=1' \
+    curl -b /tmp/artigate.cookies -XPOST 'localhost:8080/admin/go/collect?stream=1' \
       -d '{"modules":["rsc.io/quote@latest"],"resolve_deps":true}'
     ```
 
 Other ecosystems follow the same shape, e.g. Python wheels:
 
 ```bash
-curl -XPOST localhost:8080/admin/python/collect \
+curl -b /tmp/artigate.cookies -XPOST localhost:8080/admin/python/collect \
   -d '{"requirements":["requests"]}'
 ```
 
@@ -206,7 +234,9 @@ Carry all three files of each bundle from the low side's `--export-dir` across t
     artigate hashpw --user user
     ```
 
-    In `docker-compose.yml` every `$` in the resulting hash must be doubled to `$$`, because Compose treats a single `$` as a variable reference.
+    For the shipped Compose stack, paste the complete output into
+    `ARTIGATE_LOW_AUTH` in the gitignored `.env` file and single-quote the
+    value. This keeps each `$` literal without editing the generated hash.
 
 ## Where to next
 

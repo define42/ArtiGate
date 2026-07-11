@@ -22,6 +22,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate secure Compose defaults
+        shell: bash
+        run: |
+          if env -u ARTIGATE_LOW_AUTH -u ARTIGATE_DIODE_TOKEN docker compose config >/dev/null 2>&1; then
+            echo "docker compose config unexpectedly accepted missing credentials" >&2
+            exit 1
+          fi
+          export ARTIGATE_LOW_AUTH='ci:$argon2id$v=19$m=8,t=1,p=1$c2FsdA$aGFzaA'
+          export ARTIGATE_DIODE_TOKEN='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+          docker compose config --format json > compose-rendered.json
+          python3 - <<'PY'
+          import json
+
+          with open("compose-rendered.json", encoding="utf-8") as f:
+              config = json.load(f)
+          services = config["services"]
+          assert services["low"]["ports"][0]["host_ip"] == "127.0.0.1"
+          assert services["high"]["ports"][0]["host_ip"] == "127.0.0.1"
+          assert services["low"]["environment"]["ARTIGATE_LOW_AUTH"]
+          assert services["low"]["environment"]["ARTIGATE_DIODE_TOKEN"]
+          assert services["high"]["environment"]["ARTIGATE_DIODE_TOKEN"]
+          low_sources = {v["source"] for v in services["low"]["volumes"]}
+          high_sources = {v["source"] for v in services["high"]["volumes"]}
+          assert "keys" in low_sources
+          assert "keys" not in high_sources
+          assert "high-keys" in high_sources
+          PY
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

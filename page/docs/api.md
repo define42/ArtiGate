@@ -520,7 +520,7 @@ Both return the identical `LowBundleStatus` payload.
 
 ### Diode ingest — `PUT|POST /diode/<bundle-file>`
 
-The [HTTP diode transport](deployment.md)'s receiving end, **off by default** — enabled with `ARTIGATE_DIODE_INGEST=on`, optionally token-gated with `ARTIGATE_DIODE_TOKEN` (`Authorization: Bearer …`, constant-time compare). The body streams atomically into the landing directory; a completed bundle triggers an immediate import.
+The [HTTP diode transport](deployment.md)'s receiving end, **off by default** — enabled with `ARTIGATE_DIODE_INGEST=on`. Enabling it requires a whitespace-free `ARTIGATE_DIODE_TOKEN` of at least 32 bytes (`Authorization: Bearer …`, constant-time compare). The body streams atomically into the landing directory; a completed bundle triggers an immediate import.
 
 | Situation | Status |
 |---|---|

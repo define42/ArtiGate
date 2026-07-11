@@ -61,20 +61,36 @@ Because the entrypoint is the binary itself, `docker run <image>` prints usage. 
 The bundled `docker-compose.yml` runs a complete low + high pipeline on a single host, wired together over the **HTTP diode transport**: the low side uploads each exported bundle to the high side's `/diode` ingest endpoint (`ARTIGATE_DIODE_URL=http://high:8080/diode`, shared `ARTIGATE_DIODE_TOKEN`), which **stands in for the one-way data diode** and lets you exercise the whole flow locally. Prefer the classic folder flow instead? Drop the `ARTIGATE_DIODE_*` variables and mount one shared volume as the low side's `/var/spool/diode-out` and the high side's `/var/spool/diode-in`.
 
 !!! warning "The compose wiring is not a real diode"
-    In a real deployment the two sides are physically separated and the transfer is enforced one-way by hardware. In the demo the low side simply HTTP-POSTs to the high side on the same Docker network — nothing enforces directionality. Never treat the demo topology as an air gap, and replace the demo `change-me-diode-token` before sharing the stack. See [Security & trust](security.md).
+    In a real deployment the two sides are physically separated and the transfer is enforced one-way by hardware. In the demo the low side simply HTTP-POSTs to the high side on the same Docker network — nothing enforces directionality. Never treat the demo topology as an air gap. The stack has no default credentials, refuses to render until an operator login and random diode token are supplied, and publishes both services on loopback only. See [Security & trust](security.md).
+
+### Configure credentials before startup
+
+Copy the committed template to the gitignored `.env`, generate an argon2id
+operator credential and an independent random diode bearer token, and paste the
+complete values into the corresponding variables:
+
+```bash
+cp .env.example .env
+./artigate hashpw --user admin
+openssl rand -hex 32
+```
+
+Keep `ARTIGATE_LOW_AUTH` single-quoted in `.env`; this preserves every `$`
+in the PHC hash literally. Empty values make `docker compose config` and
+`docker compose up` fail before a container starts.
 
 ### Services
 
 | Service | Role | Host port | Key volumes |
 |---|---|---|---|
-| `keygen` | One-shot: generate the Ed25519 key pair into `keys` (idempotent) | — | `keys:/keys` |
-| `low` | Internet-side exporter dashboard | `8080 → 8080` | `keys:/keys:ro`, `low-outbound:/var/spool/diode-out`, `low-data:/var/lib/artigate` |
-| `high` | Air-gapped read-only repository + tree | `8081 → 8080` | `keys:/keys:ro`, `high-landing:/var/spool/diode-in`, `high-data:/var/lib/artigate` |
+| `keygen` | One-shot: generate the Ed25519 pair into separate private/public volumes | — | `keys:/low-keys`, `high-keys:/high-keys` |
+| `low` | Internet-side exporter dashboard | `127.0.0.1:8080 → 8080` | `keys:/keys:ro`, `low-outbound:/var/spool/diode-out`, `low-data:/var/lib/artigate` |
+| `high` | Air-gapped read-only repository + tree | `127.0.0.1:8081 → 8080` | `high-keys:/keys:ro`, `high-landing:/var/spool/diode-in`, `high-data:/var/lib/artigate` |
 
-`keygen` runs first; both `low` and `high` declare `depends_on: keygen: condition: service_completed_successfully` (and `low` additionally waits for `high` to start, so the first collect's upload doesn't race the high side's boot). The keygen command is guarded so it never overwrites existing keys:
+`keygen` runs first; both `low` and `high` declare `depends_on: keygen: condition: service_completed_successfully` (and `low` additionally waits for `high` to start, so the first collect's upload doesn't race the high side's boot). The keygen command is guarded so it never overwrites existing keys and fails if only half of the pair remains. On upgrade it copies the public key from the legacy `keys` volume into the new `high-keys` volume without changing the private key. Crucially, the high container never mounts `keys`.
 
 ```bash
-test -f /keys/low.ed25519 || artigate keygen --private /keys/low.ed25519 --public /keys/high.ed25519.pub
+artigate keygen --private /low-keys/low.ed25519 --public /high-keys/high.ed25519.pub
 ```
 
 The `low` service exports on port 8080 and the `high` service maps host **8081** to container 8080 (both listen on `:8080` internally):
@@ -89,8 +105,11 @@ low:
     - --private-key=/keys/low.ed25519
     - --upstream-goproxy=https://proxy.golang.org,direct
   environment:
-    - ARTIGATE_DIODE_URL=http://high:8080/diode
-    - ARTIGATE_DIODE_TOKEN=change-me-diode-token
+    ARTIGATE_DIODE_URL: http://high:8080/diode
+    ARTIGATE_DIODE_TOKEN: "${ARTIGATE_DIODE_TOKEN:?set it in .env}"
+    ARTIGATE_LOW_AUTH: "${ARTIGATE_LOW_AUTH:?set it in .env}"
+  ports:
+    - "${ARTIGATE_LOW_BIND:-127.0.0.1}:8080:8080"
 high:
   command:
     - high
@@ -100,8 +119,10 @@ high:
     - --public-key=/keys/high.ed25519.pub
     - --import-interval=10s
   environment:
-    - ARTIGATE_DIODE_INGEST=on
-    - ARTIGATE_DIODE_TOKEN=change-me-diode-token
+    ARTIGATE_DIODE_INGEST: "on"
+    ARTIGATE_DIODE_TOKEN: "${ARTIGATE_DIODE_TOKEN:?set it in .env}"
+  ports:
+    - "${ARTIGATE_HIGH_BIND:-127.0.0.1}:8081:8080"
 ```
 
 After the stack is up:
@@ -109,15 +130,20 @@ After the stack is up:
 - **Low side** (exporter dashboard): <http://localhost:8080/>
 - **High side** (repository + tree): <http://localhost:8081/>
 
-Drive the low side by asking it to collect artifacts, then watch them arrive on the high side:
+The browser prompts for the configured operator login. API clients first obtain
+a session cookie from `/login`, then use it for privileged collect calls:
 
 ```bash
+curl -c /tmp/artigate.cookies -XPOST localhost:8080/login \
+  --data-urlencode 'username=admin' \
+  --data-urlencode "password=$ARTIGATE_PASSWORD"
+
 # Mirror a Go module and its full dependency graph:
-curl -XPOST localhost:8080/admin/go/collect \
+curl -b /tmp/artigate.cookies -XPOST localhost:8080/admin/go/collect \
   -d '{"modules":["rsc.io/quote@latest"],"resolve_deps":true}'
 
 # Mirror Python wheels:
-curl -XPOST localhost:8080/admin/python/collect \
+curl -b /tmp/artigate.cookies -XPOST localhost:8080/admin/python/collect \
   -d '{"requirements":["requests"]}'
 ```
 
@@ -135,29 +161,21 @@ The `Makefile` wraps Compose (it auto-detects `docker compose` v2 and falls back
 | `make reset` | `docker compose down -v` | Stop **and wipe all volumes** — a fresh start, sequences back to `1` |
 
 !!! warning "`reset` destroys the mirror and resets sequencing"
-    `make reset` (`docker compose down -v`) removes `low-data`, `high-data`, `low-outbound`, `high-landing`, and `keys`. Sequence numbering restarts at `1` and a new key pair is generated. Use `make stop` for an ordinary restart; only use `reset` when you deliberately want to start over.
+    `make reset` (`docker compose down -v`) removes `low-data`, `high-data`, `low-outbound`, `high-landing`, `keys`, and `high-keys`. Sequence numbering restarts at `1` and a new key pair is generated. Use `make stop` for an ordinary restart; only use `reset` when you deliberately want to start over.
 
-### Enabling low-side auth (and the `$$` caveat)
+### Network exposure and TLS
 
-Low-side login is **disabled by default** — with no `ARTIGATE_LOW_AUTH` set, the dashboard *and* its mutating `/admin/*` endpoints are unauthenticated, so bind the low side to a trusted network. To require a login, uncomment the `environment` block in the `low` service and supply your own credentials:
+The shipped Compose stack always requires low-side authentication and binds
+host ports to `127.0.0.1`. The application still speaks plain HTTP inside this
+local boundary. For remote access, keep the containers private and terminate
+TLS in an authenticating reverse proxy; then set
+`ARTIGATE_LOW_COOKIE_SECURE=true`. Only override `ARTIGATE_LOW_BIND` or
+`ARTIGATE_HIGH_BIND` after that protection is in place.
 
-```yaml
-    environment:
-      - ARTIGATE_LOW_AUTH=user:$$argon2id$$v=19$$m=65536,t=3,p=1$$5ba6Q+p3TKhi2kXkU+OtIw$$lg4sRrA78xnKtlOiNCMOAPtaHAG0KoTNzUV8xStZSes
-```
-
-Generate a hash with the `hashpw` subcommand. It reads the password from **stdin** (not an argument), so it never lands in shell history:
-
-```bash
-./artigate hashpw --user user
-```
-
-The value is an argon2id PHC string of the form `user:$argon2id$v=19$m=…,t=…,p=…$<salt>$<key>`. Multiple credentials are separated by `;` or newlines (not commas — commas appear inside the argon2 parameter string).
-
-!!! warning "Every `$` must be doubled to `$$` in compose files"
-    Compose treats a single `$` as a variable reference, so **every `$` in the argon2 hash must be written `$$`** in `docker-compose.yml`; it reaches the container as a single `$`. The example hash above encodes the password `password` — do **not** ship it; generate your own. A non-empty `ARTIGATE_LOW_AUTH` that parses to zero valid credentials (for example a stray `;` or mis-escaped `$`) is a fatal startup error, so ArtiGate fails closed rather than silently leaving the dashboard open.
-
-The high side is **never authenticated** — no auth variable applies to it. For cookie/reverse-proxy details (`ARTIGATE_LOW_COOKIE_SECURE`) and HTTPS, see [TLS / HTTPS](tls.md).
+Direct binary and systemd deployments can still omit `ARTIGATE_LOW_AUTH` for
+strictly isolated networks, but doing so leaves every collect, upload, re-export,
+and scheduling endpoint open. The high side is **never authenticated** by the
+application. See [TLS / HTTPS](tls.md) and [Security & trust](security.md).
 
 ## systemd units
 
@@ -265,7 +283,7 @@ For diodes or diode proxies that speak HTTP, ArtiGate can perform the transfer i
 |---|---|---|
 | `ARTIGATE_DIODE_URL` | low | endpoint bundles are uploaded to after every export and re-export (`PUT <url>/<file>`, archive first) |
 | `ARTIGATE_DIODE_INGEST` | high | `on` accepts uploads at `PUT/POST /diode/<file>` into the landing directory (default `off`) |
-| `ARTIGATE_DIODE_TOKEN` | both | optional shared bearer token |
+| `ARTIGATE_DIODE_TOKEN` | both | required shared bearer token for HTTP transport; at least 32 bytes, no whitespace |
 
 After a successful upload the low side clears the bundle from the export directory (it shows as *sent* on the Status page); a failed upload never loses a bundle — the collect still succeeds, the dashboard and a schedule's status report the error, and the bundle stays staged for a re-transmit. Uploads stream atomically into the landing directory (a half-received file is never visible under its final name), a completed bundle imports immediately rather than on the next scan tick, and only the three bundle-file name shapes are accepted. The transport carries no trust — signature, sequencing, and hash checks are unchanged; the token only protects the high side's disk. Anything that can `PUT` a file works as a sender:
 
@@ -304,7 +322,7 @@ Each side keeps durable state under its `--root`. Plan capacity and backups for 
     Processed bundles accumulate in `<landing>/imported`, duplicates in `<landing>/duplicates`, future bundles in `<quarantine>`, and every generated bundle in the low side's `<root>/bundles` archive. Automatic retention/pruning is not yet built, so monitor these directories and prune old `imported`/`duplicates` files as needed. The low-side `bundles` archive is what powers re-export (`POST /admin/reexport`), so keep it as long as you may need to replay sequences.
 
 !!! note "Backups"
-    Back up each side's `<root>` to preserve state across host loss. On the low side the critical items are `low-state.json`, `exported.db`, `watches.db`, and the `bundles` archive; the Go cache is reconstructible. On the high side, `import-state.json` plus `cache/download` are the mirror itself. The Ed25519 private key (low) and public key (high) live outside `<root>` (for example `/etc/artigate/` or the `keys` volume) — back these up separately and keep the private key on the low side only.
+    Back up each side's `<root>` to preserve state across host loss. On the low side the critical items are `low-state.json`, `exported.db`, `watches.db`, and the `bundles` archive; the Go cache is reconstructible. On the high side, `import-state.json` plus `cache/download` are the mirror itself. The Ed25519 private key (low) and public key (high) live outside `<root>` (for example `/etc/artigate/`, or the separate Compose `keys` and `high-keys` volumes) — back these up separately and keep the private key on the low side only.
 
     Losing `exported.db` alone is safe but wasteful (the next collects re-download and re-send content the high side already has). Losing it *while keeping* `low-state.json` and re-pointing at a **fresh** high side is the one combination to avoid — recover a rebuilt high side with a **forced** collect (`"force": true`) or by re-exporting the archived bundles, since normal collects emit delta bundles that assume the stream's earlier content is present.
 
