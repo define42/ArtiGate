@@ -27,6 +27,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -39,9 +40,13 @@ import (
 	"time"
 )
 
-// diodeUploadTimeout bounds one file's upload; bundle archives can be tens of
-// gigabytes.
-const diodeUploadTimeout = 4 * time.Hour
+const (
+	// diodeUploadTimeout bounds one file's upload; bundle archives can be tens
+	// of gigabytes.
+	diodeUploadTimeout = 4 * time.Hour
+	// diodeMaxUploadBytes bounds unverified data written to the landing disk.
+	diodeMaxUploadBytes int64 = 64 << 30
+)
 
 // bundleFileBaseRE matches a bundle's base name ("hf-bundle-000042") — the
 // only names the ingest endpoint will store, so an upload can never plant an
@@ -131,9 +136,18 @@ func (s *HighServer) serveDiode(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "not a bundle file name (want <stream>-bundle-<seq>{.tar.gz,.manifest.json,.manifest.json.sig})", http.StatusBadRequest)
 		return true
 	}
+	if r.ContentLength > diodeMaxUploadBytes {
+		http.Error(w, fmt.Sprintf("diode upload exceeds %s limit", formatBytes(diodeMaxUploadBytes)), http.StatusRequestEntityTooLarge)
+		return true
+	}
 	dst := filepath.Join(s.cfg.Landing, name)
-	n, err := writeStreamAtomic(dst, r.Body)
+	n, err := writeStreamAtomicLimit(dst, r.Body, diodeMaxUploadBytes)
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, fmt.Sprintf("diode upload exceeds %s limit", formatBytes(maxBytesErr.Limit)), http.StatusRequestEntityTooLarge)
+			return true
+		}
 		http.Error(w, fmt.Sprintf("store %s: %v", name, err), http.StatusInternalServerError)
 		return true
 	}
@@ -152,10 +166,11 @@ func (s *HighServer) serveDiode(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// writeStreamAtomic streams r into dst via a temp file in the same directory,
-// so a half-received upload is never visible under its final name (the
-// importer's completeness check must only ever see whole files).
-func writeStreamAtomic(dst string, r io.Reader) (int64, error) {
+// writeStreamAtomicLimit streams at most limit bytes from r into dst via a temp
+// file in the same directory, so a half-received upload is never visible under
+// its final name (the importer's completeness check must only ever see whole
+// files).
+func writeStreamAtomicLimit(dst string, r io.Reader, limit int64) (int64, error) {
 	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return 0, err
@@ -165,12 +180,22 @@ func writeStreamAtomic(dst string, r io.Reader) (int64, error) {
 		return 0, err
 	}
 	tmp := f.Name()
-	n, copyErr := io.Copy(f, r)
+	// Read one byte past the limit to distinguish an exact-size body from an
+	// oversized one without buffering the request.
+	n, copyErr := io.Copy(f, io.LimitReader(r, limit+1))
+	if copyErr == nil && n == limit+1 {
+		copyErr = &http.MaxBytesError{Limit: limit}
+	}
+	if copyErr != nil {
+		closeErr := f.Close()
+		_ = os.Remove(tmp)
+		return n, firstErr(copyErr, closeErr)
+	}
 	syncErr := f.Sync()
 	closeErr := f.Close()
-	if err := firstErr(copyErr, syncErr, closeErr); err != nil {
+	if err := firstErr(syncErr, closeErr); err != nil {
 		_ = os.Remove(tmp)
-		return 0, err
+		return n, err
 	}
 	if err := os.Rename(tmp, dst); err != nil {
 		_ = os.Remove(tmp)

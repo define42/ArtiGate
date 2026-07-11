@@ -529,8 +529,9 @@ The [HTTP diode transport](deployment.md)'s receiving end, **off by default** �
 | Missing/wrong token | 401 |
 | Method not PUT/POST | 405 |
 | Name is not one of the three bundle-file shapes (`<stream>-bundle-<seq>{.tar.gz,.manifest.json,.manifest.json.sig}`) | 400 |
+| Body exceeds the 64 GiB per-file limit | 413 |
 
-The transport carries no trust — an uploaded bundle is verified exactly like a diode-carried file (signature, sequencing, hashes).
+The body is capped at 64 GiB before it enters the normal verification pipeline. Oversized or interrupted uploads are removed without replacing an existing landing file. The transport carries no trust — an uploaded bundle is verified exactly like a diode-carried file (signature, sequencing, hashes).
 
 ---
 
