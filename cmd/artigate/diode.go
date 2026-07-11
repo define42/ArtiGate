@@ -183,7 +183,7 @@ func writeStreamAtomicLimit(dst string, r io.Reader, limit int64) (int64, error)
 	// Read one byte past the limit to distinguish an exact-size body from an
 	// oversized one without buffering the request.
 	n, copyErr := io.Copy(f, io.LimitReader(r, limit+1))
-	if copyErr == nil && n > limit {
+	if copyErr == nil && n == limit+1 {
 		copyErr = &http.MaxBytesError{Limit: limit}
 	}
 	if copyErr != nil {

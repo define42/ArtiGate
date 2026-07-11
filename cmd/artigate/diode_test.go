@@ -173,6 +173,22 @@ func TestWriteStreamAtomicLimitRejectsOversizedBody(t *testing.T) {
 	if len(temps) != 0 {
 		t.Fatalf("oversized upload left temporary files: %v", temps)
 	}
+
+	exactDst := filepath.Join(dir, "hf-bundle-000002.tar.gz")
+	n, err = writeStreamAtomicLimit(exactDst, strings.NewReader("12345678"), 8)
+	if err != nil {
+		t.Fatalf("exact-limit upload: %v", err)
+	}
+	if n != 8 {
+		t.Fatalf("exact-limit upload wrote %d bytes, want 8", n)
+	}
+	got, err = os.ReadFile(exactDst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "12345678" {
+		t.Fatalf("exact-limit upload stored %q", got)
+	}
 }
 
 // diodeReceiver captures uploads like a diode proxy would.
