@@ -374,21 +374,35 @@ func TestJoinDiodeGroupOnLoopback(t *testing.T) {
 // over ::1. Link-local multicast cannot route across loopback (no fe80 source
 // address there), so the transport tests run the identical datagram path over
 // unicast; the group join itself is covered above and on real fiber.
-func newLoopbackDiodePair(t *testing.T, landing string, onComplete func(string)) *diodePitcher {
+//
+// The second result reports a constrained environment: without CAP_NET_ADMIN,
+// SO_RCVBUFFORCE fails and rmem_max caps the receive buffer far below one
+// bundle, so a scheduling stall of the catcher goroutine during a 200 Mbit/s
+// blast tail-drops longer runs of datagrams than any parity budget repairs.
+// There the pitcher is paced down until the send outlasts realistic stalls —
+// the same "stay below what the catcher can absorb" rule the production rate
+// limit exists for — and callers may re-pitch once on loss beyond parity,
+// mirroring the documented re-export remedy.
+func newLoopbackDiodePair(t *testing.T, landing string, onComplete func(string)) (*diodePitcher, bool) {
 	t.Helper()
 	rc, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.ParseIP("::1"), Port: 0})
 	if err != nil {
 		t.Skipf("IPv6 loopback unavailable: %v", err)
 	}
-	if _, err := forceUDPBuffer(rc, true, 4<<20); err != nil {
-		t.Logf("receive buffer stays small: %v", err)
+	const wantRcvBuf = 4 << 20
+	rateMbit := 200
+	granted, err := forceUDPBuffer(rc, true, wantRcvBuf)
+	constrained := err != nil || granted < wantRcvBuf
+	if constrained {
+		rateMbit = 16
+		t.Logf("receive buffer %d of %d bytes (%v): pacing at %d Mbit/s and tolerating one re-pitch", granted, wantRcvBuf, err, rateMbit)
 	}
 	catcher := &diodeCatcher{conn: rc, asm: newDiodeAssembler(landing, validBundleFileName, onComplete)}
 	go catcher.run()
 	t.Cleanup(func() { _ = catcher.Close() })
 
 	cfg := PitcherConfig{
-		MTU: 1500, RateMbit: 200, Group: "::1",
+		MTU: 1500, RateMbit: rateMbit, Group: "::1",
 		Port:       rc.LocalAddr().(*net.UDPAddr).Port,
 		DataShards: 8, ParityShards: 2,
 	}
@@ -397,7 +411,7 @@ func newLoopbackDiodePair(t *testing.T, landing string, onComplete func(string))
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = p.Close() })
-	return p
+	return p, constrained
 }
 
 // TestPitcherToCatcherOverLoopback sends a whole bundle through real sockets
@@ -406,7 +420,7 @@ func TestPitcherToCatcherOverLoopback(t *testing.T) {
 	outDir, landing := t.TempDir(), t.TempDir()
 	var mu sync.Mutex
 	var landed []string
-	p := newLoopbackDiodePair(t, landing, func(n string) { mu.Lock(); landed = append(landed, n); mu.Unlock() })
+	p, constrained := newLoopbackDiodePair(t, landing, func(n string) { mu.Lock(); landed = append(landed, n); mu.Unlock() })
 
 	const bundleID = "go-bundle-000042"
 	files := map[string][]byte{
@@ -423,7 +437,13 @@ func TestPitcherToCatcherOverLoopback(t *testing.T) {
 		t.Fatalf("SendBundle: %v", err)
 	}
 
+	// With forced buffers the whole bundle fits the receive queue, so a single
+	// send must land everything. In a constrained environment the kernel may
+	// still drop beyond the parity budget under full-suite load; the diode's
+	// remedy for that is a re-export, so allow exactly one re-pitch there
+	// before calling it a failure.
 	deadline := time.Now().Add(10 * time.Second)
+	resent := false
 	for {
 		allThere := true
 		for name, content := range files {
@@ -440,13 +460,31 @@ func TestPitcherToCatcherOverLoopback(t *testing.T) {
 			mu.Lock()
 			snapshot := append([]string(nil), landed...)
 			mu.Unlock()
-			t.Fatalf("bundle did not land; completed so far: %v", snapshot)
+			if !constrained || resent {
+				t.Fatalf("bundle did not land; completed so far: %v", snapshot)
+			}
+			t.Logf("loss beyond parity in a constrained environment; re-pitching once (completed so far: %v)", snapshot)
+			if err := p.SendBundle(context.Background(), outDir, bundleID); err != nil {
+				t.Fatalf("SendBundle (re-pitch): %v", err)
+			}
+			resent = true
+			deadline = time.Now().Add(15 * time.Second)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(landed) != len(files) {
+	if resent {
+		// A re-pitch can land a file a second time; every file must still
+		// have completed at least once.
+		seen := map[string]bool{}
+		for _, n := range landed {
+			seen[n] = true
+		}
+		if len(seen) != len(files) {
+			t.Fatalf("onComplete covered %d files, want %d (%v)", len(seen), len(files), landed)
+		}
+	} else if len(landed) != len(files) {
 		t.Fatalf("onComplete ran %d times, want %d (%v)", len(landed), len(files), landed)
 	}
 }
@@ -464,7 +502,7 @@ func TestLowToHighOverUDPDiode(t *testing.T) {
 	high := httptest.NewServer(hs)
 	t.Cleanup(high.Close)
 
-	ls.pitcher = newLoopbackDiodePair(t, hs.cfg.Landing, hs.onDiodeFileLanded)
+	ls.pitcher, _ = newLoopbackDiodePair(t, hs.cfg.Landing, hs.onDiodeFileLanded)
 
 	res, err := ls.CollectHF(context.Background(), HFCollectRequest{Models: []string{"unsloth/gpt-oss-20b-GGUF:Q4_0"}})
 	if err != nil {
