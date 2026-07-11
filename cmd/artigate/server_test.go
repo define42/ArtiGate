@@ -290,6 +290,51 @@ func mustImportNext(t *testing.T, hs *HighServer) ImportResult {
 	return res
 }
 
+// TestImportStateSaveFailureDoesNotStrandBundle forces the durable state write
+// to fail after a bundle's files are installed. The in-memory counter must
+// roll back to match disk: if it ran ahead, the next quarantine pass would
+// file the landing bundle under duplicates/ as "already imported", and after a
+// restart the stream would wait forever for a bundle it can no longer find.
+func TestImportStateSaveFailureDoesNotStrandBundle(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	writeSignedBundle(t, hs.cfg.Landing, priv, 1, 0, []moduleSpec{{"github.com/foo/bar", "v1.0.0"}})
+
+	goodStatePath := hs.statePath
+	// Point the state file under a path whose parent is a regular file, so the
+	// atomic write fails deterministically (MkdirAll returns ENOTDIR).
+	blocker := filepath.Join(hs.cfg.Root, "state-blocker")
+	writeFile(t, blocker, []byte("x"))
+	hs.statePath = filepath.Join(blocker, "state.json")
+
+	// Two passes: the first fails the save, the second proves the bundle was
+	// neither skipped (memory rolled back) nor mis-sorted into duplicates/.
+	for i := 0; i < 2; i++ {
+		if _, err := hs.ImportNext(); err == nil || !strings.Contains(err.Error(), "not persisted") {
+			t.Fatalf("ImportNext #%d with failing state save = %v, want persistence error", i+1, err)
+		}
+		if got := hs.state.Imported[streamGo]; got != 0 {
+			t.Fatalf("in-memory import state advanced to %d despite failed save", got)
+		}
+	}
+	if !bundleCompleteInDir(hs.cfg.Landing, "go-bundle-000001") {
+		t.Fatal("bundle must stay in landing while its import is not durably recorded")
+	}
+
+	// Once state can persist again, the retried import completes end to end.
+	hs.statePath = goodStatePath
+	res := mustImportNext(t, hs)
+	if !res.Imported || len(res.ImportedBundles) != 1 || res.ImportedBundles[0] != "go-bundle-000001" {
+		t.Fatalf("retried import = %+v", res)
+	}
+	if !hs.isComplete("github.com/foo/bar", "v1.0.0") {
+		t.Fatal("module should be complete after the retried import")
+	}
+	if got := hs.state.Imported[streamGo]; got != 1 {
+		t.Fatalf("imported sequence = %d, want 1", got)
+	}
+}
+
 // assertStreamProgress checks a stream's last-imported sequence and the bundle
 // it is blocked on (0 = not blocked).
 func assertStreamProgress(t *testing.T, hs *HighServer, stream string, wantLast, wantBlocking int64) {

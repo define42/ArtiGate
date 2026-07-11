@@ -11,6 +11,12 @@ package main
 // Policy: release artifacts only. SNAPSHOT and dynamic/range versions are
 // rejected because they do not resolve reproducibly, which defeats the point of
 // an air-gapped mirror.
+//
+// Uploaded pom.xml input is never handed to Maven verbatim: a full POM can
+// carry build extensions/plugins (code Maven loads and executes in-process)
+// and repository overrides (resolution from caller-chosen hosts). It is
+// reduced to a validated dependency-only project first — see
+// sanitizeUploadedPom.
 
 import (
 	"context"
@@ -19,6 +25,7 @@ import (
 	"crypto/sha1" //nolint:gosec // sha1 is only a legacy Maven checksum, not a security control
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"html"
@@ -428,7 +435,12 @@ func validateMavenArtifacts(arts []MavenArtifact, seen map[string]bool) error {
 // pom.xml; when PomXML is set, Coordinates is ignored.
 type MavenCollectRequest struct {
 	Coordinates []string `json:"coordinates"`
-	PomXML      string   `json:"pom_xml"`
+	// PomXML is a complete pom.xml. It is never resolved as-is: only its
+	// dependency information (parent, properties, dependencies,
+	// dependencyManagement) is extracted into a sanitized synthetic project,
+	// and elements that could execute code or redirect resolution (build,
+	// profiles, repositories, ...) are rejected. See sanitizeUploadedPom.
+	PomXML string `json:"pom_xml"`
 	// Force disables export dedup for this collect: every artifact is packed
 	// even when already forwarded, producing a full self-contained bundle (for
 	// disaster recovery or rebuilding a high side from scratch).
@@ -509,39 +521,558 @@ func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (
 	})
 }
 
-// mavenProjectPom returns the pom.xml to resolve: the caller's uploaded pom, or
-// a synthetic project whose dependencies are the requested coordinates.
+// mavenProjectPom returns the pom.xml to resolve: a sanitized regeneration of
+// the caller's uploaded pom, or a synthetic project whose dependencies are the
+// requested coordinates. Both paths end in renderCollectPom, so Maven only
+// ever parses XML that ArtiGate generated itself.
 func mavenProjectPom(req MavenCollectRequest) (string, error) {
 	if strings.TrimSpace(req.PomXML) != "" {
-		return req.PomXML, nil
+		return sanitizeUploadedPom(req.PomXML)
 	}
 	if len(req.Coordinates) == 0 {
 		return "", errors.New("no maven coordinates or pom_xml provided")
 	}
-	var deps strings.Builder
+	deps := make([]pomDependency, 0, len(req.Coordinates))
 	for _, spec := range req.Coordinates {
 		c, err := parseMavenCoord(spec)
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&deps, "    <dependency><groupId>%s</groupId><artifactId>%s</artifactId><version>%s</version></dependency>\n",
-			html.EscapeString(c.GroupID), html.EscapeString(c.ArtifactID), html.EscapeString(c.Version))
+		deps = append(deps, pomDependency{GroupID: c.GroupID, ArtifactID: c.ArtifactID, Version: c.Version})
 	}
-	return syntheticMavenPom(deps.String()), nil
+	return renderCollectPom("pom", nil, deps), nil
 }
 
-func syntheticMavenPom(deps string) string {
-	return `<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0">
-  <modelVersion>4.0.0</modelVersion>
-  <groupId>local.artigate</groupId>
-  <artifactId>artigate-collect</artifactId>
-  <version>0.0.0</version>
-  <packaging>pom</packaging>
-  <dependencies>
-` + deps + `  </dependencies>
-</project>
-`
+// -----------------------------------------------------------------------------
+// Uploaded pom.xml sanitization
+// -----------------------------------------------------------------------------
+//
+// A full POM is a build program, not just a dependency list: <build>
+// extensions and plugins are loaded and executed inside the mvn process during
+// resolution, and <repositories>/<pluginRepositories> would pull artifacts
+// from caller-chosen hosts into the signed bundle. Neither is acceptable for
+// input crossing into an air-gap gateway, so an uploaded pom.xml is reduced to
+// a strict dependency-only subset:
+//
+//   - extracted: packaging, <properties> (used to interpolate ${...} in the
+//     fields below, then discarded), <dependencies>, <dependencyManagement>,
+//     and <parent> (translated into a scope=import BOM entry, which supplies
+//     the parent's dependencyManagement without inheriting its build).
+//   - ignored:   purely informational elements (name, licenses, scm, ...).
+//   - rejected:  anything that executes code or changes resolution sources
+//     (build, profiles, repositories, ...) and any element not on the lists
+//     above (fail closed).
+//
+// Every extracted value is re-validated against the same token and
+// release-only version policy as the coordinates path, then a fresh project is
+// generated with renderCollectPom — Maven never parses caller-supplied bytes.
+
+type pomDependency struct {
+	GroupID    string         `xml:"groupId"`
+	ArtifactID string         `xml:"artifactId"`
+	Version    string         `xml:"version"`
+	Type       string         `xml:"type"`
+	Classifier string         `xml:"classifier"`
+	Scope      string         `xml:"scope"`
+	SystemPath string         `xml:"systemPath"`
+	Optional   string         `xml:"optional"`
+	Exclusions []pomExclusion `xml:"exclusions>exclusion"`
+}
+
+type pomExclusion struct {
+	GroupID    string `xml:"groupId"`
+	ArtifactID string `xml:"artifactId"`
+}
+
+type pomParent struct {
+	GroupID    string `xml:"groupId"`
+	ArtifactID string `xml:"artifactId"`
+	Version    string `xml:"version"`
+	// relativePath is deliberately dropped: parents resolve from repositories.
+}
+
+// uploadedPom is the dependency-only model parsed from an uploaded pom.xml.
+type uploadedPom struct {
+	GroupID    string
+	ArtifactID string
+	Version    string
+	Packaging  string
+	Parent     *pomParent
+	Properties map[string]string
+	Management []pomDependency
+	Deps       []pomDependency
+}
+
+// pomElementIgnored reports whether a top-level <project> element has no
+// resolution or execution semantics and can be dropped from the regenerated
+// project. distributionManagement only affects deploy, which never runs here.
+func pomElementIgnored(name string) bool {
+	switch name {
+	case "modelVersion", "name", "description", "url", "inceptionYear",
+		"organization", "licenses", "developers", "contributors", "mailingLists",
+		"scm", "issueManagement", "ciManagement", "distributionManagement", "prerequisites":
+		return true
+	}
+	return false
+}
+
+// pomElementRejection returns the reason a forbidden top-level <project>
+// element is rejected, and ok=false for elements that are not on the reject
+// list.
+func pomElementRejection(name string) (string, bool) {
+	switch name {
+	case "build":
+		return "build plugins and extensions execute code inside Maven during resolution", true
+	case "reporting":
+		return "reporting plugins execute code inside Maven", true
+	case "profiles":
+		return "profiles can conditionally activate plugins, repositories, and modules", true
+	case "repositories", "pluginRepositories":
+		return "resolution sources are fixed by the low side's Maven settings", true
+	case "modules":
+		return "multi-module builds are not supported; collect each module separately", true
+	}
+	return "", false
+}
+
+// pomPackagingAllowed reports whether a packaging's default lifecycle plugins
+// Maven resolves without loading custom extensions.
+func pomPackagingAllowed(packaging string) bool {
+	switch packaging {
+	case "pom", "jar", "war", "ear", "ejb", "maven-plugin":
+		return true
+	}
+	return false
+}
+
+// sanitizeUploadedPom parses an uploaded pom.xml, keeps only validated
+// dependency information, and regenerates the project Maven will actually
+// resolve. See the section comment above for the allow/ignore/reject split.
+func sanitizeUploadedPom(pomXML string) (string, error) {
+	p, err := parseUploadedPom(pomXML)
+	if err != nil {
+		return "", err
+	}
+	props := p.effectiveProperties()
+
+	packaging, err := expandPomProps(strings.TrimSpace(p.Packaging), props)
+	if err != nil {
+		return "", fmt.Errorf("packaging: %w", err)
+	}
+	if packaging = strings.TrimSpace(packaging); packaging == "" {
+		packaging = "jar"
+	}
+	if !pomPackagingAllowed(packaging) {
+		return "", fmt.Errorf("packaging %q is not supported for collection (custom packagings require build extensions)", packaging)
+	}
+
+	var mgmt []pomDependency
+	for _, d := range p.Management {
+		vd, err := validatePomDependency(d, props, true)
+		if err != nil {
+			return "", err
+		}
+		mgmt = append(mgmt, vd)
+	}
+	if p.Parent != nil {
+		imp, err := parentAsBOMImport(*p.Parent, props)
+		if err != nil {
+			return "", err
+		}
+		// Appended after the explicit entries so the pom's own
+		// dependencyManagement wins, matching Maven's inheritance precedence.
+		mgmt = append(mgmt, imp)
+	}
+
+	if len(p.Deps) == 0 {
+		return "", errors.New("uploaded pom.xml declares no <dependencies>; nothing to collect")
+	}
+	deps := make([]pomDependency, 0, len(p.Deps))
+	for _, d := range p.Deps {
+		vd, err := validatePomDependency(d, props, false)
+		if err != nil {
+			return "", err
+		}
+		deps = append(deps, vd)
+	}
+	return renderCollectPom(packaging, mgmt, deps), nil
+}
+
+// parseUploadedPom token-walks the uploaded pom.xml and extracts the
+// dependency-only subset, failing closed on anything else.
+func parseUploadedPom(pomXML string) (*uploadedPom, error) {
+	dec := xml.NewDecoder(strings.NewReader(pomXML))
+	root, err := pomRootElement(dec)
+	if err != nil {
+		return nil, err
+	}
+	if root.Name.Local != "project" {
+		return nil, fmt.Errorf("pom.xml root element is <%s>, want <project>", root.Name.Local)
+	}
+	p := &uploadedPom{Properties: map[string]string{}}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("parse pom.xml: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.EndElement: // </project>; trailing tokens are never read
+			return p, nil
+		case xml.Directive:
+			return nil, errors.New("pom.xml must not contain <!...> directives")
+		case xml.StartElement:
+			if err := p.readProjectChild(dec, t); err != nil {
+				return nil, err
+			}
+		}
+	}
+}
+
+// pomRootElement returns the document's root start element, rejecting
+// DOCTYPE/entity directives on the way there.
+func pomRootElement(dec *xml.Decoder) (xml.StartElement, error) {
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return xml.StartElement{}, fmt.Errorf("parse pom.xml: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.Directive:
+			return xml.StartElement{}, errors.New("pom.xml must not contain <!...> directives (DOCTYPE)")
+		case xml.StartElement:
+			return t, nil
+		}
+	}
+}
+
+// readProjectChild consumes one direct child element of <project>, either
+// extracting it into p, skipping it, or rejecting it.
+func (p *uploadedPom) readProjectChild(dec *xml.Decoder, se xml.StartElement) error {
+	name := se.Name.Local
+	switch name {
+	case "groupId":
+		return decodePomText(dec, &se, &p.GroupID)
+	case "artifactId":
+		return decodePomText(dec, &se, &p.ArtifactID)
+	case "version":
+		return decodePomText(dec, &se, &p.Version)
+	case "packaging":
+		return decodePomText(dec, &se, &p.Packaging)
+	case "parent":
+		var par pomParent
+		if err := dec.DecodeElement(&par, &se); err != nil {
+			return fmt.Errorf("parse pom.xml <parent>: %w", err)
+		}
+		p.Parent = &par
+		return nil
+	case "properties":
+		return decodePomProperties(dec, p.Properties)
+	case "dependencies":
+		var wrap struct {
+			Deps []pomDependency `xml:"dependency"`
+		}
+		if err := dec.DecodeElement(&wrap, &se); err != nil {
+			return fmt.Errorf("parse pom.xml <dependencies>: %w", err)
+		}
+		p.Deps = append(p.Deps, wrap.Deps...)
+		return nil
+	case "dependencyManagement":
+		var wrap struct {
+			Deps []pomDependency `xml:"dependencies>dependency"`
+		}
+		if err := dec.DecodeElement(&wrap, &se); err != nil {
+			return fmt.Errorf("parse pom.xml <dependencyManagement>: %w", err)
+		}
+		p.Management = append(p.Management, wrap.Deps...)
+		return nil
+	}
+	if pomElementIgnored(name) {
+		return dec.Skip()
+	}
+	if reason, ok := pomElementRejection(name); ok {
+		return fmt.Errorf("<%s> is not allowed in an uploaded pom.xml: %s", name, reason)
+	}
+	return fmt.Errorf("unsupported element <%s> in uploaded pom.xml: only dependency information (parent, properties, dependencies, dependencyManagement) is honored", name)
+}
+
+// decodePomText decodes an element's trimmed character data.
+func decodePomText(dec *xml.Decoder, se *xml.StartElement, into *string) error {
+	var s string
+	if err := dec.DecodeElement(&s, se); err != nil {
+		return fmt.Errorf("parse pom.xml <%s>: %w", se.Name.Local, err)
+	}
+	*into = strings.TrimSpace(s)
+	return nil
+}
+
+// decodePomProperties reads <properties>, mapping each child element's name to
+// its trimmed character data.
+func decodePomProperties(dec *xml.Decoder, into map[string]string) error {
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return fmt.Errorf("parse pom.xml <properties>: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.EndElement:
+			return nil
+		case xml.StartElement:
+			var v string
+			if err := dec.DecodeElement(&v, &t); err != nil {
+				return fmt.Errorf("parse pom.xml property <%s>: %w", t.Name.Local, err)
+			}
+			into[t.Name.Local] = strings.TrimSpace(v)
+		}
+	}
+}
+
+// effectiveProperties returns the pom's <properties> plus the project.*/pom.*
+// coordinate references Maven would supply, so versions like
+// <version>${project.version}</version> interpolate. Missing project
+// coordinates fall back to the parent's, mirroring inheritance.
+func (p *uploadedPom) effectiveProperties() map[string]string {
+	props := make(map[string]string, len(p.Properties)+6)
+	for k, v := range p.Properties {
+		props[k] = v
+	}
+	group, version := p.GroupID, p.Version
+	if p.Parent != nil {
+		if group == "" {
+			group = strings.TrimSpace(p.Parent.GroupID)
+		}
+		if version == "" {
+			version = strings.TrimSpace(p.Parent.Version)
+		}
+	}
+	for _, prefix := range []string{"project.", "pom."} {
+		props[prefix+"groupId"] = group
+		props[prefix+"artifactId"] = p.ArtifactID
+		props[prefix+"version"] = version
+	}
+	return props
+}
+
+// expandPomProps substitutes ${...} property references, iterating so property
+// values may reference other properties, with a hard cap against cycles.
+// Unknown references (including ${env.*} and ${settings.*}, which must not
+// leak low-side state into resolution) are errors.
+func expandPomProps(s string, props map[string]string) (string, error) {
+	for i := 0; i < 32; i++ {
+		start := strings.Index(s, "${")
+		if start < 0 {
+			return s, nil
+		}
+		rest := s[start+2:]
+		end := strings.Index(rest, "}")
+		if end < 0 {
+			return "", fmt.Errorf("unterminated ${ property reference in %q", s)
+		}
+		val, ok := props[rest[:end]]
+		if !ok {
+			return "", fmt.Errorf("unresolvable property ${%s}: define it in <properties> or pin the value", rest[:end])
+		}
+		s = s[:start] + val + rest[end+1:]
+	}
+	return "", fmt.Errorf("property expansion did not converge in %q (reference cycle?)", s)
+}
+
+// pomScopeAllowed reports whether a plain (non-import) dependency scope is one
+// ArtiGate resolves. The empty scope means Maven's default (compile).
+func pomScopeAllowed(scope string) bool {
+	switch scope {
+	case "", "compile", "provided", "runtime", "test":
+		return true
+	}
+	return false
+}
+
+// validatePomDependency interpolates and validates one dependency. management
+// entries (<dependencyManagement>) additionally allow scope=import BOMs and
+// must pin a version; plain dependencies may omit the version and let
+// dependencyManagement or an imported BOM supply it.
+func validatePomDependency(d pomDependency, props map[string]string, management bool) (pomDependency, error) {
+	// Checked before expansion: systemPath values conventionally reference
+	// ${basedir}-style properties, which would otherwise fail with a less
+	// helpful "unresolvable property" error.
+	if strings.TrimSpace(d.SystemPath) != "" {
+		return d, errors.New("dependency with <systemPath> is not allowed (system dependencies read files from the low-side host)")
+	}
+	var err error
+	for _, f := range []*string{&d.GroupID, &d.ArtifactID, &d.Version, &d.Type, &d.Classifier, &d.Scope, &d.Optional} {
+		if *f, err = expandPomProps(strings.TrimSpace(*f), props); err != nil {
+			return d, fmt.Errorf("dependency: %w", err)
+		}
+		*f = strings.TrimSpace(*f)
+	}
+	if !mavenTokenRE.MatchString(d.GroupID) {
+		return d, fmt.Errorf("invalid dependency groupId %q", d.GroupID)
+	}
+	where := d.GroupID + ":" + d.ArtifactID
+	if !mavenTokenRE.MatchString(d.ArtifactID) {
+		return d, fmt.Errorf("invalid dependency artifactId %q (groupId %s)", d.ArtifactID, d.GroupID)
+	}
+	if err := validatePomScope(d, where, management); err != nil {
+		return d, err
+	}
+	if err := validatePomVersion(d, where, management); err != nil {
+		return d, err
+	}
+	if err := validatePomDependencyFields(d, where); err != nil {
+		return d, err
+	}
+	if err := validatePomExclusions(&d, props, where); err != nil {
+		return d, err
+	}
+	return d, nil
+}
+
+// validatePomDependencyFields checks the optional token-shaped fields (type,
+// classifier) and the boolean <optional> flag of an interpolated dependency.
+func validatePomDependencyFields(d pomDependency, where string) error {
+	if d.Type != "" && !mavenTokenRE.MatchString(d.Type) {
+		return fmt.Errorf("dependency %s: invalid type %q", where, d.Type)
+	}
+	if d.Classifier != "" && !mavenTokenRE.MatchString(d.Classifier) {
+		return fmt.Errorf("dependency %s: invalid classifier %q", where, d.Classifier)
+	}
+	if d.Optional != "" && d.Optional != "true" && d.Optional != "false" {
+		return fmt.Errorf("dependency %s: invalid <optional> value %q", where, d.Optional)
+	}
+	return nil
+}
+
+// validatePomScope enforces the scope rules: system is forbidden, import is
+// valid only in <dependencyManagement> and only as a pom BOM, and every other
+// scope must be a recognized one.
+func validatePomScope(d pomDependency, where string, management bool) error {
+	switch {
+	case d.Scope == "system":
+		return fmt.Errorf("dependency %s: system-scoped dependencies are not allowed (they read files from the low-side host)", where)
+	case d.Scope == "import":
+		if !management {
+			return fmt.Errorf("dependency %s: scope \"import\" is only valid in <dependencyManagement>", where)
+		}
+		if d.Type != "pom" {
+			return fmt.Errorf("BOM import %s must have <type>pom</type>", where)
+		}
+	case !pomScopeAllowed(d.Scope):
+		return fmt.Errorf("dependency %s: unsupported scope %q", where, d.Scope)
+	}
+	return nil
+}
+
+// validatePomVersion applies the release-only policy: a management entry must
+// pin a version, a plain dependency may omit it (dependencyManagement or a BOM
+// supplies it), and any present version must satisfy validateMavenVersion.
+func validatePomVersion(d pomDependency, where string, management bool) error {
+	if d.Version == "" {
+		if management {
+			return fmt.Errorf("dependencyManagement entry %s is missing a version", where)
+		}
+		return nil
+	}
+	if err := validateMavenVersion(d.Version); err != nil {
+		return fmt.Errorf("dependency %s: %w", where, err)
+	}
+	return nil
+}
+
+// validatePomExclusions interpolates and validates each <exclusion>, writing
+// the normalized values back into d. "*" wildcards are allowed on either side.
+func validatePomExclusions(d *pomDependency, props map[string]string, where string) error {
+	for i, ex := range d.Exclusions {
+		g, gErr := expandPomProps(strings.TrimSpace(ex.GroupID), props)
+		a, aErr := expandPomProps(strings.TrimSpace(ex.ArtifactID), props)
+		if gErr != nil || aErr != nil {
+			return fmt.Errorf("dependency %s: exclusion: %w", where, errors.Join(gErr, aErr))
+		}
+		g, a = strings.TrimSpace(g), strings.TrimSpace(a)
+		if (g != "*" && !mavenTokenRE.MatchString(g)) || (a != "*" && !mavenTokenRE.MatchString(a)) {
+			return fmt.Errorf("dependency %s: invalid exclusion %q:%q", where, g, a)
+		}
+		d.Exclusions[i] = pomExclusion{GroupID: g, ArtifactID: a}
+	}
+	return nil
+}
+
+// parentAsBOMImport converts <parent> into a scope=import BOM entry. Importing
+// supplies the parent's dependencyManagement — what versionless dependencies
+// need — without inheriting its <build>, so a hostile parent pom cannot
+// smuggle extensions into the resolution.
+func parentAsBOMImport(par pomParent, props map[string]string) (pomDependency, error) {
+	c := mavenCoord{GroupID: par.GroupID, ArtifactID: par.ArtifactID, Version: par.Version}
+	var err error
+	for _, f := range []*string{&c.GroupID, &c.ArtifactID, &c.Version} {
+		if *f, err = expandPomProps(strings.TrimSpace(*f), props); err != nil {
+			return pomDependency{}, fmt.Errorf("<parent>: %w", err)
+		}
+		*f = strings.TrimSpace(*f)
+	}
+	if !mavenTokenRE.MatchString(c.GroupID) || !mavenTokenRE.MatchString(c.ArtifactID) {
+		return pomDependency{}, fmt.Errorf("invalid <parent> coordinate %q:%q", c.GroupID, c.ArtifactID)
+	}
+	if err := validateMavenVersion(c.Version); err != nil {
+		return pomDependency{}, fmt.Errorf("<parent> version: %w", err)
+	}
+	return pomDependency{GroupID: c.GroupID, ArtifactID: c.ArtifactID, Version: c.Version, Type: "pom", Scope: "import"}, nil
+}
+
+// renderCollectPom generates the synthetic project Maven resolves for a
+// collect. Every value has already been token-validated; escaping is belt and
+// braces.
+func renderCollectPom(packaging string, mgmt, deps []pomDependency) string {
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	b.WriteString("<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n")
+	b.WriteString("  <modelVersion>4.0.0</modelVersion>\n")
+	b.WriteString("  <groupId>local.artigate</groupId>\n")
+	b.WriteString("  <artifactId>artigate-collect</artifactId>\n")
+	b.WriteString("  <version>0.0.0</version>\n")
+	fmt.Fprintf(&b, "  <packaging>%s</packaging>\n", html.EscapeString(packaging))
+	if len(mgmt) > 0 {
+		b.WriteString("  <dependencyManagement>\n    <dependencies>\n")
+		for _, d := range mgmt {
+			b.WriteString("      " + pomDependencyXML(d) + "\n")
+		}
+		b.WriteString("    </dependencies>\n  </dependencyManagement>\n")
+	}
+	b.WriteString("  <dependencies>\n")
+	for _, d := range deps {
+		b.WriteString("    " + pomDependencyXML(d) + "\n")
+	}
+	b.WriteString("  </dependencies>\n</project>\n")
+	return b.String()
+}
+
+// pomDependencyXML renders one validated dependency on a single line.
+func pomDependencyXML(d pomDependency) string {
+	esc := html.EscapeString
+	var b strings.Builder
+	fmt.Fprintf(&b, "<dependency><groupId>%s</groupId><artifactId>%s</artifactId>", esc(d.GroupID), esc(d.ArtifactID))
+	if d.Version != "" {
+		fmt.Fprintf(&b, "<version>%s</version>", esc(d.Version))
+	}
+	if d.Type != "" {
+		fmt.Fprintf(&b, "<type>%s</type>", esc(d.Type))
+	}
+	if d.Classifier != "" {
+		fmt.Fprintf(&b, "<classifier>%s</classifier>", esc(d.Classifier))
+	}
+	if d.Scope != "" {
+		fmt.Fprintf(&b, "<scope>%s</scope>", esc(d.Scope))
+	}
+	if d.Optional == "true" {
+		b.WriteString("<optional>true</optional>")
+	}
+	if len(d.Exclusions) > 0 {
+		b.WriteString("<exclusions>")
+		for _, ex := range d.Exclusions {
+			fmt.Fprintf(&b, "<exclusion><groupId>%s</groupId><artifactId>%s</artifactId></exclusion>", esc(ex.GroupID), esc(ex.ArtifactID))
+		}
+		b.WriteString("</exclusions>")
+	}
+	b.WriteString("</dependency>")
+	return b.String()
 }
 
 func (s *LowServer) runMaven(ctx context.Context, dir string, args ...string) ([]byte, error) {

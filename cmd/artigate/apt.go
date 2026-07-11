@@ -28,10 +28,12 @@ import (
 	"crypto/md5"  //nolint:gosec // APT metadata carries MD5Sum for legacy clients, not a security control
 	"crypto/sha1" //nolint:gosec // APT metadata carries SHA1 for legacy clients, not a security control
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"net/url"
@@ -336,7 +338,7 @@ func (s *LowServer) collectAptIndex(ctx context.Context, base, distBase, name, s
 // when a keyring is supplied, verifies the signature with gpg. It returns the
 // Release payload (clearsign markers stripped).
 func (s *LowServer) fetchAptRelease(ctx context.Context, distBase, signedBy string) ([]byte, error) {
-	inrelease, inErr := s.aptGet(ctx, distBase+"/InRelease")
+	inrelease, inErr := httpGetBytes(ctx, distBase+"/InRelease", maxSignedMetaBytes)
 	if inErr == nil {
 		if signedBy != "" {
 			if err := gpgVerifyClearsigned(ctx, inrelease, signedBy); err != nil {
@@ -346,12 +348,12 @@ func (s *LowServer) fetchAptRelease(ctx context.Context, distBase, signedBy stri
 		return stripClearsign(inrelease), nil
 	}
 	// Fall back to detached Release + Release.gpg.
-	release, err := s.aptGet(ctx, distBase+"/Release")
+	release, err := httpGetBytes(ctx, distBase+"/Release", maxSignedMetaBytes)
 	if err != nil {
 		return nil, fmt.Errorf("fetch InRelease/Release: %w", err)
 	}
 	if signedBy != "" {
-		sig, err := s.aptGet(ctx, distBase+"/Release.gpg")
+		sig, err := httpGetBytes(ctx, distBase+"/Release.gpg", maxSignedMetaBytes)
 		if err != nil {
 			return nil, fmt.Errorf("fetch Release.gpg: %w", err)
 		}
@@ -372,7 +374,7 @@ func (s *LowServer) fetchAptPackagesIndex(ctx context.Context, distBase, suite, 
 		rel        string
 		decompress func([]byte) ([]byte, error)
 	}{
-		{dir + "/Packages.gz", gunzip},
+		{dir + "/Packages.gz", func(b []byte) ([]byte, error) { return gunzip(b, maxIndexPlainBytes) }},
 		{dir + "/Packages", func(b []byte) ([]byte, error) { return b, nil }},
 	}
 	for _, c := range candidates {
@@ -380,7 +382,7 @@ func (s *LowServer) fetchAptPackagesIndex(ctx context.Context, distBase, suite, 
 		if !ok {
 			continue
 		}
-		raw, err := s.aptGet(ctx, distBase+"/"+c.rel)
+		raw, err := httpGetBytes(ctx, distBase+"/"+c.rel, maxIndexFetchBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -396,11 +398,12 @@ func (s *LowServer) fetchAptPackagesIndex(ctx context.Context, distBase, suite, 
 	return nil, fmt.Errorf("no Packages index for %s/%s in Release", suite, dir)
 }
 
-// downloadAptDeb fetches one .deb, verifies its SHA256 against the index, and
-// stages it under the bundle's apt/<mirror>/<filename> path. A .deb whose
-// index-declared SHA256 and size this stream has already forwarded is not
-// downloaded at all — it becomes a prior manifest reference (the signed index
-// supplies everything the manifest entry needs).
+// downloadAptDeb fetches one .deb, verifying its SHA256 against the index as
+// it streams to the bundle's apt/<mirror>/<filename> staging path (a .deb is
+// never buffered in memory). A .deb whose index-declared SHA256 and size this
+// stream has already forwarded is not downloaded at all — it becomes a prior
+// manifest reference (the signed index supplies everything the manifest entry
+// needs).
 func (s *LowServer) downloadAptDeb(ctx context.Context, base, mirror string, pkg AptPackage, stageRoot string, prior func(path, sha256 string) bool) (ManifestFile, error) {
 	if err := validateRelPath(pkg.Filename); err != nil {
 		return ManifestFile{}, fmt.Errorf("unsafe package Filename %q: %w", pkg.Filename, err)
@@ -408,25 +411,16 @@ func (s *LowServer) downloadAptDeb(ctx context.Context, base, mirror string, pkg
 	if pkg.Size > 0 && prior(aptFileRel(mirror, pkg.Filename), pkg.SHA256) {
 		return ManifestFile{Path: aptFileRel(mirror, pkg.Filename), SHA256: pkg.SHA256, Size: pkg.Size, Prior: true}, nil
 	}
-	data, err := s.aptGet(ctx, base+"/"+pkg.Filename)
-	if err != nil {
-		return ManifestFile{}, err
-	}
-	if err := verifySHA256(data, pkg.SHA256); err != nil {
-		return ManifestFile{}, fmt.Errorf("%s: %w", pkg.Filename, err)
-	}
 	rel := aptFileRel(mirror, pkg.Filename)
 	if err := validateRelPath(rel); err != nil {
 		return ManifestFile{}, fmt.Errorf("unsafe staging path %q: %w", rel, err)
 	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return ManifestFile{}, err
+	sum, size, err := downloadVerifiedFile(ctx, base+"/"+pkg.Filename, abs, pkg.Size, "sha256", pkg.SHA256)
+	if err != nil {
+		return ManifestFile{}, fmt.Errorf("%s: %w", pkg.Filename, err)
 	}
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
-		return ManifestFile{}, err
-	}
-	return ManifestFile{Path: rel, SHA256: pkg.SHA256, Size: int64(len(data))}, nil
+	return ManifestFile{Path: rel, SHA256: sum, Size: size}, nil
 }
 
 // parseAptPackages turns a decompressed Packages index into AptPackage records,
@@ -656,7 +650,22 @@ func (s *LowServer) writeAptBundle(ctx context.Context, seq int64, stageRoot str
 // HTTP + hashing + gpg helpers
 // -----------------------------------------------------------------------------
 
-func (s *LowServer) aptGet(ctx context.Context, rawURL string) ([]byte, error) {
+// Memory-bound caps for APT/RPM mirror fetches. Package payloads and staged
+// metadata files stream to disk through downloadVerifiedFile — the multi-GiB
+// cap below bounds disk, never memory. Only small, parsed metadata is fetched
+// into memory, and every decompression is output-capped so a hostile index
+// cannot balloon into an OOM (decompression bomb).
+const (
+	maxMirroredFileBytes = 8 << 30  // a streamed file with no index-declared size (disk-bound backstop)
+	maxSignedMetaBytes   = 16 << 20 // Release/InRelease/Release.gpg and repomd.xml(.asc), parsed in memory
+	maxIndexFetchBytes   = 1 << 30  // a (compressed) Packages/primary index held in memory for parsing
+	maxIndexPlainBytes   = 2 << 30  // decompressed index bytes — gzip/xz decompression-bomb guard
+)
+
+// httpGetBytes fetches rawURL fully into memory, failing beyond limit. Only
+// small metadata that must be parsed goes through here; package payloads use
+// downloadVerifiedFile, which streams to disk.
+func httpGetBytes(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -668,15 +677,124 @@ func (s *LowServer) aptGet(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	r := newProgressReader(ctx, resp.Body, dlNameFromURL(rawURL), resp.ContentLength)
-	body, err := io.ReadAll(io.LimitReader(r, 2<<30)) // 2 GiB cap per file
-	if err != nil {
-		return nil, err
-	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: HTTP %d", rawURL, resp.StatusCode)
 	}
+	r := newProgressReader(ctx, resp.Body, dlNameFromURL(rawURL), resp.ContentLength)
+	body, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("GET %s: response exceeds the %s cap", rawURL, formatBytes(limit))
+	}
 	return body, nil
+}
+
+// downloadVerifiedFile streams rawURL to abs while hashing, so a multi-GiB
+// package never has to fit in memory (the same discipline as
+// writeVerifiedBlob for container layers). The repo-declared checksum
+// (checksumType: sha256/sha512/sha1) is verified as the bytes arrive; when the
+// index declares a size (wantSize > 0) the byte count must match it exactly,
+// otherwise the stream is capped at maxMirroredFileBytes. On any failure the
+// partial file is removed. It returns the file's SHA-256 and size for the
+// bundle manifest.
+func downloadVerifiedFile(ctx context.Context, rawURL, abs string, wantSize int64, checksumType, checksum string) (string, int64, error) {
+	verifier, manifestSHA, writers, err := newDownloadHashers(checksumType)
+	if err != nil {
+		return "", 0, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", 0, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, fmt.Errorf("GET %s: HTTP %d", rawURL, resp.StatusCode)
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return "", 0, err
+	}
+	f, err := os.OpenFile(abs, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return "", 0, err
+	}
+	limit := wantSize
+	if limit <= 0 {
+		limit = maxMirroredFileBytes
+	}
+	total := wantSize
+	if total <= 0 {
+		total = resp.ContentLength
+	}
+	r := newProgressReader(ctx, resp.Body, dlNameFromURL(rawURL), total)
+	n, copyErr := io.Copy(io.MultiWriter(append(writers, f)...), io.LimitReader(r, limit+1))
+	if err := errors.Join(copyErr, f.Close()); err != nil {
+		_ = os.Remove(abs)
+		return "", 0, fmt.Errorf("GET %s: %w", rawURL, err)
+	}
+	if err := checkDownloadResult(n, wantSize, limit, verifier, checksumType, checksum); err != nil {
+		_ = os.Remove(abs)
+		return "", 0, err
+	}
+	return hex.EncodeToString(manifestSHA.Sum(nil)), n, nil
+}
+
+// newDownloadHashers builds the hashers a streamed download writes through: a
+// verifier for the repo-declared checksum type, and the SHA-256 recorded in
+// the bundle manifest. When the repo checksum already is SHA-256 the two are
+// the same hasher; otherwise a second SHA-256 is added.
+func newDownloadHashers(checksumType string) (verifier, manifestSHA hash.Hash, writers []io.Writer, err error) {
+	verifier, err = newRepoHash(checksumType)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	manifestSHA = verifier
+	writers = []io.Writer{verifier}
+	if algo := strings.ToLower(strings.TrimSpace(checksumType)); algo != "" && algo != "sha256" {
+		manifestSHA = sha256.New()
+		writers = append(writers, manifestSHA)
+	}
+	return verifier, manifestSHA, writers, nil
+}
+
+// checkDownloadResult validates a completed stream: the byte count against the
+// index-declared size (or the cap when none was declared), then the accumulated
+// checksum against the repo-declared value.
+func checkDownloadResult(n, wantSize, limit int64, verifier hash.Hash, checksumType, checksum string) error {
+	switch {
+	case wantSize > 0 && n != wantSize:
+		return fmt.Errorf("size mismatch: got %d want %d", n, wantSize)
+	case wantSize <= 0 && n > limit:
+		return fmt.Errorf("response exceeds the %s cap", formatBytes(limit))
+	}
+	if got := hex.EncodeToString(verifier.Sum(nil)); !strings.EqualFold(got, strings.TrimSpace(checksum)) {
+		return fmt.Errorf("%s mismatch: got %s want %s", orDefault(strings.ToLower(checksumType), "sha256"), got, checksum)
+	}
+	return nil
+}
+
+// newRepoHash returns the hash implementing a repo-declared checksum type.
+// ArtiGate's own bundle integrity always uses SHA-256; sha1 is accepted only
+// because legacy repositories still declare it.
+func newRepoHash(algo string) (hash.Hash, error) {
+	switch strings.ToLower(strings.TrimSpace(algo)) {
+	case "sha256", "":
+		return sha256.New(), nil
+	case "sha512":
+		return sha512.New(), nil
+	case "sha1", "sha":
+		return sha1.New(), nil //nolint:gosec // verifying a legacy repo-declared checksum
+	default:
+		return nil, fmt.Errorf("unsupported checksum type %q", algo)
+	}
 }
 
 func verifySHA256(data []byte, want string) error {
@@ -687,13 +805,22 @@ func verifySHA256(data []byte, want string) error {
 	return nil
 }
 
-func gunzip(b []byte) ([]byte, error) {
+// gunzip decompresses b, refusing to expand beyond limit bytes — repo indexes
+// are parsed in memory, so a decompression bomb must fail instead of OOMing.
+func gunzip(b []byte, limit int64) ([]byte, error) {
 	zr, err := gzip.NewReader(bytes.NewReader(b))
 	if err != nil {
 		return nil, err
 	}
 	defer zr.Close()
-	return io.ReadAll(zr)
+	out, err := io.ReadAll(io.LimitReader(zr, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(out)) > limit {
+		return nil, fmt.Errorf("decompressed data exceeds the %s cap", formatBytes(limit))
+	}
+	return out, nil
 }
 
 // stripClearsign removes the OpenPGP clearsign header/footer from an InRelease

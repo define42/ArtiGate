@@ -109,8 +109,10 @@ and environment variable.
   downloads wheels for the high-side interpreter/platform rather than the
   low-side host (which forces wheels-only regardless).
 - **Java** — Maven coordinates (`groupId:artifactId:version`, one per line) or an
-  uploaded `pom.xml`. Release versions only; SNAPSHOTs and version ranges are
-  rejected.
+  uploaded `pom.xml`. Only the pom's dependency information is used — build
+  sections, profiles, and repository overrides are rejected, so an uploaded pom
+  can never execute code through Maven. Release versions only; SNAPSHOTs and
+  version ranges are rejected.
 - **NPM** — package specs (one per line: `lodash@4.17.21`, a bare `lodash` for
   the newest version, a range like `react@^18.2`, scoped `@types/node`), or an
   uploaded `package.json` (with an optional `package-lock.json` pinning the

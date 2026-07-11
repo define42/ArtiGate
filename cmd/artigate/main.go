@@ -2235,10 +2235,25 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 		return BundleManifest{}, err
 	}
 
+	// The in-memory counter must never run ahead of the durable state: the
+	// quarantine pass sorts landing bundles by the in-memory value, so after a
+	// failed save it would file this bundle under duplicates/ as already
+	// imported while the on-disk state still wants it — and duplicates/ is
+	// never searched, wedging the stream there after a restart. On a failed
+	// save, roll back so memory matches disk; the bundle stays in landing and
+	// the next pass retries the whole import (installs are idempotent).
+	prevSeq, hadStream := s.state.Imported[stream]
+	prevAt := s.state.ImportedAt
 	s.state.Imported[stream] = manifest.Sequence
 	s.state.ImportedAt = time.Now().UTC()
 	if err := s.saveStateLocked(); err != nil {
-		return BundleManifest{}, err
+		if hadStream {
+			s.state.Imported[stream] = prevSeq
+		} else {
+			delete(s.state.Imported, stream)
+		}
+		s.state.ImportedAt = prevAt
+		return BundleManifest{}, fmt.Errorf("bundle %s: files installed but import state was not persisted (will retry): %w", bundleID, err)
 	}
 	if err := moveImportedFilesFromDir(bundleDir, filepath.Join(s.cfg.Landing, "imported"), manifest.BundleID); err != nil {
 		log.Printf("move imported files: %v", err)

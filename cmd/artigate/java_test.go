@@ -191,17 +191,185 @@ func assertServed(t *testing.T, url, wantSub string) {
 	}
 }
 
-// TestCollectMavenRejectsSnapshot proves an uploaded pom that resolves a
-// SNAPSHOT artifact is refused (the coordinate path is guarded earlier by
-// parseMavenCoord; this covers the pom_xml path where mvn resolves it).
+// TestCollectMavenRejectsSnapshot proves an uploaded pom declaring a SNAPSHOT
+// dependency is refused at sanitization time, before mvn ever runs.
 func TestCollectMavenRejectsSnapshot(t *testing.T) {
 	ls, _ := newMavenLowServer(t)
-	pom := syntheticMavenPom(
-		"    <dependency><groupId>com.acme</groupId><artifactId>widget</artifactId><version>9.9.9-SNAPSHOT</version></dependency>\n")
+	pom := `<project><groupId>t</groupId><artifactId>t</artifactId><version>1</version><dependencies>` +
+		`<dependency><groupId>com.acme</groupId><artifactId>widget</artifactId><version>9.9.9-SNAPSHOT</version></dependency>` +
+		`</dependencies></project>`
 	_, err := ls.CollectMaven(context.Background(), MavenCollectRequest{PomXML: pom})
 	if err == nil || !strings.Contains(err.Error(), "SNAPSHOT") {
 		t.Fatalf("CollectMaven with a SNAPSHOT dep = %v, want a SNAPSHOT rejection", err)
 	}
+}
+
+// TestRejectMavenSnapshots covers the post-resolution backstop that catches
+// SNAPSHOTs arriving transitively (input validation cannot see those).
+func TestRejectMavenSnapshots(t *testing.T) {
+	ok := []MavenArtifact{{GroupID: "a", ArtifactID: "b", Version: "1.0"}}
+	if err := rejectMavenSnapshots(ok); err != nil {
+		t.Errorf("rejectMavenSnapshots(release) = %v, want nil", err)
+	}
+	bad := []MavenArtifact{
+		{GroupID: "a", ArtifactID: "b", Version: "1.0"},
+		{GroupID: "c", ArtifactID: "d", Version: "2.0-SNAPSHOT"},
+	}
+	if err := rejectMavenSnapshots(bad); err == nil || !strings.Contains(err.Error(), "c:d:2.0-SNAPSHOT") {
+		t.Errorf("rejectMavenSnapshots(snapshot) = %v, want error naming c:d:2.0-SNAPSHOT", err)
+	}
+}
+
+// TestSanitizeUploadedPom exercises the accept path: dependency information
+// (parent as BOM import, interpolated properties, dependencyManagement,
+// exclusions, versionless deps) survives, everything else is dropped.
+func TestSanitizeUploadedPom(t *testing.T) {
+	pom := `<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.3.1</version>
+    <relativePath/>
+  </parent>
+  <groupId>com.acme</groupId>
+  <artifactId>app</artifactId>
+  <version>1.0.0</version>
+  <name>Acme App</name>
+  <description>demo</description>
+  <url>https://acme.example</url>
+  <licenses><license><name>MIT</name></license></licenses>
+  <scm><url>https://git.acme.example/app</url></scm>
+  <properties>
+    <slf4j.version>2.0.16</slf4j.version>
+    <guava.base>33.2.1</guava.base>
+    <guava.version>${guava.base}-jre</guava.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>com.acme</groupId><artifactId>bom</artifactId><version>${project.version}</version><type>pom</type><scope>import</scope></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava</artifactId>
+      <version>${guava.version}</version>
+      <scope>runtime</scope>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+  </dependencies>
+</project>`
+	out, err := sanitizeUploadedPom(pom)
+	if err != nil {
+		t.Fatalf("sanitizeUploadedPom: %v", err)
+	}
+	for _, want := range []string{
+		"<groupId>local.artigate</groupId>",
+		"<groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId><version>2.0.16</version>",
+		"<version>33.2.1-jre</version>",
+		"<scope>runtime</scope>",
+		"<exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion>",
+		// A versionless dep stays versionless; the parent BOM supplies it.
+		"<dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter</artifactId></dependency>",
+		// ${project.version} resolved to the pom's own version.
+		"<artifactId>bom</artifactId><version>1.0.0</version><type>pom</type><scope>import</scope>",
+		// The parent became an import BOM.
+		"<artifactId>spring-boot-starter-parent</artifactId><version>3.3.1</version><type>pom</type><scope>import</scope>",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("sanitized pom missing %q:\n%s", want, out)
+		}
+	}
+	for _, banned := range []string{"<parent>", "<name>", "<licenses>", "<scm>", "acme.example", "<properties>", "${"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("sanitized pom must not contain %q:\n%s", banned, out)
+		}
+	}
+	// The pom's own dependencyManagement must take precedence over (come
+	// before) the parent-derived BOM import.
+	if strings.Index(out, "spring-boot-starter-parent") < strings.Index(out, "<artifactId>bom</artifactId>") {
+		t.Errorf("parent BOM import must come after explicit dependencyManagement entries:\n%s", out)
+	}
+}
+
+// TestSanitizeUploadedPomRejects proves every construct that could execute
+// code, redirect resolution, or dodge the version policy is refused.
+func TestSanitizeUploadedPomRejects(t *testing.T) {
+	dep := `<dependencies><dependency><groupId>a</groupId><artifactId>b</artifactId><version>1.0</version></dependency></dependencies>`
+	wrap := func(inner string) string {
+		return `<project><modelVersion>4.0.0</modelVersion><groupId>t</groupId><artifactId>t</artifactId><version>1.0</version>` +
+			inner + dep + `</project>`
+	}
+	cases := []struct{ name, pom, wantErr string }{
+		{"build extensions", wrap(`<build><extensions><extension><groupId>e</groupId><artifactId>evil</artifactId><version>1</version></extension></extensions></build>`), "<build>"},
+		{"build plugins", wrap(`<build><plugins><plugin><groupId>e</groupId><artifactId>evil</artifactId><extensions>true</extensions></plugin></plugins></build>`), "<build>"},
+		{"profiles", wrap(`<profiles><profile><id>p</id></profile></profiles>`), "<profiles>"},
+		{"repositories", wrap(`<repositories><repository><id>r</id><url>https://evil.example</url></repository></repositories>`), "<repositories>"},
+		{"pluginRepositories", wrap(`<pluginRepositories></pluginRepositories>`), "<pluginRepositories>"},
+		{"modules", wrap(`<modules><module>sub</module></modules>`), "<modules>"},
+		{"reporting", wrap(`<reporting></reporting>`), "<reporting>"},
+		{"unknown element fails closed", wrap(`<somethingNew>x</somethingNew>`), "unsupported element"},
+		{"doctype directive", `<!DOCTYPE project [<!ENTITY x "y">]>` + wrap(``), "directive"},
+		{"system scope", strings.Replace(wrap(``), "</dependency>", "<scope>system</scope><systemPath>/etc/passwd</systemPath></dependency>", 1), "system"},
+		{"snapshot version", strings.Replace(wrap(``), "<version>1.0</version></dependency>", "<version>2-SNAPSHOT</version></dependency>", 1), "SNAPSHOT"},
+		{"range version", strings.Replace(wrap(``), "<version>1.0</version></dependency>", "<version>[1.0,2.0)</version></dependency>", 1), "pin an exact version"},
+		{"unresolvable property", strings.Replace(wrap(``), "<version>1.0</version></dependency>", "<version>${nope}</version></dependency>", 1), "unresolvable property"},
+		{"import outside management", strings.Replace(wrap(``), "</dependency>", "<scope>import</scope></dependency>", 1), "only valid in <dependencyManagement>"},
+		{"custom packaging", wrap(`<packaging>bundle</packaging>`), "not supported"},
+		{"no dependencies", `<project><groupId>t</groupId><artifactId>t</artifactId><version>1.0</version></project>`, "no <dependencies>"},
+		{"management missing version", wrap(`<dependencyManagement><dependencies><dependency><groupId>a</groupId><artifactId>b</artifactId></dependency></dependencies></dependencyManagement>`), "missing a version"},
+		{"root not project", `<settings></settings>`, "want <project>"},
+		{"malformed xml", `<project><dependencies>`, "parse pom.xml"},
+	}
+	for _, tc := range cases {
+		if _, err := sanitizeUploadedPom(tc.pom); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Errorf("%s: sanitizeUploadedPom = %v, want error containing %q", tc.name, err, tc.wantErr)
+		}
+	}
+}
+
+// TestCollectMavenSanitizedPomEndToEnd uploads a full pom (parent, properties,
+// metadata) and confirms the collector resolves the interpolated dependency —
+// i.e. mvn saw the sanitized regeneration, not the raw upload (the fake mvn
+// only materializes single-line dependencies, which only the regenerated pom
+// contains).
+func TestCollectMavenSanitizedPomEndToEnd(t *testing.T) {
+	pom := `<?xml version="1.0"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>parent</artifactId><version>2.0.0</version></parent>
+  <artifactId>app</artifactId>
+  <name>App</name>
+  <properties><widget.version>1.2.3</widget.version></properties>
+  <dependencies>
+    <dependency>
+      <groupId>com.acme</groupId>
+      <artifactId>widget</artifactId>
+      <version>${widget.version}</version>
+    </dependency>
+  </dependencies>
+</project>`
+	hs, res := collectAndImportMaven(t, MavenCollectRequest{PomXML: pom})
+	if res.ExportedModules < 2 {
+		t.Fatalf("unexpected collect result: %+v", res)
+	}
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	// The property-versioned dependency resolved as a pinned release …
+	assertServed(t, srv.URL+"/maven/com/acme/widget/1.2.3/widget-1.2.3.jar", "JAR(com.acme:widget:1.2.3)")
+	// … and the parent was resolved as an import BOM.
+	assertServed(t, srv.URL+"/maven/com/acme/parent/2.0.0/parent-2.0.0.jar", "")
 }
 
 func TestServeMavenRejectsTraversal(t *testing.T) {

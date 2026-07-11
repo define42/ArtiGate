@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -57,7 +58,10 @@ func registerRpmRepo(t *testing.T, mux *http.ServeMux, prefix, pkg, ver, rel str
 
 	served := rpmBytes
 	if tamper {
-		served = []byte("CORRUPTED-DIFFERENT-BYTES")
+		// Same length as the real .rpm: the streaming download enforces the
+		// index-declared size first, so only same-length corruption proves the
+		// SHA256 check itself.
+		served = []byte(strings.Repeat("X", len(rpmBytes)))
 	}
 	mux.HandleFunc(prefix+"/"+loc, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(served) })
 	return string(rpmBytes)
@@ -442,7 +446,7 @@ func TestLowToHighRpmPipeline(t *testing.T) {
 	}
 	// The served primary lists the package (carried verbatim from upstream).
 	_, body := httpGet(t, base+"/repodata/primary.xml.gz")
-	plain, err := gunzip([]byte(body))
+	plain, err := gunzip([]byte(body), maxIndexPlainBytes)
 	if err != nil {
 		t.Fatalf("gunzip primary: %v", err)
 	}
@@ -496,7 +500,7 @@ func TestCollectRpmMultipleRepos(t *testing.T) {
 	assertServed(t, srv.URL+"/rpm/"+nTools+"/Packages/tool-2.0-1.x86_64.rpm", "FAKE-RPM-tool")
 
 	_, body := httpGet(t, srv.URL+"/rpm/"+nCode+"/repodata/primary.xml.gz")
-	plain, err := gunzip([]byte(body))
+	plain, err := gunzip([]byte(body), maxIndexPlainBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,4 +549,22 @@ func TestHighServerUIRpmTree(t *testing.T) {
 		t.Errorf("rpm tree missing package: %s", body)
 	}
 	assertServed(t, srv.URL+"/ui/api/detail?eco=rpm&path=vscode/code@1.101.2-1", "1.101.2-1")
+}
+
+// TestRunXZOutputCap proves the xz pipe kills a decompression bomb at the
+// output cap instead of buffering it, while normal payloads round-trip.
+func TestRunXZOutputCap(t *testing.T) {
+	if _, err := exec.LookPath("xz"); err != nil {
+		t.Skip("xz not installed")
+	}
+	comp, err := xzCompress(make([]byte, 1<<20)) // 1 MiB of zeros compresses tiny
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runXZ(comp, 64<<10, "--decompress", "--stdout"); err == nil || !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("runXZ(bomb) = %v, want cap error", err)
+	}
+	if out, err := runXZ(comp, 2<<20, "--decompress", "--stdout"); err != nil || len(out) != 1<<20 {
+		t.Fatalf("runXZ roundtrip = %d bytes, %v", len(out), err)
+	}
 }
