@@ -1,7 +1,7 @@
 # ArtiGate — build, test, and lint targets.
 
 # Pin golangci-lint to the same version CI uses (.github/workflows/go.yml).
-GOLANGCI_LINT_VERSION ?= v2.5.0
+GOLANGCI_LINT_VERSION ?= v2.12.2
 GOBIN                  := $(shell go env GOPATH)/bin
 GOLANGCI_LINT         := $(GOBIN)/golangci-lint
 
