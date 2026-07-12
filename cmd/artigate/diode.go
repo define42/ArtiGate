@@ -298,12 +298,10 @@ func writeStreamAtomicLimit(dst string, r io.Reader, limit int64) (int64, error)
 	return n, nil
 }
 
-// directoryRegularFileBytes totals only direct regular-file children. Processed
-// bundle subdirectories are intentionally excluded from the unverified quota.
-func directoryRegularFileBytes(dir string) (int64, error) {
-	return directoryRegularFileBytesExcept(dir, nil)
-}
-
+// directoryRegularFileBytesExcept totals only direct regular-file children,
+// skipping any whose name matches skip. Processed bundle subdirectories are
+// directories and are always excluded, so they never count against the
+// unverified quota.
 func directoryRegularFileBytesExcept(dir string, skip func(string) bool) (int64, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {

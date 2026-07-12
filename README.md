@@ -552,11 +552,19 @@ TLS. If ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy, set
 
 ## Notes and limitations
 
-- The **low-side dashboard** can require a session login (`ARTIGATE_LOW_AUTH`, see
-  above) but is **unauthenticated by default** — until you set credentials, bind it
-  to localhost or a trusted network. The **high-side dashboard** is always
-  unauthenticated — it serves only already-verified public mirror content, so bind
-  it to localhost or a trusted network too.
+- The **low-side dashboard** is a privileged control plane — it holds the signing
+  key, so anyone who can reach it can have arbitrary content signed and sent across
+  the diode. It requires a session login (`ARTIGATE_LOW_AUTH`, see above); when it
+  is not set the low side **refuses to start on a non-loopback listen address**.
+  Bind `--listen` to loopback, set `ARTIGATE_LOW_AUTH`, or — only behind a trusted
+  TLS-authenticating reverse proxy — set `ARTIGATE_LOW_ALLOW_UNAUTHENTICATED=true`
+  to acknowledge that layer. The **high-side dashboard** serves only
+  already-verified public mirror content and is unauthenticated, so bind it to
+  localhost or a trusted network; its state-changing admin endpoints
+  (`POST /admin/uploads/delete`, `/admin/import`) are additionally restricted to
+  loopback callers unless `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN=on` (set this when a
+  published-port or reverse-proxy hop makes local admin appear non-loopback, and
+  keep the listener itself restricted at the host).
 - **Go**: no sumdb mirroring — use `GOSUMDB=off` on the high side and rely on your
   committed `go.sum` plus the signed bundles.
 - **Python**: wheels only (no sdists), always enforced. A package with no

@@ -94,6 +94,15 @@ services:
       # trust still comes from the Ed25519 signature check on import.
       ARTIGATE_DIODE_INGEST: "on"
       ARTIGATE_DIODE_TOKEN: "${ARTIGATE_DIODE_TOKEN:?Set ARTIGATE_DIODE_TOKEN in .env; use a random value such as openssl rand -hex 32}"
+      # The high side restricts its state-changing admin endpoints
+      # (POST /admin/uploads/delete, /admin/import) to loopback callers by
+      # default. Under Docker's published-port NAT the container sees the
+      # gateway address, not loopback, so the dashboard's delete/import would be
+      # refused. Access is instead restricted at the host by the loopback
+      # publish below (ARTIGATE_HIGH_BIND defaults to 127.0.0.1), so it is safe
+      # to allow the in-container admin calls here. If you widen ARTIGATE_HIGH_BIND
+      # to a non-loopback address, put an authenticating TLS proxy in front.
+      ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN: "on"
     ports:
       - "${ARTIGATE_HIGH_BIND:-127.0.0.1}:8081:8080"
     volumes:

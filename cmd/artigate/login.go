@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gorilla/securecookie"
 )
@@ -27,8 +28,19 @@ const (
 	// maxConcurrentLogins bounds how many argon2id verifications run at once.
 	// Each verification allocates ~64 MiB, and POST /login is unauthenticated, so
 	// without a cap a flood of login attempts could exhaust memory and OOM the
-	// process; excess attempts queue on cheap goroutines instead.
+	// process. Admission is non-blocking: attempts beyond the cap are rejected
+	// with 429 rather than queued, so waiting requests and connections cannot pile
+	// up unbounded.
 	maxConcurrentLogins = 4
+
+	// maxLoginBodyBytes caps the POST /login request body. The form is a tiny
+	// username+password, so anything larger is refused before it is read — a slow
+	// or oversized body on this unauthenticated endpoint cannot tie up resources.
+	maxLoginBodyBytes = 16 << 10
+	// loginReadTimeout bounds how long the whole login body may take to arrive,
+	// defeating a slow-trickle body on this endpoint (the server sets no global
+	// ReadTimeout because it must stream large artifacts elsewhere).
+	loginReadTimeout = 15 * time.Second
 )
 
 // authManager holds the credential set and the session-cookie codec.
@@ -56,13 +68,20 @@ func newAuthManager(users map[string]string, keyPath string, secure bool) (*auth
 	}, nil
 }
 
-// checkCredential verifies user/pass, allowing at most maxConcurrentLogins
-// argon2 verifications to run concurrently so the unauthenticated login endpoint
-// cannot be turned into a memory-exhaustion DoS.
-func (a *authManager) checkCredential(user, pass string) bool {
-	a.verifySem <- struct{}{}
-	defer func() { <-a.verifySem }()
-	return credentialOK(a.users, user, pass)
+// checkCredential verifies user/pass under a non-blocking concurrency cap. At
+// most maxConcurrentLogins argon2 verifications run at once so the unauthenticated
+// login endpoint cannot be turned into a memory-exhaustion DoS; when the cap is
+// full it returns admitted=false immediately (the caller responds 429) instead of
+// queuing, so waiting requests cannot accumulate. ok is the credential result and
+// is only meaningful when admitted is true.
+func (a *authManager) checkCredential(user, pass string) (ok, admitted bool) {
+	select {
+	case a.verifySem <- struct{}{}:
+		defer func() { <-a.verifySem }()
+		return credentialOK(a.users, user, pass), true
+	default:
+		return false, false
+	}
 }
 
 // cookieSecure decides the session cookie's Secure attribute. By default it
@@ -159,8 +178,23 @@ func (a *authManager) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		writeHTML(w, loginPage(r.URL.Query().Get("e") == "1"))
 	case http.MethodPost:
-		_ = r.ParseForm()
-		if !a.checkCredential(r.PostFormValue("username"), r.PostFormValue("password")) {
+		// Bound the body and the time it may take to arrive: this endpoint is
+		// unauthenticated and reads a request body, so it must not be usable to
+		// tie up a connection with a slow or oversized upload.
+		if rc := http.NewResponseController(w); rc != nil {
+			_ = rc.SetReadDeadline(time.Now().Add(loginReadTimeout))
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid login request", http.StatusBadRequest)
+			return
+		}
+		ok, admitted := a.checkCredential(r.PostFormValue("username"), r.PostFormValue("password"))
+		if !admitted {
+			http.Error(w, "too many concurrent login attempts; try again shortly", http.StatusTooManyRequests)
+			return
+		}
+		if !ok {
 			http.Redirect(w, r, "/login?e=1", http.StatusSeeOther)
 			return
 		}

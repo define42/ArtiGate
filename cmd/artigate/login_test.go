@@ -213,24 +213,30 @@ func TestCookieSecure(t *testing.T) {
 
 func TestCheckCredentialConcurrent(t *testing.T) {
 	am := newTestAuth(t) // single user alice/pw
-	// Correct results under concurrent load, and the semaphore must not deadlock
-	// when more callers than maxConcurrentLogins run at once.
+	// Under concurrent load the non-blocking cap must never deadlock, never admit
+	// a wrong password as valid, and never reject a correct one as invalid: every
+	// admitted result must match the credential it was given. Attempts beyond the
+	// cap are admitted=false (the handler turns those into 429s) rather than
+	// queued.
 	const n = maxConcurrentLogins * 4
-	results := make(chan bool, n)
+	type res struct{ ok, admitted, wanted bool }
+	results := make(chan res, 2*n)
 	for i := 0; i < n; i++ {
-		go func() { results <- am.checkCredential("alice", "pw") }()
-		go func() { results <- am.checkCredential("alice", "wrong") }()
+		go func() { ok, ad := am.checkCredential("alice", "pw"); results <- res{ok, ad, true} }()
+		go func() { ok, ad := am.checkCredential("alice", "wrong"); results <- res{ok, ad, false} }()
 	}
-	good, bad := 0, 0
+	admitted := 0
 	for i := 0; i < 2*n; i++ {
-		if <-results {
-			good++
-		} else {
-			bad++
+		r := <-results
+		if r.admitted {
+			admitted++
+			if r.ok != r.wanted {
+				t.Errorf("admitted verification ok = %v, want %v", r.ok, r.wanted)
+			}
 		}
 	}
-	if good != n || bad != n {
-		t.Errorf("good = %d, bad = %d; want %d each", good, bad, n)
+	if admitted == 0 {
+		t.Error("no login attempt was admitted; the cap must still let work through")
 	}
 }
 

@@ -211,6 +211,41 @@ func selfSignedCert(domains []string) (tls.Certificate, error) {
 	return tls.X509KeyPair(certPEM, keyPEM)
 }
 
+// listenAddrIsLoopback reports whether a listen address binds only the local
+// loopback interface (so it is unreachable from other hosts). A host-less
+// address such as ":8080" — or an unresolved hostname, which could point
+// anywhere — is treated as NOT loopback, so the fail-closed guards err on the
+// side of caution.
+func listenAddrIsLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr // no port present; consider the whole value the host
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// remoteAddrIsLoopback reports whether a request originates from the local host
+// (directly, or via a reverse proxy running on it). Used to keep high-side
+// mutation endpoints local by default.
+func remoteAddrIsLoopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && ip.IsLoopback()
+}
+
 // listenAndServe serves handler on addr using the configured transport, blocking
 // until the server stops. storageDir is the ACME cert cache root.
 func listenAndServe(c TLSConfig, addr, storageDir string, handler http.Handler) error {
@@ -222,6 +257,15 @@ func listenAndServe(c TLSConfig, addr, storageDir string, handler http.Handler) 
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 30 * time.Second,
+		// IdleTimeout bounds how long an idle keep-alive connection is held so a
+		// flood of opened-but-silent connections cannot pin resources. No
+		// ReadTimeout/WriteTimeout is set deliberately: both servers stream
+		// multi-gigabyte artifacts (model/repo downloads, diode bundle ingest)
+		// whose transfers legitimately outrun any fixed whole-request deadline.
+		// Slow-header attacks are covered by ReadHeaderTimeout; the small
+		// unauthenticated endpoints that do read a body (e.g. /login) set their
+		// own per-request body limit and read deadline.
+		IdleTimeout: 120 * time.Second,
 	}
 	if tlsCfg == nil {
 		return srv.ListenAndServe()

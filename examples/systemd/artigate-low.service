@@ -6,8 +6,15 @@ Wants=network-online.target
 [Service]
 User=artigate
 Group=artigate
+# The low side holds the signing key, so its dashboard is a privileged control
+# plane. It binds to loopback by default; ArtiGate refuses to start on a
+# non-loopback address unless ARTIGATE_LOW_AUTH is set (see 'artigate hashpw')
+# or ARTIGATE_LOW_ALLOW_UNAUTHENTICATED=true acknowledges a trusted, TLS-
+# authenticating reverse proxy in front. Drive collects from the host itself,
+# an SSH tunnel, or that proxy — never expose :8080 directly.
+# Environment=ARTIGATE_LOW_AUTH=admin:$argon2id$...
 ExecStart=/usr/local/bin/artigate low \
-  --listen :8080 \
+  --listen 127.0.0.1:8080 \
   --root /var/lib/artigate-low \
   --export-dir /var/spool/diode-out \
   --private-key /etc/artigate/low.ed25519 \
