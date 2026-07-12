@@ -362,6 +362,9 @@ func (s *HighServer) serveUploadsAdmin(w http.ResponseWriter, r *http.Request) b
 		folders, err := s.listUploadedFolders()
 		return respondJSONOrError(w, http.StatusInternalServerError, UploadsListResponse{Folders: folders}, err)
 	case r.URL.Path == "/admin/uploads/delete" && r.Method == http.MethodPost:
+		if !s.requireLocalAdmin(w, r) {
+			return true
+		}
 		return s.handleDeleteUpload(w, r)
 	default:
 		return false

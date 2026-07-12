@@ -39,6 +39,12 @@ services:
       - NET_ADMIN
     command:
       - high
+      # Serves verified, read-only mirror content on every interface. The
+      # state-changing admin endpoints (POST /admin/uploads/delete, /admin/import)
+      # are restricted to loopback callers, so administer them from this host
+      # itself; a remote call is refused with 403. To drive them from elsewhere,
+      # front the port with an authenticating proxy and set
+      # ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN=on.
       - --listen=:8080
       - --root=/var/lib/artigate
       - --landing=/var/spool/diode-in

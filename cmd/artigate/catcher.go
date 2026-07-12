@@ -98,7 +98,8 @@ func startCatcherIfConfigured(hs *HighServer) {
 	if cfg.Interface == "" {
 		return
 	}
-	_, err = startCatcher(cfg, hs.cfg.Landing, hs.onDiodeFileLanded)
+	_, err = startCatcher(cfg, hs.cfg.Landing, hs.onDiodeFileLanded,
+		func() (int64, error) { return hs.unverifiedTransportBytesExcept(isUDPTempName) })
 	must(err)
 	log.Printf("high-side diode catcher: %s ← [%s%%%s]:%d (MTU %d, receive buffer %d MiB) into %s",
 		cfg.Interface, cfg.Group, cfg.Interface, cfg.Port, cfg.MTU, cfg.RcvBufMB, hs.cfg.Landing)
@@ -115,7 +116,7 @@ type diodeCatcher struct {
 // joins the multicast group, and starts the receive loop. Reassembled files
 // land in dir; onComplete runs for each (the high server uses it to kick an
 // import as soon as a bundle is whole).
-func startCatcher(cfg CatcherConfig, dir string, onComplete func(name string)) (*diodeCatcher, error) {
+func startCatcher(cfg CatcherConfig, dir string, onComplete func(name string), measureStored func() (int64, error)) (*diodeCatcher, error) {
 	if cfg.NetSetup {
 		if err := setupCatcherIface(cfg); err != nil {
 			return nil, err
@@ -135,7 +136,9 @@ func startCatcher(cfg CatcherConfig, dir string, onComplete func(name string)) (
 		_ = conn.Close()
 		return nil, err
 	}
-	c := &diodeCatcher{cfg: cfg, conn: conn, asm: newDiodeAssembler(dir, validBundleFileName, onComplete)}
+	asm := newDiodeAssembler(dir, validBundleFileName, onComplete)
+	asm.measureStored = measureStored
+	c := &diodeCatcher{cfg: cfg, conn: conn, asm: asm}
 	go c.run()
 	return c, nil
 }

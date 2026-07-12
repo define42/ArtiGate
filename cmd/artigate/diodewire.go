@@ -341,15 +341,22 @@ type diodeAssembler struct {
 	dir        string
 	validName  func(string) bool
 	onComplete func(name string)
-	encoders   map[uint32]reedsolomon.Encoder
-	active     map[[16]byte]*diodeTransfer
-	done       map[[16]byte]time.Time
-	doneOrder  []diodeDoneRecord
-	doneNext   int
-	buffered   int64
-	activeSize int64
-	stats      diodeCatchStats
-	lastLogged diodeCatchStats
+	// measureStored, when set, returns the bytes of already-landed unverified
+	// transport data that must count against the quota (landing + quarantine +
+	// rejected, excluding this assembler's in-progress temp files). When nil it
+	// falls back to measuring only the landing directory. Wired by the catcher
+	// so the UDP path shares the HTTP ingest's single quota rather than seeing
+	// only what currently sits in landing.
+	measureStored func() (int64, error)
+	encoders      map[uint32]reedsolomon.Encoder
+	active        map[[16]byte]*diodeTransfer
+	done          map[[16]byte]time.Time
+	doneOrder     []diodeDoneRecord
+	doneNext      int
+	buffered      int64
+	activeSize    int64
+	stats         diodeCatchStats
+	lastLogged    diodeCatchStats
 }
 
 type diodeDoneRecord struct {
@@ -404,6 +411,18 @@ func newDiodeAssembler(dir string, validName func(string) bool, onComplete func(
 		active:     map[[16]byte]*diodeTransfer{},
 		done:       map[[16]byte]time.Time{},
 	}
+}
+
+// storedUnverifiedBytes reports the already-landed unverified transport bytes
+// that count against the quota. It prefers measureStored (the shared landing +
+// quarantine + rejected total) so a bundle swept out of landing into quarantine
+// or rejected still counts; without it, it measures the landing directory alone
+// (used by unit tests that construct an assembler directly).
+func (a *diodeAssembler) storedUnverifiedBytes() (int64, error) {
+	if a.measureStored != nil {
+		return a.measureStored()
+	}
+	return directoryRegularFileBytesExcept(a.dir, isUDPTempName)
 }
 
 // handleDatagram feeds one received datagram through parse → transfer → block
@@ -475,7 +494,7 @@ func (a *diodeAssembler) transferFor(p *diodePacket, now time.Time) (*diodeTrans
 	if len(a.active) >= diodeMaxTransfers {
 		return nil, fmt.Errorf("more than %d transfers in flight", diodeMaxTransfers)
 	}
-	stored, err := directoryRegularFileBytesExcept(a.dir, isUDPTempName)
+	stored, err := a.storedUnverifiedBytes()
 	if err != nil {
 		return nil, fmt.Errorf("measure landing quota: %w", err)
 	}

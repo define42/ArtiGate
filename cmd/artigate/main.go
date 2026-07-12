@@ -440,6 +440,7 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 	must(err)
 	users, err := parseLowAuth(os.Getenv("ARTIGATE_LOW_AUTH"))
 	must(err)
+	guardLowExposure(cfg.Listen, len(users) > 0, tc.Mode)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", ls)
@@ -465,6 +466,40 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 			p.cfg.Interface, p.target(), p.cfg.RateMbit, p.cfg.DataShards, p.cfg.ParityShards, p.cfg.MTU)
 	}
 	must(listenAndServe(tc, cfg.Listen, cfg.Root, logHTTP(handler)))
+}
+
+// guardLowExposure fails closed when the low side — which holds the signing key
+// and can therefore have arbitrary content signed through it — would be reachable
+// from other hosts without a login. The operator must either set ARTIGATE_LOW_AUTH,
+// bind the listener to loopback, or explicitly acknowledge an external
+// authenticating layer with ARTIGATE_LOW_ALLOW_UNAUTHENTICATED=true. It also warns
+// when credentials would traverse a non-loopback plaintext hop.
+func guardLowExposure(listen string, authEnabled bool, tlsMode tlsMode) {
+	loopback := listenAddrIsLoopback(listen)
+	if !authEnabled && !loopback {
+		allow, err := parseOnOff(os.Getenv("ARTIGATE_LOW_ALLOW_UNAUTHENTICATED"))
+		must(err)
+		if !allow {
+			log.Fatalf("refusing to start: the low side listens on %s (reachable from other hosts) with no authentication. "+
+				"The low side holds the signing key, so an unauthenticated listener lets anyone have arbitrary content signed and sent across the diode. "+
+				"Set ARTIGATE_LOW_AUTH (see 'artigate hashpw'), bind --listen to loopback (e.g. 127.0.0.1:8080), "+
+				"or set ARTIGATE_LOW_ALLOW_UNAUTHENTICATED=true if a trusted authenticating reverse proxy fronts it.", listen)
+		}
+		log.Printf("WARNING: low side is unauthenticated on a non-loopback address (%s); relying on an external authenticating layer per ARTIGATE_LOW_ALLOW_UNAUTHENTICATED", listen)
+	}
+	if authEnabled && !loopback && tlsMode == tlsUnencrypted && !envIsTrue(os.Getenv("ARTIGATE_LOW_COOKIE_SECURE")) {
+		log.Printf("WARNING: low side serves plaintext HTTP on a non-loopback address (%s); the login password and session cookie can be observed on the wire. Terminate TLS (ARTIGATE_TLS_MODE) or set ARTIGATE_LOW_COOKIE_SECURE=true behind an HTTPS proxy.", listen)
+	}
+}
+
+// envIsTrue reports whether an environment toggle holds an affirmative value.
+func envIsTrue(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
@@ -1848,6 +1883,12 @@ type HighConfig struct {
 	// bearer token on those uploads (ARTIGATE_DIODE_TOKEN).
 	DiodeIngest bool
 	DiodeToken  string
+	// AllowRemoteAdmin permits the high side's state-changing admin endpoints
+	// (POST /admin/uploads/delete, POST /admin/import) to be driven from other
+	// hosts (ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN=on). By default they are restricted
+	// to loopback callers, because the high side is otherwise unauthenticated and
+	// these endpoints mutate served content. Read-only serving is unaffected.
+	AllowRemoteAdmin bool
 }
 
 type HighState struct {
@@ -1896,6 +1937,11 @@ func runHigh(args []string) {
 	if cfg.DiodeIngest {
 		must(validateDiodeToken(cfg.DiodeToken))
 	}
+	allowRemoteAdmin, err := parseOnOff(os.Getenv("ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN"))
+	if err != nil {
+		log.Fatalf("ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN: %v", err)
+	}
+	cfg.AllowRemoteAdmin = allowRemoteAdmin
 	pub, err := readPublicKey(cfg.PublicKeyPath)
 	must(err)
 	hs, err := NewHighServer(cfg, pub)
@@ -1975,9 +2021,21 @@ func (s *HighServer) requestImport() {
 }
 
 func (s *HighServer) unverifiedTransportBytes() (int64, error) {
+	return s.unverifiedTransportBytesExcept(nil)
+}
+
+// unverifiedTransportBytesExcept totals the bytes of transport data that has not
+// yet been verified and installed — across the landing, quarantine, and rejected
+// directories. A bundle that is swept out of landing into quarantine or rejected
+// before its signature is checked still occupies disk, so all three must count
+// against the single quota; measuring landing alone would let an attacker reset
+// the quota by getting each bundle sorted out of it. skip, when non-nil, excludes
+// matching file names (the UDP catcher passes it to leave out its own in-progress
+// temp files, which it accounts for separately).
+func (s *HighServer) unverifiedTransportBytesExcept(skip func(string) bool) (int64, error) {
 	var total int64
 	for _, dir := range []string{s.cfg.Landing, s.cfg.Quarantine, filepath.Join(s.cfg.Root, "rejected")} {
-		n, err := directoryRegularFileBytes(dir)
+		n, err := directoryRegularFileBytesExcept(dir, skip)
 		if err != nil {
 			return 0, err
 		}
@@ -2042,6 +2100,20 @@ func (s *HighServer) goModuleDir() string {
 	return filepath.Join(s.downloadDir, "go")
 }
 
+// requireLocalAdmin gates the high side's state-changing admin endpoints. The
+// high side serves already-verified public content unauthenticated, but its
+// mutation endpoints must not be reachable from arbitrary hosts: by default they
+// are restricted to loopback callers (including a reverse proxy on the same
+// host), unless ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN is set. It writes a 403 and
+// reports false when the caller is not allowed.
+func (s *HighServer) requireLocalAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.cfg.AllowRemoteAdmin || remoteAddrIsLoopback(r) {
+		return true
+	}
+	http.Error(w, "admin endpoint restricted to local callers; set ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN to permit remote access behind an authenticating proxy", http.StatusForbidden)
+	return false
+}
+
 // serveHighAdmin handles the health check and /admin/* routes. It reports
 // whether it has written a response for the request.
 func (s *HighServer) serveHighAdmin(w http.ResponseWriter, r *http.Request) bool {
@@ -2049,6 +2121,9 @@ func (s *HighServer) serveHighAdmin(w http.ResponseWriter, r *http.Request) bool
 	case r.URL.Path == "/healthz":
 		_, _ = w.Write([]byte("ok\n"))
 	case r.URL.Path == "/admin/import" && r.Method == http.MethodPost:
+		if !s.requireLocalAdmin(w, r) {
+			return true
+		}
 		res, err := s.ImportNext()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -12,8 +12,15 @@
 #
 #   network_mode: host   the pitcher must own a REAL host NIC (the fiber TX);
 #                        bridge networking would hide it. `ports:` does not
-#                        apply with host networking — the dashboard binds host
-#                        port 8080 directly.
+#                        apply with host networking — the dashboard binds the
+#                        host address given to --listen directly. It defaults to
+#                        127.0.0.1:8080 (loopback) below: the low side holds the
+#                        signing key, so ArtiGate refuses to start on a
+#                        non-loopback address without ARTIGATE_LOW_AUTH (see
+#                        'artigate hashpw') or ARTIGATE_LOW_ALLOW_UNAUTHENTICATED
+#                        =true acknowledging a trusted authenticating proxy.
+#                        Drive collects from the host itself or over an SSH
+#                        tunnel; do not widen the bind without adding auth+TLS.
 #   cap_add: NET_ADMIN   configure the NIC (MTU / queues / eui64 / link) via
 #                        ioctl + rtnetlink, and raise the send buffer past
 #                        wmem_max (SO_SNDBUFFORCE).
@@ -36,7 +43,11 @@ services:
       - NET_ADMIN
     command:
       - low
-      - --listen=:8080
+      # Loopback-only: the low side is a signing control plane. To reach the
+      # dashboard remotely, put an authenticating TLS proxy in front and set
+      # ARTIGATE_LOW_AUTH, or widen this bind and set the same — never expose it
+      # unauthenticated. See the network_mode note above.
+      - --listen=127.0.0.1:8080
       - --root=/var/lib/artigate
       - --export-dir=/var/spool/diode-out
       - --private-key=/keys/low.ed25519

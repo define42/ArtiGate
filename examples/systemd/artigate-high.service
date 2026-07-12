@@ -6,6 +6,11 @@ Wants=network-online.target
 [Service]
 User=artigate
 Group=artigate
+# Serves verified, read-only mirror content. Its state-changing admin endpoints
+# (POST /admin/uploads/delete, /admin/import) are restricted to loopback callers
+# by default, so administer them from this host; set
+# ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN=on (behind an authenticating proxy) to allow
+# remote admin.
 ExecStart=/usr/local/bin/artigate high \
   --listen :8080 \
   --root /var/lib/artigate-high \
