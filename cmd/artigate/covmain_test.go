@@ -622,6 +622,6 @@ func TestCovMain_MoveFile(t *testing.T) {
 	}
 }
 
-func TestCovMain_MustNilDoesNotFatal(t *testing.T) {
+func TestCovMain_MustNilDoesNotFatal(_ *testing.T) {
 	must(nil) // must must not exit on a nil error
 }

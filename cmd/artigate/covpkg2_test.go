@@ -64,8 +64,10 @@ func TestCovP2_ValidateAptMirrorConfig(t *testing.T) {
 func TestCovP2_ValidateAptMirrorImport(t *testing.T) {
 	seen := map[string]bool{"apt/m/pool/main/c/code_1_amd64.deb": true}
 	suite := AptSuite{Name: "stable", Components: []string{"main"}, Architectures: []string{"amd64"}}
-	pkg := AptPackage{Package: "code", Version: "1", Architecture: "amd64", Suite: "stable", Component: "main",
-		Filename: "pool/main/c/code_1_amd64.deb", SHA256: strings.Repeat("a", 64), Size: 1}
+	pkg := AptPackage{
+		Package: "code", Version: "1", Architecture: "amd64", Suite: "stable", Component: "main",
+		Filename: "pool/main/c/code_1_amd64.deb", SHA256: strings.Repeat("a", 64), Size: 1,
+	}
 
 	good := AptMirror{Name: "m", Suites: []AptSuite{suite}, Packages: []AptPackage{pkg}}
 	if err := validateAptMirrors([]AptMirror{good}, seen); err != nil {
@@ -362,8 +364,10 @@ func TestCovP2_ValidateRpmMirrorConfigAndImport(t *testing.T) {
 		{Name: "a/b", BaseURL: "https://ex/repo", Repodata: good.Repodata},           // slash
 		{Name: "m", BaseURL: "https://ex/repo"},                                      // no repodata
 		{Name: "m", BaseURL: "https://ex/repo", Repodata: []RpmData{{Href: "x.gz"}}}, // metadata not in files
-		{Name: "m", BaseURL: "https://ex/repo", Repodata: good.Repodata,
-			Packages: []RpmPackage{{Name: "z", Location: "Packages/absent.rpm"}}}, // pkg not in files
+		{
+			Name: "m", BaseURL: "https://ex/repo", Repodata: good.Repodata,
+			Packages: []RpmPackage{{Name: "z", Location: "Packages/absent.rpm"}},
+		}, // pkg not in files
 	}
 	for i, m := range bad {
 		if err := validateRpmMirror(m, seen); err == nil {
@@ -388,8 +392,10 @@ func TestCovP2_RpmDetail(t *testing.T) {
 
 	mirror := RpmMirror{
 		Name: "m", BaseURL: "https://ex/repo",
-		Packages: []RpmPackage{{Name: "code", Version: "1.0-1", Arch: "x86_64",
-			Location: "Packages/code-1.0-1.x86_64.rpm", SHA256: strings.Repeat("d", 64), Size: 5}},
+		Packages: []RpmPackage{{
+			Name: "code", Version: "1.0-1", Arch: "x86_64",
+			Location: "Packages/code-1.0-1.x86_64.rpm", SHA256: strings.Repeat("d", 64), Size: 5,
+		}},
 	}
 	b, _ := json.MarshalIndent(mirror, "", "  ")
 	covP2Write(t, filepath.Join(hs.rpmDir(), "m", "index.json"), b)
@@ -598,8 +604,10 @@ func TestCovP2_ParentAsBOMImport(t *testing.T) {
 // TestCovP2_SkipMavenFile covers each bookkeeping-file class plus a real
 // artifact (kept).
 func TestCovP2_SkipMavenFile(t *testing.T) {
-	skip := []string{"_remote.repositories", "maven-metadata-central.xml", "resolver-status.properties",
-		"slf4j-api-2.0.16.jar.lastUpdated", "part.download.part", "download.tmp"}
+	skip := []string{
+		"_remote.repositories", "maven-metadata-central.xml", "resolver-status.properties",
+		"slf4j-api-2.0.16.jar.lastUpdated", "part.download.part", "download.tmp",
+	}
 	for _, n := range skip {
 		if !skipMavenFile(n) {
 			t.Errorf("skipMavenFile(%q) = false, want true", n)

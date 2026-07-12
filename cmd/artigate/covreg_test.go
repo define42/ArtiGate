@@ -352,13 +352,17 @@ func TestCovReg_MergeHFModel(t *testing.T) {
 	d1 := containerSHA([]byte("hf-manifest-1"))
 	d2 := containerSHA([]byte("hf-manifest-2"))
 
-	if err := hs.mergeHFModel(HFModel{Org: "unsloth", Name: "gpt-oss-20b-GGUF",
-		Variants: []HFVariant{{Tag: "Q4_0", Digest: d1}}}); err != nil {
+	if err := hs.mergeHFModel(HFModel{
+		Org: "unsloth", Name: "gpt-oss-20b-GGUF",
+		Variants: []HFVariant{{Tag: "Q4_0", Digest: d1}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	// Re-import: Q4_0 moves to a new digest; Q8_0 is added.
-	if err := hs.mergeHFModel(HFModel{Org: "unsloth", Name: "gpt-oss-20b-GGUF",
-		Variants: []HFVariant{{Tag: "Q4_0", Digest: d2}, {Tag: "Q8_0", Digest: d1}}}); err != nil {
+	if err := hs.mergeHFModel(HFModel{
+		Org: "unsloth", Name: "gpt-oss-20b-GGUF",
+		Variants: []HFVariant{{Tag: "Q4_0", Digest: d2}, {Tag: "Q8_0", Digest: d1}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -385,17 +389,23 @@ func TestCovReg_MergeHFRepo(t *testing.T) {
 	rev1 := strings.Repeat("ab", 20)
 	rev2 := strings.Repeat("cd", 20)
 
-	if err := hs.mergeHFRepo(HFRepo{Org: "openai", Name: "gpt-oss-20b", Revision: rev1, Ref: "main",
-		Files: []HFRepoFile{{Path: "config.json", SHA256: strings.Repeat("11", 32), Size: 3}}}); err != nil {
+	if err := hs.mergeHFRepo(HFRepo{
+		Org: "openai", Name: "gpt-oss-20b", Revision: rev1, Ref: "main",
+		Files: []HFRepoFile{{Path: "config.json", SHA256: strings.Repeat("11", 32), Size: 3}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	// Re-import the same revision (replaced in place) plus move "main" to a new commit.
-	if err := hs.mergeHFRepo(HFRepo{Org: "openai", Name: "gpt-oss-20b", Revision: rev1, Ref: "main",
-		Files: []HFRepoFile{{Path: "config.json", SHA256: strings.Repeat("22", 32), Size: 5}}}); err != nil {
+	if err := hs.mergeHFRepo(HFRepo{
+		Org: "openai", Name: "gpt-oss-20b", Revision: rev1, Ref: "main",
+		Files: []HFRepoFile{{Path: "config.json", SHA256: strings.Repeat("22", 32), Size: 5}},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := hs.mergeHFRepo(HFRepo{Org: "openai", Name: "gpt-oss-20b", Revision: rev2, Ref: "main",
-		Files: []HFRepoFile{{Path: "config.json", SHA256: strings.Repeat("33", 32), Size: 7}}}); err != nil {
+	if err := hs.mergeHFRepo(HFRepo{
+		Org: "openai", Name: "gpt-oss-20b", Revision: rev2, Ref: "main",
+		Files: []HFRepoFile{{Path: "config.json", SHA256: strings.Repeat("33", 32), Size: 7}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 

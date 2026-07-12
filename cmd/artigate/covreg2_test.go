@@ -165,8 +165,10 @@ func TestCovR2_ValidateHFRepoErrors(t *testing.T) {
 	seen := map[string]bool{rel: true}
 	shaByPath := map[string]string{rel: hexSHA(config)}
 
-	good := HFRepo{Org: "openai", Name: "gpt-oss-20b", Revision: strings.Repeat("ab", 20), Ref: "main",
-		Files: []HFRepoFile{{Path: "config.json", SHA256: hexSHA(config), Size: int64(len(config))}}}
+	good := HFRepo{
+		Org: "openai", Name: "gpt-oss-20b", Revision: strings.Repeat("ab", 20), Ref: "main",
+		Files: []HFRepoFile{{Path: "config.json", SHA256: hexSHA(config), Size: int64(len(config))}},
+	}
 	if err := validateHFRepo(good, seen, shaByPath); err != nil {
 		t.Fatalf("valid repo rejected: %v", err)
 	}
