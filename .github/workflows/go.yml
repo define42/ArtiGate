@@ -112,8 +112,11 @@ jobs:
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
+        env:
+          GOTOOLCHAIN: local
         with:
           version: v2.12.2
+          install-mode: goinstall
 
   # ---------------------------------------------------------------------------
   # Versioning, release & container publish (push to main only)
