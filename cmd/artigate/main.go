@@ -1913,6 +1913,25 @@ type HighServer struct {
 	importOnce  sync.Once
 }
 
+// applyHighEnvConfig fills the environment-driven high-side settings (diode
+// ingest + token, remote-admin override), failing fast on an invalid value.
+func applyHighEnvConfig(cfg *HighConfig) {
+	ingest, err := parseOnOff(os.Getenv("ARTIGATE_DIODE_INGEST"))
+	if err != nil {
+		log.Fatalf("ARTIGATE_DIODE_INGEST: %v", err)
+	}
+	cfg.DiodeIngest = ingest
+	cfg.DiodeToken = os.Getenv("ARTIGATE_DIODE_TOKEN")
+	if cfg.DiodeIngest {
+		must(validateDiodeToken(cfg.DiodeToken))
+	}
+	allowRemoteAdmin, err := parseOnOff(os.Getenv("ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN"))
+	if err != nil {
+		log.Fatalf("ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN: %v", err)
+	}
+	cfg.AllowRemoteAdmin = allowRemoteAdmin
+}
+
 func runHigh(args []string) {
 	fs := flag.NewFlagSet("high", flag.ExitOnError)
 	cfg := HighConfig{}
@@ -1928,20 +1947,7 @@ func runHigh(args []string) {
 	if cfg.PublicKeyPath == "" {
 		log.Fatal("--public-key is required")
 	}
-	ingest, err := parseOnOff(os.Getenv("ARTIGATE_DIODE_INGEST"))
-	if err != nil {
-		log.Fatalf("ARTIGATE_DIODE_INGEST: %v", err)
-	}
-	cfg.DiodeIngest = ingest
-	cfg.DiodeToken = os.Getenv("ARTIGATE_DIODE_TOKEN")
-	if cfg.DiodeIngest {
-		must(validateDiodeToken(cfg.DiodeToken))
-	}
-	allowRemoteAdmin, err := parseOnOff(os.Getenv("ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN"))
-	if err != nil {
-		log.Fatalf("ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN: %v", err)
-	}
-	cfg.AllowRemoteAdmin = allowRemoteAdmin
+	applyHighEnvConfig(&cfg)
 	pub, err := readPublicKey(cfg.PublicKeyPath)
 	must(err)
 	hs, err := NewHighServer(cfg, pub)
