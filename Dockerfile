@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 # Build stage: compile a static ArtiGate binary (pure-Go dependencies only).
 # -----------------------------------------------------------------------------
-FROM golang:1.25-alpine AS build
+FROM golang:1.26.5-alpine AS build
 
 WORKDIR /src
 
@@ -30,7 +30,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/artigate ./cmd/art
 # (--apt-gpg-key / --rpm-gpg-key); otherwise it needs none of them, so a
 # high-only deployment can use a slimmer image with just the binary + gnupg.
 # -----------------------------------------------------------------------------
-FROM golang:1.25-alpine
+FROM golang:1.26.5-alpine
 
 RUN apk add --no-cache git ca-certificates openssh-client python3 py3-pip maven openjdk17-jre-headless nodejs npm gnupg xz \
     && addgroup -S artigate \

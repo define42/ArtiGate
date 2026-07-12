@@ -6,7 +6,7 @@ ArtiGate is a single static binary with four subcommands (`keygen`, `low`, `high
 
 ## The Docker image
 
-The `Dockerfile` is a two-stage build, both stages on `golang:1.25-alpine`.
+The `Dockerfile` is a two-stage build, both stages on `golang:1.26.5-alpine`.
 
 **Build stage.** `go.mod`/`go.sum` are copied first so the module-download layer caches independently of source changes (ArtiGate's runtime deps are pure-Go: `certmagic` for ACME/TLS, `gorilla/securecookie`, `hashicorp/go-version`, `golang.org/x/crypto`, `klauspost/reedsolomon` for the UDP diode's forward error correction, and `modernc.org` SQLite). The binary is compiled fully static with CGO disabled, so it runs on any base:
 
@@ -14,7 +14,7 @@ The `Dockerfile` is a two-stage build, both stages on `golang:1.25-alpine`.
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/artigate ./cmd/artigate
 ```
 
-**Runtime stage.** A single `apk add` installs the fetch toolchain that the **low side** shells out to. The Go toolchain itself is already present from the `golang:1.25-alpine` base and is not re-installed via apk:
+**Runtime stage.** A single `apk add` installs the fetch toolchain that the **low side** shells out to. The Go toolchain itself is already present from the `golang:1.26.5-alpine` base and is not re-installed via apk:
 
 ```dockerfile
 RUN apk add --no-cache git ca-certificates openssh-client python3 py3-pip \
