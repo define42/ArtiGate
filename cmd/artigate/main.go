@@ -64,13 +64,22 @@ const (
 	streamContainers = "containers"
 	streamNpm        = "npm"
 	streamHF         = "hf"
+	streamCrates     = "crates"
+	streamTerraform  = "terraform"
+	streamHelm       = "helm"
+	streamNuget      = "nuget"
+	streamApk        = "apk"
 	streamUploads    = "uploads"
 )
 
 // knownStreams is the set of built-in ecosystem streams, shown in the low-side
 // status even before anything has been exported.
 func knownStreams() []string {
-	return []string{streamGo, streamPython, streamMaven, streamApt, streamRpm, streamContainers, streamNpm, streamHF, streamUploads}
+	return []string{
+		streamGo, streamPython, streamMaven, streamApt, streamRpm, streamContainers,
+		streamNpm, streamHF, streamCrates, streamTerraform, streamHelm, streamNuget,
+		streamApk, streamUploads,
+	}
 }
 
 // maxFutureSequenceGap bounds untrusted quarantine state. Normal operation
@@ -145,7 +154,7 @@ High-side clients:
   GOSUMDB=off
 
 Useful admin endpoints:
-  low:  POST /admin/{go,python,maven,apt,rpm,containers,npm,hf}/collect
+  low:  POST /admin/{go,python,maven,apt,rpm,containers,npm,hf,crates,terraform,helm,nuget,apk}/collect
   low:  POST /admin/reexport?stream=go&sequences=42,45-47
   low:  GET  /admin/bundles
   high: POST /admin/import
@@ -203,6 +212,11 @@ type BundleManifest struct {
 	Containers       *ContainerManifest `json:"containers,omitempty"`
 	Npm              *NpmManifest       `json:"npm,omitempty"`
 	HuggingFace      *HFManifest        `json:"huggingface,omitempty"`
+	Crates           *CratesManifest    `json:"crates,omitempty"`
+	Terraform        *TerraformManifest `json:"terraform,omitempty"`
+	Helm             *HelmManifest      `json:"helm,omitempty"`
+	Nuget            *NugetManifest     `json:"nuget,omitempty"`
+	Apk              *ApkManifest       `json:"apk,omitempty"`
 	Uploads          *UploadsManifest   `json:"uploads,omitempty"`
 	Part             *BundlePartInfo    `json:"part,omitempty"`
 	Files            []ManifestFile     `json:"files"`
@@ -341,7 +355,20 @@ type LowConfig struct {
 	// HFEndpoint optionally overrides the Hugging Face endpoint models are
 	// fetched from (a private mirror, or a test server); empty means
 	// https://huggingface.co.
-	HFEndpoint    string
+	HFEndpoint string
+	// CratesIndex optionally overrides the sparse registry index Rust crates
+	// are resolved from; empty means https://index.crates.io.
+	CratesIndex string
+	// TerraformRegistry optionally overrides the registry Terraform providers
+	// and modules are fetched from (point it at https://registry.opentofu.org
+	// to mirror OpenTofu); empty means https://registry.terraform.io.
+	TerraformRegistry string
+	// NugetSource optionally overrides the NuGet v3 service index packages are
+	// resolved from; empty means https://api.nuget.org/v3/index.json.
+	NugetSource string
+	// GitBinary is the git command used to fetch Terraform modules that
+	// resolve to git sources.
+	GitBinary     string
 	WatchInterval time.Duration
 	// ContainerRegistries optionally remaps container registry names to the
 	// endpoints they are fetched from, as comma-separated host=baseURL pairs.
@@ -434,12 +461,7 @@ func runLow(args []string) {
 	fs.StringVar(&cfg.GOVCS, "govcs", "*:git", "GOVCS used by low-side fetcher")
 	fs.StringVar(&cfg.GoBinary, "go", "go", "go command path")
 	fs.StringVar(&cfg.GoToolchain, "gotoolchain", "auto", "GOTOOLCHAIN for the low-side fetcher; \"auto\" lets go download a newer toolchain when a module requires one, \"local\" pins the installed toolchain")
-	fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
-	fs.StringVar(&cfg.MavenBinary, "maven", "mvn", "maven command used to resolve Java/Maven artifacts")
-	fs.StringVar(&cfg.NpmBinary, "npm", "npm", "npm command used to resolve NPM package graphs")
-	fs.StringVar(&cfg.NpmRegistry, "npm-registry", "", "registry URL npm resolves against (default: npm's own configuration)")
-	fs.StringVar(&cfg.HFEndpoint, "hf-endpoint", "", "Hugging Face endpoint models are fetched from (default https://huggingface.co); ARTIGATE_HF_TOKEN optionally authenticates gated models")
-	fs.StringVar(&cfg.ContainerRegistries, "container-registry", "", "comma-separated host=baseURL overrides for container registries (e.g. docker.io=https://mirror.example.com)")
+	registerLowEcosystemFlags(fs, &cfg)
 	fs.DurationVar(&cfg.WatchInterval, "watch-interval", 60*time.Second, "how often the scheduler checks for due watches; 0 disables scheduled watches")
 	_ = fs.Parse(args)
 
@@ -465,6 +487,21 @@ func runLow(args []string) {
 	attachPitcher(ls, pitcherCfg)
 
 	serveLow(cfg, ls)
+}
+
+// registerLowEcosystemFlags declares the per-ecosystem tool and upstream
+// overrides on the low-side flag set.
+func registerLowEcosystemFlags(fs *flag.FlagSet, cfg *LowConfig) {
+	fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
+	fs.StringVar(&cfg.MavenBinary, "maven", "mvn", "maven command used to resolve Java/Maven artifacts")
+	fs.StringVar(&cfg.NpmBinary, "npm", "npm", "npm command used to resolve NPM package graphs")
+	fs.StringVar(&cfg.NpmRegistry, "npm-registry", "", "registry URL npm resolves against (default: npm's own configuration)")
+	fs.StringVar(&cfg.HFEndpoint, "hf-endpoint", "", "Hugging Face endpoint models are fetched from (default https://huggingface.co); ARTIGATE_HF_TOKEN optionally authenticates gated models")
+	fs.StringVar(&cfg.ContainerRegistries, "container-registry", "", "comma-separated host=baseURL overrides for container registries (e.g. docker.io=https://mirror.example.com)")
+	fs.StringVar(&cfg.CratesIndex, "crates-index", "", "sparse registry index Rust crates are resolved from (default https://index.crates.io)")
+	fs.StringVar(&cfg.TerraformRegistry, "terraform-registry", "", "registry Terraform providers/modules are fetched from (default https://registry.terraform.io; use https://registry.opentofu.org for OpenTofu)")
+	fs.StringVar(&cfg.NugetSource, "nuget-source", "", "NuGet v3 service index packages are resolved from (default https://api.nuget.org/v3/index.json)")
+	fs.StringVar(&cfg.GitBinary, "git", "git", "git command used to fetch Terraform modules from git sources")
 }
 
 // serveLow wires up TLS, optional low-side authentication, the scheduler, and the
@@ -707,6 +744,27 @@ func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// collectHandlers maps each collect endpoint to its request handler. Every
+// route is named by its stream constant (collectStreamFromPath relies on it).
+func (s *LowServer) collectHandlers() map[string]func(context.Context, *http.Request) (ExportResult, error) {
+	return map[string]func(context.Context, *http.Request) (ExportResult, error){
+		"/admin/go/collect":         s.HandleGoCollect,
+		"/admin/python/collect":     s.HandlePythonCollect,
+		"/admin/maven/collect":      s.HandleMavenCollect,
+		"/admin/apt/collect":        s.HandleAptCollect,
+		"/admin/rpm/collect":        s.HandleRpmCollect,
+		"/admin/containers/collect": s.HandleContainerCollect,
+		"/admin/npm/collect":        s.HandleNpmCollect,
+		"/admin/hf/collect":         s.HandleHFCollect,
+		"/admin/crates/collect":     s.HandleCratesCollect,
+		"/admin/terraform/collect":  s.HandleTerraformCollect,
+		"/admin/helm/collect":       s.HandleHelmCollect,
+		"/admin/nuget/collect":      s.HandleNugetCollect,
+		"/admin/apk/collect":        s.HandleApkCollect,
+		"/admin/uploads/collect":    s.HandleUploadsCollect,
+	}
+}
+
 // serveLowCollect dispatches the per-ecosystem collect endpoints. It reports
 // whether it handled the request (false for non-POST or unmatched paths, so the
 // caller can fall through to its own routing).
@@ -714,34 +772,16 @@ func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool
 	if r.Method != http.MethodPost {
 		return false
 	}
-	// Each case binds the request to its handler; the collect itself runs as a
-	// job on its stream's queue. A plain POST waits for the job and answers
-	// with the buffered JSON result as always; ?stream=1 (the dashboard's live
-	// progress modal) follows the job's NDJSON event stream instead. The
-	// handler re-reads r.Body when the job runs — enqueueCollect buffers it.
-	var run func(context.Context) (ExportResult, error)
-	switch r.URL.Path {
-	case "/admin/go/collect":
-		run = func(ctx context.Context) (ExportResult, error) { return s.HandleGoCollect(ctx, r) }
-	case "/admin/python/collect":
-		run = func(ctx context.Context) (ExportResult, error) { return s.HandlePythonCollect(ctx, r) }
-	case "/admin/maven/collect":
-		run = func(ctx context.Context) (ExportResult, error) { return s.HandleMavenCollect(ctx, r) }
-	case "/admin/apt/collect":
-		run = func(ctx context.Context) (ExportResult, error) { return s.HandleAptCollect(ctx, r) }
-	case "/admin/rpm/collect":
-		run = func(ctx context.Context) (ExportResult, error) { return s.HandleRpmCollect(ctx, r) }
-	case "/admin/containers/collect":
-		run = func(ctx context.Context) (ExportResult, error) { return s.HandleContainerCollect(ctx, r) }
-	case "/admin/npm/collect":
-		run = func(ctx context.Context) (ExportResult, error) { return s.HandleNpmCollect(ctx, r) }
-	case "/admin/hf/collect":
-		run = func(ctx context.Context) (ExportResult, error) { return s.HandleHFCollect(ctx, r) }
-	case "/admin/uploads/collect":
-		run = func(ctx context.Context) (ExportResult, error) { return s.HandleUploadsCollect(ctx, r) }
-	default:
+	// The handler binds the request; the collect itself runs as a job on its
+	// stream's queue. A plain POST waits for the job and answers with the
+	// buffered JSON result as always; ?stream=1 (the dashboard's live progress
+	// modal) follows the job's NDJSON event stream instead. The handler
+	// re-reads r.Body when the job runs — enqueueCollect buffers it.
+	handle, ok := s.collectHandlers()[r.URL.Path]
+	if !ok {
 		return false
 	}
+	run := func(ctx context.Context) (ExportResult, error) { return handle(ctx, r) }
 	s.runCollectJob(w, r, collectStreamFromPath(r.URL.Path), run)
 	return true
 }
@@ -2231,6 +2271,12 @@ type HighConfig struct {
 	ImportInterval time.Duration
 	AptGPGKey      string
 	RpmGPGKey      string
+	// ApkRSAKey is a PEM RSA private key path used to sign regenerated Alpine
+	// APKINDEX files; ApkKeyName is the filename clients install the matching
+	// public key under (/etc/apk/keys/<name>). Unset serves indexes unsigned
+	// (clients then need --allow-untrusted).
+	ApkRSAKey  string
+	ApkKeyName string
 	// DiodeIngest accepts bundle uploads at PUT/POST /diode/<file> into the
 	// landing directory (ARTIGATE_DIODE_INGEST=on); DiodeToken requires a
 	// bearer token on those uploads (ARTIGATE_DIODE_TOKEN).
@@ -2296,6 +2342,8 @@ func runHigh(args []string) {
 	fs.DurationVar(&cfg.ImportInterval, "import-interval", 10*time.Second, "bundle import scan interval; 0 disables background import")
 	fs.StringVar(&cfg.AptGPGKey, "apt-gpg-key", "", "GPG key id used to sign regenerated APT repositories (InRelease); unset serves them unsigned")
 	fs.StringVar(&cfg.RpmGPGKey, "rpm-gpg-key", "", "GPG key id used to sign regenerated RPM repositories (repomd.xml.asc); unset serves them unsigned")
+	fs.StringVar(&cfg.ApkRSAKey, "apk-rsa-key", "", "PEM RSA private key path used to sign regenerated Alpine APKINDEX files; unset serves them unsigned")
+	fs.StringVar(&cfg.ApkKeyName, "apk-key-name", "artigate.rsa.pub", "filename Alpine clients install the APK signing public key under (/etc/apk/keys/<name>)")
 	_ = fs.Parse(args)
 	if cfg.PublicKeyPath == "" {
 		log.Fatal("--public-key is required")
@@ -2420,7 +2468,8 @@ func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// request; anything unclaimed is not found.
 	for _, serve := range []func(http.ResponseWriter, *http.Request) bool{
 		s.serveHighAdmin, s.serveDiode, s.serveGo, s.servePython, s.serveMaven, s.serveApt,
-		s.serveRpm, s.serveHF, s.serveContainers, s.serveNpm, s.serveUploads, s.serveUI,
+		s.serveRpm, s.serveHF, s.serveContainers, s.serveNpm, s.serveCrates, s.serveTerraform,
+		s.serveHelm, s.serveNuget, s.serveApk, s.serveUploads, s.serveUI,
 	} {
 		if serve(w, r) {
 			return
@@ -3372,6 +3421,16 @@ type manifestEcoCheck struct {
 	check   func(map[string]bool) error
 }
 
+// hfManifestPresent / tfManifestPresent report whether a manifest carries any
+// content of their ecosystem (each has two content lists).
+func hfManifestPresent(m BundleManifest) bool {
+	return m.HuggingFace != nil && (len(m.HuggingFace.Models) > 0 || len(m.HuggingFace.Repos) > 0)
+}
+
+func tfManifestPresent(m BundleManifest) bool {
+	return m.Terraform != nil && (len(m.Terraform.Providers) > 0 || len(m.Terraform.Modules) > 0)
+}
+
 func manifestEcoChecks(m BundleManifest) []manifestEcoCheck {
 	return []manifestEcoCheck{
 		{len(m.Modules) > 0, func(s map[string]bool) error { return validateManifestModules(m.Modules, s) }},
@@ -3381,7 +3440,12 @@ func manifestEcoChecks(m BundleManifest) []manifestEcoCheck {
 		{m.Rpm != nil && len(m.Rpm.Mirrors) > 0, func(s map[string]bool) error { return validateRpmMirrors(m.Rpm.Mirrors, s) }},
 		{m.Containers != nil && len(m.Containers.Repos) > 0, func(s map[string]bool) error { return validateContainerRepos(m.Containers.Repos, s, m.Files) }},
 		{m.Npm != nil && len(m.Npm.Packages) > 0, func(s map[string]bool) error { return validateNpmPackages(m.Npm.Packages, s) }},
-		{m.HuggingFace != nil && (len(m.HuggingFace.Models) > 0 || len(m.HuggingFace.Repos) > 0), func(s map[string]bool) error { return validateHF(m.HuggingFace, s, m.Files) }},
+		{hfManifestPresent(m), func(s map[string]bool) error { return validateHF(m.HuggingFace, s, m.Files) }},
+		{m.Crates != nil && len(m.Crates.Crates) > 0, func(s map[string]bool) error { return validateCrates(m.Crates.Crates, s) }},
+		{tfManifestPresent(m), func(s map[string]bool) error { return validateTerraformManifest(m.Terraform, s) }},
+		{m.Helm != nil && len(m.Helm.Repos) > 0, func(s map[string]bool) error { return validateHelmRepos(m.Helm.Repos, s) }},
+		{m.Nuget != nil && len(m.Nuget.Packages) > 0, func(s map[string]bool) error { return validateNugetPackages(m.Nuget.Packages, s) }},
+		{m.Apk != nil && len(m.Apk.Mirrors) > 0, func(s map[string]bool) error { return validateApkMirrors(m.Apk.Mirrors, s) }},
 		{m.Uploads != nil && len(m.Uploads.Files) > 0, func(s map[string]bool) error { return validateUploadsManifest(m.Uploads, s, m.Files) }},
 		{m.Part != nil, func(map[string]bool) error { return validateBundlePart(m.Part, m.Files) }},
 	}
@@ -3416,7 +3480,7 @@ func validateManifestCompleteness(m BundleManifest) error {
 		}
 	}
 	if !matched {
-		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, container repos, npm packages, hugging face models, uploaded files, or content-part marker")
+		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, container repos, npm packages, hugging face models, crates, terraform providers/modules, helm charts, nuget packages, apk mirrors, uploaded files, or content-part marker")
 	}
 	return nil
 }
@@ -3500,6 +3564,25 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 		return err
 	}
 	if err := s.publishHF(manifest.HuggingFace); err != nil {
+		return err
+	}
+	if err := s.publishCrates(manifest.Crates); err != nil {
+		return err
+	}
+	if err := s.publishTerraform(manifest.Terraform); err != nil {
+		return err
+	}
+	// Regenerate index.yaml from each chart's own embedded Chart.yaml (never
+	// trusting a transferred repository index).
+	if err := s.publishHelm(manifest.Helm); err != nil {
+		return err
+	}
+	// Regenerate the served NuGet metadata from each package's own embedded
+	// .nuspec (never trusting transferred metadata).
+	if err := s.publishNuget(manifest.Nuget); err != nil {
+		return err
+	}
+	if err := s.publishApk(manifest.Apk); err != nil {
 		return err
 	}
 	// Complete markers are written only after all files are installed.

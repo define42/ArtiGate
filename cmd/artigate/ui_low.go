@@ -155,6 +155,11 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="rpm" onclick="setView('rpm')">RPM</button>
     <button type="button" data-view="containers" onclick="setView('containers')">Containers</button>
     <button type="button" data-view="hf" onclick="setView('hf')">AI Models</button>
+    <button type="button" data-view="crates" onclick="setView('crates')">Crates</button>
+    <button type="button" data-view="terraform" onclick="setView('terraform')">Terraform</button>
+    <button type="button" data-view="helm" onclick="setView('helm')">Helm</button>
+    <button type="button" data-view="nuget" onclick="setView('nuget')">NuGet</button>
+    <button type="button" data-view="apk" onclick="setView('apk')">Alpine</button>
     <button type="button" data-view="uploads" onclick="setView('uploads')">Uploads</button>
     <button type="button" data-view="status" onclick="setView('status')">Status</button>
   </nav>
@@ -410,6 +415,157 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   </section>
 
+  <section class="view" id="view-crates" hidden>
+  <div class="card">
+    <h2>Mirror Rust crates</h2>
+    <p class="hint">List crates to mirror &mdash; one per line: <code>serde@1.0.203</code> to pin, or a bare <code>serde</code> for the newest release. Each crate's normal and build dependencies are resolved against the sparse index (index.crates.io by default; <code>--crates-index</code> overrides) and bundled too, each <code>.crate</code> verified against the index checksum. The high side serves a sparse registry: <code>sparse+&lt;high&gt;/crates/index/</code>. Same as POSTing to <code>/admin/crates/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectCrates(event)">
+      <label class="filelabel">Crates <span class="opt">&mdash; one per line; name or name@version</span>
+        <textarea id="crpkgs" rows="4" placeholder="serde@1.0.203&#10;tokio&#10;anyhow" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="crdeps" type="checkbox" checked> Resolve dependencies (normal + build; dev dependencies are never followed)</label>
+      <label class="pytarget-check"><input id="croptional" type="checkbox"> Also follow optional dependencies (bigger, but covers feature-enabled builds)</label>
+      <label class="pytarget-check"><input id="crForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="crBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('crResult')">Reset</button>
+      </div>
+    </form>
+    <div id="crResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="crEvery" type="number" min="1" value="1" autocomplete="off"> <select id="crUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleCrates()">Add schedule</button>
+    </div>
+    <div id="crWatches" class="watchlist"></div>
+  </div>
+  </section>
+
+  <section class="view" id="view-terraform" hidden>
+  <div class="card">
+    <h2>Mirror Terraform / OpenTofu providers &amp; modules</h2>
+    <p class="hint">List providers (<code>hashicorp/aws@5.50.0</code>, or bare for the newest release) and/or registry modules (<code>terraform-aws-modules/vpc/aws@5.8.1</code>). Provider zips are verified against the registry checksum and mirrored together with the upstream <code>SHA256SUMS</code>, its GPG signature, and signing keys, so terraform's own verification works against the mirror. Modules are repacked as deterministic archives (git sources are fetched with <code>git</code>). Point clients at <code>&lt;high&gt;/.well-known/terraform.json</code>'s host. Same as POSTing to <code>/admin/terraform/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectTerraform(event)">
+      <label class="filelabel">Providers <span class="opt">&mdash; one per line; namespace/type or namespace/type@version</span>
+        <textarea id="tfproviders" rows="3" placeholder="hashicorp/aws@5.50.0&#10;hashicorp/random" autocomplete="off"></textarea>
+      </label>
+      <label class="filelabel">Modules <span class="opt">&mdash; one per line; namespace/name/system or @version</span>
+        <textarea id="tfmodules" rows="2" placeholder="terraform-aws-modules/vpc/aws@5.8.1" autocomplete="off"></textarea>
+      </label>
+      <label class="filelabel">Platforms <span class="opt">&mdash; comma-separated os_arch for provider zips; default linux_amd64</span>
+        <input id="tfplatforms" type="text" placeholder="linux_amd64, darwin_arm64" autocomplete="off">
+      </label>
+      <label class="filelabel">Registry <span class="opt">&mdash; optional; default is the configured --terraform-registry or registry.terraform.io (use https://registry.opentofu.org for OpenTofu)</span>
+        <input id="tfregistry" type="text" placeholder="https://registry.opentofu.org" autocomplete="off">
+      </label>
+      <label class="pytarget-check"><input id="tfForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="tfBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('tfResult')">Reset</button>
+      </div>
+    </form>
+    <div id="tfResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="tfEvery" type="number" min="1" value="1" autocomplete="off"> <select id="tfUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleTerraform()">Add schedule</button>
+    </div>
+    <div id="tfWatches" class="watchlist"></div>
+  </div>
+  </section>
+
+  <section class="view" id="view-helm" hidden>
+  <div class="card">
+    <h2>Mirror Helm charts</h2>
+    <p class="hint">Give the upstream chart repository URL (what <code>helm repo add</code> takes) and list charts &mdash; one per line: <code>nginx@21.1.0</code> to pin, or a bare <code>nginx</code> for the newest version. Each chart archive is verified against the repository index digest. The high side regenerates <code>index.yaml</code> from the charts' own embedded <code>Chart.yaml</code> and serves the repo at <code>&lt;high&gt;/helm/&lt;mirror&gt;</code>. Same as POSTing to <code>/admin/helm/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectHelm(event)">
+      <label class="filelabel">Repository URL
+        <input id="helmurl" type="text" placeholder="https://charts.bitnami.com/bitnami" autocomplete="off">
+      </label>
+      <label class="filelabel">Mirror name <span class="opt">&mdash; optional; the /helm/&lt;name&gt; the high side serves; defaults to a slug of the URL</span>
+        <input id="helmname" type="text" placeholder="bitnami" autocomplete="off">
+      </label>
+      <label class="filelabel">Charts <span class="opt">&mdash; one per line; name or name@version</span>
+        <textarea id="helmcharts" rows="4" placeholder="nginx@21.1.0&#10;postgresql" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="helmForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="helmBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('helmResult')">Reset</button>
+      </div>
+    </form>
+    <div id="helmResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="helmEvery" type="number" min="1" value="1" autocomplete="off"> <select id="helmUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleHelm()">Add schedule</button>
+    </div>
+    <div id="helmWatches" class="watchlist"></div>
+  </div>
+  </section>
+
+  <section class="view" id="view-nuget" hidden>
+  <div class="card">
+    <h2>Mirror NuGet packages</h2>
+    <p class="hint">List packages to mirror &mdash; one per line: <code>Newtonsoft.Json@13.0.3</code> to pin, or a bare <code>Serilog</code> for the newest stable release. Dependencies from each package's nuspec are resolved like NuGet restore does (lowest applicable version) against the v3 source (api.nuget.org by default; <code>--nuget-source</code> overrides). The high side serves a v3 feed at <code>&lt;high&gt;/nuget/v3/index.json</code>. Same as POSTing to <code>/admin/nuget/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectNuget(event)">
+      <label class="filelabel">Packages <span class="opt">&mdash; one per line; id or id@version</span>
+        <textarea id="ngpkgs" rows="4" placeholder="Newtonsoft.Json@13.0.3&#10;Serilog" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="ngdeps" type="checkbox" checked> Resolve dependencies (lowest applicable version, like NuGet restore)</label>
+      <label class="pytarget-check"><input id="ngForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="ngBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('ngResult')">Reset</button>
+      </div>
+    </form>
+    <div id="ngResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="ngEvery" type="number" min="1" value="1" autocomplete="off"> <select id="ngUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleNuget()">Add schedule</button>
+    </div>
+    <div id="ngWatches" class="watchlist"></div>
+  </div>
+  </section>
+
+  <section class="view" id="view-apk" hidden>
+  <div class="card">
+    <h2>Mirror an Alpine (apk) repository</h2>
+    <p class="hint">Name the mirror base and pick branches/repositories/architectures &mdash; or paste an <code>/etc/apk/repositories</code> file. ArtiGate fetches each <code>APKINDEX</code>, mirrors every listed <code>.apk</code> (verified against the index size and control checksum), and writes a signed bundle. The high side regenerates <code>APKINDEX.tar.gz</code> and (optionally, with <code>--apk-rsa-key</code>) signs it so stock <code>apk</code> clients accept it. The upstream index carries no whole-file hash, so a scheduled re-collect re-downloads packages and dedups at export. This is <code>/admin/apk/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectApk(event)">
+      <label class="filelabel">Mirror base URL
+        <input id="apkuri" type="text" placeholder="https://dl-cdn.alpinelinux.org/alpine" autocomplete="off">
+      </label>
+      <label class="filelabel">Branches <span class="opt">&mdash; comma-separated, e.g. v3.22 or edge</span>
+        <input id="apkbranches" type="text" placeholder="v3.22" autocomplete="off">
+      </label>
+      <label class="filelabel">Repositories <span class="opt">&mdash; comma-separated; default main</span>
+        <input id="apkrepos" type="text" placeholder="main, community" autocomplete="off">
+      </label>
+      <label class="filelabel">Architectures <span class="opt">&mdash; comma-separated; default x86_64</span>
+        <input id="apkarches" type="text" placeholder="x86_64, aarch64" autocomplete="off">
+      </label>
+      <label class="filelabel">&hellip;or paste an /etc/apk/repositories file <span class="opt">&mdash; overrides the fields above (architectures still apply)</span>
+        <textarea id="apkreposfile" rows="2" placeholder="https://dl-cdn.alpinelinux.org/alpine/v3.22/main&#10;https://dl-cdn.alpinelinux.org/alpine/v3.22/community" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="apknewest" type="checkbox" checked> Newest version of each package only (uncheck to mirror every version)</label>
+      <label class="pytarget-check"><input id="apkForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="apkBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('apkResult')">Reset</button>
+      </div>
+    </form>
+    <div id="apkResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule this mirror:</span>
+      <span class="every"><input id="apkEvery" type="number" min="1" value="1" autocomplete="off"> <select id="apkUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleApk()">Add schedule</button>
+    </div>
+    <div id="apkWatches" class="watchlist"></div>
+  </div>
+  </section>
+
   <section class="view" id="view-uploads" hidden>
   <div class="card">
     <h2>Upload files</h2>
@@ -444,6 +600,11 @@ const lowUIHTML = `<!DOCTYPE html>
         <option value="rpm">RPM</option>
         <option value="containers">Containers</option>
         <option value="hf">AI Models (Hugging Face)</option>
+        <option value="crates">Rust Crates</option>
+        <option value="terraform">Terraform</option>
+        <option value="helm">Helm</option>
+        <option value="nuget">NuGet</option>
+        <option value="apk">Alpine (apk)</option>
         <option value="uploads">Uploads</option>
       </select>
       <input id="seq" type="text" placeholder="42,45-47" autocomplete="off" autofocus>
@@ -499,7 +660,7 @@ const lowUIHTML = `<!DOCTYPE html>
 // If the session has expired, any API call returns 401; bounce to the login page.
 (function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers',hf:'AI Models',uploads:'Uploads'})[name]||name;}
+function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers',hf:'AI Models',crates:'Crates',terraform:'Terraform',helm:'Helm',nuget:'NuGet',apk:'Alpine',uploads:'Uploads'})[name]||name;}
 // clearResult hides an ecosystem's inline result box; the Reset button pairs it
 // with the form's native field reset (type="reset").
 function clearResult(id){const el=document.getElementById(id); if(el){ el.className='rbox'; el.innerHTML=''; }}
@@ -772,7 +933,7 @@ function outboundCell(inOutbound){
 // VIEW_STREAM maps each ecosystem view to its backend stream (now identical
 // names); views without a stream (overview, status) are absent, so it doubles as
 // the "is this an ecosystem page" test.
-const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers',hf:'hf'};
+const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers',hf:'hf',crates:'crates',terraform:'terraform',helm:'helm',nuget:'nuget',apk:'apk'};
 function setView(view){
   // The sections themselves are the source of truth (every <section class="view">
   // has id "view-<name>"), so a newly added page can never be missing here and
@@ -1094,6 +1255,183 @@ async function scheduleHF(){
   createWatch('hf','AI Models: '+refs.slice(0,3).join(', '), body, 'hfEvery','hfUnit', showHFResult);
 }
 
+function showCrResult(cls, html){
+  const el=document.getElementById('crResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+// linesOf reads a textarea as a list: one entry per line, comments dropped.
+function linesOf(id){
+  return document.getElementById(id).value.split(/\r?\n/)
+    .map(s=>s.replace(/\s+#.*$/,'').trim()).filter(l=>l && l.charAt(0)!=='#');
+}
+
+// commaList reads a comma-separated input into a trimmed list.
+function commaList(id){
+  return document.getElementById(id).value.split(',').map(s=>s.trim()).filter(Boolean);
+}
+
+// skippedItems renders the shared "these items were skipped" warning for a
+// collect result.
+function skippedItems(msg, d){
+  const sk=d.skipped_modules||[];
+  if(!sk.length) return {cls:'ok', msg};
+  return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' unfetchable item(s):', sk, m=>'<code>'+esc(m.module)+'@'+esc(m.version)+'</code> &mdash; '+esc(m.error))};
+}
+
+function cratesBody(){
+  const crates=linesOf('crpkgs');
+  if(!crates.length) return null;
+  const body={crates:crates, resolve_deps:document.getElementById('crdeps').checked};
+  if(document.getElementById('croptional').checked) body.include_optional=true;
+  return body;
+}
+
+async function collectCrates(ev){
+  ev.preventDefault();
+  const body=cratesBody();
+  if(!body){ showCrResult('err','List at least one crate.'); return; }
+  runCollect({btnId:'crBtn', showFn:showCrResult, title:'Collecting Rust crates',
+    url:'/admin/crates/collect', body:applyForce(body,'crForce'), forceId:'crForce',
+    render:d=>skippedItems(collectedMsg(d,'Collected','crate(s)'), d)});
+}
+
+async function scheduleCrates(){
+  const body=cratesBody();
+  if(!body){ showCrResult('err','List at least one crate to schedule.'); return; }
+  createWatch('crates','Crates: '+body.crates.slice(0,3).join(', '), body, 'crEvery','crUnit', showCrResult);
+}
+
+function showTfResult(cls, html){
+  const el=document.getElementById('tfResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function terraformBody(){
+  const providers=linesOf('tfproviders'), modules=linesOf('tfmodules');
+  if(!providers.length && !modules.length) return null;
+  const body={providers:providers, modules:modules};
+  const platforms=commaList('tfplatforms');
+  if(platforms.length) body.platforms=platforms;
+  const registry=document.getElementById('tfregistry').value.trim();
+  if(registry) body.registry=registry;
+  return body;
+}
+
+async function collectTerraform(ev){
+  ev.preventDefault();
+  const body=terraformBody();
+  if(!body){ showTfResult('err','List at least one provider or module.'); return; }
+  runCollect({btnId:'tfBtn', showFn:showTfResult, title:'Collecting Terraform providers/modules',
+    url:'/admin/terraform/collect', body:applyForce(body,'tfForce'), forceId:'tfForce',
+    render:d=>skippedItems(collectedMsg(d,'Collected','item(s)'), d)});
+}
+
+async function scheduleTerraform(){
+  const body=terraformBody();
+  if(!body){ showTfResult('err','List at least one provider or module to schedule.'); return; }
+  const refs=body.providers.concat(body.modules);
+  createWatch('terraform','Terraform: '+refs.slice(0,3).join(', '), body, 'tfEvery','tfUnit', showTfResult);
+}
+
+function showHelmResult(cls, html){
+  const el=document.getElementById('helmResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function helmBody(){
+  const url=document.getElementById('helmurl').value.trim();
+  const charts=linesOf('helmcharts');
+  if(!url || !charts.length) return null;
+  const body={url:url, charts:charts};
+  const name=document.getElementById('helmname').value.trim();
+  if(name) body.name=name;
+  return body;
+}
+
+async function collectHelm(ev){
+  ev.preventDefault();
+  const body=helmBody();
+  if(!body){ showHelmResult('err','Give the repository URL and at least one chart.'); return; }
+  runCollect({btnId:'helmBtn', showFn:showHelmResult, title:'Collecting Helm charts',
+    url:'/admin/helm/collect', body:applyForce(body,'helmForce'), forceId:'helmForce',
+    render:d=>skippedItems(collectedMsg(d,'Collected','chart(s)'), d)});
+}
+
+async function scheduleHelm(){
+  const body=helmBody();
+  if(!body){ showHelmResult('err','Give the repository URL and at least one chart to schedule.'); return; }
+  createWatch('helm','Helm: '+body.charts.slice(0,3).join(', '), body, 'helmEvery','helmUnit', showHelmResult);
+}
+
+function showNgResult(cls, html){
+  const el=document.getElementById('ngResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function nugetBody(){
+  const packages=linesOf('ngpkgs');
+  if(!packages.length) return null;
+  return {packages:packages, resolve_deps:document.getElementById('ngdeps').checked};
+}
+
+async function collectNuget(ev){
+  ev.preventDefault();
+  const body=nugetBody();
+  if(!body){ showNgResult('err','List at least one package.'); return; }
+  runCollect({btnId:'ngBtn', showFn:showNgResult, title:'Collecting NuGet packages',
+    url:'/admin/nuget/collect', body:applyForce(body,'ngForce'), forceId:'ngForce',
+    render:d=>skippedItems(collectedMsg(d,'Collected','package(s)'), d)});
+}
+
+async function scheduleNuget(){
+  const body=nugetBody();
+  if(!body){ showNgResult('err','List at least one package to schedule.'); return; }
+  createWatch('nuget','NuGet: '+body.packages.slice(0,3).join(', '), body, 'ngEvery','ngUnit', showNgResult);
+}
+
+function showApkResult(cls, html){
+  const el=document.getElementById('apkResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function apkBody(){
+  const body={newest_only:document.getElementById('apknewest').checked};
+  const arches=commaList('apkarches');
+  if(arches.length) body.architectures=arches;
+  const file=document.getElementById('apkreposfile').value.trim();
+  if(file){ body.repositories_file=file; return body; }
+  const uri=document.getElementById('apkuri').value.trim();
+  const branches=commaList('apkbranches');
+  if(!uri || !branches.length) return null;
+  body.uri=uri;
+  body.branches=branches;
+  const repos=commaList('apkrepos');
+  if(repos.length) body.repositories=repos;
+  return body;
+}
+
+async function collectApk(ev){
+  ev.preventDefault();
+  const body=apkBody();
+  if(!body){ showApkResult('err','Give the mirror base URL and at least one branch (or paste a repositories file).'); return; }
+  runCollect({btnId:'apkBtn', busyLabel:'Mirroring…', showFn:showApkResult, title:'Mirroring Alpine repository',
+    url:'/admin/apk/collect', body:applyForce(body,'apkForce'), forceId:'apkForce',
+    render:d=>skippedItems(collectedMsg(d,'Mirrored','package(s)'), d)});
+}
+
+async function scheduleApk(){
+  const body=apkBody();
+  if(!body){ showApkResult('err','Give the mirror base URL and at least one branch (or paste a repositories file) to schedule.'); return; }
+  const label='Alpine: '+(body.uri||'repositories file');
+  createWatch('apk', label, body, 'apkEvery','apkUnit', showApkResult);
+}
+
 // uploadCollect POSTs multipart form data with XMLHttpRequest instead of the
 // NDJSON stream: fetch exposes no upload progress, and streaming a response
 // while the browser is still sending the body trips HTTP/1.1's half-duplex
@@ -1298,8 +1636,8 @@ function viewJob(id, title){
 // ---- Schedules (watches) ----
 // Each ecosystem page schedules a recurring collect from its own inputs, so the
 // spec built here is exactly what that page's collect button would POST.
-const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',npm:'npmWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches',hf:'hfWatches'};
-const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,npm:showNpmResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult,hf:showHFResult};
+const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',npm:'npmWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches',hf:'hfWatches',crates:'crWatches',terraform:'tfWatches',helm:'helmWatches',nuget:'ngWatches',apk:'apkWatches'};
+const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,npm:showNpmResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult,hf:showHFResult,crates:showCrResult,terraform:showTfResult,helm:showHelmResult,nuget:showNgResult,apk:showApkResult};
 
 function intervalSeconds(everyId, unitId){
   const n=parseInt(document.getElementById(everyId).value,10);

@@ -422,6 +422,16 @@ func (s *LowServer) runWatchCollect(ctx context.Context, stream, spec string) (E
 		return decodeAndCollect(ctx, b, s.CollectNpm)
 	case streamHF:
 		return decodeAndCollect(ctx, b, s.CollectHF)
+	case streamCrates:
+		return decodeAndCollect(ctx, b, s.CollectCrates)
+	case streamTerraform:
+		return decodeAndCollect(ctx, b, s.CollectTerraform)
+	case streamHelm:
+		return decodeAndCollect(ctx, b, s.CollectHelm)
+	case streamNuget:
+		return decodeAndCollect(ctx, b, s.CollectNuget)
+	case streamApk:
+		return decodeAndCollect(ctx, b, s.CollectApk)
 	default:
 		return ExportResult{}, fmt.Errorf("unknown stream %q", stream)
 	}

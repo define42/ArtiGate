@@ -4,24 +4,27 @@
 [![docs](https://img.shields.io/badge/docs-define42.github.io%2FArtiGate-green)](https://define42.github.io/ArtiGate/)
 
 ArtiGate is a dependency mirror for **one-way data-diode networks**. It mirrors
-Go modules, Python (PyPI) wheels, Java (Maven) artifacts, NPM packages, APT
-(`.deb`) and RPM (`.rpm`) repositories, container images (Docker/OCI,
-linux/amd64), and AI models from Hugging Face (GGUF for Ollama, plus full
-safetensors repositories) from the internet into an air-gapped network, and
-serves them there in each ecosystem's native format.
+Go modules, Python (PyPI) wheels, Java (Maven) artifacts, NPM packages, Rust
+crates, Terraform/OpenTofu providers and modules, Helm charts, NuGet packages,
+APT (`.deb`), RPM (`.rpm`), and Alpine (`.apk`) repositories, container images
+(Docker/OCI, linux/amd64), and AI models from Hugging Face (GGUF for Ollama,
+plus full safetensors repositories) from the internet into an air-gapped
+network, and serves them there in each ecosystem's native format.
 
 One binary, two modes:
 
 - **`low`** — runs on the internet side. From its web dashboard you give it a spec
   (a `go.mod` or module list, a Python requirements list, Maven coordinates, a
-  `package.json` or NPM package list, an APT source, a `.repo`, a list of
-  container images, or a list of Hugging Face model references); it fetches the
-  artifacts from upstream and writes **signed, numbered bundle files**.
+  `package.json` or NPM package list, a crate/provider/chart/NuGet list, an APT
+  source, a `.repo`, an Alpine repositories file, a list of container images,
+  or a list of Hugging Face model references); it fetches the artifacts from
+  upstream and writes **signed, numbered bundle files**.
 - **`high`** — runs air-gapped. It imports the bundles (in order, verifying every
   signature and hash) and serves them as a GOPROXY, a PyPI index, a Maven 2
-  repository, an NPM registry, APT/RPM repositories, a read-only OCI
-  container registry, and an Ollama-compatible model registry with a
-  Hugging Face Hub download API.
+  repository, an NPM registry, a cargo sparse registry, a Terraform/OpenTofu
+  provider+module registry, Helm repositories, a NuGet v3 feed, APT/RPM/Alpine
+  repositories, a read-only OCI container registry, and an Ollama-compatible
+  model registry with a Hugging Face Hub download API.
 
 ```
   spec ──▶ [ low ] ──▶ signed bundles ──▶ ((diode)) ──▶ [ high ] ──▶ clients
@@ -216,8 +219,52 @@ and environment variable.
 
 [hashicorp/go-version]: https://github.com/hashicorp/go-version
 
-For APT and RPM, a **"Newest version only"** checkbox (on by default) mirrors just
-the latest version of each package; untick it to mirror every version.
+- **Crates** — Rust crate specs, one per line (`serde@1.0.203`, or a bare
+  `serde` for the newest release). The transitive dependency graph (normal and
+  build dependencies; never dev-dependencies, optional ones only when asked) is
+  resolved against the sparse index — `https://index.crates.io` by default,
+  `--crates-index` overrides — and every `.crate` archive is verified against
+  the index checksum. The verbatim index line of each release travels inside
+  the signed manifest; the high side serves a sparse registry regenerated from
+  those verified records.
+- **Terraform** — provider addresses (`hashicorp/aws@5.50.0`, or bare for the
+  newest release; `platforms` selects the target zips, `linux_amd64` by
+  default) and/or registry modules (`terraform-aws-modules/vpc/aws@5.8.1`).
+  Provider zips are verified against the registry-declared checksum and
+  mirrored together with the upstream `SHA256SUMS`, its GPG signature, and the
+  registry-served signing keys, so terraform's own verification chain works
+  unchanged against the mirror. Modules are fetched from their upstream source
+  (https archives, or git sources via the `git` tool) and repacked as
+  deterministic archives. `--terraform-registry` (or the request's `registry`
+  field) points at another registry — e.g. `https://registry.opentofu.org`
+  to mirror OpenTofu.
+- **Helm** — a chart repository URL plus charts, one per line (`nginx@21.1.0`,
+  or bare for the newest version). Chart archives are verified against the
+  repository index digest when the index declares one. Each upstream repo is
+  served as its own mirror under `/helm/<mirror>`, its `index.yaml`
+  regenerated from every chart's own embedded `Chart.yaml`.
+- **NuGet** — package specs, one per line (`Newtonsoft.Json@13.0.3`, or a bare
+  `Serilog` for the newest stable release). Dependencies from each package's
+  nuspec are resolved the way NuGet restore does (lowest applicable version)
+  against the v3 source — `https://api.nuget.org/v3/index.json` by default,
+  `--nuget-source` overrides. The high side serves a v3 feed (service index,
+  flat container, registration, search), all metadata regenerated from each
+  package's own embedded `.nuspec`.
+- **Alpine** — a mirror base URL plus branches/repositories/architectures
+  (defaults: `main`, `x86_64`), or a pasted `/etc/apk/repositories` file.
+  Every listed `.apk` is verified against the APKINDEX-declared size and
+  control checksum; the verbatim index stanzas travel inside the signed
+  manifest and the high side regenerates `APKINDEX.tar.gz` from them, gated on
+  the packages present. With `--apk-rsa-key` the high side signs the
+  regenerated index with its own RSA key (clients install the matching public
+  key once, served at `/apk/keys/<name>`); unsigned indexes need
+  `apk --allow-untrusted`. The upstream index carries no whole-file hash, so a
+  scheduled re-collect re-downloads packages on the low side and dedups at
+  export — the bundle still carries only new content.
+
+For APT, RPM, and Alpine, a **"Newest version only"** checkbox (on by default)
+mirrors just the latest version of each package; untick it to mirror every
+version.
 
 - **Uploads** — arbitrary files, no ecosystem behind them: pick a folder name
   and one or more files (`POST /admin/uploads/collect`, multipart form data).
@@ -389,6 +436,7 @@ for tuning guidance.
   --public-key /etc/artigate/high.ed25519.pub \
   --import-interval 10s \
   # --apt-gpg-key <keyid>  --rpm-gpg-key <keyid>   (optional: sign the served repos)
+  # --apk-rsa-key /etc/artigate/apk.pem  --apk-key-name artigate.rsa.pub  (optional: sign Alpine indexes)
 ```
 
 It imports on a timer, and the **dashboard at `http://<high-host>:8080/`** shows
@@ -444,6 +492,46 @@ enabled=1
 gpgcheck=1
 repo_gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate
+```
+
+```toml
+# Rust — ~/.cargo/config.toml
+[source.crates-io]
+replace-with = "artigate"
+
+[source.artigate]
+registry = "sparse+https://artigate-high.local/crates/index/"
+```
+
+```hcl
+# Terraform / OpenTofu — ~/.terraformrc (network_mirror needs HTTPS), or use
+# the host directly in source addresses: artigate-high.local/hashicorp/aws
+provider_installation {
+  network_mirror {
+    url = "https://artigate-high.local/terraform/v1/providers/"
+  }
+}
+```
+
+```bash
+# Helm — each mirrored upstream repo is served under its mirror name
+helm repo add artigate https://artigate-high.local/helm/<mirror>
+helm install my-release artigate/<chart> --version <version>
+```
+
+```xml
+<!-- NuGet — nuget.config (next to the solution) -->
+<configuration><packageSources>
+  <clear />
+  <add key="artigate" value="https://artigate-high.local/nuget/v3/index.json" protocolVersion="3" />
+</packageSources></configuration>
+```
+
+```bash
+# Alpine — /etc/apk/repositories; with --apk-rsa-key, install the mirror's key once
+wget -O /etc/apk/keys/artigate.rsa.pub https://artigate-high.local/apk/keys/artigate.rsa.pub
+echo https://artigate-high.local/apk/<mirror>/v3.22/main >> /etc/apk/repositories
+apk update   # add --allow-untrusted instead when the index is served unsigned
 ```
 
 ```bash
@@ -596,8 +684,31 @@ TLS. If ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy, set
   x86_64 + noarch packages. RPM `.zck`-only indexes aren't supported (use
   `.gz`/`.xz`). Each collect re-syncs against upstream, but the export dedup
   index keeps it from re-downloading or re-sending what already crossed.
-- **Signing the served repos** is optional (`--apt-gpg-key`/`--rpm-gpg-key`);
-  otherwise APT/RPM repositories are published unsigned.
+- **Crates**: the resolver follows normal and build dependencies (never
+  dev-dependencies; optional ones only with "include optional"), picking the
+  highest version satisfying each requirement like cargo does — but it does no
+  feature unification, so an unusual feature-gated dependency may need to be
+  listed explicitly. Yanked releases are skipped unless pinned exactly.
+- **Terraform**: provider mirroring covers the platforms listed at collect time
+  (`linux_amd64` by default; re-collect with more platforms to extend a
+  version). Module sources must be https archives or `git::https` URLs (the
+  usual registry forms); other go-getter schemes are skipped. `terraform login`
+  / publishing APIs are not served.
+- **Helm**: OCI-hosted charts are out of scope (mirror them as container
+  images); classic `index.yaml` repositories only. Chart provenance (`.prov`)
+  files are not mirrored — integrity comes from the regenerated index digests.
+- **NuGet**: the flat container publishes no digests, so low-side downloads are
+  TLS-trusted and validated against the embedded nuspec; everything after that
+  is hash-locked into the signed bundle. Dependency resolution picks the lowest
+  applicable version per range (NuGet restore behavior) across all target
+  frameworks.
+- **Alpine**: the APKINDEX carries no whole-file hash, so scheduled re-collects
+  re-download packages on the low side (export dedup still keeps re-sends off
+  the diode). Packages are verified against the index's size and Q1 control
+  checksum at collect time.
+- **Signing the served repos** is optional (`--apt-gpg-key`/`--rpm-gpg-key` for
+  APT/RPM, `--apk-rsa-key` for Alpine); otherwise those repositories are
+  published unsigned.
 - **Containers**: linux/amd64 only, anonymous pulls of public images only, and
   registries on non-standard ports can't be mirrored (the port can't appear in
   the high-side pull name). `--container-registry host=baseURL` on the low side
