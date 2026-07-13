@@ -259,44 +259,70 @@ func (s *LowServer) watchLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.runDueWatches(ctx)
+			s.runDueWatches()
 		}
 	}
 }
 
-// runDueWatches runs every enabled watch whose time has come, one at a time.
-func (s *LowServer) runDueWatches(ctx context.Context) {
+// runDueWatches enqueues every enabled watch whose time has come on its
+// stream's job queue. The scheduler never blocks on a collect: due watches on
+// different streams run concurrently (each stream still runs one job at a
+// time), and a watch whose previous run is still queued or running is left
+// alone until it finishes.
+func (s *LowServer) runDueWatches() {
 	due, err := s.watches.Due(time.Now().UTC())
 	if err != nil {
 		log.Printf("watch scheduler: %v", err)
 		return
 	}
 	for _, w := range due {
-		s.runWatch(ctx, w)
+		s.enqueueWatch(w)
 	}
 }
 
-// runWatch executes one watch's collect and records the outcome. It is a no-op
-// if the same watch is already running (from a concurrent tick or a run-now).
-func (s *LowServer) runWatch(ctx context.Context, w Watch) {
-	if !s.tryStartWatch(w.ID) {
-		return
+// enqueueWatch queues one run of w, returning the job id — or 0 when the run
+// was not queued because a job for this watch already is (a due tick
+// overlapping a run-now, or a slow collect still going when the next interval
+// arrived) or the stream's queue is full. Either way the watch stays due, so
+// a skipped run is retried on a later tick rather than lost. The outcome is
+// recorded from the job's completion hook; a watch deleted while its job is
+// queued still runs, and its RecordRun then updates zero rows — harmless.
+func (s *LowServer) enqueueWatch(w Watch) int64 {
+	j := &Job{
+		Stream:      w.Stream,
+		Kind:        jobKindWatch,
+		WatchID:     w.ID,
+		Label:       w.Label,
+		RequestedBy: "schedule",
+		run: func(ctx context.Context) (ExportResult, error) {
+			return s.runWatchCollect(ctx, w.Stream, w.Spec)
+		},
+		afterRun: func(res ExportResult, err error) { s.recordWatchOutcome(w, res, err) },
 	}
-	defer s.finishWatch(w.ID)
-	s.executeWatch(w, func() (ExportResult, error) {
-		return s.runWatchCollectSafely(ctx, w.Stream, w.Spec)
-	})
+	if _, err := s.jobs.enqueue(context.Background(), j); err != nil {
+		if !errors.Is(err, errWatchJobExists) {
+			log.Printf("watch %d (%s): not queued: %v", w.ID, w.Label, err)
+		}
+		return 0
+	}
+	return j.ID
 }
 
-// executeWatch runs one watch's collect closure and records the outcome
-// (status, message, and the advanced next_run_at). The collect is passed in
-// rather than called directly so the record path can be driven in tests with a
-// failing or panic-recovering collect and no real upstream. collect is expected
-// to be panic-safe (runWatch passes runWatchCollectSafely); any error it returns
-// is recorded as a failed run, which advances next_run_at and so cannot wedge
-// the schedule into a tight retry.
+// executeWatch runs one watch's collect closure and records the outcome. The
+// collect is passed in rather than called directly so the record path can be
+// driven in tests with a failing or panic-recovering collect and no real
+// upstream.
 func (s *LowServer) executeWatch(w Watch, collect func() (ExportResult, error)) {
 	res, err := collect()
+	s.recordWatchOutcome(w, res, err)
+}
+
+// recordWatchOutcome stores a run's status and message and schedules the next
+// run. Any error — including a canceled or panicked collect (the job worker's
+// recoverCollectPanic turns panics into errors) — is recorded as a failed
+// run, which advances next_run_at and so cannot wedge the schedule into a
+// tight retry.
+func (s *LowServer) recordWatchOutcome(w Watch, res ExportResult, err error) {
 	status, message := "ok", watchRunMessage(res)
 	if err != nil {
 		status, message = "error", err.Error()
@@ -309,21 +335,6 @@ func (s *LowServer) executeWatch(w Watch, collect func() (ExportResult, error)) 
 	if rerr := s.watches.RecordRun(w.ID, now, status, message, next); rerr != nil {
 		log.Printf("watch %d: record run: %v", w.ID, rerr)
 	}
-}
-
-// runWatchCollectSafely runs a scheduled collect and converts a panic into an
-// ordinary error. Scheduled collects run in the scheduler's own goroutine (and
-// run-now spawns a bare goroutine), so — unlike a collect driven over HTTP,
-// which net/http's per-request recovery contains — a collector panic on
-// malformed upstream data would otherwise propagate to the top of the goroutine
-// and crash the whole low server. Worse, the watch would still be due on the
-// next start, turning a single bad upstream response into a restart crash loop.
-// Recovering here keeps the failure to one run: the error is recorded and the
-// watch's next_run_at still advances, exactly as any other failed collect.
-func (s *LowServer) runWatchCollectSafely(ctx context.Context, stream, spec string) (ExportResult, error) {
-	return recoverCollectPanic(stream, func() (ExportResult, error) {
-		return s.runWatchCollect(ctx, stream, spec)
-	})
 }
 
 // recoverCollectPanic runs fn and turns any panic into an error so a collector
@@ -358,23 +369,6 @@ func watchRunMessage(res ExportResult) string {
 		msg += "; diode upload failed: " + res.DiodeError
 	}
 	return msg
-}
-
-// tryStartWatch marks a watch as running, returning false if it already was.
-func (s *LowServer) tryStartWatch(id int64) bool {
-	s.watchRunningMu.Lock()
-	defer s.watchRunningMu.Unlock()
-	if s.watchRunning[id] {
-		return false
-	}
-	s.watchRunning[id] = true
-	return true
-}
-
-func (s *LowServer) finishWatch(id int64) {
-	s.watchRunningMu.Lock()
-	defer s.watchRunningMu.Unlock()
-	delete(s.watchRunning, id)
 }
 
 // runWatchCollect dispatches a stored watch spec to the matching collector.
@@ -518,10 +512,11 @@ func (s *LowServer) handleRunWatch(w http.ResponseWriter, r *http.Request) bool 
 		http.Error(w, "watch not found", http.StatusNotFound)
 		return true
 	}
-	// Run in the background: a collect can take minutes, far longer than the
-	// request. The in-flight guard prevents it colliding with the scheduler.
-	go s.runWatch(context.Background(), watch)
-	writeJSON(w, map[string]string{"status": "started"})
+	// Queue the run: a collect can take minutes, far longer than the request.
+	// job_id 0 means a job for this watch is already queued or running (the
+	// queue's dedup prevents it colliding with the scheduler).
+	jobID := s.enqueueWatch(watch)
+	writeJSON(w, map[string]any{"status": "started", "job_id": jobID})
 	return true
 }
 

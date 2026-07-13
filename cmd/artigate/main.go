@@ -379,15 +379,14 @@ type LowServer struct {
 	// export pipeline: the index is only an optimization (collectors fail safe).
 	exported *ExportedStore
 	// watches holds scheduled recurring collects (SQLite-backed); watchTick is
-	// how often the scheduler checks for due ones; watchRunning guards against a
-	// watch running concurrently with itself (a tick overlapping a run-now).
-	watches        *WatchStore
-	watchTick      time.Duration
-	watchRunningMu sync.Mutex
-	watchRunning   map[int64]bool
+	// how often the scheduler checks for due ones.
+	watches   *WatchStore
+	watchTick time.Duration
 	// jobs is the per-stream collect queue: every manual and scheduled collect
 	// runs as a job on it, giving all dashboard sessions one shared view of
-	// what is queued, running, and recently finished (and why it failed).
+	// what is queued, running, and recently finished (and why it failed). It
+	// also keeps a watch from running concurrently with itself (a due tick
+	// overlapping a run-now).
 	jobs *jobManager
 	// authEnabled is set when ARTIGATE_LOW_AUTH is configured; it makes the UI
 	// render a "Log out" button.
@@ -615,7 +614,6 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 		state:                  LowState{Sequences: map[string]int64{}},
 		streamLocks:            map[string]*sync.Mutex{},
 		watchTick:              cfg.WatchInterval,
-		watchRunning:           map[int64]bool{},
 		jobs:                   newJobManager(),
 		containerRegistryBases: registryBases,
 	}

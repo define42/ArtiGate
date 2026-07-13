@@ -147,7 +147,11 @@ func TestRunDueWatchesProducesBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ls.runDueWatches(context.Background())
+	ls.runDueWatches()
+
+	// The run is now a job on the go stream's queue; wait for its outcome to
+	// be recorded before asserting.
+	waitWatchRecorded(t, ls, 1)
 
 	// The collect ran: the go stream's sequence advanced past bundle 1.
 	if got := ls.peekSequence(streamGo); got != 2 {
@@ -163,6 +167,112 @@ func TestRunDueWatchesProducesBundle(t *testing.T) {
 	// Its next run is now in the future, so a second drain does nothing.
 	if due, _ := ls.watches.Due(time.Now().UTC()); len(due) != 0 {
 		t.Errorf("watch should not be due right after running, got %d", len(due))
+	}
+}
+
+// waitWatchRecorded polls until the watch has a recorded run — scheduled runs
+// now execute asynchronously on the job queue.
+func waitWatchRecorded(t *testing.T, ls *LowServer, id int64) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if got, err := ls.watches.Get(id); err == nil && got.LastRunAt != nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("watch %d never recorded a run", id)
+}
+
+// A watch whose previous run is still queued or running is not enqueued again
+// by a due tick or a run-now — the queue dedups on the watch id.
+func TestWatchJobDedupAcrossTickAndRunNow(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	w, err := ls.watches.Create(Watch{
+		Stream: streamGo, Label: "go: foo/bar",
+		Spec: `{"modules":["example.com/foo/bar@v1.0.0"]}`, IntervalSeconds: 3600, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the go stream busy so the watch job stays queued.
+	release := make(chan struct{})
+	blocker := testJob(streamGo, func(context.Context) (ExportResult, error) {
+		<-release
+		return ExportResult{}, nil
+	})
+	if _, err := ls.jobs.enqueue(context.Background(), blocker); err != nil {
+		t.Fatal(err)
+	}
+
+	first := ls.enqueueWatch(w)
+	if first == 0 {
+		t.Fatal("first enqueue should produce a job")
+	}
+	if again := ls.enqueueWatch(w); again != 0 {
+		t.Errorf("second enqueue produced job %d, want 0 (deduped)", again)
+	}
+	ls.runDueWatches() // the due tick is deduped the same way
+	if got := len(ls.jobs.list()); got != 2 {
+		t.Errorf("job list has %d entries, want 2 (blocker + one watch job)", got)
+	}
+
+	// Run-now over HTTP reports the dedup as job_id 0.
+	res := doLowReq(t, ls, http.MethodPost, "/admin/watches/run",
+		`{"id":`+strconv.FormatInt(w.ID, 10)+`}`)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"job_id": 0`) {
+		t.Errorf("run-now while queued = %d %s, want job_id 0", res.Code, res.Body.String())
+	}
+
+	close(release)
+	waitWatchRecorded(t, ls, w.ID)
+	got, err := ls.watches.Get(w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastStatus != "ok" {
+		t.Errorf("watch outcome = %s (%s), want ok", got.LastStatus, got.LastMessage)
+	}
+}
+
+// Canceling a watch's job records the outcome, so the schedule advances
+// instead of immediately re-enqueueing the canceled run.
+func TestWatchJobCancelRecordsOutcome(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	w, err := ls.watches.Create(Watch{
+		Stream: streamGo, Label: "go: foo/bar",
+		Spec: `{"modules":["example.com/foo/bar@v1.0.0"]}`, IntervalSeconds: 3600, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	defer close(release)
+	blocker := testJob(streamGo, func(context.Context) (ExportResult, error) {
+		<-release
+		return ExportResult{}, nil
+	})
+	if _, err := ls.jobs.enqueue(context.Background(), blocker); err != nil {
+		t.Fatal(err)
+	}
+	jobID := ls.enqueueWatch(w)
+	if jobID == 0 {
+		t.Fatal("watch job not enqueued")
+	}
+	if err := ls.jobs.cancel(jobID); err != nil {
+		t.Fatal(err)
+	}
+	waitWatchRecorded(t, ls, w.ID)
+	got, err := ls.watches.Get(w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastStatus != "error" || got.NextRunAt.IsZero() {
+		t.Errorf("canceled watch run = %+v, want recorded error with next run scheduled", got)
+	}
+	if due, _ := ls.watches.Due(time.Now().UTC()); len(due) != 0 {
+		t.Errorf("canceled watch still due: %d", len(due))
 	}
 }
 

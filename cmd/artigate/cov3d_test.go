@@ -313,25 +313,19 @@ func TestCov3D_ValidateWatch(t *testing.T) {
 	}
 }
 
-// TestCov3D_RunWatchBranches covers the already-running guard and the
-// error-recording branch (a spec that fails to decode) without a real collect.
-func TestCov3D_RunWatchBranches(t *testing.T) {
+// TestCov3D_EnqueueWatchErrorRecorded covers the error-recording branch (a
+// spec that fails to decode) without a real collect: the failed run lands in
+// the watch row via the job's completion hook.
+func TestCov3D_EnqueueWatchErrorRecorded(t *testing.T) {
 	ls := newBareLowServer(t)
-
-	// Already running: a marked watch is a no-op.
-	const id = int64(4242)
-	if !ls.tryStartWatch(id) {
-		t.Fatal("tryStartWatch should mark a fresh id")
-	}
-	ls.runWatch(context.Background(), Watch{ID: id, Stream: streamGo, Spec: `{}`, IntervalSeconds: 3600})
-	ls.finishWatch(id)
-
-	// Error path: an undecodable spec is recorded as a failed run.
 	w, err := ls.watches.Create(Watch{Stream: streamGo, Label: "bad", Spec: `{"modules":["x"]}`, IntervalSeconds: 3600})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ls.runWatch(context.Background(), Watch{ID: w.ID, Stream: streamGo, Spec: "{not json", IntervalSeconds: 3600})
+	if id := ls.enqueueWatch(Watch{ID: w.ID, Stream: streamGo, Spec: "{not json", IntervalSeconds: 3600}); id == 0 {
+		t.Fatal("watch job not enqueued")
+	}
+	waitWatchRecorded(t, ls, w.ID)
 	got, err := ls.watches.Get(w.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -406,7 +400,7 @@ func TestCov3D_RunWatchSurvivesPanickingCollect(t *testing.T) {
 func TestCov3D_RunDueWatchesStoreError(t *testing.T) {
 	ls := newBareLowServer(t)
 	_ = ls.watches.Close() // subsequent Due() fails; runDueWatches must log and return
-	ls.runDueWatches(context.Background())
+	ls.runDueWatches()
 }
 
 func TestCov3D_ServeLowWatchesRouting(t *testing.T) {
