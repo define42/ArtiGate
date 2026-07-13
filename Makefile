@@ -23,6 +23,10 @@ test: ## Run unit tests with the race detector and coverage
 cover: test ## Show per-function coverage from the last test run
 	go tool cover -func=coverage.out
 
+.PHONY: e2e
+e2e: ## Run the end-to-end suite (real upstreams + real client tools; see e2e/doc.go)
+	go test -tags e2e -v -count=1 -timeout 25m ./e2e
+
 .PHONY: lint
 lint: ## Run golangci-lint using .golangci.yml
 	@if ! $(GOLANGCI_LINT) version 2>/dev/null | grep -q \

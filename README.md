@@ -605,6 +605,26 @@ TLS. If ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy, set
 - Low-side collects for different ecosystems run concurrently; the high side never
   runs `go`/`pip`/`mvn` and does no upstream fetching.
 
+## End-to-end tests
+
+Beyond the offline unit suite (`go test ./...`), an opt-in end-to-end suite
+builds the real binary, starts a low+high pair wired over the HTTP diode
+transport, collects **every stream from its real upstream** (PyPI,
+proxy.golang.org, Maven Central, npmjs, cli.github.com, Docker Hub,
+huggingface.co), and validates each with its real client tool — pip, `go`,
+`mvn`+`java`, npm+node, `apt-get`+`dpkg-deb`, `dnf`+`rpm`, `docker`,
+huggingface_hub's CLI, and `curl`:
+
+```bash
+make e2e        # == go test -tags e2e -v -count=1 -timeout 25m ./e2e
+```
+
+It needs network access and the client toolchains on PATH; a missing tool
+skips its test locally (CI sets `ARTIGATE_E2E_REQUIRE_ALL=1` to fail
+instead). CI runs it on every PR via `.github/workflows/e2e.yml`. See
+`e2e/doc.go` for all knobs (`ARTIGATE_E2E_BIN`, `ARTIGATE_E2E_WORKDIR`,
+`ARTIGATE_E2E_KEEP`, `ARTIGATE_E2E_HF_GGUF`).
+
 ## Documentation
 
 The full manual — architecture, per-ecosystem guides, configuration and HTTP

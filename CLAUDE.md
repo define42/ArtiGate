@@ -69,3 +69,10 @@ Tests live beside the code as `*_test.go` (many `cov*_test.go` files exist purel
 to hold coverage cases — extend the nearest relevant one rather than creating a
 new file for a single case). Keep coverage high; the suite runs fast (`~20s`,
 `~50s` with `-race`).
+
+An opt-in end-to-end suite lives under `e2e/` behind the `e2e` build tag
+(`make e2e`); it needs network access plus the real client toolchains and runs
+in CI via `.github/workflows/e2e.yml`. The default `go build/vet/test ./...`
+and `golangci-lint run` never compile it (only the untagged `e2e/doc.go` is in
+the default build), so when touching `e2e/` also run `go vet -tags e2e ./e2e`
+and keep the files gofumpt-formatted yourself — CI lint won't catch them.
