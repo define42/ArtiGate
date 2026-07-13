@@ -338,7 +338,10 @@ carry: a collect whose new content would overflow it — a full safetensors
 repository easily does — is split automatically into consecutive sequenced
 bundles, each within the limit. The content ships in *part* bundles first and
 the ecosystem metadata arrives in the final bundle, which references the parts'
-files, so the model appears on the high side exactly once, complete.
+files, so the model appears on the high side exactly once, complete. With the
+built-in UDP pitcher enabled, the split budget also respects the wire's
+block-count bound for the configured FEC geometry, so every bundle produced is
+guaranteed transmittable as configured.
 
 ### Built-in UDP diode transport (optional)
 

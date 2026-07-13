@@ -1392,7 +1392,7 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream, baseDir string, fil
 	}
 	chunks, err := splitDeliveredFiles(files, s.bundleSplitBudget())
 	if err != nil {
-		return ExportResult{}, err
+		return ExportResult{}, s.decorateSplitError(err)
 	}
 	parts, err := s.exportContentParts(ctx, stream, baseDir, files, chunks)
 	var res ExportResult
@@ -1447,12 +1447,36 @@ func (s *LowServer) exportSequencedBundle(ctx context.Context, stream string, fi
 // before a collect is split. It defaults to the transport's hard per-archive
 // limit — the same one the high side enforces at import, so an oversized
 // archive would not merely fail to transfer, it would be rejected at its
-// sequence number and wedge the stream.
+// sequence number and wedge the stream. With the built-in UDP pitcher
+// enabled, the wire's block-count bound also applies: a small block geometry
+// caps a transfer below the archive limit, and a bundle beyond it would be
+// committed and recorded only for the send to refuse it — leaving the high
+// side waiting on a sequence that cannot cross until the operator changes
+// pitcher settings. The estimate always exceeds the finished archive, so a
+// bundle within budget is guaranteed both importable and transmittable.
 func (s *LowServer) bundleSplitBudget() int64 {
 	if s.splitBudget > 0 {
 		return s.splitBudget
 	}
-	return diodeMaxArchiveBytes
+	budget := int64(diodeMaxArchiveBytes)
+	if s.pitcher != nil {
+		budget = min(budget, s.pitcher.maxWireFileBytes())
+	}
+	return budget
+}
+
+// decorateSplitError appends the actionable pitcher hint to a split refusal
+// when the wire's block-count bound — not the archive cap — is the limit the
+// file failed against.
+func (s *LowServer) decorateSplitError(err error) error {
+	if s.splitBudget > 0 || s.pitcher == nil {
+		return err
+	}
+	if wire := s.pitcher.maxWireFileBytes(); wire < diodeMaxArchiveBytes {
+		return fmt.Errorf("%w (the UDP pitcher's block geometry caps one wire transfer at %s; raise ARTIGATE_PITCHER_MTU or ARTIGATE_PITCHER_FEC_DATA to carry bigger bundles)",
+			err, formatBytes(wire))
+	}
+	return err
 }
 
 const (

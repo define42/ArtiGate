@@ -271,6 +271,15 @@ func (p *diodePitcher) target() string {
 	return fmt.Sprintf("[%s%%%s]:%d", p.cfg.Group, p.cfg.Interface, p.cfg.Port)
 }
 
+// maxWireFileBytes is the largest file this pitcher's block geometry can
+// carry: the wire format bounds a transfer at diodeMaxBlockCount blocks, so a
+// small geometry (low MTU, few data shards) caps a transfer well below the
+// archive limit. Bundle production consults it so nothing is ever committed
+// that sendDiodeFile would refuse.
+func (p *diodePitcher) maxWireFileBytes() int64 {
+	return int64(p.plan.blockDataSize()) * diodeMaxBlockCount
+}
+
 // SendBundle throws one bundle's three files down the fiber, the archive
 // first — the same ordering rule as every other transport, so the catcher can
 // never land a manifest whose archive never arrives and look complete.
