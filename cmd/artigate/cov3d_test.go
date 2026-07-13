@@ -236,8 +236,10 @@ func TestCov3D_AcmeTLSConfigTrustedRootErrors(t *testing.T) {
 func TestCov3D_ListenAndServeBindErrors(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 
+	ctx := context.Background()
+
 	// serverTLSConfig error propagates out immediately.
-	if err := listenAndServe(TLSConfig{Mode: tlsOwnCert, CertFile: "/no/cert", KeyFile: "/no/key"},
+	if err := listenAndServe(ctx, TLSConfig{Mode: tlsOwnCert, CertFile: "/no/cert", KeyFile: "/no/key"},
 		"127.0.0.1:0", t.TempDir(), handler); err == nil {
 		t.Error("listenAndServe with an unloadable certificate should error")
 	}
@@ -250,11 +252,11 @@ func TestCov3D_ListenAndServeBindErrors(t *testing.T) {
 	addr := l.Addr().String()
 
 	// Plain HTTP: the address is taken, so ListenAndServe fails.
-	if err := listenAndServe(TLSConfig{Mode: tlsUnencrypted}, addr, t.TempDir(), handler); err == nil {
+	if err := listenAndServe(ctx, TLSConfig{Mode: tlsUnencrypted}, addr, t.TempDir(), handler); err == nil {
 		t.Error("plain listenAndServe on an occupied address should error")
 	}
 	// TLS: same, exercising the ListenAndServeTLS branch.
-	if err := listenAndServe(TLSConfig{Mode: tlsAutoGen, Domains: []string{"127.0.0.1"}}, addr, t.TempDir(), handler); err == nil {
+	if err := listenAndServe(ctx, TLSConfig{Mode: tlsAutoGen, Domains: []string{"127.0.0.1"}}, addr, t.TempDir(), handler); err == nil {
 		t.Error("TLS listenAndServe on an occupied address should error")
 	}
 }

@@ -984,11 +984,20 @@ func validateAptMirrorConfig(cfg aptMirrorConfig) (aptMirrorConfig, error) {
 		return aptMirrorConfig{}, fmt.Errorf("invalid mirror name %q", cfg.Name)
 	}
 	for _, tok := range append(append(append([]string{}, cfg.Suites...), cfg.Components...), cfg.Architectures...) {
-		if !mavenTokenRE.MatchString(tok) {
+		if !validRepoToken(tok) {
 			return aptMirrorConfig{}, fmt.Errorf("invalid suite/component/architecture token %q", tok)
 		}
 	}
 	return cfg, nil
+}
+
+// validRepoToken reports whether tok is a safe single path segment for an APT
+// suite/component/architecture. mavenTokenRE already excludes '/' and the empty
+// string; this additionally rejects "." and ".." so a token can never traverse
+// out of the dists/<suite>/<component> tree when the high side turns it into a
+// filesystem path while regenerating repository metadata.
+func validRepoToken(tok string) bool {
+	return mavenTokenRE.MatchString(tok) && tok != "." && tok != ".."
 }
 
 // dedupeStrings drops empty and repeated tokens, keeping first-occurrence order
@@ -1055,7 +1064,7 @@ func validateAptMirror(m AptMirror, seen map[string]bool) error {
 			return fmt.Errorf("apt suite %q missing components or architectures", suite.Name)
 		}
 		for _, tok := range append(append([]string{suite.Name}, suite.Components...), suite.Architectures...) {
-			if !mavenTokenRE.MatchString(tok) {
+			if !validRepoToken(tok) {
 				return fmt.Errorf("invalid apt suite/component/architecture token %q", tok)
 			}
 		}

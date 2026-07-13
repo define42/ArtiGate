@@ -16,6 +16,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -246,9 +247,19 @@ func remoteAddrIsLoopback(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// shutdownGracePeriod bounds how long a graceful shutdown waits for in-flight
+// requests to finish before the process exits anyway. Large artifact transfers
+// can exceed it; those connections are cut at exit exactly as an ungraceful stop
+// would have done, while short requests and durable-state writes drain cleanly.
+const shutdownGracePeriod = 30 * time.Second
+
 // listenAndServe serves handler on addr using the configured transport, blocking
-// until the server stops. storageDir is the ACME cert cache root.
-func listenAndServe(c TLSConfig, addr, storageDir string, handler http.Handler) error {
+// until the server stops or ctx is cancelled. On cancellation (a SIGINT/SIGTERM
+// the caller wired into ctx) it drains in-flight requests for up to
+// shutdownGracePeriod before returning nil, so a `docker stop` or systemd stop
+// no longer aborts requests and truncates the caller's deferred store closes.
+// storageDir is the ACME cert cache root.
+func listenAndServe(ctx context.Context, c TLSConfig, addr, storageDir string, handler http.Handler) error {
 	tlsCfg, err := serverTLSConfig(c, storageDir)
 	if err != nil {
 		return err
@@ -267,9 +278,25 @@ func listenAndServe(c TLSConfig, addr, storageDir string, handler http.Handler) 
 		// own per-request body limit and read deadline.
 		IdleTimeout: 120 * time.Second,
 	}
-	if tlsCfg == nil {
-		return srv.ListenAndServe()
+	srvErr := make(chan error, 1)
+	go func() {
+		if tlsCfg != nil {
+			srv.TLSConfig = tlsCfg
+			srvErr <- srv.ListenAndServeTLS("", "") // certificates come from TLSConfig
+			return
+		}
+		srvErr <- srv.ListenAndServe()
+	}()
+	select {
+	case err := <-srvErr:
+		return err // failed to start, or stopped on its own
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGracePeriod)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown incomplete after %s: %v", shutdownGracePeriod, err)
+		}
+		<-srvErr // ListenAndServe returns ErrServerClosed once Shutdown closes it
+		return nil
 	}
-	srv.TLSConfig = tlsCfg
-	return srv.ListenAndServeTLS("", "") // certificates come from TLSConfig
 }

@@ -31,8 +31,10 @@ import (
 	"math"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -75,6 +77,19 @@ func knownStreams() []string {
 // produces consecutive bundles, so ten thousand outstanding predecessors is
 // already far beyond a credible delivery reordering window.
 const maxFutureSequenceGap int64 = 10_000
+
+const (
+	// rejectedRetention bounds how long terminally rejected bundles occupy the
+	// shared unverified-bytes quota before being reaped. A rejected bundle never
+	// imports on its own — recovery is a low-side re-export — so retaining it
+	// only preserves its reason file for diagnostics, and only for a while.
+	rejectedRetention = 7 * 24 * time.Hour
+	// incompleteLandingRetention bounds how long a partial landing set (missing
+	// one of the three bundle files) is kept. A real transfer completes in
+	// minutes to hours; a set still incomplete long after was orphaned by an
+	// interrupted transfer and would otherwise pin the quota forever.
+	incompleteLandingRetention = 48 * time.Hour
+)
 
 const manifestSignaturePHPrefix = "ed25519ph:"
 
@@ -426,21 +441,26 @@ func runLow(args []string) {
 
 	attachPitcher(ls, pitcherCfg)
 
-	if cfg.WatchInterval > 0 {
-		go ls.watchLoop(context.Background())
-	}
-
 	serveLow(cfg, ls)
 }
 
-// serveLow wires up TLS, optional low-side authentication, and the HTTP handler,
-// then serves until the process stops.
+// serveLow wires up TLS, optional low-side authentication, the scheduler, and the
+// HTTP handler, then serves until the process stops or a SIGINT/SIGTERM arrives.
 func serveLow(cfg LowConfig, ls *LowServer) {
 	tc, err := tlsConfigFromEnv()
 	must(err)
 	users, err := parseLowAuth(os.Getenv("ARTIGATE_LOW_AUTH"))
 	must(err)
 	guardLowExposure(cfg.Listen, len(users) > 0, tc.Mode)
+
+	// A SIGINT/SIGTERM (Ctrl-C, docker stop, systemd stop) cancels this context,
+	// stopping the scheduler and draining the HTTP server before runLow's
+	// deferred store closes run.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if cfg.WatchInterval > 0 {
+		go ls.watchLoop(ctx)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/", ls)
@@ -453,6 +473,10 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 		must(err)
 		handler = am.middleware(handler)
 	}
+	// Guard state-changing requests against cross-site (CSRF) abuse in every
+	// deployment mode, including loopback-without-auth where no session cookie
+	// (and thus no SameSite protection) exists.
+	handler = csrfGuardLow(handler)
 
 	log.Printf("low-side exporter listening on %s (TLS: %s, auth: %s)", cfg.Listen, tc.Mode, authStatus(users))
 	log.Printf("low-side go module cache: %s", ls.downloadDir)
@@ -465,7 +489,7 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 		log.Printf("low-side diode pitcher: %s → %s at ≤ %d Mbit/s (FEC %d+%d, MTU %d; bundles transmit after export, export dir is the retry spool)",
 			p.cfg.Interface, p.target(), p.cfg.RateMbit, p.cfg.DataShards, p.cfg.ParityShards, p.cfg.MTU)
 	}
-	must(listenAndServe(tc, cfg.Listen, cfg.Root, logHTTP(handler)))
+	must(listenAndServe(ctx, tc, cfg.Listen, cfg.Root, logHTTP(handler)))
 }
 
 // guardLowExposure fails closed when the low side — which holds the signing key
@@ -500,6 +524,57 @@ func envIsTrue(v string) bool {
 	default:
 		return false
 	}
+}
+
+// isStateChangingMethod reports whether m can mutate server state and therefore
+// warrants CSRF protection. Safe methods (GET/HEAD/OPTIONS/TRACE) are exempt.
+func isStateChangingMethod(m string) bool {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return false
+	default:
+		return true
+	}
+}
+
+// isCrossSiteBrowserRequest reports whether r is a browser-issued cross-site
+// request. It prefers the Fetch-Metadata Sec-Fetch-Site header sent by modern
+// browsers and falls back to comparing Origin against the request Host. A
+// non-browser client (curl, the diode uploader, CI) sends neither and is treated
+// as same-site: CSRF is a browser-confused-deputy problem, not theirs.
+func isCrossSiteBrowserRequest(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none":
+		return false
+	case "same-site", "cross-site":
+		return true
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return true
+	}
+	return !strings.EqualFold(u.Host, r.Host)
+}
+
+// csrfGuardLow rejects browser-issued cross-site state-changing requests to the
+// low-side control plane. The low side holds the signing key, so a cross-site
+// POST a browser is tricked into sending could have arbitrary content signed and
+// pushed across the diode. SameSite=Lax on the session cookie stops that only
+// when auth is enabled; the supported loopback-without-auth deployment has no
+// cookie, so this guard closes the gap for every mode. Safe methods and
+// non-browser clients pass through unaffected.
+func csrfGuardLow(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isStateChangingMethod(r.Method) && isCrossSiteBrowserRequest(r) {
+			http.Error(w, "cross-site request refused; the low-side control plane accepts state changes only from its own dashboard", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
@@ -1954,8 +2029,13 @@ func runHigh(args []string) {
 	must(err)
 	startCatcherIfConfigured(hs)
 
+	// A SIGINT/SIGTERM cancels this context, stopping the import loop and
+	// draining the HTTP server on shutdown.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	if cfg.ImportInterval > 0 {
-		go hs.importLoop()
+		go hs.importLoop(ctx)
 	}
 
 	tc, err := tlsConfigFromEnv()
@@ -1970,7 +2050,7 @@ func runHigh(args []string) {
 	log.Printf("high-side repo: %s", hs.downloadDir)
 	log.Printf("high-side landing: %s", cfg.Landing)
 	log.Printf("high-side quarantine: %s", hs.cfg.Quarantine)
-	must(listenAndServe(tc, cfg.Listen, cfg.Root, logHTTP(mux)))
+	must(listenAndServe(ctx, tc, cfg.Listen, cfg.Root, logHTTP(mux)))
 }
 
 func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
@@ -2288,10 +2368,15 @@ func (s *HighServer) saveStateLocked() error {
 	return writeJSONAtomic(s.statePath, s.state, stateFileMode)
 }
 
-func (s *HighServer) importLoop() {
+func (s *HighServer) importLoop(ctx context.Context) {
 	t := time.NewTicker(s.cfg.ImportInterval)
 	defer t.Stop()
-	for range t.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 		res, err := s.ImportNext()
 		if err != nil {
 			log.Printf("import failed: %v", err)
@@ -2404,6 +2489,8 @@ func (s *HighServer) ImportNext() (ImportResult, error) {
 		}
 	}
 
+	s.reapUnverifiedLocked(time.Now())
+
 	status, err := s.importStatusLocked()
 	if err != nil {
 		return ImportResult{}, err
@@ -2472,6 +2559,20 @@ func invalidBundle(err error) error {
 	return &invalidBundleError{err: err}
 }
 
+// classifyExtractError decides whether a bundle extraction failure means the
+// bundle is content-invalid (→ rejected) or was merely an operational local-I/O
+// fault such as a full staging disk (→ retryable, left in place). Marking a
+// disk-full extraction of a 64 GiB bundle as invalid would permanently eject a
+// validly-signed bundle and wedge the stream, so those faults, tagged
+// stagingIOError during extraction, stay unmarked.
+func classifyExtractError(err error) error {
+	var ioErr *stagingIOError
+	if errors.As(err, &ioErr) {
+		return ioErr.err
+	}
+	return invalidBundle(err)
+}
+
 // importWaitMessage summarizes which streams are blocked on a missing bundle.
 func importWaitMessage(status ImportStatus) string {
 	var waits []string
@@ -2512,7 +2613,7 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 	defer os.RemoveAll(staging)
 
 	if err := extractAndVerifyTarGz(archivePath, staging, manifest.Files); err != nil {
-		return BundleManifest{}, invalidBundle(err)
+		return BundleManifest{}, classifyExtractError(err)
 	}
 	if err := s.installVerifiedBundle(staging, manifest); err != nil {
 		return BundleManifest{}, err
@@ -2770,6 +2871,115 @@ func (s *HighServer) rejectBundleLocked(srcDir, bundleID, reason string) error {
 		reason = reason[:maxReason]
 	}
 	return writeBytesAtomic(filepath.Join(dstDir, bundleID+".reason.txt"), []byte(reason+"\n"), 0o644)
+}
+
+// reapUnverifiedLocked frees the shared unverified-bytes quota from data that
+// can never import on its own: terminally rejected bundles past their retention,
+// and orphaned partial landing sets. Quarantine is deliberately never reaped —
+// it holds valid future bundles waiting for an earlier one to fill a gap.
+// Callers hold s.mu.
+func (s *HighServer) reapUnverifiedLocked(now time.Time) {
+	if n, err := reapRejectedDir(filepath.Join(s.cfg.Root, "rejected"), now.Add(-rejectedRetention)); err != nil {
+		log.Printf("reap rejected: %v", err)
+	} else if n > 0 {
+		log.Printf("reaped %d expired rejected file(s)", n)
+	}
+	if n, err := reapIncompleteLanding(s.cfg.Landing, now.Add(-incompleteLandingRetention)); err != nil {
+		log.Printf("reap incomplete landing: %v", err)
+	} else if n > 0 {
+		log.Printf("reaped %d orphaned partial landing file(s)", n)
+	}
+}
+
+// reapRejectedDir deletes regular files in the rejected directory last modified
+// before cutoff.
+func reapRejectedDir(dir string, cutoff time.Time) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var removed int
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if removeIfOlder(filepath.Join(dir, e.Name()), cutoff) {
+			removed++
+		}
+	}
+	return removed, nil
+}
+
+// reapIncompleteLanding deletes the files of landing bundle sets that are still
+// incomplete (missing at least one of the three bundle files) and whose newest
+// file predates cutoff — orphans of an interrupted transfer that would otherwise
+// pin the unverified-bytes quota forever. Complete sets (pending import),
+// subdirectories, and UDP reassembly temp files are left untouched.
+func reapIncompleteLanding(dir string, cutoff time.Time) (int, error) {
+	members, newest, err := landingBundleGroups(dir)
+	if err != nil {
+		return 0, err
+	}
+	var removed int
+	for base, names := range members {
+		if bundleCompleteInDir(dir, base) || !newest[base].Before(cutoff) {
+			continue
+		}
+		for _, name := range names {
+			if removeIfOlder(filepath.Join(dir, name), cutoff) {
+				removed++
+			}
+		}
+	}
+	return removed, nil
+}
+
+// landingBundleGroups maps each landing bundle base name to its present files and
+// the newest of their modification times. Subdirectories, UDP reassembly temp
+// files, and files with no known bundle suffix are skipped.
+func landingBundleGroups(dir string) (members map[string][]string, newest map[string]time.Time, err error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	members = map[string][]string{}
+	newest = map[string]time.Time{}
+	for _, e := range entries {
+		if e.IsDir() || isUDPTempName(e.Name()) {
+			continue
+		}
+		base := bundleBaseName(e.Name())
+		if base == e.Name() {
+			continue // not a bundle file (no known suffix)
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		members[base] = append(members[base], e.Name())
+		if info.ModTime().After(newest[base]) {
+			newest[base] = info.ModTime()
+		}
+	}
+	return members, newest, nil
+}
+
+// removeIfOlder removes p only if it still exists as a regular file last modified
+// before cutoff. The re-stat guards against deleting a file that was rewritten
+// (for example a landing bundle re-uploaded) between the directory listing and
+// the delete.
+func removeIfOlder(p string, cutoff time.Time) bool {
+	info, err := os.Stat(p)
+	if err != nil || info.IsDir() || !info.ModTime().Before(cutoff) {
+		return false
+	}
+	return os.Remove(p) == nil
 }
 
 func (s *HighServer) findBundleDirLocked(bundleID string) (string, bool) {
@@ -3493,6 +3703,28 @@ func expectedArchiveFiles(files []ManifestFile) (map[string]ManifestFile, error)
 	return expected, nil
 }
 
+// stagingIOError marks a local filesystem failure while extracting a verified
+// bundle into staging (for example a full disk). It is an operational fault, not
+// a defect in the bundle, so the importer keeps the bundle in place to retry
+// rather than rejecting a validly-signed bundle because the disk was full.
+type stagingIOError struct{ err error }
+
+func (e *stagingIOError) Error() string { return e.err.Error() }
+func (e *stagingIOError) Unwrap() error { return e.err }
+
+// stagingWriter tags a write failure to the staging file as a stagingIOError, so
+// a disk-full extraction is classified operational while a read failure from the
+// archive stream (a corrupt bundle) stays a content error.
+type stagingWriter struct{ w io.Writer }
+
+func (sw stagingWriter) Write(p []byte) (int, error) {
+	n, err := sw.w.Write(p)
+	if err != nil {
+		return n, &stagingIOError{err: err}
+	}
+	return n, nil
+}
+
 func extractAndVerifyTarGz(archivePath, staging string, files []ManifestFile) error {
 	expected, err := expectedArchiveFiles(files)
 	if err != nil {
@@ -3502,7 +3734,7 @@ func extractAndVerifyTarGz(archivePath, staging string, files []ManifestFile) er
 
 	f, err := os.Open(archivePath)
 	if err != nil {
-		return err
+		return &stagingIOError{err: err}
 	}
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
@@ -3550,20 +3782,22 @@ func extractTarEntry(tr *tar.Reader, hdr *tar.Header, staging string, expected m
 		return fmt.Errorf("unsafe archive path %s", hdr.Name)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
+		return &stagingIOError{err: err}
 	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return &stagingIOError{err: err}
 	}
 	h := sha256.New()
-	_, copyErr := io.Copy(io.MultiWriter(out, h), tr)
+	// stagingWriter tags a write-side (disk) failure so it is retried, not
+	// rejected; a read-side failure from tr means the archive is corrupt.
+	_, copyErr := io.Copy(io.MultiWriter(stagingWriter{w: out}, h), tr)
 	closeErr := out.Close()
 	if copyErr != nil {
 		return copyErr
 	}
 	if closeErr != nil {
-		return closeErr
+		return &stagingIOError{err: closeErr}
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); got != mf.SHA256 {
 		return fmt.Errorf("sha256 mismatch for %s: got %s want %s", hdr.Name, got, mf.SHA256)
