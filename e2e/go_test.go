@@ -30,6 +30,11 @@ go 1.21
 
 require rsc.io/quote v1.5.2
 `)
+	// quote.Go() rather than quote.Hello(): Hello() routes through
+	// rsc.io/sampler's locale matching and answers in the language of the
+	// host's LANG/LC_ALL — "Ahoy, world!" on some CI locales. Go() is a
+	// fixed string, and the package still imports sampler and x/text, so
+	// the mirrored three-module graph is exercised either way.
 	writeFile(t, filepath.Join(proj, "main.go"), `package main
 
 import (
@@ -39,13 +44,15 @@ import (
 )
 
 func main() {
-	fmt.Println(quote.Hello())
+	fmt.Println(quote.Go())
 }
 `)
 	env := []string{
 		"GOPROXY=" + stack.HighURL + "/go,off",
 		"GOSUMDB=off", // no sumdb mirroring by design; trust the signed bundles
-		"GOFLAGS=-mod=mod",
+		// -modcacherw keeps the module cache deletable by t.TempDir cleanup
+		// (go marks it read-only by default, which non-root CI cannot remove).
+		"GOFLAGS=-mod=mod -modcacherw",
 		"GOTOOLCHAIN=local",
 		"GOWORK=off",
 		"HOME=" + filepath.Join(tmp, "home"),
@@ -55,7 +62,8 @@ func main() {
 	}
 	run(t, proj, env, goBin, "mod", "tidy")
 	out := runStdout(t, proj, env, goBin, "run", ".")
-	if strings.TrimSpace(out) != "Hello, world." {
-		t.Fatalf("go run printed %q, want %q", strings.TrimSpace(out), "Hello, world.")
+	const want = "Don't communicate by sharing memory, share memory by communicating."
+	if strings.TrimSpace(out) != want {
+		t.Fatalf("go run printed %q, want %q", strings.TrimSpace(out), want)
 	}
 }
