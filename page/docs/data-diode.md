@@ -140,6 +140,10 @@ transfers and 32 open blocks per transfer, 64 MiB reserved reconstruction memory
 per transfer and 256 MiB globally, four million blocks per file, 4,096 remembered
 completed transfer IDs, and 64 cached Reed-Solomon encoder geometries. A block
 reserves its full data-plus-parity footprint before the first shard is retained.
+The block-count ceiling also bounds one transfer's size for a given geometry
+(`FEC_DATA` × shard size × 2²²); the low side folds that bound into its bundle
+split budget, so a small geometry never produces a bundle the pitcher would
+then refuse to send.
 
 The pitcher clears each bundle from the export dir after the send finishes
 (it shows as *sent* on the Status page) and keeps the archive copy for

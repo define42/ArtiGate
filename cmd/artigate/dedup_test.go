@@ -953,3 +953,64 @@ func TestValidateBundlePart(t *testing.T) {
 		t.Errorf("empty manifest error = %v, want it to mention content parts", err)
 	}
 }
+
+// withTestPitcherPlan attaches a socketless pitcher (plan only) so the budget
+// logic sees a wire geometry, detaching it before cleanup so ls.Close never
+// touches the missing socket.
+func withTestPitcherPlan(t *testing.T, ls *LowServer, mtu, dataShards, parityShards int) diodePlan {
+	t.Helper()
+	pl, err := newDiodePlan(mtu, dataShards, parityShards)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ls.pitcher = &diodePitcher{plan: pl}
+	t.Cleanup(func() { ls.pitcher = nil })
+	return pl
+}
+
+// TestBundleSplitBudgetRespectsWireLimit pins the budget arithmetic: without
+// a pitcher the archive cap rules; with one, the wire's block-count bound
+// clamps it whenever the block geometry cannot carry a full-size archive.
+func TestBundleSplitBudgetRespectsWireLimit(t *testing.T) {
+	ls := newBareLowServer(t)
+	if got := ls.bundleSplitBudget(); got != diodeMaxArchiveBytes {
+		t.Fatalf("budget without a pitcher = %d, want the archive cap %d", got, int64(diodeMaxArchiveBytes))
+	}
+
+	small := withTestPitcherPlan(t, ls, 1500, 8, 3) // 9824-byte blocks: caps a transfer below 64 GiB
+	if want := int64(small.blockDataSize()) * diodeMaxBlockCount; ls.bundleSplitBudget() != want {
+		t.Fatalf("budget with a small-geometry pitcher = %d, want the wire cap %d", ls.bundleSplitBudget(), want)
+	}
+
+	withTestPitcherPlan(t, ls, 9000, 200, 8) // blocks big enough that the archive cap rules again
+	if got := ls.bundleSplitBudget(); got != diodeMaxArchiveBytes {
+		t.Fatalf("budget with a big-geometry pitcher = %d, want the archive cap %d", got, int64(diodeMaxArchiveBytes))
+	}
+
+	ls.splitBudget = 123 // the test override stays absolute
+	if got := ls.bundleSplitBudget(); got != 123 {
+		t.Fatalf("budget with an override = %d, want 123", got)
+	}
+}
+
+// TestExportRefusesWireUntransmittableFile is the sequence-wedge guard for
+// the UDP transport: a file below the archive cap but beyond what the
+// pitcher's block geometry can send must refuse the collect up front — not
+// commit a bundle whose send then fails, leaving the high side waiting on a
+// sequence that cannot cross until the pitcher is reconfigured.
+func TestExportRefusesWireUntransmittableFile(t *testing.T) {
+	ls := newBareLowServer(t)
+	withTestPitcherPlan(t, ls, 1500, 8, 3) // wire cap ≈ 38 GiB, well under the 64 GiB archive cap
+	files := []ManifestFile{{Path: "data/model.safetensors", SHA256: strings.Repeat("a", 64), Size: 48 << 30}}
+
+	_, err := splitExport(t, ls, t.TempDir(), files)
+	if err == nil || !strings.Contains(err.Error(), "does not fit a bundle") || !strings.Contains(err.Error(), "ARTIGATE_PITCHER_MTU") {
+		t.Fatalf("wire-untransmittable export = %v, want a refusal naming the pitcher knobs", err)
+	}
+	if seq := ls.peekSequence(streamNpm); seq != 1 {
+		t.Errorf("next sequence = %d, want 1 (no number burned)", seq)
+	}
+	if entries, _ := os.ReadDir(ls.cfg.ExportDir); len(entries) != 0 {
+		t.Errorf("export dir not empty after a refused collect")
+	}
+}
