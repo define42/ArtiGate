@@ -706,19 +706,10 @@ func assertTfProviderDownload(t *testing.T, base string, zip []byte, zipName str
 // the download descriptor's download_url must serve the exact collected zip,
 // shasums_url/shasums_signature_url the mirrored verification chain, and the
 // module download's X-Terraform-Get target the mirrored archive — this is
-// what terraform itself does on install.
-//
-// KNOWN BUG (documented, do not fix here): tfServablePath counts path
-// segments as if rel still carried the "terraform/" prefix (it requires 6
-// segments for provider files and 7 for module archives), but serveTerraform
-// dispatches the trimmed rel ("providers/..." = 5 segments, "modules/..." =
-// 6), so every artifact URL 404s and handleTfFile's TrimPrefix(rel,
-// "terraform/") is dead code. Un-skip once tfServablePath matches the rel it
-// is actually given (5/6 segments, or dispatch strings.Trim(p, "/") and
-// check segs[1]).
+// what terraform itself does on install. Regression test: tfServablePath must
+// match the rel serveTerraform actually dispatches (the "terraform/" prefix
+// already trimmed), or every artifact URL 404s.
 func TestTerraformArtifactRoutes(t *testing.T) {
-	t.Skip("known terraform.go bug: tfServablePath is off by one segment (expects the terraform/ prefix serveTerraform already trimmed), so provider zips, SHA256SUMS(.sig), and module archives all 404")
-
 	reg := newFakeTfRegistry(t)
 	zip := reg.registerProvider("hashicorp", "null", "1.0.0", false)
 	archive := tfTestTarGz(t, map[string]string{"main.tf": "# vpc module\n"})
@@ -981,20 +972,10 @@ func TestTerraformFetchModuleArchiveSources(t *testing.T) {
 // and the packed module.tar.gz must carry the subdir's content at the archive
 // root with every .git tree excluded. A forced re-collect must produce a
 // bit-identical archive (deterministic packing drives content dedup).
-//
-// KNOWN BUG (documented, do not fix here): packGitModule calls
-// os.MkdirTemp(filepath.Dir(abs), "git-") before anything creates the staging
-// directory terraform/modules/<ns>/<name>/<system>/<version>/ (only
-// packDirTarGz creates it, later), so collecting any git:: module source
-// fails with "no such file or directory" and the collect reports "nothing
-// could be fetched". https archive sources are unaffected because
-// downloadFileSHA256 creates the parent directory itself. Un-skip once
-// packGitModule creates filepath.Dir(abs) before MkdirTemp. The packing logic
-// itself is covered by TestTerraformPackGitModule below, which calls it with
-// an existing parent directory.
+// Regression test: packGitModule must create the module's staging directory
+// before placing its clone tempdir inside it, or every git:: collect fails
+// with ENOENT (https archive sources create the parent themselves).
 func TestTerraformModuleGitPipeline(t *testing.T) {
-	t.Skip("known terraform.go bug: packGitModule os.MkdirTemp()s inside the not-yet-created module staging directory, so every git:: module collect fails with ENOENT")
-
 	gitBin, argsLog := tfTestWriteFakeGit(t, false)
 	reg := newFakeTfRegistry(t)
 	reg.registerModule("org", "vpc", "aws", "1.0.0", "git::https://git.example/org/repo//modules/sub?ref=v1.0.0")
@@ -1267,6 +1248,78 @@ func TestTerraformImportSkipsMismatchedSums(t *testing.T) {
 				t.Errorf("versions status = %d, want %d", code, tt.wantCode)
 			}
 		})
+	}
+}
+
+// TestTerraformUITreeAndDetail walks the dashboard tree for both mirrored
+// kinds (providers/<ns>/<type> and modules/<ns>/<name>/<system>) and checks
+// the detail panels.
+func TestTerraformUITreeAndDetail(t *testing.T) {
+	reg := newFakeTfRegistry(t)
+	zip := reg.registerProvider("hashicorp", "null", "1.0.0", false)
+	archive := tfTestTarGz(t, map[string]string{"main.tf": "# vpc module\n"})
+	reg.serveBytes("/archives/vpc.tar.gz", archive)
+	reg.registerModule("org", "vpc", "aws", "1.0.0", reg.srv.URL+"/archives/vpc.tar.gz")
+	ls, priv := tfTestLowServer(t, reg.srv.URL, "")
+	res, err := ls.CollectTerraform(context.Background(), TerraformCollectRequest{
+		Providers: []string{"hashicorp/null@1.0.0"},
+		Modules:   []string{"org/vpc/aws@1.0.0"},
+	})
+	if err != nil {
+		t.Fatalf("CollectTerraform: %v", err)
+	}
+	if res.ExportedModules != 2 {
+		t.Fatalf("unexpected collect result: %+v", res)
+	}
+	hs := tfTestImport(t, ls, priv, res.BundleID)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	steps := []struct{ path, want string }{
+		{"", `"providers"`},
+		{"", `"modules"`},
+		{"providers", `"hashicorp"`},
+		{"providers/hashicorp", `"null"`},
+		{"providers/hashicorp/null", "1.0.0"},
+		{"modules/org/vpc", `"aws"`},
+		{"modules/org/vpc/aws", "1.0.0"},
+	}
+	for _, st := range steps {
+		if _, body := httpGet(t, srv.URL+"/ui/api/tree?eco=terraform&path="+st.path); !strings.Contains(body, st.want) {
+			t.Errorf("terraform tree at %q missing %s: %s", st.path, st.want, body)
+		}
+	}
+
+	code, body := httpGet(t, srv.URL+"/ui/api/detail?eco=terraform&path=providers/hashicorp/null@1.0.0")
+	if code != http.StatusOK || !strings.Contains(body, aptSHA256(zip)) {
+		t.Errorf("provider detail: status %d, body %q missing the platform digest", code, body)
+	}
+	var d UIDetail
+	if err := json.Unmarshal([]byte(body), &d); err != nil {
+		t.Fatal(err)
+	}
+	wantURL := "/terraform/providers/hashicorp/null/1.0.0/" + tfProviderZipName("null", "1.0.0", "linux", "amd64")
+	if len(d.Downloads) != 1 || d.Downloads[0].URL != wantURL {
+		t.Errorf("provider detail downloads = %+v, want %s", d.Downloads, wantURL)
+	}
+
+	code, body = httpGet(t, srv.URL+"/ui/api/detail?eco=terraform&path=modules/org/vpc/aws@1.0.0")
+	if code != http.StatusOK || !strings.Contains(body, aptSHA256(archive)) ||
+		!strings.Contains(body, "/terraform/modules/org/vpc/aws/1.0.0/module.tar.gz") {
+		t.Errorf("module detail: status %d body %q", code, body)
+	}
+
+	for _, miss := range []string{
+		"providers/hashicorp/null@9.9.9", // unknown version
+		"modules/org/vpc/aws@9.9.9",
+		"providers/hashicorp/null",     // no @version
+		"nonsense/x@1.0.0",             // neither providers nor modules
+		"providers/hashicorp@1.0.0",    // wrong segment count
+		"providers/hashicorp/null@../", // invalid version
+	} {
+		if code, _ := httpGet(t, srv.URL+"/ui/api/detail?eco=terraform&path="+miss); code != http.StatusNotFound {
+			t.Errorf("detail %q = %d, want 404", miss, code)
+		}
 	}
 }
 

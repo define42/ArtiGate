@@ -68,6 +68,11 @@ nav:
       - RPM (RHEL/Fedora): ecosystems/rpm.md
       - Container images (OCI): ecosystems/containers.md
       - AI models (Hugging Face): ecosystems/ai-models.md
+      - Rust crates: ecosystems/crates.md
+      - Terraform / OpenTofu: ecosystems/terraform.md
+      - Helm charts: ecosystems/helm.md
+      - NuGet: ecosystems/nuget.md
+      - Alpine (apk): ecosystems/apk.md
   - Security & trust: security.md
   - TLS / HTTPS: tls.md
   - Configuration reference: configuration.md

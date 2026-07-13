@@ -252,13 +252,14 @@ func (s *HighServer) serveTerraform(w http.ResponseWriter, r *http.Request) bool
 
 // handleTfFile serves the artifact files: provider zips, SHA256SUMS(.sig),
 // and module archives. The stored metadata/keys files stay private (their
-// content is embedded in the API responses).
+// content is embedded in the API responses). rel is relative to the terraform
+// subtree, e.g. "providers/<ns>/<type>/<version>/<file>".
 func (s *HighServer) handleTfFile(w http.ResponseWriter, r *http.Request, rel string) {
 	if validateRelPath(rel) != nil || !tfServablePath(rel) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	abs := filepath.Join(s.terraformDir(), filepath.FromSlash(strings.TrimPrefix(rel, "terraform/")))
+	abs := filepath.Join(s.terraformDir(), filepath.FromSlash(rel))
 	if !safeJoin(s.terraformDir(), abs) {
 		http.Error(w, "unsafe path", http.StatusBadRequest)
 		return
@@ -266,15 +267,17 @@ func (s *HighServer) handleTfFile(w http.ResponseWriter, r *http.Request, rel st
 	serveFile(w, r, abs)
 }
 
-// tfServablePath restricts the served files to the client-facing artifacts.
+// tfServablePath restricts the served files to the client-facing artifacts:
+// providers/<ns>/<type>/<version>/<zip|SHA256SUMS|SHA256SUMS.sig> and
+// modules/<ns>/<name>/<system>/<version>/module.tar.gz.
 func tfServablePath(rel string) bool {
 	segs := strings.Split(rel, "/")
 	switch {
-	case len(segs) == 6 && segs[0] == "providers":
-		f := segs[5]
+	case len(segs) == 5 && segs[0] == "providers":
+		f := segs[4]
 		return strings.HasSuffix(f, ".zip") || strings.HasSuffix(f, "_SHA256SUMS") || strings.HasSuffix(f, "_SHA256SUMS.sig")
-	case len(segs) == 7 && segs[0] == "modules":
-		return segs[6] == "module.tar.gz"
+	case len(segs) == 6 && segs[0] == "modules":
+		return segs[5] == "module.tar.gz"
 	}
 	return false
 }
@@ -1307,6 +1310,9 @@ func (s *LowServer) fetchTerraformModuleArchive(ctx context.Context, source, abs
 func (s *LowServer) packGitModule(ctx context.Context, gitURL, abs string) (string, int64, error) {
 	repoURL, subdir, ref, err := splitGitSource(gitURL)
 	if err != nil {
+		return "", 0, err
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return "", 0, err
 	}
 	tmp, err := os.MkdirTemp(filepath.Dir(abs), "git-")

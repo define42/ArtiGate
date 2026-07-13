@@ -100,10 +100,15 @@ After the verified files are installed, the high side rebuilds all served reposi
 - **npm** — regenerates the served packument from each tarball's own embedded `package.json`. The manifest's `integrity` value is kept only for audit and recomputed from the artifact.
 - **Containers** — regenerates the served registry metadata.
 - **Go** — listings are computed from the `.info`/`.mod`/`.zip` files on disk; a version is only visible once its `.complete` marker and all three files are present. There is no transferred "latest" index that the high side trusts.
+- **Crates** — regenerates every served sparse-index file from the manifest-carried index lines, and never serves a line whose `cksum` does not equal the byte-verified artifact's SHA-256 (re-checked at import).
+- **Terraform** — regenerates provider version lists and download descriptors after cross-checking every zip against the mirrored `SHA256SUMS`; terraform's own chain (shasum → `SHA256SUMS` → GPG key) then verifies against the mirrored upstream signatures.
+- **Helm** — regenerates each mirror's `index.yaml` from the charts' own embedded `Chart.yaml`, with digests recomputed from the artifacts (never trusting a transferred index).
+- **NuGet** — regenerates the served v3 feed metadata from each package's own embedded `.nuspec`.
+- **Alpine** — regenerates `APKINDEX.tar.gz` from the manifest-carried stanzas of the `.apk` files now present; optionally signed with `--apk-rsa-key`.
 
 ### No upstream fetch on the high side
 
-The high side has **no HTTP client and no upstream fetcher**. Its only loops are the import loop and the read-only serving mux. Missing content returns `404` — it is never fetched from anywhere. (All upstream/fetch configuration lives on the low side — e.g. `--upstream-goproxy`, `--npm-registry`, `--container-registry`, `--gosumdb`; the high side has none.) This is the property the diode exists to guarantee: nothing the high side serves came from the network, only from a signed, hash-verified, sequence-chained bundle.
+The high side has **no HTTP client and no upstream fetcher**. Its only loops are the import loop and the read-only serving mux. Missing content returns `404` — it is never fetched from anywhere. (All upstream/fetch configuration lives on the low side — e.g. `--upstream-goproxy`, `--npm-registry`, `--container-registry`, `--gosumdb`, `--crates-index`, `--terraform-registry`, `--nuget-source`; the high side has none.) This is the property the diode exists to guarantee: nothing the high side serves came from the network, only from a signed, hash-verified, sequence-chained bundle.
 
 ## Low-side authentication
 
@@ -112,7 +117,7 @@ Authentication is **optional**, **off by default**, and **low side only**. It is
 !!! danger "Unauthenticated by default — including all of `/admin/*`"
     With no `ARTIGATE_LOW_AUTH` set, the low side is **fully open**. Anyone who can reach the listener can drive collects and re-exports and read every admin endpoint:
 
-    - `POST /admin/{go,python,maven,apt,rpm,containers,npm,hf}/collect` — trigger fetching and export
+    - `POST /admin/{go,python,maven,apt,rpm,containers,npm,hf,crates,terraform,helm,nuget,apk}/collect` — trigger fetching and export
     - `POST /admin/reexport?stream=go&sequences=42,45-47` — replay archived bundles
     - `GET /admin/bundles` — bundle status
     - the dashboard UI and the watches routes
@@ -233,6 +238,11 @@ The same principle applies to every ecosystem — configure ArtiGate as the sole
 | Maven | ArtiGate as the only repository / mirror-of `*` |
 | APT | Only the ArtiGate `sources.list` entry |
 | RPM | Only the ArtiGate `.repo`; no other baseurls |
+| Rust crates | Replace crates.io (`replace-with` in `~/.cargo/config.toml`); no second registry |
+| Terraform / OpenTofu | ArtiGate as the `network_mirror` / source host; no direct registry fallback |
+| Helm | ArtiGate mirrors as the only configured chart repositories |
+| NuGet | `<clear />` in `nuget.config`, then ArtiGate as the sole source |
+| Alpine | Only ArtiGate lines in `/etc/apk/repositories` — replace, don't append |
 
 !!! warning "Do not add extra upstreams on the high side"
     The high side has no mechanism to add upstreams, so this guidance is entirely about **client** configuration. Any additional registry, mirror, or index configured on a high-side client reintroduces the confusion risk the diode was built to remove. Per-ecosystem client configuration is documented under [Ecosystems](ecosystems/index.md).

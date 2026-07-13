@@ -8,7 +8,7 @@ ArtiGate is a single binary with two roles that never share routes: `artigate lo
 ## Conventions
 
 - **Bundle IDs** are `<stream>-bundle-%06d`, e.g. `go-bundle-000042`, `python-bundle-000007`. Each bundle is three files: `<id>.tar.gz`, `<id>.manifest.json`, `<id>.manifest.json.sig`.
-- **Streams** are the eight ecosystems, each independently sequenced: `go`, `python`, `maven`, `apt`, `rpm`, `containers`, `npm`, `hf`. The `go` stream keeps the legacy single-stream numbering.
+- **Streams** are the thirteen ecosystems, each independently sequenced: `go`, `python`, `maven`, `apt`, `rpm`, `containers`, `npm`, `hf`, `crates`, `terraform`, `helm`, `nuget`, `apk`. The `go` stream keeps the legacy single-stream numbering.
 - **Error codes**: collect and re-export errors are `400`; watch validation `400`, watch store failures `500`; high-side import/status failures `500`; UI `detail` not-found `404`; `repos` for a wrong ecosystem `400`. Non-read methods on serving/UI routes return `405`.
 - **Auth**: only the low dashboard can require login (`ARTIGATE_LOW_AUTH`). The high side is never authenticated. See [Security & trust](security.md) and [TLS / HTTPS](tls.md).
 
@@ -72,7 +72,7 @@ Every collect request additionally accepts one shared field:
     A dedup skip writes no bundle and burns no sequence number. The [high side](high-side.md) must not wait on a sequence that was never produced.
 
 !!! note "Which collectors populate `skipped_modules`"
-    **Go**, **containers**, **AI models**, **Python** (source-only distributions that cannot be mirrored under the wheels-only policy), and **NPM** (git-URL / otherwise-unfetchable packages) report per-item failures here. **APT**, **RPM**, and **Maven** never populate the field — they either fully succeed or return a single top-level error. If *all* items fail, the whole request errors at 400 (e.g. Go `"no modules could be fetched: …"`, containers `"no images could be fetched: …"`) rather than writing an empty bundle.
+    **Go**, **containers**, **AI models**, **Python** (source-only distributions that cannot be mirrored under the wheels-only policy), **NPM** (git-URL / otherwise-unfetchable packages), **crates**, **Terraform**, **Helm**, **NuGet**, and **apk** report per-item failures here. **APT**, **RPM**, and **Maven** never populate the field — they either fully succeed or return a single top-level error. If *all* items fail, the whole request errors at 400 (e.g. Go `"no modules could be fetched: …"`, containers `"no images could be fetched: …"`) rather than writing an empty bundle.
 
 ---
 
@@ -266,6 +266,124 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 | `repo_exclude` | `[]string` | skip repository paths: a bare directory name excludes the subtree, else `path.Match` against the full path |
 
 At least one of `models`/`repos` is required. Gated models need `ARTIGATE_HF_TOKEN` on the low side; unfetchable references are skipped and reported in `skipped_modules`.
+
+---
+
+#### Rust crates — `POST /admin/crates/collect`
+
+`CratesCollectRequest`. Body limit **1 MiB**. See [Rust crates](ecosystems/crates.md).
+
+```json
+{
+  "crates": ["serde@1.0.203", "tokio"],
+  "resolve_deps": true,
+  "include_optional": false
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `crates` | `[]string` | Crate specs: bare `serde` for the newest release, `serde@1.0.203` to pin |
+| `resolve_deps` | `*bool` | **Defaults true when absent** — the transitive graph (normal + build dependencies, never dev) is resolved against the sparse index and bundled too; `false` mirrors only the listed crates |
+| `include_optional` | bool | Additionally follow optional dependencies |
+
+Every `.crate` is verified against the sparse-index `cksum`; unresolvable/unfetchable crates are skipped and reported in `skipped_modules`.
+
+---
+
+#### Terraform / OpenTofu — `POST /admin/terraform/collect`
+
+`TerraformCollectRequest`. Body limit **1 MiB**. See [Terraform / OpenTofu](ecosystems/terraform.md).
+
+```json
+{
+  "providers": ["hashicorp/aws@5.50.0"],
+  "modules": ["terraform-aws-modules/vpc/aws@5.8.1"],
+  "platforms": ["linux_amd64"],
+  "registry": ""
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `providers` | `[]string` | `namespace/type`, optionally `@version` (bare = newest release) |
+| `modules` | `[]string` | `namespace/name/system`, optionally `@version` |
+| `platforms` | `[]string` | `os_arch` names the provider zips are mirrored for; **defaults to `["linux_amd64"]`** |
+| `registry` | string | Upstream registry override for this collect (e.g. `https://registry.opentofu.org`); empty uses `--terraform-registry` or `https://registry.terraform.io` |
+
+At least one provider or module is required. Provider zips are verified against the registry shasum and mirrored with the upstream `SHA256SUMS`/`.sig`/signing keys; failed items are skipped and reported in `skipped_modules`.
+
+---
+
+#### Helm — `POST /admin/helm/collect`
+
+`HelmCollectRequest`. Body limit **1 MiB**. See [Helm charts](ecosystems/helm.md).
+
+```json
+{
+  "name": "bitnami",
+  "url": "https://charts.bitnami.com/bitnami",
+  "charts": ["nginx@21.1.0", "redis"]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | string | Optional mirror name (`/helm/<name>` on the high side); defaults to a slug of the URL |
+| `url` | string | **Required** — the upstream chart repository (the URL `helm repo add` would use) |
+| `charts` | `[]string` | Chart specs: bare `nginx` for the newest version, `nginx@21.1.0` to pin |
+
+Archives are verified against the upstream index digest when one is declared; failed charts are skipped and reported in `skipped_modules`.
+
+---
+
+#### NuGet — `POST /admin/nuget/collect`
+
+`NugetCollectRequest`. Body limit **1 MiB**. See [NuGet](ecosystems/nuget.md).
+
+```json
+{
+  "packages": ["Newtonsoft.Json@13.0.3", "Serilog"],
+  "resolve_deps": true
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `packages` | `[]string` | Package specs: bare `Serilog` for the newest stable release, `Newtonsoft.Json@13.0.3` to pin |
+| `resolve_deps` | `*bool` | **Defaults true when absent** — nuspec dependencies are resolved to the **lowest applicable version** per range (NuGet restore behavior) and bundled too |
+
+The flat container publishes no digests, so downloads are TLS-trusted and validated against each package's embedded nuspec; failed packages are skipped and reported in `skipped_modules`.
+
+---
+
+#### Alpine (apk) — `POST /admin/apk/collect`
+
+`ApkCollectRequest`. Body limit **1 MiB**. See [Alpine (apk)](ecosystems/apk.md).
+
+```json
+{
+  "name": "alpine",
+  "uri": "https://dl-cdn.alpinelinux.org/alpine",
+  "branches": ["v3.22"],
+  "repositories": ["main", "community"],
+  "architectures": ["x86_64"],
+  "repositories_file": "",
+  "newest_only": true
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | string | Mirror name (`/apk/<name>` on the high side); defaults to a slug of the URI |
+| `uri` | string | Mirror base URL (the part before `<branch>/<repo>`) |
+| `branches` | `[]string` | Branches to mirror, e.g. `["v3.22"]`; required with `uri` |
+| `repositories` | `[]string` | **Defaults to `["main"]`** |
+| `architectures` | `[]string` | **Defaults to `["x86_64"]`** |
+| `repositories_file` | string | A pasted `/etc/apk/repositories` file — an alternative to `uri`+`branches`+`repositories`; every line must name the same mirror base |
+| `newest_only` | `*bool` | **Defaults true when absent**; keeps only each package's highest version |
+
+Each `.apk` is verified against the `APKINDEX`-declared size and `Q1` control checksum; per-package failures are skipped and reported in `skipped_modules`.
 
 ---
 
@@ -490,13 +608,13 @@ Both return the identical `LowBundleStatus` payload.
 ### Health & dashboard
 
 - `GET /healthz` → body `ok\n`, no JSON.
-- `GET /`, `/ui`, `/ui/` → the self-contained HTML dashboard (tabs: Overview / Go / Python / Maven / NPM / APT / RPM / Containers / AI Models / Status). Non-read methods → **405**.
+- `GET /`, `/ui`, `/ui/` → the self-contained HTML dashboard (tabs: Overview / Go / Python / Maven / NPM / APT / RPM / Containers / AI Models / Crates / Terraform / Helm / NuGet / Alpine / Status). Non-read methods → **405**.
 
 ---
 
 ## HIGH side
 
-`HighServer.ServeHTTP` tries, in order: `serveHighAdmin`, `serveDiode`, `serveGo`, `servePython`, `serveMaven`, `serveApt`, `serveRpm`, `serveHF`, `serveContainers`, `serveNpm`, `serveUI`; unclaimed → `404`. Every ecosystem handler is **read-only** (GET/HEAD; others → `405`, or a registry error for containers). The one write surface is the opt-in diode ingest (`/diode/`, below), which only lands files in the import pipeline. The high side never fetches upstream and never invokes toolchains — it serves imported bundle contents from disk. See [High side](high-side.md).
+`HighServer.ServeHTTP` tries, in order: `serveHighAdmin`, `serveDiode`, `serveGo`, `servePython`, `serveMaven`, `serveApt`, `serveRpm`, `serveHF`, `serveContainers`, `serveNpm`, `serveCrates`, `serveTerraform`, `serveHelm`, `serveNuget`, `serveApk`, `serveUploads`, `serveUI`; unclaimed → `404`. Every ecosystem handler is **read-only** (GET/HEAD; others → `405`, or a registry error for containers). The one write surface is the opt-in diode ingest (`/diode/`, below), which only lands files in the import pipeline. The high side never fetches upstream and never invokes toolchains — it serves imported bundle contents from disk. See [High side](high-side.md).
 
 ### Admin & health
 
@@ -650,6 +768,61 @@ Clients: `ollama pull <high-host>/<org>/<name>:<tag>`, or `HF_ENDPOINT=<base>` f
 
 Hub-API misses carry `X-Error-Code` (`RepoNotFound`, `RevisionNotFound`, `EntryNotFound`) so `huggingface_hub` raises its typed errors. The `/v2` space is shared with containers without ambiguity — a container name's first segment is a dotted registry host, which can never parse as a Hugging Face organization.
 
+#### Rust crates (cargo sparse registry) — prefix `/crates`
+
+Client: `~/.cargo/config.toml` source replacement with `registry = "sparse+<base>/crates/index/"`. See [Rust crates](ecosystems/crates.md).
+
+| URL | Returns |
+|---|---|
+| `/crates/index/config.json` | `{"dl": "<base>/crates/dl"}` — cargo appends `/{crate}/{version}/download` itself |
+| `/crates/index/<index-path>` | Regenerated sparse-index file for one crate (e.g. `/crates/index/se/rd/serde`) |
+| `/crates/dl/<name>/<version>/download` | The `.crate` archive |
+
+#### Terraform / OpenTofu — prefixes `/.well-known/terraform.json`, `/terraform`
+
+Client: `~/.terraformrc` `network_mirror` (`https://<host>/terraform/v1/providers/`, HTTPS required), or host-prefixed source addresses (`<host>/hashicorp/aws`). See [Terraform / OpenTofu](ecosystems/terraform.md).
+
+| URL | Returns |
+|---|---|
+| `/.well-known/terraform.json` | Service discovery: `providers.v1` → `/terraform/v1/providers/`, `modules.v1` → `/terraform/v1/modules/` |
+| `/terraform/v1/providers/<ns>/<type>/versions` | Mirrored provider versions with per-platform availability |
+| `/terraform/v1/providers/<ns>/<type>/<ver>/download/<os>/<arch>` | Download descriptor: `download_url`, `shasum`, `shasums_url`, `shasums_signature_url`, mirrored `signing_keys` |
+| `/terraform/v1/modules/<ns>/<name>/<system>/versions` | Mirrored module versions |
+| `/terraform/v1/modules/<ns>/<name>/<system>/<ver>/download` | `204` + `X-Terraform-Get` naming the archive |
+| `/terraform/providers/…`, `/terraform/modules/…` | Artifact files: provider zips, `…_SHA256SUMS`, `…_SHA256SUMS.sig`, `module.tar.gz` |
+
+#### Helm — prefix `/helm`
+
+Client: `helm repo add artigate <base>/helm/<mirror>`. See [Helm charts](ecosystems/helm.md).
+
+| URL | Returns |
+|---|---|
+| `/helm/<mirror>/index.yaml` | The regenerated repository index (`application/yaml`) |
+| `/helm/<mirror>/charts/<name>-<version>.tgz` | The chart archive |
+
+#### NuGet (v3 feed) — prefix `/nuget`
+
+Client: `nuget.config` source `<base>/nuget/v3/index.json` with `<clear />`. See [NuGet](ecosystems/nuget.md).
+
+| URL | Returns |
+|---|---|
+| `/nuget/v3/index.json` | Service index (`PackageBaseAddress/3.0.0`, `RegistrationsBaseUrl`, `SearchQueryService`) |
+| `/nuget/v3-flatcontainer/<id>/index.json` | `{"versions": […]}` (lowercase, ascending) |
+| `/nuget/v3-flatcontainer/<id>/<ver>/<id>.<ver>.nupkg` | The package archive |
+| `/nuget/v3-flatcontainer/<id>/<ver>/<id>.nuspec` | The verbatim embedded nuspec |
+| `/nuget/v3/registration/<id>/index.json` | Registration index (single inlined page with catalog entries and dependency groups) |
+| `/nuget/v3/search?q=<text>` | Minimal search (case-insensitive substring on the id) |
+
+#### Alpine (apk) — prefix `/apk`
+
+Client `/etc/apk/repositories` line: `<base>/apk/<mirror>/<branch>/<repo>`. See [Alpine (apk)](ecosystems/apk.md).
+
+| URL | Returns |
+|---|---|
+| `/apk/<mirror>/<branch>/<repo>/<arch>/APKINDEX.tar.gz` | The regenerated index — RSA-signed when `--apk-rsa-key` is set |
+| `/apk/<mirror>/<branch>/<repo>/<arch>/<pkg>-<ver>.apk` | The package |
+| `/apk/keys/<key-name>` | The PEM public key matching `--apk-rsa-key` (only when signing is configured) |
+
 ---
 
 ### Dashboard JSON — `/ui/api/*`
@@ -666,7 +839,7 @@ Just the import status; the package trees are fetched lazily.
 
 #### `GET /ui/api/tree?eco=<eco>&path=<path>`
 
-`eco` ∈ `go` (default), `python`, `maven`, `apt`, `rpm`, `containers`, `npm`, `hf`. `path` is the parent node path (empty for root); children are returned one level at a time.
+`eco` ∈ `go` (default), `python`, `maven`, `apt`, `rpm`, `containers`, `npm`, `hf`, `crates`, `terraform`, `helm`, `nuget`, `apk`. `path` is the parent node path (empty for root); children are returned one level at a time.
 
 ```json
 { "nodes": [
@@ -676,9 +849,9 @@ Just the import status; the package trees are fetched lazily.
 
 `UITreeNode` fields: `label`, `path`, `kind` (`dir | module | version | project | file`), `expandable` (bool), `count` (omitempty).
 
-- Go / Maven / APT / RPM / containers use a slash-segment tree: root yields first path segments; an exact module's children are its `version` leaves (`path` = `module@version`).
+- Go / Maven / APT / RPM / containers / AI models / Terraform / Helm / apk use a slash-segment tree: root yields first path segments; an exact module's children are its `version` leaves (`path` = `module@version`).
 - Python uses a two-level tree: root → `project` nodes; a project expands to `file` (wheel filename) leaves.
-- NPM uses a flat package → versions tree (a scope is part of the name).
+- NPM, crates, and NuGet use a flat package → versions tree (an npm scope is part of the name).
 
 Inventory is memoized for **3 seconds**, so freshly imported content appears within that window.
 
@@ -710,7 +883,7 @@ Inventory is memoized for **3 seconds**, so freshly imported content appears wit
 
 #### `GET /ui/api/repos?eco=<eco>` → `UIReposResponse`
 
-Valid only for `eco` ∈ `apt | rpm | containers | hf`; anything else → **400** `"repos are only available for apt, rpm, containers, and hf"`. For `hf`, entries with `"kind":"repo"` are full repository snapshots (consumed via `HF_ENDPOINT`); the rest are GGUF models with their variant tags.
+Valid only for `eco` ∈ `apt | rpm | containers | hf | apk`; anything else → **400** `"repos are only available for apt, rpm, containers, hf, and apk"`. For `hf`, entries with `"kind":"repo"` are full repository snapshots (consumed via `HF_ENDPOINT`); the rest are GGUF models with their variant tags. For `apk`, each mirror lists its branch/repository/architecture selections as suites, with `"kind":"apk"` and `signed` reporting whether `--apk-rsa-key` is configured.
 
 ```json
 { "repos": [
@@ -732,5 +905,5 @@ Valid only for `eco` ∈ `apt | rpm | containers | hf`; anything else → **400*
 - [Low side](low-side.md) and [High side](high-side.md) — operating each role.
 - [Scheduling (watches)](scheduling.md) — the recurring-pull model behind `/admin/watches*`.
 - [Configuration reference](configuration.md) — every flag and environment variable.
-- [Ecosystems](ecosystems/index.md) — the eight ecosystem pages linked above.
+- [Ecosystems](ecosystems/index.md) — the thirteen ecosystem pages linked above.
 - [Troubleshooting & limitations](troubleshooting.md) — error codes and known edges.
