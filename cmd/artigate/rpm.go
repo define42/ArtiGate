@@ -1299,6 +1299,7 @@ func (s *HighServer) rpmDetail(spec string) (UIDetail, error) {
 		{Label: "Version", Value: version, Mono: true},
 	}
 	found := false
+	var downloads []UIDownload
 	for _, p := range mirror.Packages {
 		if p.Name != pkgName || p.Version != version {
 			continue
@@ -1309,9 +1310,10 @@ func (s *HighServer) rpmDetail(spec string) (UIDetail, error) {
 			UIDetailField{Label: "Size", Value: formatBytes(p.Size)},
 			UIDetailField{Label: "SHA-256", Value: p.SHA256, Mono: true},
 			UIDetailField{Label: "Path", Value: "/rpm/" + mirrorName + "/" + p.Location, Mono: true})
+		downloads = append(downloads, UIDownload{Label: path.Base(p.Location), URL: "/rpm/" + mirrorName + "/" + p.Location})
 	}
 	if !found {
 		return UIDetail{}, errors.New("version not found")
 	}
-	return UIDetail{Title: pkgName, Subtitle: version, Fields: fields}, nil
+	return UIDetail{Title: pkgName, Subtitle: version, Fields: fields, Downloads: downloads}, nil
 }

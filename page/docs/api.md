@@ -693,6 +693,7 @@ Inventory is memoized for **3 seconds**, so freshly imported content appears wit
   "fields": [ { "label": "Module", "value": "golang.org/x/text", "mono": true } ],
   "go_mod": "module golang.org/x/text\n\ngo 1.18\n",
   "copy_ref": "",
+  "downloads": [ { "label": "v0.14.0.zip", "url": "/go/golang.org/x/text/@v/v0.14.0.zip" } ],
   "layers": [ { "command": "RUN ...", "size": "5.0 MiB", "digest": "sha256:...", "empty": false } ]
 }
 ```
@@ -704,6 +705,7 @@ Inventory is memoized for **3 seconds**, so freshly imported content appears wit
 | `fields` | `[]UIDetailField` | `{label, value, mono}` — Go exposes Module, Version, Published, Zip size, Zip SHA-256, and a `Proxy path` (`/go/<esc>/@v/<verEsc>.zip`); Python exposes Filename, Version, Size, Download (`/packages/<file>`), SHA-256 |
 | `go_mod` | string | omitempty; the full `go.mod` |
 | `copy_ref` | string | omitempty; a host-relative container pull ref the client prepends its host to |
+| `downloads` | `[]UIDownload` | omitempty; direct-download links `{label, url}` — the artifact's files (module zip, wheel, jar/pom, per-arch `.deb`/`.rpm`, npm tarball, raw GGUF, uploaded file) as host-relative URLs, rendered as download buttons. Empty for leaves that are not plain files (container images, HF repo snapshots) |
 | `layers` | `[]UIImageLayer` | omitempty; container build history — `{command, size, digest, empty}` |
 
 #### `GET /ui/api/repos?eco=<eco>` → `UIReposResponse`

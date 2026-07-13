@@ -719,6 +719,13 @@ func TestNpmTreeAndDetail(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, "Integrity") || !strings.Contains(body, "MIT") {
 		t.Fatalf("npm detail: status %d body %q", code, body)
 	}
+	var d UIDetail
+	if err := json.Unmarshal([]byte(body), &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Downloads) != 1 || d.Downloads[0].URL != "/npm/lodash/-/lodash-4.17.21.tgz" || d.Downloads[0].Label != "lodash-4.17.21.tgz" {
+		t.Errorf("npm detail downloads = %+v", d.Downloads)
+	}
 	if code, _ := httpGet(t, srv.URL+"/ui/api/detail?eco=npm&path=lodash@9.9.9"); code != http.StatusNotFound {
 		t.Errorf("missing version detail should 404, got %d", code)
 	}

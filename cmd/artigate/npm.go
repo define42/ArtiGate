@@ -591,7 +591,8 @@ func (s *HighServer) npmDetail(spec string) (UIDetail, error) {
 		UIDetailField{Label: "Integrity", Value: st.Integrity, Mono: true},
 		UIDetailField{Label: "Registry path", Value: "/npm/" + name + "/-/" + st.Filename, Mono: true},
 	)
-	return UIDetail{Title: name, Subtitle: version, Fields: fields}, nil
+	downloads := []UIDownload{{Label: st.Filename, URL: "/npm/" + name + "/-/" + st.Filename}}
+	return UIDetail{Title: name, Subtitle: version, Fields: fields, Downloads: downloads}, nil
 }
 
 // npmManifestFields extracts the human-facing bits of an embedded package.json

@@ -166,6 +166,14 @@ func TestHighServerUIDetailGo(t *testing.T) {
 	if fieldValue(d, "Zip size") == "" || fieldValue(d, "Zip SHA-256") == "" {
 		t.Errorf("missing zip fields: %+v", d.Fields)
 	}
+	// The download button points at the module zip, and that URL is live.
+	wantZip := "/go/github.com/foo/bar/@v/v1.0.0.zip"
+	if len(d.Downloads) != 1 || d.Downloads[0].URL != wantZip || d.Downloads[0].Label != "v1.0.0.zip" {
+		t.Errorf("Downloads = %+v, want one link to %s", d.Downloads, wantZip)
+	}
+	if code, _ := httpGet(t, srv.URL+wantZip); code != http.StatusOK {
+		t.Errorf("GET %s = %d, want 200", wantZip, code)
+	}
 
 	// Unknown version 404s.
 	if code, _ := httpGet(t, srv.URL+"/ui/api/detail?eco=go&path=github.com/foo/bar@v9.9.9"); code != http.StatusNotFound {
@@ -215,6 +223,14 @@ func TestHighServerUIDetailPython(t *testing.T) {
 	}
 	if fieldValue(d, "SHA-256") == "" || fieldValue(d, "Size") == "" {
 		t.Errorf("missing wheel fields: %+v", d.Fields)
+	}
+	// The download button points at the wheel, and that URL is live.
+	wantWheel := "/packages/requests-2.32.4-py3-none-any.whl"
+	if len(d.Downloads) != 1 || d.Downloads[0].URL != wantWheel || d.Downloads[0].Label != "requests-2.32.4-py3-none-any.whl" {
+		t.Errorf("Downloads = %+v, want one link to %s", d.Downloads, wantWheel)
+	}
+	if code, _ := httpGet(t, srv.URL+wantWheel); code != http.StatusOK {
+		t.Errorf("GET %s = %d, want 200", wantWheel, code)
 	}
 }
 
@@ -350,9 +366,9 @@ func TestHighServerUIAppJS(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The compiled bundle drives the lazy tree fetch, the view switch, the
-	// detail panel, the "Set me up" client-setup guide, and the uploads
-	// download/delete actions.
-	for _, want := range []string{"/ui/api/tree", "/ui/api/detail", "/ui/api/repos", "fetchChildren", "selectLeaf", "renderDetail", "openGuide", "openRepoGuide", "aptGuideSection", "fetchRepos", "showModal", "GOPROXY", "index-url", "uploadActions", "upload-download", "uploadDeleteButton", "/admin/uploads/delete"} {
+	// detail panel with its direct-download buttons, the "Set me up"
+	// client-setup guide, and the uploads delete action.
+	for _, want := range []string{"/ui/api/tree", "/ui/api/detail", "/ui/api/repos", "fetchChildren", "selectLeaf", "renderDetail", "downloadRow", "download-link", "encodePath", "openGuide", "openRepoGuide", "aptGuideSection", "fetchRepos", "showModal", "GOPROXY", "index-url", "uploadActions", "uploadDeleteButton", "/admin/uploads/delete"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("app.js missing %q", want)
 		}

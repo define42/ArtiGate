@@ -2087,6 +2087,7 @@ func (s *HighServer) hfVariantDetail(name string, v HFVariant) UIDetail {
 		total += b.Size
 	}
 	fields = append(fields, UIDetailField{Label: "Manifest digest", Value: v.Digest, Mono: true})
+	var downloads []UIDownload
 	if modelBlob, ok := hfModelBlob(v); ok {
 		fields = append(
 			fields,
@@ -2096,15 +2097,19 @@ func (s *HighServer) hfVariantDetail(name string, v HFVariant) UIDetail {
 			// pulling from a registry (vLLM, llama.cpp).
 			UIDetailField{Label: "Download", Value: "/hf/" + name + "/" + v.Tag + ".gguf", Mono: true},
 		)
+		// Saved as "<model>-<tag>.gguf" — the filename the llama.cpp guide uses.
+		parts := strings.SplitN(name, "/", 2)
+		downloads = []UIDownload{{Label: parts[len(parts)-1] + "-" + v.Tag + ".gguf", URL: "/hf/" + name + "/" + v.Tag + ".gguf"}}
 	}
 	fields = append(fields, UIDetailField{Label: "Total blob size", Value: formatBytes(total)})
 	// CopyRef is the host-relative pull reference; the dashboard prepends its
 	// own host, so the operator copies exactly what `ollama pull` needs.
 	return UIDetail{
-		Title:    name,
-		Subtitle: v.Tag,
-		Fields:   fields,
-		CopyRef:  name + ":" + v.Tag,
+		Title:     name,
+		Subtitle:  v.Tag,
+		Fields:    fields,
+		CopyRef:   name + ":" + v.Tag,
+		Downloads: downloads,
 	}
 }
 

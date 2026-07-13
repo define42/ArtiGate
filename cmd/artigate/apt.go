@@ -1532,6 +1532,7 @@ func (s *HighServer) aptDetail(spec string) (UIDetail, error) {
 		return UIDetail{}, errors.New("mirror not found")
 	}
 	var fileFields []UIDetailField
+	var downloads []UIDownload
 	for _, p := range mirror.Packages {
 		if p.Suite != suite || p.Component != comp || p.Package != pkgName || p.Version != version {
 			continue
@@ -1541,6 +1542,7 @@ func (s *HighServer) aptDetail(spec string) (UIDetail, error) {
 			UIDetailField{Label: "Size", Value: formatBytes(p.Size)},
 			UIDetailField{Label: "SHA-256", Value: p.SHA256, Mono: true},
 			UIDetailField{Label: "Path", Value: "/apt/" + mirrorName + "/" + p.Filename, Mono: true})
+		downloads = append(downloads, UIDownload{Label: path.Base(p.Filename), URL: "/apt/" + mirrorName + "/" + p.Filename})
 	}
 	if len(fileFields) == 0 {
 		return UIDetail{}, errors.New("version not found")
@@ -1553,5 +1555,5 @@ func (s *HighServer) aptDetail(spec string) (UIDetail, error) {
 		{Label: "Version", Value: version, Mono: true},
 	}
 	fields = append(fields, fileFields...)
-	return UIDetail{Title: pkgName, Subtitle: version, Fields: fields}, nil
+	return UIDetail{Title: pkgName, Subtitle: version, Fields: fields, Downloads: downloads}, nil
 }
