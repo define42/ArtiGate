@@ -198,6 +198,10 @@ function renderDetail(detail) {
         dl.appendChild(dd);
     }
     panel.appendChild(dl);
+    const downloads = detail.downloads ?? [];
+    if (downloads.length > 0) {
+        panel.appendChild(downloadRow(downloads));
+    }
     if (detail.go_mod) {
         const label = document.createElement("div");
         label.className = "subtitle";
@@ -302,6 +306,31 @@ function copyRefButton(ref) {
     });
     return btn;
 }
+// encodePath percent-encodes each segment of a host-relative artifact path,
+// keeping the "/" separators. Mirrored names can contain characters that are
+// not URL-safe as-is (npm scopes start with "@", wheel build tags carry "+"),
+// so a served path is never usable as a raw href.
+function encodePath(p) {
+    return p.split("/").map(encodeURIComponent).join("/");
+}
+// downloadRow renders the artifact's files as direct-download buttons, one per
+// file — an APT/RPM version can carry one file per architecture, a Maven
+// version a jar plus its pom. The download attribute names the saved file and
+// keeps the browser from displaying text-like artifacts (a .pom, a .mod)
+// instead of saving them.
+function downloadRow(links) {
+    const row = document.createElement("div");
+    row.className = "downloads";
+    for (const link of links) {
+        const a = document.createElement("a");
+        a.className = "download-link";
+        a.href = encodePath(link.url);
+        a.setAttribute("download", link.label);
+        a.textContent = `↓ ${link.label}`;
+        row.appendChild(a);
+    }
+    return row;
+}
 async function selectLeaf(el, node) {
     if (selectedLeaf) {
         selectedLeaf.classList.remove("selected");
@@ -334,22 +363,14 @@ function splitUploadPath(path) {
     }
     return [path.slice(0, i), path.slice(i + 1)];
 }
-// uploadActions is the action row under an uploaded file's details: a plain
-// download link for the file's public URL, and the delete button. Uploaded
-// files are the one deletable kind of content — operator-owned, not a
-// mirrored artifact some client build depends on staying immutable.
+// uploadActions is the action row under an uploaded file's details: the
+// delete button. (The download button comes from the detail's downloads row,
+// like every other ecosystem.) Uploaded files are the one deletable kind of
+// content — operator-owned, not a mirrored artifact some client build depends
+// on staying immutable.
 function uploadActions(treePath) {
     const row = document.createElement("div");
     row.className = "upload-actions";
-    const [folder, name] = splitUploadPath(treePath);
-    if (folder && name) {
-        const dl = document.createElement("a");
-        dl.className = "upload-download";
-        dl.href = `/uploads/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`;
-        dl.setAttribute("download", name);
-        dl.textContent = "Download";
-        row.appendChild(dl);
-    }
     row.appendChild(uploadDeleteButton(treePath));
     return row;
 }

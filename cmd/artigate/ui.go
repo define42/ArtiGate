@@ -495,10 +495,23 @@ type UIDetail struct {
 	Fields   []UIDetailField `json:"fields"`
 	GoMod    string          `json:"go_mod,omitempty"`
 	CopyRef  string          `json:"copy_ref,omitempty"`
+	// Downloads are the artifact files behind the selected leaf, rendered as
+	// direct-download buttons. Empty when the leaf is not a plain file
+	// (container images and full HF repository snapshots are consumed through
+	// their registry/Hub protocols instead).
+	Downloads []UIDownload `json:"downloads,omitempty"`
 	// Layers is a container image's build-history breakdown (the command each
 	// step ran, and the filesystem layer it produced), rendered as a box below
 	// the detail panel. Empty for non-container leaves.
 	Layers []UIImageLayer `json:"layers,omitempty"`
+}
+
+// UIDownload is one direct-download button in the detail panel: the artifact's
+// host-relative URL (the same path clients fetch) and the filename the browser
+// should save it as.
+type UIDownload struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
 }
 
 // UIImageLayer is one build step of a container image, from its config
@@ -588,7 +601,8 @@ func (s *HighServer) goDetail(spec string) (UIDetail, error) {
 	fields = append(fields, UIDetailField{Label: "Proxy path", Value: "/go/" + moduleEsc + "/@v/" + versionEsc + ".zip", Mono: true})
 
 	goMod, _ := os.ReadFile(filepath.Join(base, versionEsc+".mod"))
-	return UIDetail{Title: module, Subtitle: version, Fields: fields, GoMod: string(goMod)}, nil
+	downloads := []UIDownload{{Label: version + ".zip", URL: "/go/" + moduleEsc + "/@v/" + versionEsc + ".zip"}}
+	return UIDetail{Title: module, Subtitle: version, Fields: fields, GoMod: string(goMod), Downloads: downloads}, nil
 }
 
 func goInfoTime(infoPath string) string {
@@ -629,7 +643,8 @@ func (s *HighServer) pythonDetail(filename string) (UIDetail, error) {
 	if title == "" {
 		title = filename
 	}
-	return UIDetail{Title: title, Subtitle: version, Fields: fields}, nil
+	downloads := []UIDownload{{Label: filename, URL: "/packages/" + filename}}
+	return UIDetail{Title: title, Subtitle: version, Fields: fields, Downloads: downloads}, nil
 }
 
 // formatBytes renders a byte count in human-readable units.

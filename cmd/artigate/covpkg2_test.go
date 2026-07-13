@@ -140,6 +140,9 @@ func TestCovP2_AptDetail(t *testing.T) {
 	if err != nil || d.Subtitle != "1.0" {
 		t.Fatalf("aptDetail = %+v, %v", d, err)
 	}
+	if len(d.Downloads) != 1 || d.Downloads[0].URL != "/apt/m/pool/main/c/code_1.0_amd64.deb" || d.Downloads[0].Label != "code_1.0_amd64.deb" {
+		t.Errorf("Downloads = %+v", d.Downloads)
+	}
 }
 
 // TestCovP2_ServeAptMethodAndEmpty covers serveApt's non-static branches.
@@ -411,6 +414,9 @@ func TestCovP2_RpmDetail(t *testing.T) {
 	d, err := hs.rpmDetail("m/code@1.0-1")
 	if err != nil || d.Subtitle != "1.0-1" {
 		t.Fatalf("rpmDetail = %+v, %v", d, err)
+	}
+	if len(d.Downloads) != 1 || d.Downloads[0].URL != "/rpm/m/Packages/code-1.0-1.x86_64.rpm" || d.Downloads[0].Label != "code-1.0-1.x86_64.rpm" {
+		t.Errorf("Downloads = %+v", d.Downloads)
 	}
 }
 
@@ -707,6 +713,13 @@ func TestCovP2_MavenDetail(t *testing.T) {
 	}
 	if !hasJarSum {
 		t.Errorf("detail missing the JAR SHA-256 field: %+v", d.Fields)
+	}
+	// One download button per primary file (jar + pom); checksums and
+	// directories stay excluded.
+	if len(d.Downloads) != 2 ||
+		d.Downloads[0].URL != "/maven/com/example/lib/1.0.0/lib-1.0.0.jar" ||
+		d.Downloads[1].URL != "/maven/com/example/lib/1.0.0/lib-1.0.0.pom" {
+		t.Errorf("Downloads = %+v", d.Downloads)
 	}
 }
 

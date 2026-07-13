@@ -360,6 +360,7 @@ func (s *HighServer) mavenDetail(spec string) (UIDetail, error) {
 		{Label: "Coordinate", Value: groupID + ":" + artifactID + ":" + version, Mono: true},
 		{Label: "Repo path", Value: "/maven/" + artifactPath + "/" + version + "/", Mono: true},
 	}
+	var downloads []UIDownload
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || skipMavenFile(name) || isMavenChecksum(name) {
@@ -370,11 +371,12 @@ func (s *HighServer) mavenDetail(spec string) (UIDetail, error) {
 			continue
 		}
 		fields = append(fields, UIDetailField{Label: name, Value: formatBytes(info.Size())})
+		downloads = append(downloads, UIDownload{Label: name, URL: "/maven/" + artifactPath + "/" + version + "/" + name})
 	}
 	if sum, err := sha256File(filepath.Join(dir, artifactID+"-"+version+".jar")); err == nil {
 		fields = append(fields, UIDetailField{Label: "JAR SHA-256", Value: sum, Mono: true})
 	}
-	return UIDetail{Title: groupID + ":" + artifactID, Subtitle: version, Fields: fields}, nil
+	return UIDetail{Title: groupID + ":" + artifactID, Subtitle: version, Fields: fields, Downloads: downloads}, nil
 }
 
 func isMavenChecksum(name string) bool {

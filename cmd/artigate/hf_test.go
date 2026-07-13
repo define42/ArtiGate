@@ -850,6 +850,11 @@ func TestHFDashboardAndDetail(t *testing.T) {
 			t.Errorf("field %s = %q, want %q", label, got[label], want)
 		}
 	}
+	if len(detail.Downloads) != 1 ||
+		detail.Downloads[0].URL != "/hf/unsloth/gpt-oss-20b-GGUF/Q4_0.gguf" ||
+		detail.Downloads[0].Label != "gpt-oss-20b-GGUF-Q4_0.gguf" {
+		t.Errorf("Downloads = %+v", detail.Downloads)
+	}
 
 	if _, err := hs.hfDetail("unsloth/gpt-oss-20b-GGUF@NoSuch"); err == nil {
 		t.Error("detail of an unknown variant should fail")

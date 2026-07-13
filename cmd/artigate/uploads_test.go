@@ -396,6 +396,9 @@ func TestUploadsTreeAndDetail(t *testing.T) {
 	if fields["Download"] != "/uploads/docs/readme.md" || fields["Folder"] != "docs" {
 		t.Fatalf("detail fields = %+v", detail.Fields)
 	}
+	if len(detail.Downloads) != 1 || detail.Downloads[0].URL != "/uploads/docs/readme.md" || detail.Downloads[0].Label != "readme.md" {
+		t.Fatalf("detail downloads = %+v", detail.Downloads)
+	}
 
 	// Traversal attempts against detail and delete fail cleanly.
 	if resp, err := http.Get(srv.URL + "/ui/api/detail?eco=uploads&path=" + `..%2F..%2Fetc`); err != nil || resp.StatusCode == http.StatusOK {

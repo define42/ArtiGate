@@ -524,5 +524,6 @@ func (s *HighServer) uploadsDetail(spec string) (UIDetail, error) {
 	if sum, err := sha256File(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
 	}
-	return UIDetail{Title: name, Subtitle: "uploads/" + folder, Fields: fields}, nil
+	downloads := []UIDownload{{Label: name, URL: "/" + uploadsFileRel(folder, name)}}
+	return UIDetail{Title: name, Subtitle: "uploads/" + folder, Fields: fields, Downloads: downloads}, nil
 }
