@@ -204,7 +204,22 @@ type BundleManifest struct {
 	Npm              *NpmManifest       `json:"npm,omitempty"`
 	HuggingFace      *HFManifest        `json:"huggingface,omitempty"`
 	Uploads          *UploadsManifest   `json:"uploads,omitempty"`
+	Part             *BundlePartInfo    `json:"part,omitempty"`
 	Files            []ManifestFile     `json:"files"`
+}
+
+// BundlePartInfo marks a bundle that carries one slice of a collect whose
+// content exceeds the single-archive transport limit (diodeMaxArchiveBytes).
+// Content parts deliver files only; the split's final bundle carries the
+// ecosystem metadata and lists every earlier part's files as prior, so by the
+// time it imports — imports are strictly sequential per stream — all the
+// content it references is already in the repository, and clients see the new
+// content exactly once, complete.
+type BundlePartInfo struct {
+	// Index is this bundle's 1-based position among the collect's bundles.
+	Index int `json:"index"`
+	// Count is how many bundles the collect produced in total.
+	Count int `json:"count"`
 }
 
 type ManifestMod struct {
@@ -397,6 +412,11 @@ type LowServer struct {
 	// containerRegistryBases maps a container registry name to the API base URL
 	// it is fetched from (parsed from cfg.ContainerRegistries).
 	containerRegistryBases map[string]string
+	// splitBudget overrides the per-bundle estimated-archive budget that
+	// triggers splitting a collect into multiple sequenced bundles; zero means
+	// the transport limit (diodeMaxArchiveBytes). Tests shrink it to exercise
+	// splitting without gigabytes of fixture data.
+	splitBudget int64
 }
 
 func runLow(args []string) {
@@ -977,6 +997,10 @@ type ExportResult struct {
 	PriorFiles     int            `json:"prior_files,omitempty"`
 	Message        string         `json:"message,omitempty"`
 	SkippedModules []FailedModule `json:"skipped_modules,omitempty"`
+	// Bundles lists every bundle a split collect produced, in export order;
+	// the last one carries the ecosystem metadata (and is BundleID). Unset
+	// when the collect fit in a single bundle.
+	Bundles []string `json:"bundles,omitempty"`
 	// DiodeError reports a failed upload to the HTTP diode endpoint. The
 	// bundle itself is fine — committed, archived, and still staged in the
 	// export dir — so this is a "re-transmit me" signal, not a lost export.
@@ -1066,7 +1090,7 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 		return ExportResult{}, fmt.Errorf("no modules could be fetched: %s", summarizeFailures(failed))
 	}
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	res, err := s.exportIfNew(ctx, streamGo, files, req.Force, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamGo, s.downloadDir, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeGoBundle(ctx, streamGo, seq, mods, files)
 	})
 	if err != nil {
@@ -1332,9 +1356,19 @@ func (s *LowServer) commitSequence(stream string, seq int64) error {
 // already forwarded are marked prior (listed in the manifest, left out of the
 // archive), and when nothing at all is new it writes no bundle and burns no
 // sequence number, returning a skipped result. force disables both, producing
-// a full self-contained bundle. write builds and writes the bundle for the
-// allocated sequence. The caller must hold the stream lock (every collector
-// does) so the peek/commit stay race-free.
+// a full self-contained bundle. write builds and writes the ecosystem's bundle
+// for the allocated sequence; baseDir is the root its file paths are relative
+// to. The caller must hold the stream lock (every collector does) so the
+// peek/commit stay race-free.
+//
+// A collect whose new content would overflow the transport's per-archive
+// limit (a full safetensors repository easily exceeds diodeMaxArchiveBytes)
+// is split automatically: the content ships in consecutive sequenced
+// content-part bundles, each within the limit, and the ecosystem's own bundle
+// goes last, listing the parts' files as prior. Each part is committed,
+// recorded, and handed to the diode transport as it is produced, so a failure
+// midway loses nothing — a retry collect skips the already-forwarded parts
+// and continues with the rest.
 //
 // A cancelled collect (the dashboard's Stop button aborts the streaming
 // request, cancelling ctx) stops here rather than packing and exporting a
@@ -1342,7 +1376,7 @@ func (s *LowServer) commitSequence(stream string, seq int64) error {
 // temp file is removed, no sequence is committed); only the final
 // sign-and-archive steps run to completion, so a bundle is either fully
 // produced or not at all.
-func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []ManifestFile, force bool, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
+func (s *LowServer) exportIfNew(ctx context.Context, stream, baseDir string, files []ManifestFile, force bool, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ExportResult{}, fmt.Errorf("collect stopped before export: %w", err)
 	}
@@ -1356,6 +1390,33 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []Mani
 	if prior := len(files) - delivered; prior > 0 {
 		emitProgress(ctx, "%d of %d file(s) already forwarded; the bundle carries the %d new one(s)", prior, len(files), delivered)
 	}
+	chunks, err := splitDeliveredFiles(files, s.bundleSplitBudget())
+	if err != nil {
+		return ExportResult{}, err
+	}
+	parts, err := s.exportContentParts(ctx, stream, baseDir, files, chunks)
+	var res ExportResult
+	if err == nil {
+		res, err = s.exportSequencedBundle(ctx, stream, files, write)
+	}
+	if err != nil {
+		if n := len(parts.ids); n > 0 {
+			err = fmt.Errorf("%d of %d bundle(s) already exported and committed (%s); a retry collect will continue with the remaining content: %w",
+				n, len(chunks), strings.Join(parts.ids, ", "), err)
+		}
+		return ExportResult{}, err
+	}
+	res.PriorFiles = len(files) - delivered
+	parts.finish(&res)
+	return res, nil
+}
+
+// exportSequencedBundle allocates the stream's next sequence, writes one
+// bundle for it, commits the claim, records the files as forwarded, and hands
+// the bundle to the configured diode transport. It is the tail every exported
+// bundle goes through — a collect's only bundle, each content part of a split,
+// and the split's final ecosystem bundle.
+func (s *LowServer) exportSequencedBundle(ctx context.Context, stream string, files []ManifestFile, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
 	seq, err := s.allocateSequence(stream)
 	if err != nil {
 		return ExportResult{}, err
@@ -1371,16 +1432,174 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream string, files []Mani
 		// overwriting this one.
 		return ExportResult{}, fmt.Errorf("bundle %s written, but its sequence claim was not persisted (a retry will use a fresh sequence): %w", bundleIDFor(stream, seq), err)
 	}
-	res.PriorFiles = len(files) - delivered
 	// Record only after the sequence is committed. If the commit fails the
 	// content is not durably part of the stream, so a retry must re-export it
 	// rather than see it as already forwarded and skip.
 	s.recordForwarded(stream, files)
-	// With an HTTP diode endpoint configured, hand the bundle over now; a
-	// failed upload is reported on the result, never fatal (the bundle is
+	// With a diode transport configured, hand the bundle over now; a failed
+	// transfer is reported on the result, never fatal (the bundle is
 	// committed and archived, ready to re-transmit).
 	s.uploadBundleIfConfigured(ctx, &res)
 	return res, nil
+}
+
+// bundleSplitBudget is the estimated-archive-size budget one bundle may use
+// before a collect is split. It defaults to the transport's hard per-archive
+// limit — the same one the high side enforces at import, so an oversized
+// archive would not merely fail to transfer, it would be rejected at its
+// sequence number and wedge the stream.
+func (s *LowServer) bundleSplitBudget() int64 {
+	if s.splitBudget > 0 {
+		return s.splitBudget
+	}
+	return diodeMaxArchiveBytes
+}
+
+const (
+	// bundlePackBaseOverheadBytes over-covers a tar.gz archive's fixed cost:
+	// the gzip header and trailer plus tar's end-of-archive blocks.
+	bundlePackBaseOverheadBytes = 4096
+	// bundlePackFileOverheadBytes over-covers one file's fixed cost in the
+	// archive: a 512-byte tar header plus padding to the next 512 boundary.
+	bundlePackFileOverheadBytes = 2048
+)
+
+// estimatedPackedBytes bounds one file's contribution to a tar.gz archive
+// from above. Model weights and package tarballs are already compressed or
+// incompressible, so no compression is assumed — and gzip inflates
+// incompressible input slightly (stored deflate blocks add ~0.008%; the
+// size>>7 term allows 0.8%), so the estimate must exceed the raw size for the
+// budget to guarantee the finished archive stays under the transport limit.
+func estimatedPackedBytes(size int64) int64 {
+	return size + size>>7 + bundlePackFileOverheadBytes
+}
+
+// splitDeliveredFiles partitions the delivered (non-prior) files, in path
+// order, into consecutive index groups whose estimated packed archive size
+// stays within budget. A single group means the collect fits one bundle. A
+// file too large for any bundle fails the collect before a sequence is
+// allocated — exporting it would wedge the stream on an unimportable bundle.
+func splitDeliveredFiles(files []ManifestFile, budget int64) ([][]int, error) {
+	idx := make([]int, 0, len(files))
+	for i := range files {
+		if !files[i].Prior {
+			idx = append(idx, i)
+		}
+	}
+	sort.Slice(idx, func(a, b int) bool { return files[idx[a]].Path < files[idx[b]].Path })
+	var chunks [][]int
+	var cur []int
+	used := int64(bundlePackBaseOverheadBytes)
+	for _, fi := range idx {
+		cost := estimatedPackedBytes(files[fi].Size)
+		if bundlePackBaseOverheadBytes+cost > budget {
+			return nil, fmt.Errorf("file %s (%s) does not fit a bundle: even alone its estimated archive would exceed the %s transport limit",
+				files[fi].Path, formatBytes(files[fi].Size), formatBytes(budget))
+		}
+		if len(cur) > 0 && used+cost > budget {
+			chunks = append(chunks, cur)
+			cur, used = nil, bundlePackBaseOverheadBytes
+		}
+		cur = append(cur, fi)
+		used += cost
+	}
+	if len(cur) > 0 {
+		chunks = append(chunks, cur)
+	}
+	return chunks, nil
+}
+
+// contentPartsResult accumulates what a split's content parts produced, to be
+// folded into the final bundle's ExportResult.
+type contentPartsResult struct {
+	ids       []string
+	diodeErrs []string
+}
+
+// finish folds the content parts into the collect's final result: the full
+// bundle list and any per-part transfer failures (each part is independently
+// re-transmittable from the Status page).
+func (p contentPartsResult) finish(res *ExportResult) {
+	if len(p.ids) == 0 {
+		return
+	}
+	res.Bundles = make([]string, 0, len(p.ids)+1)
+	res.Bundles = append(append(res.Bundles, p.ids...), res.BundleID)
+	if res.DiodeError != "" {
+		p.diodeErrs = append(p.diodeErrs, res.DiodeError)
+	}
+	res.DiodeError = strings.Join(p.diodeErrs, "; ")
+}
+
+// exportContentParts ships every chunk but the last as a content-part bundle,
+// marking its files prior in place so the final bundle — written by the
+// ecosystem's own writer from the same slice — lists them without packing
+// them again. Parts are committed and transferred one at a time; an error
+// leaves the already-committed parts durable on the stream.
+func (s *LowServer) exportContentParts(ctx context.Context, stream, baseDir string, files []ManifestFile, chunks [][]int) (contentPartsResult, error) {
+	var parts contentPartsResult
+	if len(chunks) < 2 {
+		return parts, nil
+	}
+	count := len(chunks)
+	emitProgress(ctx, "Content exceeds the %s per-bundle transport limit; splitting into %d sequenced bundles", formatBytes(s.bundleSplitBudget()), count)
+	for i, chunk := range chunks[:count-1] {
+		if err := ctx.Err(); err != nil {
+			return parts, fmt.Errorf("collect stopped between bundle parts: %w", err)
+		}
+		part := make([]ManifestFile, 0, len(chunk))
+		for _, fi := range chunk {
+			part = append(part, files[fi])
+		}
+		emitProgress(ctx, "→ bundle %d/%d (%d file(s))", i+1, count, len(part))
+		res, err := s.exportSequencedBundle(ctx, stream, part, func(seq int64) (ExportResult, error) {
+			return s.writeBundlePart(ctx, stream, seq, baseDir, part, i+1, count)
+		})
+		if err != nil {
+			return parts, err
+		}
+		parts.ids = append(parts.ids, res.BundleID)
+		if res.DiodeError != "" {
+			parts.diodeErrs = append(parts.diodeErrs, res.BundleID+": "+res.DiodeError)
+		}
+		for _, fi := range chunk {
+			files[fi].Prior = true
+		}
+	}
+	emitProgress(ctx, "→ bundle %d/%d (final, with the %s metadata)", count, count, stream)
+	return parts, nil
+}
+
+// writeBundlePart builds, signs, and writes one content part of a split
+// collect: a bundle that carries a slice of the collect's files and no
+// ecosystem metadata. The high side installs its files into the accumulated
+// repository and regenerates nothing — the split's final bundle, importing
+// after it, carries the metadata that references them.
+func (s *LowServer) writeBundlePart(ctx context.Context, stream string, seq int64, baseDir string, files []ManifestFile, index, count int) (ExportResult, error) {
+	if seq <= 0 {
+		return ExportResult{}, fmt.Errorf("invalid sequence %d", seq)
+	}
+	id := bundleIDFor(stream, seq)
+	manifest := BundleManifest{
+		Type:             manifestType,
+		Stream:           stream,
+		Sequence:         seq,
+		PreviousSequence: seq - 1,
+		Created:          time.Now().UTC(),
+		Generator:        hostnameOrDefault(),
+		BundleID:         id,
+		Ecosystems:       []string{stream},
+		Part:             &BundlePartInfo{Index: index, Count: count},
+		Files:            files,
+	}
+	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return ExportResult{}, err
+	}
+	if err := s.writeBundleArtifacts(ctx, id, baseDir, manifestBytes, files); err != nil {
+		return ExportResult{}, err
+	}
+	return ExportResult{Stream: stream, Sequence: seq, BundleID: id, Message: fmt.Sprintf("content part %d of %d", index, count)}, nil
 }
 
 // markPriorFiles flags, in place, every file the exported index already
@@ -2788,13 +3007,19 @@ func readFileLimit(name string, limit int64) ([]byte, error) {
 	return b, nil
 }
 
+// manifestStream returns the stream a manifest belongs to; legacy manifests
+// without one are the go stream.
+func manifestStream(m BundleManifest) string {
+	if m.Stream == "" {
+		return streamGo
+	}
+	return m.Stream
+}
+
 // checkManifestFields validates the manifest's type, stream, sequencing, and
 // identity against what the importer expects next for that stream.
 func (s *HighServer) checkManifestFields(manifest BundleManifest, stream, bundleID string, expectedSeq int64) error {
-	gotStream := manifest.Stream
-	if gotStream == "" {
-		gotStream = streamGo // legacy single-stream manifests
-	}
+	gotStream := manifestStream(manifest)
 	switch {
 	case manifest.Type != manifestType:
 		return fmt.Errorf("wrong manifest type %q", manifest.Type)
@@ -3134,7 +3359,21 @@ func manifestEcoChecks(m BundleManifest) []manifestEcoCheck {
 		{m.Npm != nil && len(m.Npm.Packages) > 0, func(s map[string]bool) error { return validateNpmPackages(m.Npm.Packages, s) }},
 		{m.HuggingFace != nil && (len(m.HuggingFace.Models) > 0 || len(m.HuggingFace.Repos) > 0), func(s map[string]bool) error { return validateHF(m.HuggingFace, s, m.Files) }},
 		{m.Uploads != nil && len(m.Uploads.Files) > 0, func(s map[string]bool) error { return validateUploadsManifest(m.Uploads, s, m.Files) }},
+		{m.Part != nil, func(map[string]bool) error { return validateBundlePart(m.Part, m.Files) }},
 	}
+}
+
+// validateBundlePart checks a split collect's content-part marker: sane
+// bounds, and the part must actually deliver content — its whole purpose is
+// carrying files the split's final bundle will reference as prior.
+func validateBundlePart(p *BundlePartInfo, files []ManifestFile) error {
+	if p.Index < 1 || p.Count < 2 || p.Index > p.Count {
+		return fmt.Errorf("invalid bundle part %d of %d", p.Index, p.Count)
+	}
+	if countDelivered(files) == 0 {
+		return errors.New("bundle part delivers no files")
+	}
+	return nil
 }
 
 func validateManifestCompleteness(m BundleManifest) error {
@@ -3153,7 +3392,7 @@ func validateManifestCompleteness(m BundleManifest) error {
 		}
 	}
 	if !matched {
-		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, container repos, npm packages, hugging face models, or uploaded files")
+		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, container repos, npm packages, hugging face models, uploaded files, or content-part marker")
 	}
 	return nil
 }
@@ -3210,7 +3449,14 @@ func validateManifestModules(mods []ManifestMod, seen map[string]bool) error {
 }
 
 func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManifest) error {
-	if err := s.installVerifiedFiles(staging, manifest.Files, goFilePaths(manifest.Modules)); err != nil {
+	goFiles := goFilePaths(manifest.Modules)
+	// A content part carries no module records to derive placement from; on
+	// the go stream every file it delivers is a module file and belongs under
+	// the go/ subtree, where the split's final bundle will verify it as prior.
+	if manifest.Part != nil && manifestStream(manifest) == streamGo {
+		goFiles = allManifestFilePaths(manifest.Files)
+	}
+	if err := s.installVerifiedFiles(staging, manifest.Files, goFiles); err != nil {
 		return err
 	}
 	// Regenerate APT repository metadata from the accumulated stanzas of the
@@ -3234,6 +3480,15 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 	}
 	// Complete markers are written only after all files are installed.
 	return s.writeCompleteMarkers(manifest.Modules)
+}
+
+// allManifestFilePaths returns the set of every listed file path.
+func allManifestFilePaths(files []ManifestFile) map[string]bool {
+	set := make(map[string]bool, len(files))
+	for _, f := range files {
+		set[f.Path] = true
+	}
+	return set
 }
 
 // goFilePaths collects the manifest paths that belong to Go modules, so the

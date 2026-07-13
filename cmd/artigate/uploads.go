@@ -263,7 +263,7 @@ func (s *LowServer) collectUploads(ctx context.Context, folder string, staged []
 	}
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	res, err := s.exportIfNew(ctx, streamUploads, files, true, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamUploads, stageRoot, files, true, func(seq int64) (ExportResult, error) {
 		return s.writeUploadsBundle(ctx, seq, stageRoot, files, entries)
 	})
 	if err != nil {

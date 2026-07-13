@@ -432,7 +432,7 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 	// exportIfNew peeks/commits the sequence around the write (so a failed
 	// collection never burns a number) and skips entirely when every wheel was
 	// already forwarded.
-	res, err := s.exportIfNew(ctx, streamPython, files, req.Force, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamPython, stageRoot, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writePythonBundle(ctx, seq, stageRoot, files, projects)
 	})
 	if err != nil {

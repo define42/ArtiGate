@@ -99,7 +99,7 @@ func startCatcherIfConfigured(hs *HighServer) {
 		return
 	}
 	_, err = startCatcher(cfg, hs.cfg.Landing, hs.onDiodeFileLanded,
-		func() (int64, error) { return hs.unverifiedTransportBytesExcept(isUDPTempName) })
+		func() (int64, error) { return hs.unverifiedTransportBytesExcept(isUDPActiveTempName) })
 	must(err)
 	log.Printf("high-side diode catcher: %s ← [%s%%%s]:%d (MTU %d, receive buffer %d MiB) into %s",
 		cfg.Interface, cfg.Group, cfg.Interface, cfg.Port, cfg.MTU, cfg.RcvBufMB, hs.cfg.Landing)

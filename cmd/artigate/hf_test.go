@@ -570,7 +570,7 @@ func TestExportIfNewStoppedBeforeExport(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	called := false
-	_, err := ls.exportIfNew(ctx, streamHF, []ManifestFile{{Path: "hf/x", SHA256: strings.Repeat("a", 64), Size: 1}},
+	_, err := ls.exportIfNew(ctx, streamHF, t.TempDir(), []ManifestFile{{Path: "hf/x", SHA256: strings.Repeat("a", 64), Size: 1}},
 		false, func(int64) (ExportResult, error) {
 			called = true
 			return ExportResult{}, nil
@@ -1177,4 +1177,91 @@ func TestStreamingCollectEmitsDownloadProgress(t *testing.T) {
 	if events[len(events)-1]["type"] != "done" {
 		t.Errorf("final event = %v, want done", events[len(events)-1])
 	}
+}
+
+// TestLowToHighHFSplitRepoPipeline runs the flagship oversized case end to
+// end: a repository snapshot too big for one bundle collects into three
+// sequenced bundles (two content parts plus the final one carrying the repo
+// metadata), the high side imports them strictly in order, and the snapshot
+// serves — the same trust path as a single bundle, at any model size.
+func TestLowToHighHFSplitRepoPipeline(t *testing.T) {
+	up := fakeHFRepoUpstream{
+		sha: strings.Repeat("cd", 20),
+		files: map[string][]byte{
+			"config.json":                      []byte(`{"model_type":"gpt_oss","pad":"` + strings.Repeat("c", 560) + `"}`),
+			"model-00001-of-00004.safetensors": []byte("w1-" + strings.Repeat("1", 597)),
+			"model-00002-of-00004.safetensors": []byte("w2-" + strings.Repeat("2", 597)),
+			"model-00003-of-00004.safetensors": []byte("w3-" + strings.Repeat("3", 597)),
+			"model-00004-of-00004.safetensors": []byte("w4-" + strings.Repeat("4", 597)),
+		},
+		lfs: map[string]bool{
+			"model-00001-of-00004.safetensors": true,
+			"model-00002-of-00004.safetensors": true,
+			"model-00003-of-00004.safetensors": true,
+			"model-00004-of-00004.safetensors": true,
+		},
+	}
+	hub := fakeHFHub(t, nil, map[string]fakeHFRepoUpstream{"openai/gpt-oss-120b": up}, "")
+	ls, priv := newHFLowServer(t, hub.URL)
+	// Two ~600-byte blobs fit one bundle, three do not: five blobs split
+	// into three bundles.
+	ls.splitBudget = bundlePackBaseOverheadBytes + 2*estimatedPackedBytes(600) + 128
+
+	res, err := ls.CollectHF(context.Background(), HFCollectRequest{Repos: []string{"openai/gpt-oss-120b"}})
+	if err != nil {
+		t.Fatalf("CollectHF: %v", err)
+	}
+	if len(res.Bundles) != 3 || res.BundleID != "hf-bundle-000003" || res.ExportedModules != 1 {
+		t.Fatalf("split collect result = %+v, want 3 bundles ending at hf-bundle-000003", res)
+	}
+
+	// The parts deliver content only; the final bundle carries the repo
+	// record and lists the parts' blobs as prior.
+	part := readBundleManifest(t, ls, res.Bundles[0])
+	if part.Part == nil || part.Part.Index != 1 || part.Part.Count != 3 || part.HuggingFace != nil {
+		t.Fatalf("first part manifest = %+v", part)
+	}
+	final := readBundleManifest(t, ls, res.BundleID)
+	if final.Part != nil || final.HuggingFace == nil || len(final.HuggingFace.Repos) != 1 || len(final.Files) != 5 {
+		t.Fatalf("final manifest = %+v", final)
+	}
+	finalPrior := 0
+	for _, f := range final.Files {
+		if f.Prior {
+			finalPrior++
+		}
+	}
+	if finalPrior != 4 {
+		t.Fatalf("final manifest prior files = %d, want 4", finalPrior)
+	}
+
+	// Transfer all three bundles and import: the high side drains them in
+	// sequence, verifying each part's files and the final bundle's prior
+	// references against what the parts installed.
+	hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+	for _, id := range res.Bundles {
+		for _, suffix := range bundleSuffixes() {
+			b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, id+suffix))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(hs.cfg.Landing, id+suffix), b)
+		}
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("import of split bundles failed: %v", err)
+	}
+	st, err := hs.ImportStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Stream(streamHF).LastImportedSequence; got != 3 {
+		t.Fatalf("imported through sequence %d, want 3", got)
+	}
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	assertHTTPBody(t, srv.URL+"/openai/gpt-oss-120b/resolve/main/config.json", string(up.files["config.json"]))
+	assertHTTPBody(t, srv.URL+"/openai/gpt-oss-120b/resolve/"+up.sha+"/model-00004-of-00004.safetensors",
+		string(up.files["model-00004-of-00004.safetensors"]))
 }

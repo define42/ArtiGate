@@ -747,7 +747,7 @@ func (s *LowServer) CollectNpm(ctx context.Context, req NpmCollectRequest) (Expo
 	// exportIfNew peeks/commits the sequence around the write (so a failed
 	// collection never burns a number) and skips entirely when every tarball was
 	// already forwarded.
-	res, err := s.exportIfNew(ctx, streamNpm, files, req.Force, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamNpm, stageRoot, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeNpmBundle(ctx, seq, stageRoot, files, pkgs)
 	})
 	if err != nil {

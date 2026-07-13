@@ -256,7 +256,7 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 	}
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	return s.exportIfNew(ctx, streamApt, files, req.Force, func(seq int64) (ExportResult, error) {
+	return s.exportIfNew(ctx, streamApt, stageRoot, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeAptBundle(ctx, seq, stageRoot, files, mirrors)
 	})
 }

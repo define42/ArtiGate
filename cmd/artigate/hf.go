@@ -713,7 +713,7 @@ func (s *LowServer) CollectHF(ctx context.Context, req HFCollectRequest) (Export
 	}
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	res, err := s.exportIfNew(ctx, streamHF, files, req.Force, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamHF, stageRoot, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeHFBundle(ctx, seq, stageRoot, files, models, repos)
 	})
 	if err != nil {

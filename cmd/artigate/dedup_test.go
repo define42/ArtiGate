@@ -225,7 +225,7 @@ func TestExportDeltaBundle(t *testing.T) {
 	c := stageTestFile(t, stage, "data/c.bin", "content-c")
 
 	export := func(files []ManifestFile, force bool) (ExportResult, error) {
-		return ls.exportIfNew(ctx, streamNpm, files, force, func(seq int64) (ExportResult, error) {
+		return ls.exportIfNew(ctx, streamNpm, stage, files, force, func(seq int64) (ExportResult, error) {
 			id := bundleIDFor(streamNpm, seq)
 			if err := ls.writeBundleArtifacts(ctx, id, stage, []byte("{}"), files); err != nil {
 				return ExportResult{}, err
@@ -721,5 +721,235 @@ func TestHFDeltaSharedBlobSkipped(t *testing.T) {
 		if want := f.Path == templateRel; f.Prior != want {
 			t.Errorf("manifest prior flag for %s = %v, want %v", f.Path, f.Prior, want)
 		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Automatic bundle splitting (oversized collects)
+// -----------------------------------------------------------------------------
+
+// splitTestBudget fits two 100-byte staged files per bundle but not three,
+// so five files split into three sequenced bundles.
+const splitTestBudget = int64(8500)
+
+func stageSplitFiles(t *testing.T, stage string) []ManifestFile {
+	t.Helper()
+	files := make([]ManifestFile, 0, 5)
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		files = append(files, stageTestFile(t, stage, "data/"+name+".bin", strings.Repeat(name, 100)))
+	}
+	return files
+}
+
+// splitExport drives exportIfNew the way a collector does, with a minimal
+// final-bundle writer over the shared files slice.
+func splitExport(t *testing.T, ls *LowServer, stage string, files []ManifestFile) (ExportResult, error) {
+	t.Helper()
+	return ls.exportIfNew(context.Background(), streamNpm, stage, files, false, func(seq int64) (ExportResult, error) {
+		id := bundleIDFor(streamNpm, seq)
+		if err := ls.writeBundleArtifacts(context.Background(), id, stage, []byte("{}"), files); err != nil {
+			return ExportResult{}, err
+		}
+		return ExportResult{Stream: streamNpm, Sequence: seq, BundleID: id}, nil
+	})
+}
+
+// TestExportSplitBundles drives an oversized collect end to end on the low
+// side: the content ships as two content parts plus the final bundle, each
+// within budget, all committed and recorded.
+func TestExportSplitBundles(t *testing.T) {
+	ls := newBareLowServer(t)
+	ls.splitBudget = splitTestBudget
+	stage := t.TempDir()
+	files := stageSplitFiles(t, stage)
+
+	res, err := splitExport(t, ls, stage, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBundles := []string{"npm-bundle-000001", "npm-bundle-000002", "npm-bundle-000003"}
+	if fmt.Sprint(res.Bundles) != fmt.Sprint(wantBundles) || res.BundleID != wantBundles[2] || res.Sequence != 3 {
+		t.Fatalf("split result = %+v, want bundles %v", res, wantBundles)
+	}
+	if res.PriorFiles != 0 {
+		t.Errorf("PriorFiles = %d, want 0 (nothing was forwarded before this collect)", res.PriorFiles)
+	}
+
+	wantArchives := [][]string{
+		{"data/a.bin", "data/b.bin"},
+		{"data/c.bin", "data/d.bin"},
+		{"data/e.bin"},
+	}
+	for i, id := range wantBundles {
+		if got := listArchiveEntries(t, ls.cfg.ExportDir, id); fmt.Sprint(got) != fmt.Sprint(wantArchives[i]) {
+			t.Errorf("archive %s = %v, want %v", id, got, wantArchives[i])
+		}
+	}
+
+	// Content parts carry the part marker, their slice of files (none prior),
+	// and no ecosystem metadata; both pass the high side's completeness check.
+	for i, id := range wantBundles[:2] {
+		m := readBundleManifest(t, ls, id)
+		if m.Part == nil || m.Part.Index != i+1 || m.Part.Count != 3 {
+			t.Fatalf("%s part marker = %+v, want %d of 3", id, m.Part, i+1)
+		}
+		if len(m.Files) != 2 || m.Files[0].Prior || m.Files[1].Prior {
+			t.Errorf("%s files = %+v, want 2 delivered", id, m.Files)
+		}
+		if err := validateManifestCompleteness(m); err != nil {
+			t.Errorf("content part %s fails completeness: %v", id, err)
+		}
+	}
+
+	// The final write saw the parts' files flagged prior on the shared slice.
+	if got := priorFlags(files); fmt.Sprint(got) != fmt.Sprint([]bool{true, true, true, true, false}) {
+		t.Errorf("prior flags after split = %v", got)
+	}
+	if seq := ls.peekSequence(streamNpm); seq != 4 {
+		t.Errorf("next sequence = %d, want 4", seq)
+	}
+
+	// Every part was recorded as forwarded, so re-collecting the same set
+	// skips without burning a sequence.
+	again := stageSplitFiles(t, stage)
+	res2, err := splitExport(t, ls, stage, again)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res2.Skipped {
+		t.Fatalf("re-export of a fully split collect = %+v, want skipped", res2)
+	}
+}
+
+// TestExportSplitOversizedFile checks the fail-fast: a single file that no
+// bundle can carry aborts the collect before any sequence is allocated —
+// exporting it would produce a bundle the high side rejects, wedging the
+// stream.
+func TestExportSplitOversizedFile(t *testing.T) {
+	ls := newBareLowServer(t)
+	ls.splitBudget = splitTestBudget
+	stage := t.TempDir()
+	files := []ManifestFile{stageTestFile(t, stage, "data/huge.bin", strings.Repeat("x", 4096))}
+
+	_, err := splitExport(t, ls, stage, files)
+	if err == nil || !strings.Contains(err.Error(), "does not fit a bundle") {
+		t.Fatalf("oversized file export = %v, want a does-not-fit error", err)
+	}
+	if seq := ls.peekSequence(streamNpm); seq != 1 {
+		t.Errorf("next sequence = %d, want 1 (no number burned)", seq)
+	}
+	if entries, _ := os.ReadDir(ls.cfg.ExportDir); len(entries) != 0 {
+		t.Errorf("export dir not empty after a refused collect")
+	}
+}
+
+// TestExportSplitPartFailureIsResumable checks that a split failing midway
+// loses nothing: the committed parts stay durable on the stream, the error
+// says so, and a retry collect skips their content and continues.
+func TestExportSplitPartFailureIsResumable(t *testing.T) {
+	ls := newBareLowServer(t)
+	ls.splitBudget = splitTestBudget
+	stage := t.TempDir()
+	files := stageSplitFiles(t, stage)
+
+	// Crash residue at sequence 2 makes the second part's allocation fail
+	// after part one has committed.
+	if err := os.MkdirAll(ls.cfg.ExportDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	residue := filepath.Join(ls.cfg.ExportDir, "npm-bundle-000002.tar.gz")
+	if err := os.WriteFile(residue, []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := splitExport(t, ls, stage, files)
+	if err == nil || !strings.Contains(err.Error(), "1 of 3 bundle(s) already exported and committed (npm-bundle-000001)") {
+		t.Fatalf("mid-split failure = %v, want it to name the committed part", err)
+	}
+	if !bundleCompleteInDir(ls.cfg.ExportDir, "npm-bundle-000001") {
+		t.Fatal("part one should be complete and transferable")
+	}
+
+	// Clear the residue and retry: the first part's files are already
+	// forwarded, so the remaining content ships as two more bundles.
+	if err := os.Remove(residue); err != nil {
+		t.Fatal(err)
+	}
+	retry := stageSplitFiles(t, stage)
+	res, err := splitExport(t, ls, stage, retry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(res.Bundles) != fmt.Sprint([]string{"npm-bundle-000002", "npm-bundle-000003"}) || res.PriorFiles != 2 {
+		t.Fatalf("retry result = %+v, want bundles 2-3 with 2 prior files", res)
+	}
+	if got := listArchiveEntries(t, ls.cfg.ExportDir, "npm-bundle-000002"); fmt.Sprint(got) != fmt.Sprint([]string{"data/c.bin", "data/d.bin"}) {
+		t.Errorf("retry part archive = %v", got)
+	}
+}
+
+func TestSplitDeliveredFiles(t *testing.T) {
+	sized := func(path string, size int64, prior bool) ManifestFile {
+		return ManifestFile{Path: path, SHA256: strings.Repeat("a", 64), Size: size, Prior: prior}
+	}
+	budget := int64(bundlePackBaseOverheadBytes) + 2*estimatedPackedBytes(100)
+
+	t.Run("fits one bundle", func(t *testing.T) {
+		chunks, err := splitDeliveredFiles([]ManifestFile{sized("b", 100, false), sized("a", 100, false)}, budget)
+		if err != nil || len(chunks) != 1 || len(chunks[0]) != 2 {
+			t.Fatalf("chunks = %v, %v", chunks, err)
+		}
+	})
+
+	t.Run("splits in path order, skipping prior", func(t *testing.T) {
+		files := []ManifestFile{
+			sized("d", 100, false), sized("b", 100, true),
+			sized("c", 100, false), sized("a", 100, false),
+		}
+		chunks, err := splitDeliveredFiles(files, budget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Delivered files in path order are a, c, d -> [a c] [d].
+		if len(chunks) != 2 || fmt.Sprint(chunks[0]) != fmt.Sprint([]int{3, 2}) || fmt.Sprint(chunks[1]) != fmt.Sprint([]int{0}) {
+			t.Fatalf("chunks = %v", chunks)
+		}
+	})
+
+	t.Run("single oversized file", func(t *testing.T) {
+		if _, err := splitDeliveredFiles([]ManifestFile{sized("big", budget, false)}, budget); err == nil {
+			t.Fatal("oversized file passed the partition")
+		}
+	})
+}
+
+func TestValidateBundlePart(t *testing.T) {
+	delivered := []ManifestFile{mf("data/x", "a")}
+	prior := []ManifestFile{{Path: "data/x", SHA256: strings.Repeat("a", 64), Size: 1, Prior: true}}
+	for _, tc := range []struct {
+		name  string
+		part  BundlePartInfo
+		files []ManifestFile
+		ok    bool
+	}{
+		{"valid middle part", BundlePartInfo{Index: 1, Count: 3}, delivered, true},
+		{"index below one", BundlePartInfo{Index: 0, Count: 3}, delivered, false},
+		{"index beyond count", BundlePartInfo{Index: 4, Count: 3}, delivered, false},
+		{"count below two", BundlePartInfo{Index: 1, Count: 1}, delivered, false},
+		{"no delivered files", BundlePartInfo{Index: 1, Count: 2}, prior, false},
+	} {
+		err := validateBundlePart(&tc.part, tc.files)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+
+	// A manifest whose only section is the part marker passes completeness;
+	// one with neither still reads as empty.
+	m := BundleManifest{Part: &BundlePartInfo{Index: 1, Count: 2}, Files: delivered}
+	if err := validateManifestCompleteness(m); err != nil {
+		t.Errorf("part-only manifest rejected: %v", err)
+	}
+	if err := validateManifestCompleteness(BundleManifest{Files: delivered}); err == nil || !strings.Contains(err.Error(), "content-part") {
+		t.Errorf("empty manifest error = %v, want it to mention content parts", err)
 	}
 }
