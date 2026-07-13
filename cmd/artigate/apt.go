@@ -1056,12 +1056,11 @@ func validateAptMirror(m AptMirror, seen map[string]bool) error {
 		return errors.New("apt mirror missing name or suites")
 	}
 	// The mirror name becomes a path component under aptDir() on publish, so it
-	// must be a single safe segment. Validate it here — on the untrusted import
-	// side — exactly as the low side does at collect time (validateRelPath plus
-	// no separator); a bundle whose name is ".." must never reach a filepath.Join
-	// that would place regenerated metadata (or an os.RemoveAll) above aptDir().
-	if err := validateRelPath(m.Name); err != nil || strings.ContainsRune(m.Name, '/') {
-		return fmt.Errorf("invalid apt mirror name %q", m.Name)
+	// must be a single safe segment (see validateMirrorName): a bundle whose name
+	// is ".." must never reach a filepath.Join that would place regenerated
+	// metadata (or an os.RemoveAll) above aptDir().
+	if err := validateMirrorName(m.Name); err != nil {
+		return err
 	}
 	suites := map[string]bool{}
 	for _, suite := range m.Suites {

@@ -1023,12 +1023,11 @@ func validateRpmMirror(m RpmMirror, seen map[string]bool) error {
 		return errors.New("rpm mirror missing name or base_url")
 	}
 	// The mirror name becomes a path component under rpmDir() on publish, so it
-	// must be a single safe segment. Validate it here — on the untrusted import
-	// side — exactly as the low side does at collect time (validateRelPath plus
-	// no separator); a bundle whose name is ".." must never reach a filepath.Join
-	// that would place regenerated metadata (or an os.RemoveAll) above rpmDir().
-	if err := validateRelPath(m.Name); err != nil || strings.ContainsRune(m.Name, '/') {
-		return fmt.Errorf("invalid rpm mirror name %q", m.Name)
+	// must be a single safe segment (see validateMirrorName): a bundle whose name
+	// is ".." must never reach a filepath.Join that would place regenerated
+	// metadata (or an os.RemoveAll) above rpmDir().
+	if err := validateMirrorName(m.Name); err != nil {
+		return err
 	}
 	if len(m.Repodata) == 0 {
 		return fmt.Errorf("rpm mirror %s has no repodata", m.Name)
