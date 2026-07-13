@@ -403,6 +403,18 @@ func TestCov3D_RunDueWatchesStoreError(t *testing.T) {
 	ls.runDueWatches()
 }
 
+// TestCov3D_RecordWatchOutcomeStoreError covers the RecordRun-error branch of
+// the outcome recording: a store that can no longer be written (closed here,
+// e.g. mid-shutdown in production) is logged and contained, not propagated
+// into the job worker.
+func TestCov3D_RecordWatchOutcomeStoreError(t *testing.T) {
+	ls := newBareLowServer(t)
+	_ = ls.watches.Close()
+	ls.executeWatch(Watch{ID: 1, Stream: streamGo, Label: "gone"}, func() (ExportResult, error) {
+		return ExportResult{}, nil
+	})
+}
+
 func TestCov3D_ServeLowWatchesRouting(t *testing.T) {
 	ls := newBareLowServer(t)
 
