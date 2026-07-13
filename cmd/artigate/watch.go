@@ -224,11 +224,18 @@ func (s *WatchStore) Due(now time.Time) ([]Watch, error) {
 	return due, rows.Err()
 }
 
-// RecordRun stores the outcome of a run and schedules the next one.
-func (s *WatchStore) RecordRun(id int64, ranAt time.Time, status, message string, nextRun time.Time) error {
+// RecordRun stores the outcome of a run and schedules the next one, one
+// interval after ranAt. The interval is read from the row inside the UPDATE —
+// not captured by the caller when the run was enqueued — so an interval
+// edited while the run was queued or in flight spaces the next run; the
+// strftime renders watchTimeLayout (RFC3339 UTC).
+func (s *WatchStore) RecordRun(id int64, ranAt time.Time, status, message string) error {
+	at := ranAt.UTC().Format(watchTimeLayout)
 	_, err := s.db.Exec(
-		"UPDATE watches SET last_run_at = ?, last_status = ?, last_message = ?, next_run_at = ? WHERE id = ?",
-		ranAt.UTC().Format(watchTimeLayout), status, message, nextRun.UTC().Format(watchTimeLayout), id)
+		`UPDATE watches SET last_run_at = ?, last_status = ?, last_message = ?,
+		 next_run_at = strftime('%Y-%m-%dT%H:%M:%SZ', ?, '+' || interval_seconds || ' seconds')
+		 WHERE id = ?`,
+		at, status, message, at, id)
 	return err
 }
 
@@ -338,10 +345,13 @@ func (s *LowServer) executeWatch(w Watch, collect func() (ExportResult, error)) 
 }
 
 // recordWatchOutcome stores a run's status and message and schedules the next
-// run. Any error — including a canceled or panicked collect (the job worker's
-// recoverCollectPanic turns panics into errors) — is recorded as a failed
-// run, which advances next_run_at and so cannot wedge the schedule into a
-// tight retry.
+// run one interval after completion. Any error — including a canceled or
+// panicked collect (the job worker's recoverCollectPanic turns panics into
+// errors) — is recorded as a failed run, which advances next_run_at and so
+// cannot wedge the schedule into a tight retry. The spacing comes from the
+// watch's stored interval at record time, not from the stale w captured when
+// the run was enqueued, so an interval edited mid-run is honored (w only
+// labels the log lines here).
 func (s *LowServer) recordWatchOutcome(w Watch, res ExportResult, err error) {
 	status, message := "ok", watchRunMessage(res)
 	if err != nil {
@@ -350,9 +360,7 @@ func (s *LowServer) recordWatchOutcome(w Watch, res ExportResult, err error) {
 	} else {
 		log.Printf("watch %d (%s): %s", w.ID, w.Label, message)
 	}
-	now := time.Now().UTC()
-	next := now.Add(time.Duration(w.IntervalSeconds) * time.Second)
-	if rerr := s.watches.RecordRun(w.ID, now, status, message, next); rerr != nil {
+	if rerr := s.watches.RecordRun(w.ID, time.Now().UTC(), status, message); rerr != nil {
 		log.Printf("watch %d: record run: %v", w.ID, rerr)
 	}
 }
@@ -515,8 +523,11 @@ func (s *LowServer) handleCreateWatch(w http.ResponseWriter, r *http.Request) bo
 
 // handleUpdateWatch edits an existing watch's label, spec, and interval in
 // place, keeping its id, stream, enabled state, and run history. A job already
-// queued or running for the watch still uses the spec it was enqueued with;
-// the edit takes effect from the next run.
+// queued or running for the watch still collects with the spec it was enqueued
+// with — the new spec applies from the next run — but when that run completes
+// it is re-scheduled at the edited interval (RecordRun reads the stored
+// interval), so switching a daily watch to hourly mid-run schedules the next
+// run an hour after this one finishes, not a day.
 func (s *LowServer) handleUpdateWatch(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodPost {
 		return false

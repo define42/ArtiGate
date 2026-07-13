@@ -83,14 +83,22 @@ func TestWatchStoreDueAndEnable(t *testing.T) {
 	}
 	assertDueCount(t, store, time.Now().UTC().Add(time.Second), 1) // freshly created → due
 
-	// Recording a run pushes the next run into the future, so it is no longer due.
-	if err := store.RecordRun(w.ID, time.Now().UTC(), "ok", "bundle python-bundle-000001: 1 unit(s)",
-		time.Now().UTC().Add(time.Hour)); err != nil {
+	// Recording a run pushes the next run one interval into the future, so it
+	// is no longer due.
+	ranAt := time.Now().UTC().Truncate(time.Second)
+	if err := store.RecordRun(w.ID, ranAt, "ok", "bundle python-bundle-000001: 1 unit(s)"); err != nil {
 		t.Fatal(err)
 	}
 	assertDueCount(t, store, time.Now().UTC(), 0)
-	if got, _ := store.Get(w.ID); got.LastStatus != "ok" || got.LastRunAt == nil {
+	got, err := store.Get(w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastStatus != "ok" || got.LastRunAt == nil {
 		t.Fatalf("run not recorded: %+v", got)
+	}
+	if want := ranAt.Add(time.Hour); !got.NextRunAt.Equal(want) {
+		t.Errorf("next_run_at = %s, want %s (ranAt + stored interval)", got.NextRunAt, want)
 	}
 
 	// Disabling excludes it even once the time passes; re-enabling makes it due.
@@ -134,7 +142,7 @@ func TestWatchStoreUpdate(t *testing.T) {
 
 	// Has run: the edit re-spaces the next run from that last run.
 	ranAt := time.Now().UTC().Truncate(time.Second)
-	if err := store.RecordRun(w.ID, ranAt, "ok", "bundle", ranAt.Add(2*time.Hour)); err != nil {
+	if err := store.RecordRun(w.ID, ranAt, "ok", "bundle"); err != nil {
 		t.Fatal(err)
 	}
 	w, _ = store.Get(w.ID)
@@ -281,6 +289,56 @@ func TestWatchJobDedupAcrossTickAndRunNow(t *testing.T) {
 	}
 	if got.LastStatus != "ok" {
 		t.Errorf("watch outcome = %s (%s), want ok", got.LastStatus, got.LastMessage)
+	}
+}
+
+// An interval edited while the watch's job is queued or running is honored
+// when that run's completion schedules the next one: enqueueWatch captured
+// the pre-edit Watch, but RecordRun spaces from the interval stored at record
+// time. Regression: switching a daily watch to hourly mid-run used to
+// schedule the next run a day out from the stale captured interval.
+func TestWatchIntervalEditDuringRunHonored(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	w, err := ls.watches.Create(Watch{
+		Stream: streamGo, Label: "go: foo/bar",
+		Spec: `{"modules":["example.com/foo/bar@v1.0.0"]}`, IntervalSeconds: 86400, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the go stream busy so the watch's job is still pending when the
+	// edit lands.
+	release := make(chan struct{})
+	blocker := testJob(streamGo, func(context.Context) (ExportResult, error) {
+		<-release
+		return ExportResult{}, nil
+	})
+	if _, err := ls.jobs.enqueue(context.Background(), blocker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ls.enqueueWatch(w); err != nil {
+		t.Fatal(err)
+	}
+
+	// Edit the schedule from daily to hourly while the run is in flight.
+	w.IntervalSeconds = 3600
+	if _, err := ls.watches.Update(w); err != nil {
+		t.Fatal(err)
+	}
+
+	close(release)
+	waitWatchRecorded(t, ls, w.ID)
+	got, err := ls.watches.Get(w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IntervalSeconds != 3600 {
+		t.Fatalf("interval after run = %d, want the edited 3600: %+v", got.IntervalSeconds, got)
+	}
+	if want := got.LastRunAt.Add(time.Hour); !got.NextRunAt.Equal(want) {
+		t.Errorf("next_run_at = %s, want %s (finish + edited interval, not + the enqueue-time day)",
+			got.NextRunAt, want)
 	}
 }
 
