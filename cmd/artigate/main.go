@@ -3133,7 +3133,22 @@ func validateManifestFiles(files []ManifestFile) (map[string]bool, error) {
 		if f.SHA256 == "" || len(f.SHA256) != 64 {
 			return nil, fmt.Errorf("invalid sha256 for %s", f.Path)
 		}
+		if seen[f.Path] {
+			return nil, fmt.Errorf("duplicate file path %s", f.Path)
+		}
 		seen[f.Path] = true
+	}
+	// No listed path may double as a parent directory of another: no tree can
+	// hold both, so extraction or install would fail with an EEXIST/ENOTDIR
+	// indistinguishable from an operational staging fault, and the bundle
+	// would be retried forever instead of rejected. Prior files count too —
+	// they name paths the accumulated repository already holds as files.
+	for _, f := range files {
+		for dir := path.Dir(f.Path); dir != "."; dir = path.Dir(dir) {
+			if seen[dir] {
+				return nil, fmt.Errorf("file path %s collides with parent directory of %s", dir, f.Path)
+			}
+		}
 	}
 	return seen, nil
 }
@@ -3781,6 +3796,13 @@ func extractAndVerifyTarGz(archivePath, staging string, files []ManifestFile) er
 		}
 		if err != nil {
 			return err
+		}
+		// A repeated name is a defect in the archive. Caught here, before the
+		// entry collides with its own first extraction, so it never surfaces
+		// as an EEXIST tagged stagingIOError — which would misclassify the
+		// bundle as retryable and wedge its stream instead of rejecting it.
+		if seen[hdr.Name] {
+			return fmt.Errorf("archive contains duplicate entry %s", hdr.Name)
 		}
 		if err := extractTarEntry(tr, hdr, staging, expected); err != nil {
 			return err
