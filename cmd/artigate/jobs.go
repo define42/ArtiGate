@@ -492,6 +492,14 @@ func (j *Job) logSince(cursor int) jobLogBatch {
 	return batch
 }
 
+// outcome returns a finished job's result and failure reason ("" on success).
+// Callers wait on j.done first.
+func (j *Job) outcome() (ExportResult, string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.result, j.errMsg
+}
+
 // JobInfo is one job as reported by GET /admin/jobs.
 type JobInfo struct {
 	ID          int64       `json:"id"`

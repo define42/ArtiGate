@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -642,7 +643,7 @@ func TestCov3D_HandleLoginMethodAndAuthedGet(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 // cov3DNonFlusher is a ResponseWriter that deliberately does not implement
-// http.Flusher, forcing streamCollect down its buffered fallback.
+// http.Flusher, forcing followJobNDJSON down its buffered fallback.
 type cov3DNonFlusher struct {
 	hdr  http.Header
 	code int
@@ -658,44 +659,99 @@ func (w *cov3DNonFlusher) Header() http.Header {
 func (w *cov3DNonFlusher) Write(b []byte) (int, error) { return w.buf.Write(b) }
 func (w *cov3DNonFlusher) WriteHeader(code int)        { w.code = code }
 
-func TestCov3D_StreamCollectNonFlusherFallback(t *testing.T) {
+func TestCov3D_FollowJobNonFlusherFallback(t *testing.T) {
 	w := &cov3DNonFlusher{}
 	r := httptest.NewRequest(http.MethodPost, "/admin/go/collect?stream=1", nil)
-	(&LowServer{}).streamCollect(w, r, func(context.Context) (ExportResult, error) {
+	m := newJobManager()
+	j := testJob(streamGo, func(context.Context) (ExportResult, error) {
 		return ExportResult{BundleID: "go-bundle-000001"}, nil
 	})
+	if _, err := m.enqueue(context.Background(), j); err != nil {
+		t.Fatal(err)
+	}
+	followJobNDJSON(w, r, j, true)
 	if !strings.Contains(w.buf.String(), "go-bundle-000001") {
 		t.Errorf("buffered fallback body = %q", w.buf.String())
 	}
 }
 
-func TestCov3D_StreamCollectOversizedBody(t *testing.T) {
+func TestCov3D_EnqueueCollectOversizedBody(t *testing.T) {
+	ls := &LowServer{jobs: newJobManager()}
 	big := bytes.Repeat([]byte("x"), maxStreamCollectBody+1)
 	r := httptest.NewRequest(http.MethodPost, "/admin/go/collect?stream=1", bytes.NewReader(big))
 	rec := httptest.NewRecorder()
-	(&LowServer{}).streamCollect(rec, r, func(context.Context) (ExportResult, error) {
+	_, ok := ls.enqueueCollect(rec, r, streamGo, func(context.Context) (ExportResult, error) {
 		t.Error("collect must not run when the body is rejected")
 		return ExportResult{}, nil
 	})
+	if ok {
+		t.Error("oversized body must refuse the enqueue")
+	}
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("oversized stream body status = %d, want 400", rec.Code)
 	}
 }
 
-func TestCov3D_PrepareStreamCollectBody(t *testing.T) {
-	// Multipart with a recorder cannot enable full duplex, so it falls through
-	// to buffering the (small) body successfully.
-	r := httptest.NewRequest(http.MethodPost, "/admin/hf/collect?stream=1", strings.NewReader("--b--"))
-	r.Header.Set("Content-Type", "multipart/form-data; boundary=b")
-	if err := prepareStreamCollectBody(httptest.NewRecorder(), r); err != nil {
-		t.Fatalf("multipart fallthrough should buffer, got %v", err)
+func TestCov3D_BufferCollectBody(t *testing.T) {
+	// A small body buffers and remains readable afterwards.
+	r := httptest.NewRequest(http.MethodPost, "/admin/go/collect", strings.NewReader(`{"modules":["a"]}`))
+	body, err := bufferCollectBody(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"modules":["a"]}` {
+		t.Errorf("buffered body = %q", body)
+	}
+	rearmed, err := io.ReadAll(r.Body)
+	if err != nil || string(rearmed) != string(body) {
+		t.Errorf("rearmed body read = %q, %v", rearmed, err)
 	}
 
-	// An oversized non-multipart body errors clearly.
+	// An oversized body errors clearly.
 	big := bytes.Repeat([]byte("y"), maxStreamCollectBody+1)
-	r2 := httptest.NewRequest(http.MethodPost, "/admin/go/collect?stream=1", bytes.NewReader(big))
-	if err := prepareStreamCollectBody(httptest.NewRecorder(), r2); err == nil {
+	r2 := httptest.NewRequest(http.MethodPost, "/admin/go/collect", bytes.NewReader(big))
+	if _, err := bufferCollectBody(r2); err == nil {
 		t.Error("oversized body should error")
+	}
+}
+
+// A multipart collect (an upload) is never buffered: the run streams the body
+// straight from the request, and the job dies with the request context — a
+// client that vanishes while its upload is queued frees the queue slot.
+func TestCov3D_EnqueueCollectMultipart(t *testing.T) {
+	ls := &LowServer{jobs: newJobManager()}
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	defer cancelReq()
+
+	// Hold the uploads stream busy so the multipart job stays queued.
+	release := make(chan struct{})
+	defer close(release)
+	blocker := testJob(streamUploads, func(context.Context) (ExportResult, error) {
+		<-release
+		return ExportResult{}, nil
+	})
+	if _, err := ls.jobs.enqueue(context.Background(), blocker); err != nil {
+		t.Fatal(err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/admin/uploads/collect", strings.NewReader("--b--")).WithContext(reqCtx)
+	r.Header.Set("Content-Type", "multipart/form-data; boundary=b")
+	rec := httptest.NewRecorder()
+	j, ok := ls.enqueueCollect(rec, r, streamUploads, func(context.Context) (ExportResult, error) {
+		t.Error("queued upload must not run after its client disconnected")
+		return ExportResult{}, nil
+	})
+	if !ok {
+		t.Fatalf("multipart enqueue refused: %s", rec.Body.String())
+	}
+	if j.Label != "uploads: file upload" {
+		t.Errorf("upload job label = %q", j.Label)
+	}
+
+	cancelReq() // the client goes away while queued
+	waitJobDone(t, j)
+	if got := j.snapshotInfo(0).State; got != string(jobCanceled) {
+		t.Errorf("abandoned queued upload state = %s, want canceled", got)
 	}
 }
 
