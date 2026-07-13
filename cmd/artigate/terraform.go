@@ -124,9 +124,10 @@ func tfModuleRel(ns, name, system, version string) string {
 
 // validateTerraformManifest checks every provider and module record of a
 // bundle manifest.
-func validateTerraformManifest(m *TerraformManifest, seen map[string]bool) error {
+func validateTerraformManifest(m *TerraformManifest, seen map[string]bool, files []ManifestFile) error {
+	fileSHA := manifestFileSHAs(files)
 	for _, p := range m.Providers {
-		if err := validateTerraformProvider(p, seen); err != nil {
+		if err := validateTerraformProvider(p, seen, fileSHA); err != nil {
 			return err
 		}
 	}
@@ -138,7 +139,7 @@ func validateTerraformManifest(m *TerraformManifest, seen map[string]bool) error
 	return nil
 }
 
-func validateTerraformProvider(p TerraformProvider, seen map[string]bool) error {
+func validateTerraformProvider(p TerraformProvider, seen map[string]bool, fileSHA map[string]string) error {
 	for kind, tok := range map[string]string{"namespace": p.Namespace, "type": p.Type} {
 		if err := validateTfToken(kind, tok); err != nil {
 			return err
@@ -162,14 +163,14 @@ func validateTerraformProvider(p TerraformProvider, seen map[string]bool) error 
 		return fmt.Errorf("provider %s/%s@%s lists no platforms", p.Namespace, p.Type, p.Version)
 	}
 	for _, pl := range p.Platforms {
-		if err := validateTerraformPlatform(p, pl, dir, seen); err != nil {
+		if err := validateTerraformPlatform(p, pl, dir, seen, fileSHA); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateTerraformPlatform(p TerraformProvider, pl TerraformPlatform, dir string, seen map[string]bool) error {
+func validateTerraformPlatform(p TerraformProvider, pl TerraformPlatform, dir string, seen map[string]bool, fileSHA map[string]string) error {
 	for kind, tok := range map[string]string{"os": pl.OS, "arch": pl.Arch} {
 		if err := validateTfToken(kind, tok); err != nil {
 			return err
@@ -180,6 +181,12 @@ func validateTerraformPlatform(p TerraformProvider, pl TerraformPlatform, dir st
 	}
 	if pl.Path != path.Join(dir, pl.Filename) || !seen[pl.Path] {
 		return fmt.Errorf("provider %s/%s@%s references file not listed in manifest.files: %s", p.Namespace, p.Type, p.Version, pl.Path)
+	}
+	// The record's SHA256 is served as the download descriptor's shasum, which
+	// terraform verifies the zip against — it must equal the manifest.files
+	// hash the importer byte-verifies for that path.
+	if pl.SHA256 == "" || !strings.EqualFold(fileSHA[pl.Path], pl.SHA256) {
+		return fmt.Errorf("provider %s/%s@%s: %s/%s shasum does not match the delivered artifact", p.Namespace, p.Type, p.Version, pl.OS, pl.Arch)
 	}
 	return nil
 }

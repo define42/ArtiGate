@@ -14,6 +14,7 @@ package main
 // verified records, gated on the .crate actually being present.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -135,8 +136,10 @@ type crateDep struct {
 
 // validateCrateRecord checks one manifest record: path-safe identity, the
 // canonical storage path, and that the embedded index line describes exactly
-// the artifact the bundle delivers (name/version match, cksum == SHA-256).
-func validateCrateRecord(c CrateVersion, seen map[string]bool) error {
+// the artifact the bundle delivers — name/version match, and the line's cksum
+// equals the manifest.files hash the importer byte-verifies for that path, so
+// a served index line can never disagree with its artifact.
+func validateCrateRecord(c CrateVersion, seen map[string]bool, fileSHA map[string]string) error {
 	if err := validateCrateName(c.Name); err != nil {
 		return err
 	}
@@ -156,20 +159,31 @@ func validateCrateRecord(c CrateVersion, seen map[string]bool) error {
 	if !strings.EqualFold(line.Name, c.Name) || line.Vers != c.Version {
 		return fmt.Errorf("crate %s@%s index line names %s@%s", c.Name, c.Version, line.Name, line.Vers)
 	}
-	if !strings.EqualFold(line.Cksum, c.SHA256) || c.SHA256 == "" {
+	if c.SHA256 == "" || !strings.EqualFold(line.Cksum, c.SHA256) || !strings.EqualFold(fileSHA[c.Path], c.SHA256) {
 		return fmt.Errorf("crate %s@%s index cksum does not match the delivered artifact", c.Name, c.Version)
 	}
 	return nil
 }
 
 // validateCrates checks every crate record of a bundle manifest.
-func validateCrates(crates []CrateVersion, seen map[string]bool) error {
+func validateCrates(crates []CrateVersion, seen map[string]bool, files []ManifestFile) error {
+	fileSHA := manifestFileSHAs(files)
 	for _, c := range crates {
-		if err := validateCrateRecord(c, seen); err != nil {
+		if err := validateCrateRecord(c, seen, fileSHA); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// manifestFileSHAs indexes a manifest's file list by path for record
+// cross-checks.
+func manifestFileSHAs(files []ManifestFile) map[string]string {
+	out := make(map[string]string, len(files))
+	for _, f := range files {
+		out[f.Path] = f.SHA256
+	}
+	return out
 }
 
 // -----------------------------------------------------------------------------
@@ -278,7 +292,10 @@ func (s *HighServer) publishCrates(m *CratesManifest) error {
 
 // publishCrateIndex upserts the given releases into one crate's sparse-index
 // file, keeping lines from earlier bundles and writing the result atomically.
-// Only releases whose verified .crate archive is present are (re)listed.
+// Only releases whose verified .crate archive is present are (re)listed. Each
+// line is compacted first: the bundle manifest is written indented, which
+// spreads the embedded raw line over several lines, and a sparse-index file
+// must be strictly one JSON object per line for cargo to parse it.
 func (s *HighServer) publishCrateIndex(name string, records []CrateVersion) error {
 	if validateCrateName(name) != nil {
 		return fmt.Errorf("invalid crate name %q", name)
@@ -295,7 +312,11 @@ func (s *HighServer) publishCrateIndex(name string, records []CrateVersion) erro
 		if !fileExists(filepath.Join(s.downloadDir, filepath.FromSlash(c.Path))) {
 			return fmt.Errorf("crate archive missing for %s@%s", c.Name, c.Version)
 		}
-		lines[c.Version] = append(json.RawMessage(nil), c.IndexLine...)
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, c.IndexLine); err != nil {
+			return fmt.Errorf("crate %s@%s index line: %w", c.Name, c.Version, err)
+		}
+		lines[c.Version] = json.RawMessage(compact.Bytes())
 	}
 	return writeBytesAtomic(out, renderCrateIndex(lines), 0o644)
 }
