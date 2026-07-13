@@ -617,6 +617,7 @@ Clients: `ollama pull <high-host>/<org>/<name>:<tag>`, or `HF_ENDPOINT=<base>` f
 | `GET /v2/<org>/<name>/tags/list` | `{"name":"<org>/<name>","tags":[…]}` |
 | `GET /hf/<org>/<name>/<tag>.gguf` | the variant's raw model file, `Content-Disposition` filename `<name>-<tag>.gguf` |
 | `GET /api/models/<org>/<name>[/revision/<rev>]` | snapshot info: pinned commit (`sha`) + `siblings` file list |
+| `GET /api/models/<org>/<name>/tree/<rev>[/<path>]` | file listing (`?recursive=true` supported) — what modern `huggingface_hub` clients enumerate before downloading; always a single page |
 | `GET\|HEAD /<org>/<name>/resolve/<rev>/<path>` | snapshot file with `ETag` (sha256) and `X-Repo-Commit`; Range supported |
 
 Hub-API misses carry `X-Error-Code` (`RepoNotFound`, `RevisionNotFound`, `EntryNotFound`) so `huggingface_hub` raises its typed errors. The `/v2` space is shared with containers without ambiguity — a container name's first segment is a dotted registry host, which can never parse as a Hugging Face organization.

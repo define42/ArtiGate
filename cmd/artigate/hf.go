@@ -29,10 +29,10 @@ package main
 // every LFS file's SHA-256), downloads each file from
 // /<org>/<repo>/resolve/<commit>/<path>, and stores it content-addressed. The
 // high side serves the subset of the Hub HTTP API that huggingface_hub
-// clients use to download — /api/models/... model info and
-// /<org>/<repo>/resolve/<revision>/<path> with the ETag/X-Repo-Commit
-// headers — so air-gapped vLLM, transformers, and `hf download` work
-// unchanged by pointing HF_ENDPOINT at the mirror:
+// clients use to download — /api/models/... model info, the .../tree/...
+// file listing, and /<org>/<repo>/resolve/<revision>/<path> with the
+// ETag/X-Repo-Commit headers — so air-gapped vLLM, transformers, and
+// `hf download` work unchanged by pointing HF_ENDPOINT at the mirror:
 //
 //	export HF_ENDPOINT=http://<high-host>
 //	vllm serve openai/gpt-oss-20b
@@ -1628,8 +1628,9 @@ func (s *HighServer) handleHFTags(w http.ResponseWriter, model HFModel) {
 // transformers, `hf download`) use to download a model, served at the server
 // root so clients simply set HF_ENDPOINT to this mirror:
 //
-//	GET /api/models/<org>/<name>[/revision/<rev>]  — model info (sha + file list)
-//	GET /<org>/<name>/resolve/<rev>/<path>         — file download
+//	GET /api/models/<org>/<name>[/revision/<rev>]      — model info (sha + file list)
+//	GET /api/models/<org>/<name>/tree/<rev>[/<path>]   — file listing (modern clients)
+//	GET /<org>/<name>/resolve/<rev>/<path>             — file download
 //
 // The resolve responses carry the ETag and X-Repo-Commit headers
 // hf_hub_download reads, and misses carry the X-Error-Code values it maps to
@@ -1640,31 +1641,48 @@ type hfHubRequest struct {
 	Org  string
 	Name string
 	Rev  string // requested revision; empty means the default ("main")
-	File string // repo-relative path for resolve requests; empty for info
+	File string // repo-relative path for resolve requests or a tree subpath
 	Info bool   // an /api/models info request
+	Tree bool   // an /api/models .../tree/ listing request
 }
 
-// parseHFHubPath recognizes the two Hub API shapes. /api/models/... is
+// parseHFHubPath recognizes the Hub API shapes. /api/models/... is
 // unambiguously this API's namespace; the resolve form is claimed only when
 // it fully parses (org, name, revision, and a safe file path).
 func parseHFHubPath(p string) (hfHubRequest, bool) {
 	if rest, ok := strings.CutPrefix(p, "/api/models/"); ok {
-		segs := strings.Split(rest, "/")
-		switch {
-		case len(segs) == 2:
-			req := hfHubRequest{Org: segs[0], Name: segs[1], Info: true}
-			return req, validHFHubRequest(req)
-		case len(segs) == 4 && segs[2] == "revision" && segs[3] != "":
-			req := hfHubRequest{Org: segs[0], Name: segs[1], Rev: segs[3], Info: true}
-			return req, validHFHubRequest(req)
-		}
-		return hfHubRequest{}, false
+		return parseHFHubAPIPath(rest)
 	}
 	segs := strings.Split(strings.TrimPrefix(p, "/"), "/")
 	if len(segs) >= 5 && segs[2] == "resolve" && segs[3] != "" {
 		req := hfHubRequest{Org: segs[0], Name: segs[1], Rev: segs[3], File: strings.Join(segs[4:], "/")}
 		if validateRelPath(req.File) != nil {
 			return hfHubRequest{}, false
+		}
+		return req, validHFHubRequest(req)
+	}
+	return hfHubRequest{}, false
+}
+
+// parseHFHubAPIPath parses the part after /api/models/: the info form
+// (<org>/<name>, optionally /revision/<rev>) and the tree listing form
+// (<org>/<name>/tree/<rev>[/<subpath>]).
+func parseHFHubAPIPath(rest string) (hfHubRequest, bool) {
+	segs := strings.Split(rest, "/")
+	switch {
+	case len(segs) == 2:
+		req := hfHubRequest{Org: segs[0], Name: segs[1], Info: true}
+		return req, validHFHubRequest(req)
+	case len(segs) == 4 && segs[2] == "revision" && segs[3] != "":
+		req := hfHubRequest{Org: segs[0], Name: segs[1], Rev: segs[3], Info: true}
+		return req, validHFHubRequest(req)
+	case len(segs) >= 4 && segs[2] == "tree" && segs[3] != "":
+		req := hfHubRequest{Org: segs[0], Name: segs[1], Rev: segs[3], Tree: true}
+		if len(segs) > 4 {
+			req.File = strings.Join(segs[4:], "/")
+			if validateRelPath(req.File) != nil {
+				return hfHubRequest{}, false
+			}
 		}
 		return req, validHFHubRequest(req)
 	}
@@ -1688,16 +1706,21 @@ func hubError(w http.ResponseWriter, status int, code, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
-// serveHFHub dispatches one Hub API request. Info requests own their
-// namespace and always answer; a resolve request for a repository that is not
-// mirrored falls through (the URL space stays free for a 404 elsewhere).
+// serveHFHub dispatches one Hub API request. Info and tree requests own
+// their namespace and always answer; a resolve request for a repository that
+// is not mirrored falls through (the URL space stays free for a 404
+// elsewhere).
 func (s *HighServer) serveHFHub(w http.ResponseWriter, r *http.Request, hreq hfHubRequest) bool {
-	if hreq.Info {
+	if hreq.Info || hreq.Tree {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return true
 		}
-		s.handleHFHubInfo(w, hreq)
+		if hreq.Tree {
+			s.handleHFHubTree(w, r, hreq)
+		} else {
+			s.handleHFHubInfo(w, hreq)
+		}
 		return true
 	}
 	idx, err := s.loadHFRepoIndexFold(hreq.Org, hreq.Name)
@@ -1742,6 +1765,116 @@ func (s *HighServer) handleHFHubInfo(w http.ResponseWriter, hreq hfHubRequest) {
 		"tags":      []string{},
 		"siblings":  siblings,
 	})
+}
+
+// handleHFHubTree answers /api/models/<org>/<name>/tree/<rev>[/<subpath>] —
+// the listing endpoint modern huggingface_hub clients call before fetching
+// files via /resolve (older clients read the info response's siblings
+// instead). Every mirrored snapshot fits one page, so no pagination Link
+// header is ever emitted.
+func (s *HighServer) handleHFHubTree(w http.ResponseWriter, r *http.Request, hreq hfHubRequest) {
+	idx, err := s.loadHFRepoIndexFold(hreq.Org, hreq.Name)
+	if err != nil {
+		hubError(w, http.StatusNotFound, "RepoNotFound", "repository not mirrored")
+		return
+	}
+	snap, ok := resolveHFRepoRevision(idx, hreq.Rev)
+	if !ok {
+		hubError(w, http.StatusNotFound, "RevisionNotFound", "revision not mirrored")
+		return
+	}
+	recursive := r.URL.Query().Get("recursive")
+	entries := hfHubTreeEntries(snap, hreq.File, recursive == "true" || recursive == "True" || recursive == "1")
+	if entries == nil {
+		hubError(w, http.StatusNotFound, "EntryNotFound", "path not in mirrored snapshot")
+		return
+	}
+	writeJSON(w, entries)
+}
+
+// hfHubTreeEntry is one row of a tree listing, shaped like the Hub's: paths
+// are repo-root-relative even when listing a subpath, and oid is the file's
+// sha256 (standing in for the git blob id, which the mirror does not have —
+// clients treat it as an opaque cache-key string).
+type hfHubTreeEntry struct {
+	Type string `json:"type"`
+	Oid  string `json:"oid"`
+	Size int64  `json:"size"`
+	Path string `json:"path"`
+}
+
+// hfHubTreeEntries renders a snapshot's tree listing under subpath ("" for
+// the repository root): every file plus its intermediate directories when
+// recursive, only the immediate children otherwise. Directories are
+// synthesized from the file paths — the manifest stores only files. A nil
+// return means the subpath names nothing in the snapshot (a 404, distinct
+// from an empty listing).
+func hfHubTreeEntries(snap HFRepoSnapshot, subpath string, recursive bool) []hfHubTreeEntry {
+	prefix := ""
+	if subpath != "" {
+		prefix = subpath + "/"
+	}
+	files := make([]HFRepoFile, 0, len(snap.Files))
+	for _, f := range snap.Files {
+		if strings.HasPrefix(f.Path, prefix) {
+			files = append(files, f)
+		}
+	}
+	if len(files) == 0 && subpath != "" {
+		return nil
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	if recursive {
+		return hfHubTreeRecursive(files, prefix)
+	}
+	return hfHubTreeChildren(files, prefix)
+}
+
+// hfHubTreeChildren lists the immediate children of prefix: plain files, and
+// one synthesized directory entry per nested first segment.
+func hfHubTreeChildren(files []HFRepoFile, prefix string) []hfHubTreeEntry {
+	entries := make([]hfHubTreeEntry, 0, len(files))
+	seen := map[string]bool{}
+	for _, f := range files {
+		rel := strings.TrimPrefix(f.Path, prefix)
+		if first, _, nested := strings.Cut(rel, "/"); nested {
+			entries = appendHFTreeDir(entries, seen, prefix+first)
+			continue
+		}
+		entries = append(entries, hfHubTreeEntry{Type: "file", Oid: f.SHA256, Size: f.Size, Path: f.Path})
+	}
+	return entries
+}
+
+// hfHubTreeRecursive lists every file under prefix, synthesizing each
+// intermediate directory once, ahead of the first file below it.
+func hfHubTreeRecursive(files []HFRepoFile, prefix string) []hfHubTreeEntry {
+	entries := make([]hfHubTreeEntry, 0, len(files))
+	seen := map[string]bool{}
+	for _, f := range files {
+		rel := strings.TrimPrefix(f.Path, prefix)
+		if dir := path.Dir(rel); dir != "." {
+			partial := ""
+			for _, seg := range strings.Split(dir, "/") {
+				partial = path.Join(partial, seg)
+				entries = appendHFTreeDir(entries, seen, prefix+partial)
+			}
+		}
+		entries = append(entries, hfHubTreeEntry{Type: "file", Oid: f.SHA256, Size: f.Size, Path: f.Path})
+	}
+	return entries
+}
+
+// appendHFTreeDir appends a synthesized directory entry once per path. The
+// oid is a stable opaque hex string — clients require the field but treat it
+// as an identifier only, and the mirror has no git tree hashes to offer.
+func appendHFTreeDir(entries []hfHubTreeEntry, seen map[string]bool, dir string) []hfHubTreeEntry {
+	if seen[dir] {
+		return entries
+	}
+	seen[dir] = true
+	oid := sha256.Sum256([]byte(dir))
+	return append(entries, hfHubTreeEntry{Type: "directory", Oid: hex.EncodeToString(oid[:]), Path: dir})
 }
 
 // handleHFHubResolve serves one repository file with the metadata headers
@@ -1955,7 +2088,8 @@ func (s *HighServer) hfVariantDetail(name string, v HFVariant) UIDetail {
 	}
 	fields = append(fields, UIDetailField{Label: "Manifest digest", Value: v.Digest, Mono: true})
 	if modelBlob, ok := hfModelBlob(v); ok {
-		fields = append(fields,
+		fields = append(
+			fields,
 			UIDetailField{Label: "Model file size", Value: formatBytes(modelBlob.Size)},
 			UIDetailField{Label: "Model file", Value: "/v2/" + name + "/blobs/" + modelBlob.Digest, Mono: true},
 			// The friendly route for clients that load a file instead of
@@ -1992,7 +2126,8 @@ func (s *HighServer) hfRepoDetail(idx HFRepoIndex, ref string) (UIDetail, bool) 
 	if label != "" {
 		fields = append(fields, UIDetailField{Label: "Ref", Value: label, Mono: true})
 	}
-	fields = append(fields,
+	fields = append(
+		fields,
 		UIDetailField{Label: "Revision", Value: snap.Revision, Mono: true},
 		UIDetailField{Label: "Files", Value: fmt.Sprint(len(snap.Files))},
 		UIDetailField{Label: "Total size", Value: formatBytes(total)},

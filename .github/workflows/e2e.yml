@@ -1,0 +1,79 @@
+name: E2E
+
+# Full end-to-end run: builds the real binary, starts a low+high pair wired
+# over the HTTP diode transport, collects every stream from its real
+# upstream (PyPI, proxy.golang.org, Maven Central, npmjs, cli.github.com,
+# Docker Hub, huggingface.co), and validates with the real client tools
+# (pip, go, mvn+java, npm+node, apt-get+dpkg-deb, dnf+rpm, docker,
+# huggingface_hub, curl). See e2e/doc.go.
+
+on:
+  push:
+    branches: [ "main", "claude/**" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    # Pinned rather than ubuntu-latest: the suite leans on image-provided
+    # toolchains (python, node, maven, docker) and apt-installed dnf, whose
+    # behavior shifts between images — bump deliberately.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install client tools (dnf, rpm, huggingface_hub CLI)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dnf rpm
+          if command -v pipx >/dev/null 2>&1; then
+            pipx install huggingface_hub
+          else
+            python3 -m pip install --user --break-system-packages huggingface_hub
+          fi
+
+      - name: Preflight tool and upstream checks
+        run: |
+          set -x
+          go version
+          python3 --version
+          node --version && npm --version
+          mvn --version | head -1
+          java -version 2>&1 | head -1
+          docker info --format 'docker {{.ServerVersion}}'
+          dnf --version | head -1
+          rpm --version
+          curl --version | head -1
+          hf version || huggingface-cli version
+          # Fail fast if the suite's default GGUF reference has rotted
+          # upstream (keep in sync with defaultGGUF in e2e/hf_test.go).
+          curl -fsSI -o /dev/null "https://huggingface.co/v2/bartowski/SmolLM2-135M-Instruct-GGUF/manifests/Q4_K_M"
+
+      - name: Run end-to-end suite
+        env:
+          ARTIGATE_E2E_REQUIRE_ALL: "1"
+          ARTIGATE_E2E_WORKDIR: ${{ runner.temp }}/artigate-e2e
+        run: go test -tags e2e -v -count=1 -timeout 25m ./e2e
+
+      - name: Upload server logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-server-logs
+          path: ${{ runner.temp }}/artigate-e2e/*.log
+          if-no-files-found: ignore

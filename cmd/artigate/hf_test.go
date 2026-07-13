@@ -922,6 +922,34 @@ func TestLowToHighHFHubPipeline(t *testing.T) {
 		}
 	}
 
+	// The tree listing — what modern huggingface_hub clients (hf download,
+	// snapshot_download) enumerate instead of the info siblings, by branch
+	// and by the pinned commit, with the query flags the real client sends.
+	for _, u := range []string{
+		"/api/models/openai/gpt-oss-20b/tree/main?recursive=true&expand=false",
+		"/api/models/openai/gpt-oss-20b/tree/" + up.sha + "?recursive=True",
+	} {
+		code, body := httpGet(t, srv.URL+u)
+		if code != http.StatusOK {
+			t.Fatalf("GET %s: %d %q", u, code, body)
+		}
+		var entries []struct {
+			Type string `json:"type"`
+			Oid  string `json:"oid"`
+			Size int64  `json:"size"`
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal([]byte(body), &entries); err != nil {
+			t.Fatalf("GET %s: %v in %q", u, err, body)
+		}
+		if len(entries) != 2 || entries[0].Path != "config.json" || entries[1].Path != "model-00001-of-00001.safetensors" {
+			t.Fatalf("GET %s: entries %+v", u, entries)
+		}
+		if entries[0].Type != "file" || entries[0].Oid != hexSHA(up.files["config.json"]) || entries[0].Size != int64(len(up.files["config.json"])) {
+			t.Fatalf("GET %s: config.json entry %+v", u, entries[0])
+		}
+	}
+
 	// File metadata — the HEAD request hf_hub_download issues, expecting the
 	// sha256 ETag (its cache key) and X-Repo-Commit (its snapshot directory).
 	headReq, _ := http.NewRequest(http.MethodHead, srv.URL+"/openai/gpt-oss-20b/resolve/main/config.json", nil) //nolint:noctx // test request
@@ -953,6 +981,9 @@ func TestLowToHighHFHubPipeline(t *testing.T) {
 		{"/openai/gpt-oss-20b/resolve/main/original/model.safetensors", "EntryNotFound"},
 		{"/api/models/openai/gpt-oss-20b/revision/nope", "RevisionNotFound"},
 		{"/api/models/nobody/nothing", "RepoNotFound"},
+		{"/api/models/openai/gpt-oss-20b/tree/nope", "RevisionNotFound"},
+		{"/api/models/nobody/nothing/tree/main", "RepoNotFound"},
+		{"/api/models/openai/gpt-oss-20b/tree/main/no-such-dir", "EntryNotFound"},
 	} {
 		resp, err := http.Get(srv.URL + tc.url) //nolint:noctx // test request
 		if err != nil {
@@ -977,6 +1008,54 @@ func TestLowToHighHFHubPipeline(t *testing.T) {
 
 	// The GGUF model imported in the same bundle still serves over /v2.
 	assertHTTPBody(t, srv.URL+"/v2/unsloth/gpt-oss-20b-GGUF/manifests/Q4_0", string(gguf.manifest))
+}
+
+func TestHFHubTreeEntries(t *testing.T) {
+	snap := HFRepoSnapshot{Revision: strings.Repeat("ab", 20), Files: []HFRepoFile{
+		{Path: "sub/x.bin", SHA256: strings.Repeat("22", 32), Size: 2},
+		{Path: "config.json", SHA256: strings.Repeat("11", 32), Size: 1},
+		{Path: "sub/dir/w.bin", SHA256: strings.Repeat("33", 32), Size: 3},
+	}}
+	flat := func(entries []hfHubTreeEntry) string {
+		var parts []string
+		for _, e := range entries {
+			parts = append(parts, e.Type+":"+e.Path)
+		}
+		return strings.Join(parts, " ")
+	}
+	tests := []struct {
+		subpath   string
+		recursive bool
+		want      string
+	}{
+		// Non-recursive root: immediate files plus one synthesized directory.
+		{"", false, "file:config.json directory:sub"},
+		// Recursive root: every file with its intermediate directories, once.
+		{"", true, "file:config.json directory:sub directory:sub/dir file:sub/dir/w.bin file:sub/x.bin"},
+		// Subpath listings keep repo-root-relative paths, like the Hub.
+		{"sub", false, "directory:sub/dir file:sub/x.bin"},
+		{"sub", true, "directory:sub/dir file:sub/dir/w.bin file:sub/x.bin"},
+		{"sub/dir", true, "file:sub/dir/w.bin"},
+	}
+	for _, tc := range tests {
+		if got := flat(hfHubTreeEntries(snap, tc.subpath, tc.recursive)); got != tc.want {
+			t.Errorf("hfHubTreeEntries(%q, %v) = %q, want %q", tc.subpath, tc.recursive, got, tc.want)
+		}
+	}
+	// A subpath naming nothing is a miss (nil), distinct from empty.
+	if got := hfHubTreeEntries(snap, "nope", true); got != nil {
+		t.Errorf("hfHubTreeEntries(nope) = %+v, want nil", got)
+	}
+	// File entries carry the sha256 oid and size the client caches on.
+	entries := hfHubTreeEntries(snap, "", false)
+	if entries[0].Oid != strings.Repeat("11", 32) || entries[0].Size != 1 {
+		t.Errorf("config.json entry = %+v", entries[0])
+	}
+	// Directory oids are stable opaque hex, never empty (clients require the
+	// field to be present).
+	if entries[1].Oid == "" || entries[1].Size != 0 {
+		t.Errorf("sub directory entry = %+v", entries[1])
+	}
 }
 
 func TestHFRepoDashboardAndDetail(t *testing.T) {

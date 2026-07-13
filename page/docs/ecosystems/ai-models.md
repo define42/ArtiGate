@@ -127,6 +127,7 @@ An Ollama model name is `host/namespace/model:tag` — exactly two path segments
 | Route | Response |
 |---|---|
 | `GET /api/models/<org>/<name>[/revision/<rev>]` | model info: pinned commit (`sha`) + file list (`siblings`) |
+| `GET /api/models/<org>/<name>/tree/<rev>[/<path>]` | file listing (`?recursive=true` supported), which modern `huggingface_hub` clients enumerate instead of `siblings`; every mirrored snapshot fits one page |
 | `GET\|HEAD /<org>/<name>/resolve/<rev>/<path>` | file download with `ETag` (the sha256 — the client's cache key) and `X-Repo-Commit` (its snapshot directory); Range supported |
 
 `<rev>` may be a collected branch name (`main`), the commit hash, or absent for the default. Misses carry the `X-Error-Code` values `huggingface_hub` maps to typed errors (`RepoNotFound`, `RevisionNotFound`, `EntryNotFound`). This is the **download subset only** — search, listing, and write APIs are not served, which is exactly what `HF_ENDPOINT`-pointed model loading needs.
