@@ -476,7 +476,7 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 	// Guard state-changing requests against cross-site (CSRF) abuse in every
 	// deployment mode, including loopback-without-auth where no session cookie
 	// (and thus no SameSite protection) exists.
-	handler = csrfGuardLow(handler)
+	handler = csrfGuard(handler)
 
 	log.Printf("low-side exporter listening on %s (TLS: %s, auth: %s)", cfg.Listen, tc.Mode, authStatus(users))
 	log.Printf("low-side go module cache: %s", ls.downloadDir)
@@ -560,17 +560,15 @@ func isCrossSiteBrowserRequest(r *http.Request) bool {
 	return !strings.EqualFold(u.Host, r.Host)
 }
 
-// csrfGuardLow rejects browser-issued cross-site state-changing requests to the
-// low-side control plane. The low side holds the signing key, so a cross-site
-// POST a browser is tricked into sending could have arbitrary content signed and
-// pushed across the diode. SameSite=Lax on the session cookie stops that only
-// when auth is enabled; the supported loopback-without-auth deployment has no
-// cookie, so this guard closes the gap for every mode. Safe methods and
-// non-browser clients pass through unaffected.
-func csrfGuardLow(next http.Handler) http.Handler {
+// csrfGuard rejects browser-issued cross-site state-changing requests. On the
+// low side the signing control plane has no SameSite cookie protection in the
+// supported loopback-without-auth mode; on the high side it backs up the
+// loopback gate on the mutating admin endpoints. Safe methods and non-browser
+// clients (curl, the diode uploader) pass through unaffected.
+func csrfGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isStateChangingMethod(r.Method) && isCrossSiteBrowserRequest(r) {
-			http.Error(w, "cross-site request refused; the low-side control plane accepts state changes only from its own dashboard", http.StatusForbidden)
+			http.Error(w, "cross-site request refused; state changes are accepted only from the dashboard", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -620,6 +618,7 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 	ls.watches = store
 	exported, err := OpenExportedStore(filepath.Join(cfg.Root, "exported.db"))
 	if err != nil {
+		_ = store.Close() // don't leak the watch DB when the exported index fails to open
 		return nil, err
 	}
 	ls.exported = exported
@@ -2050,7 +2049,10 @@ func runHigh(args []string) {
 	log.Printf("high-side repo: %s", hs.downloadDir)
 	log.Printf("high-side landing: %s", cfg.Landing)
 	log.Printf("high-side quarantine: %s", hs.cfg.Quarantine)
-	must(listenAndServe(ctx, tc, cfg.Listen, cfg.Root, logHTTP(mux)))
+	// The mutating admin endpoints are already loopback-gated; the CSRF guard
+	// additionally blocks a same-host browser from being used cross-site against
+	// them. Diode ingest PUTs come from non-browser clients and pass through.
+	must(listenAndServe(ctx, tc, cfg.Listen, cfg.Root, logHTTP(csrfGuard(mux))))
 }
 
 func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
@@ -2889,6 +2891,35 @@ func (s *HighServer) reapUnverifiedLocked(now time.Time) {
 	} else if n > 0 {
 		log.Printf("reaped %d orphaned partial landing file(s)", n)
 	}
+	if n, err := reapStaleUDPTemps(s.cfg.Landing, now.Add(-incompleteLandingRetention)); err != nil {
+		log.Printf("reap stale UDP temp files: %v", err)
+	} else if n > 0 {
+		log.Printf("reaped %d stale UDP reassembly temp file(s)", n)
+	}
+}
+
+// reapStaleUDPTemps deletes orphaned UDP reassembly temp files last modified
+// before cutoff — a partial reassembly whose process was killed mid-transfer.
+// In-flight reassemblies keep a recent mtime (and the catcher expires stale
+// transfers itself), so only long-abandoned temps are removed here.
+func reapStaleUDPTemps(dir string, cutoff time.Time) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var removed int
+	for _, e := range entries {
+		if e.IsDir() || !isUDPTempName(e.Name()) {
+			continue
+		}
+		if removeIfOlder(filepath.Join(dir, e.Name()), cutoff) {
+			removed++
+		}
+	}
+	return removed, nil
 }
 
 // reapRejectedDir deletes regular files in the rejected directory last modified

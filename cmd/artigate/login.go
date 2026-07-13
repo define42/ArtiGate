@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/securecookie"
@@ -41,7 +42,21 @@ const (
 	// defeating a slow-trickle body on this endpoint (the server sets no global
 	// ReadTimeout because it must stream large artifacts elsewhere).
 	loginReadTimeout = 15 * time.Second
+
+	// loginFailureThreshold locks a known account after this many consecutive
+	// failed logins; loginLockoutWindow is how long the lock then lasts. Only
+	// configured usernames are tracked, so the attacker-supplied username field
+	// cannot grow the failure table, and a wrong password no longer permits
+	// unlimited online guessing against a real account.
+	loginFailureThreshold = 5
+	loginLockoutWindow    = time.Minute
 )
+
+// loginFailure tracks consecutive failed logins for one configured user.
+type loginFailure struct {
+	count       int
+	lockedUntil time.Time
+}
 
 // authManager holds the credential set and the session-cookie codec.
 type authManager struct {
@@ -49,6 +64,9 @@ type authManager struct {
 	sc        *securecookie.SecureCookie
 	secure    bool          // set the cookie's Secure flag (true when serving over TLS)
 	verifySem chan struct{} // bounds concurrent (memory-heavy) argon2 verifications
+
+	failMu   sync.Mutex
+	failures map[string]loginFailure // per configured user; bounded by len(users)
 }
 
 // newAuthManager builds the session manager, loading (or creating) the cookie
@@ -65,7 +83,39 @@ func newAuthManager(users map[string]string, keyPath string, secure bool) (*auth
 		sc:        sc,
 		secure:    secure,
 		verifySem: make(chan struct{}, maxConcurrentLogins),
+		failures:  map[string]loginFailure{},
 	}, nil
+}
+
+// loginLocked reports whether user is currently locked out after repeated
+// failed logins.
+func (a *authManager) loginLocked(user string, now time.Time) bool {
+	a.failMu.Lock()
+	defer a.failMu.Unlock()
+	return now.Before(a.failures[user].lockedUntil)
+}
+
+// noteLoginResult records a login outcome. Success clears the user's failure
+// count; a failure increments it and, at the threshold, starts a lockout window.
+// Only configured usernames are tracked, so the table stays bounded by the
+// credential set no matter what username field an attacker submits.
+func (a *authManager) noteLoginResult(user string, ok bool) {
+	if _, known := a.users[user]; !known {
+		return
+	}
+	a.failMu.Lock()
+	defer a.failMu.Unlock()
+	if ok {
+		delete(a.failures, user)
+		return
+	}
+	f := a.failures[user]
+	f.count++
+	if f.count >= loginFailureThreshold {
+		f.count = 0
+		f.lockedUntil = time.Now().Add(loginLockoutWindow)
+	}
+	a.failures[user] = f
 }
 
 // checkCredential verifies user/pass under a non-blocking concurrency cap. At
@@ -189,16 +239,22 @@ func (a *authManager) handleLogin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid login request", http.StatusBadRequest)
 			return
 		}
-		ok, admitted := a.checkCredential(r.PostFormValue("username"), r.PostFormValue("password"))
+		user := r.PostFormValue("username")
+		if a.loginLocked(user, time.Now()) {
+			http.Error(w, "too many failed attempts; try again shortly", http.StatusTooManyRequests)
+			return
+		}
+		ok, admitted := a.checkCredential(user, r.PostFormValue("password"))
 		if !admitted {
 			http.Error(w, "too many concurrent login attempts; try again shortly", http.StatusTooManyRequests)
 			return
 		}
+		a.noteLoginResult(user, ok)
 		if !ok {
 			http.Redirect(w, r, "/login?e=1", http.StatusSeeOther)
 			return
 		}
-		if err := a.setSession(w, r.PostFormValue("username")); err != nil {
+		if err := a.setSession(w, user); err != nil {
 			http.Error(w, "session error", http.StatusInternalServerError)
 			return
 		}
