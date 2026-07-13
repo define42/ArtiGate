@@ -5,7 +5,14 @@ package main
 // graceful shutdown.
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -277,4 +284,151 @@ func TestListenAndServeGracefulShutdown(t *testing.T) {
 		return
 	}
 	t.Skip("could not obtain a stable loopback port")
+}
+
+// --- Fix #7: self-colliding bundle paths are content errors -----------------
+
+type tarEntry struct {
+	name string
+	body []byte
+}
+
+// writeTestTarGz writes a tar.gz with exactly the given entries, in order,
+// letting tests craft archives createTarGzAtomic would never produce, such as
+// duplicated entry names.
+func writeTestTarGz(t *testing.T, dst string, entries []tarEntry) {
+	t.Helper()
+	f, err := os.Create(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	for _, e := range entries {
+		hdr := &tar.Header{Name: e.name, Mode: 0o644, Size: int64(len(e.body)), Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(e.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A duplicated tar entry collides with its own first extraction. That EEXIST
+// must not be read as an operational staging fault: the bundle would be left
+// in landing and retried forever, wedging the stream.
+func TestExtractRejectsDuplicateTarEntry(t *testing.T) {
+	body := []byte("payload")
+	sum := sha256.Sum256(body)
+	mf := ManifestFile{Path: "a/b.txt", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(body))}
+	archive := filepath.Join(t.TempDir(), "dup.tar.gz")
+	writeTestTarGz(t, archive, []tarEntry{{mf.Path, body}, {mf.Path, body}})
+
+	err := extractAndVerifyTarGz(archive, t.TempDir(), []ManifestFile{mf})
+	if err == nil || !strings.Contains(err.Error(), "duplicate entry") {
+		t.Fatalf("duplicate tar entry error = %v, want duplicate-entry cause", err)
+	}
+	var ioErr *stagingIOError
+	if errors.As(err, &ioErr) {
+		t.Error("a duplicate entry is a defect in the archive, not a staging I/O fault")
+	}
+	var invalid *invalidBundleError
+	if !errors.As(classifyExtractError(err), &invalid) {
+		t.Error("a duplicate tar entry must reject the bundle, not retry it")
+	}
+}
+
+func TestValidateManifestFilesRejectsPathCollisions(t *testing.T) {
+	sha := strings.Repeat("a", 64)
+	mk := func(p string) ManifestFile { return ManifestFile{Path: p, SHA256: sha, Size: 1} }
+	cases := []struct {
+		name    string
+		files   []ManifestFile
+		wantErr bool
+	}{
+		{"duplicate path", []ManifestFile{mk("a/b"), mk("a/b")}, true},
+		{"file shadows parent dir", []ManifestFile{mk("a"), mk("a/b")}, true},
+		{"order independent", []ManifestFile{mk("a/b"), mk("a")}, true},
+		{"deep collision", []ManifestFile{mk("a/b"), mk("a/b/c/d")}, true},
+		{"prior parent still collides", []ManifestFile{{Path: "a", SHA256: sha, Size: 1, Prior: true}, mk("a/b/c")}, true},
+		{"siblings ok", []ManifestFile{mk("a/b"), mk("a/c")}, false},
+		{"string prefix ok", []ManifestFile{mk("a"), mk("a.txt"), mk("ab/c")}, false},
+	}
+	for _, tc := range cases {
+		if _, err := validateManifestFiles(tc.files); (err != nil) != tc.wantErr {
+			t.Errorf("%s: err = %v, wantErr = %v", tc.name, err, tc.wantErr)
+		}
+	}
+}
+
+// End to end: a signed bundle whose archive duplicates an entry is rejected
+// and retained under rejected/, instead of wedging its stream in landing.
+func TestImportRejectsDuplicateEntryArchive(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+
+	src := t.TempDir()
+	mod, files := buildModuleFiles(t, src, moduleSpec{module: "example.com/dup", version: "v1.0.0"})
+	manifest := BundleManifest{
+		Type:             manifestType,
+		Sequence:         1,
+		PreviousSequence: 0,
+		Created:          time.Unix(0, 0).UTC(),
+		Generator:        "test",
+		BundleID:         bundleIDForSequence(1),
+		Modules:          []ManifestMod{mod},
+		Files:            files,
+	}
+	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := ed25519.Sign(priv, manifestBytes)
+
+	var entries []tarEntry
+	for _, mf := range files {
+		b, err := os.ReadFile(filepath.Join(src, filepath.FromSlash(mf.Path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, tarEntry{name: mf.Path, body: b})
+	}
+	entries = append(entries, entries[0])
+
+	id := manifest.BundleID
+	writeTestTarGz(t, filepath.Join(hs.cfg.Landing, id+".tar.gz"), entries)
+	writeFile(t, filepath.Join(hs.cfg.Landing, id+".manifest.json"), manifestBytes)
+	writeFile(t, filepath.Join(hs.cfg.Landing, id+".manifest.json.sig"),
+		[]byte(base64.StdEncoding.EncodeToString(sig)+"\n"))
+
+	res, err := hs.ImportNext()
+	if err != nil {
+		t.Fatalf("a duplicate-entry archive must reject cleanly, not fail the pass: %v", err)
+	}
+	if len(res.RejectedBundles) != 1 || res.RejectedBundles[0] != id {
+		t.Fatalf("bundle was not rejected: %+v", res)
+	}
+	if bundleCompleteInDir(hs.cfg.Landing, id) {
+		t.Error("rejected bundle was left wedged in landing/")
+	}
+	if !bundleCompleteInDir(filepath.Join(hs.cfg.Root, "rejected"), id) {
+		t.Error("bundle was not retained in rejected/")
+	}
+	reason, err := os.ReadFile(filepath.Join(hs.cfg.Root, "rejected", id+".reason.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(reason), "duplicate entry") {
+		t.Errorf("rejection reason = %q, want duplicate-entry cause", reason)
+	}
 }
