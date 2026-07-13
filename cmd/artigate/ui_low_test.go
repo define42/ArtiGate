@@ -76,6 +76,11 @@ func TestLowServerUIPage(t *testing.T) {
 		`id="view-overview"`, `id="view-go"`, `id="view-maven"`, `id="view-status"`,
 		// Overview page lists every schedule and whether it is working.
 		`id="allWatches"`, "loadAllWatches",
+		// The Jobs card shows every queued/running/finished collect across all
+		// sessions, polled live, with follow and cancel controls.
+		`id="jobsBox"`, "loadJobs", "pollJobs", "function jobRow", "/admin/jobs",
+		"/admin/jobs/follow", "/admin/jobs/cancel", "cancelJob(", "viewJobById",
+		"ev.type==='job'", "Closing this window does not stop the job",
 		// Scheduling lives on each ecosystem page, reusing that page's inputs.
 		"/admin/watches", "loadWatchesInto", "Add schedule",
 		"scheduleGo()", `id="goEvery"`, `id="goWatches"`,
@@ -248,10 +253,10 @@ func TestLowServerUIReexportFlow(t *testing.T) {
 }
 
 // TestLowUICollectStopButton checks the collect modal ships a Stop control
-// wired to abort the streaming request (the server cancels the collect with
-// the connection).
+// wired to cancel the job server-side (uploads, whose bytes stream from the
+// page, still abort the request itself).
 func TestLowUICollectStopButton(t *testing.T) {
-	for _, want := range []string{`id="cmStop"`, "stopCollect()", "AbortController", "AbortError"} {
+	for _, want := range []string{`id="cmStop"`, "stopCollect()", "AbortController", "AbortError", "/admin/jobs/cancel"} {
 		if !strings.Contains(lowUIHTML, want) {
 			t.Errorf("low UI missing %q", want)
 		}

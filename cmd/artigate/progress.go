@@ -1,29 +1,28 @@
 package main
 
-// Live collect progress. The dashboard's "Collect & export" modal streams what
-// a collect is doing as it runs, rather than blocking on a single request until
-// the bundle is finished. Collectors report human-readable lines with
-// emitProgress; streamCollect forwards them to the browser as newline-delimited
-// JSON. The plumbing is a no-op unless a streaming client installed a sink, so
-// the plain /admin/*/collect endpoints and the scheduled watches are unaffected.
+// Live collect progress. Collectors report human-readable lines with
+// emitProgress and byte-level download samples with emitDownloadProgress;
+// both write to sinks carried on the context. The job queue installs sinks
+// pointed at the running job's log ring, from which any number of dashboard
+// sessions can follow along as newline-delimited JSON (see jobs_http.go). The
+// plumbing is a cheap no-op when no sink is installed, so collectors emit
+// unconditionally.
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"path"
-	"strings"
 	"time"
 )
 
-// maxStreamCollectBody caps the buffered request body for a streaming collect.
-// It sits above every JSON collect handler's own body limit, so a valid
-// request is never truncated (multipart uploads are not buffered at all — see
-// prepareStreamCollectBody); an oversized body is refused with a clear error.
+// maxStreamCollectBody caps the request body buffered when a collect is
+// enqueued as a job (see bufferCollectBody). It sits above every JSON collect
+// handler's own body limit, so a valid request is never truncated (multipart
+// uploads are not buffered at all); an oversized body is refused with a clear
+// error.
 const maxStreamCollectBody = 16 << 20
 
 // progressSink receives one progress line at a time. Sends must never block the
@@ -180,98 +179,6 @@ func wantsStreamingCollect(r *http.Request) bool {
 	return r.URL.Query().Get("stream") == "1"
 }
 
-// prepareStreamCollectBody arranges for the collect goroutine to read the
-// request body while progress events are already streaming back. HTTP/1.x is
-// half-duplex by default — the server shuts the request body down once the
-// response starts — so a multipart upload (arbitrarily large, cannot be
-// buffered) switches the connection to full duplex instead. Everything else
-// (the JSON collects, all small) is buffered in memory, erroring clearly when
-// a body exceeds the cap rather than silently truncating it and leaving the
-// client with an opaque network error.
-func prepareStreamCollectBody(w http.ResponseWriter, r *http.Request) error {
-	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
-		if err := http.NewResponseController(w).EnableFullDuplex(); err == nil {
-			return nil
-		}
-		// A transport that cannot interleave reads and writes falls through to
-		// buffering — and, for a big upload, to the clear size error below.
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxStreamCollectBody+1))
-	if err != nil {
-		return err
-	}
-	if len(body) > maxStreamCollectBody {
-		return fmt.Errorf("request body exceeds %s; POST without ?stream=1 to send more", formatBytes(maxStreamCollectBody))
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	return nil
-}
-
-// streamCollect runs a collect while streaming its progress to the client as
-// newline-delimited JSON (application/x-ndjson): one {"type":"log","message":…}
-// object per progress line, then a terminal {"type":"done","result":…} or
-// {"type":"error","error":…}. The collect runs in its own goroutine so this
-// goroutine is free to forward and flush progress as it arrives; only this
-// goroutine ever writes to w.
-func (s *LowServer) streamCollect(w http.ResponseWriter, r *http.Request, run func(context.Context) (ExportResult, error)) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		// net/http's ResponseWriter is a Flusher; this only guards exotic
-		// wrappers. Fall back to a buffered result so the client still answers.
-		res, err := run(r.Context())
-		respondJSONOrError(w, http.StatusBadRequest, res, err)
-		return
-	}
-	if err := prepareStreamCollectBody(w, r); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
-
-	enc := json.NewEncoder(w)
-	writeEvent := func(ev map[string]any) {
-		_ = enc.Encode(ev) // Encoder appends the newline that frames each event.
-		flusher.Flush()
-	}
-
-	events := make(chan map[string]any, 64)
-	// Log lines wait for room (none may be lost); download samples are
-	// ephemeral and dropped when the channel is full — a fresh one follows.
-	ctx := withProgress(r.Context(), func(line string) {
-		select {
-		case events <- logEvent(line):
-		case <-r.Context().Done():
-		}
-	})
-	ctx = withDownloadProgress(ctx, func(name string, done, total, bps int64) {
-		select {
-		case events <- dlEvent(name, done, total, bps):
-		default:
-		}
-	})
-
-	done := make(chan collectOutcome, 1)
-	go func() { res, err := run(ctx); done <- collectOutcome{res, err} }()
-
-	for {
-		select {
-		case ev := <-events:
-			writeEvent(ev)
-		case o := <-done:
-			drainProgress(events, writeEvent)
-			writeEvent(o.event())
-			return
-		case <-r.Context().Done():
-			return
-		}
-	}
-}
-
 // collectOutcome is a finished collect's result or error, rendered into the
 // stream's terminal event.
 type collectOutcome struct {
@@ -294,17 +201,4 @@ func logEvent(line string) map[string]any {
 // progress bar.
 func dlEvent(name string, done, total, bps int64) map[string]any {
 	return map[string]any{"type": "dl", "name": name, "done": done, "total": total, "bps": bps}
-}
-
-// drainProgress flushes any progress buffered in the moment before the collect
-// returned, so nothing is lost before the terminal event.
-func drainProgress(events <-chan map[string]any, writeEvent func(map[string]any)) {
-	for {
-		select {
-		case ev := <-events:
-			writeEvent(ev)
-		default:
-			return
-		}
-	}
 }

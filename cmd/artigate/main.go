@@ -379,12 +379,15 @@ type LowServer struct {
 	// export pipeline: the index is only an optimization (collectors fail safe).
 	exported *ExportedStore
 	// watches holds scheduled recurring collects (SQLite-backed); watchTick is
-	// how often the scheduler checks for due ones; watchRunning guards against a
-	// watch running concurrently with itself (a tick overlapping a run-now).
-	watches        *WatchStore
-	watchTick      time.Duration
-	watchRunningMu sync.Mutex
-	watchRunning   map[int64]bool
+	// how often the scheduler checks for due ones.
+	watches   *WatchStore
+	watchTick time.Duration
+	// jobs is the per-stream collect queue: every manual and scheduled collect
+	// runs as a job on it, giving all dashboard sessions one shared view of
+	// what is queued, running, and recently finished (and why it failed). It
+	// also keeps a watch from running concurrently with itself (a due tick
+	// overlapping a run-now).
+	jobs *jobManager
 	// authEnabled is set when ARTIGATE_LOW_AUTH is configured; it makes the UI
 	// render a "Log out" button.
 	authEnabled bool
@@ -461,6 +464,12 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 	if cfg.WatchInterval > 0 {
 		go ls.watchLoop(ctx)
 	}
+	// Cancel queued and running jobs as soon as the stop signal arrives, so
+	// requests waiting on a job unblock and the HTTP server can drain.
+	go func() {
+		<-ctx.Done()
+		ls.jobs.shutdown()
+	}()
 
 	mux := http.NewServeMux()
 	mux.Handle("/", ls)
@@ -605,7 +614,7 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 		state:                  LowState{Sequences: map[string]int64{}},
 		streamLocks:            map[string]*sync.Mutex{},
 		watchTick:              cfg.WatchInterval,
-		watchRunning:           map[int64]bool{},
+		jobs:                   newJobManager(),
 		containerRegistryBases: registryBases,
 	}
 	if err := ls.loadState(); err != nil {
@@ -628,6 +637,9 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 // Close releases the low server's resources (the watch and exported-index
 // databases, and the diode sender when one is open).
 func (s *LowServer) Close() error {
+	// Stop the job queue first: its completion hooks write to the watch store,
+	// which must still be open when the last canceled job records its outcome.
+	s.jobs.shutdown()
 	err := errors.Join(s.watches.Close(), s.exported.Close())
 	if s.pitcher != nil {
 		err = errors.Join(err, s.pitcher.Close())
@@ -656,6 +668,9 @@ func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if s.serveLowWatches(w, r) {
 		return true
 	}
+	if s.serveLowJobs(w, r) {
+		return true
+	}
 	switch {
 	case r.URL.Path == "/healthz":
 		_, _ = w.Write([]byte("ok\n"))
@@ -679,10 +694,11 @@ func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool
 	if r.Method != http.MethodPost {
 		return false
 	}
-	// Each case binds the request to its handler; the collect itself runs below,
-	// either buffered (a single JSON result) or streamed (?stream=1, the
-	// dashboard's live progress modal). The handler re-reads r.Body when it runs,
-	// so streaming defers the collect into streamCollect's goroutine unchanged.
+	// Each case binds the request to its handler; the collect itself runs as a
+	// job on its stream's queue. A plain POST waits for the job and answers
+	// with the buffered JSON result as always; ?stream=1 (the dashboard's live
+	// progress modal) follows the job's NDJSON event stream instead. The
+	// handler re-reads r.Body when the job runs — enqueueCollect buffers it.
 	var run func(context.Context) (ExportResult, error)
 	switch r.URL.Path {
 	case "/admin/go/collect":
@@ -706,12 +722,32 @@ func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool
 	default:
 		return false
 	}
-	if wantsStreamingCollect(r) {
-		s.streamCollect(w, r, run)
-		return true
+	s.runCollectJob(w, r, collectStreamFromPath(r.URL.Path), run)
+	return true
+}
+
+// runCollectJob enqueues one collect on its stream's queue and answers the
+// request: streaming clients (?stream=1) follow the job's NDJSON events,
+// everyone else waits for the buffered JSON result as before.
+func (s *LowServer) runCollectJob(w http.ResponseWriter, r *http.Request, stream string,
+	run func(context.Context) (ExportResult, error),
+) {
+	job, ok := s.enqueueCollect(w, r, stream, run)
+	if !ok {
+		return // enqueueCollect wrote the error
 	}
-	res, err := run(r.Context())
-	return respondJSONOrError(w, http.StatusBadRequest, res, err)
+	if wantsStreamingCollect(r) {
+		followJobNDJSON(w, r, job, true)
+		return
+	}
+	waitCollectJob(w, r, job)
+}
+
+// collectStreamFromPath extracts the stream key from a collect endpoint path:
+// /admin/<stream>/collect. Every collect route is named by its stream
+// constant, so no mapping table is needed.
+func collectStreamFromPath(path string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(path, "/admin/"), "/collect")
 }
 
 // respondJSONOrError writes err as an HTTP error with the given status, or res

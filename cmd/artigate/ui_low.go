@@ -106,6 +106,8 @@ const lowUIHTML = `<!DOCTYPE html>
   .pill { display: inline-block; border-radius: 999px; padding: .05rem .5rem; font-size: .72rem; font-weight: 600; }
   .pill.ok { background: #10281a; border: 1px solid #1f6f43; color: #7ee2a8; }
   .pill.warn { background: #2e1416; border: 1px solid #7f2a30; color: #ff9ea3; }
+  .pill.busy { background: #2a2410; border: 1px solid #6b5320; color: #d8b26a; }
+  .pill.q { background: #2a2f3a; border: 1px solid #3a4150; color: #c7cedb; }
   .wmsg { color: #8b93a5; font-size: .75rem; }
   .wactions { white-space: nowrap; }
   .wactions button { background: #2a2f3a; color: #c7cedb; border: 1px solid #3a4150; border-radius: 5px; padding: .25rem .55rem; margin-left: .3rem; cursor: pointer; font: inherit; font-size: .78rem; }
@@ -153,11 +155,16 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="uploads" onclick="setView('uploads')">Uploads</button>
     <button type="button" data-view="status" onclick="setView('status')">Status</button>
   </nav>
-  <button type="button" class="refresh" onclick="loadStatus();loadAllWatches()">Refresh</button>
+  <button type="button" class="refresh" onclick="loadStatus();loadAllWatches();loadJobs()">Refresh</button>
   {{LOGOUT}}
 </header>
 <main>
   <section class="view" id="view-overview">
+  <div class="card">
+    <h2>Jobs</h2>
+    <p class="hint">Every collect &mdash; started here, by another user, or by a schedule &mdash; runs as a job in a per-ecosystem queue: one job per stream at a time, different streams in parallel. All sessions see the same list, live. Finished jobs keep their outcome (and why they failed) until the server restarts.</p>
+    <div id="jobsBox"><p class="empty">Loading&hellip;</p></div>
+  </div>
   <div class="card">
     <h2>Scheduled pulls</h2>
     <p class="hint">Every schedule across all ecosystems, with its last run, status, and next run &mdash; so you can see at a glance whether they are working. Add or edit schedules on each ecosystem's page.</p>
@@ -458,6 +465,7 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   <div class="cmodal-foot">
     <div id="cmResult" class="rbox"></div>
+    <p class="hint" id="cmDetachHint" hidden>Closing this window does not stop the job &mdash; it keeps running and stays visible under Jobs on the Overview page.</p>
     <div class="cm-actions">
       <button type="button" class="danger" id="cmStop" onclick="stopCollect()">Stop</button>
       <button type="button" class="secondary" id="cmClose" onclick="closeCollectModal()">Close</button>
@@ -474,32 +482,54 @@ function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'N
 function clearResult(id){const el=document.getElementById(id); if(el){ el.className='rbox'; el.innerHTML=''; }}
 // ---- Collect progress modal ----
 // Every "Collect & export" streams its progress into one shared modal: the
-// collect POST carries ?stream=1, and the server answers with newline-delimited
-// JSON events ({type:"log"|"done"|"error"}) that this reader renders live.
-// Stop aborts the streaming request; the server ties the collect to that
-// request's context, so aborting cancels the running downloads/tools too.
-let cmRunning=false, cmAbort=null;
+// collect runs as a job on its stream's queue, the POST carries ?stream=1, and
+// the server answers with newline-delimited JSON events
+// ({type:"job"|"log"|"dl"|"done"|"error"}) that this reader renders live. The
+// job is server-side: Stop cancels it via /admin/jobs/cancel, and closing the
+// modal merely stops following — the job keeps running (except uploads, whose
+// bytes stream from this page, so they still live and die with the request).
+// The same modal follows any existing job from the Jobs table via viewJob.
+let cmRunning=false, cmAbort=null, cmJobId=0, cmDetached=false;
 
 function openCollectModal(title){
   const m=document.getElementById('collectModal');
   document.getElementById('cmTitle').textContent=title;
   document.getElementById('cmLog').textContent='';
   const rb=document.getElementById('cmResult'); rb.className='rbox'; rb.innerHTML='';
-  m.dataset.done=''; cmRunning=true;
+  m.dataset.done=''; cmRunning=true; cmJobId=0; cmDetached=false;
   cmAbort=new AbortController();
   hideCollectDl();
   const stop=document.getElementById('cmStop'); stop.disabled=false; stop.textContent='Stop';
   document.getElementById('cmClose').disabled=true;
+  document.getElementById('cmDetachHint').hidden=true;
   if(!m.open) m.showModal();
 }
 
-// stopCollect aborts the in-flight collect. The fetch rejects with AbortError,
-// which runCollect renders as a "stopped" outcome rather than an error.
+// noteCollectJob records which job the modal is following (from the stream's
+// leading {type:"job"} event). Knowing the job makes the modal detachable:
+// Close only stops following, so it unlocks along with the hint saying so.
+function noteCollectJob(id){
+  cmJobId=id;
+  document.getElementById('cmClose').disabled=false;
+  document.getElementById('cmDetachHint').hidden=false;
+}
+
+// stopCollect cancels the job the modal is following; the stream then ends
+// with its terminal event. Uploads have no server-side life of their own —
+// aborting the request cancels them, exactly as before.
 function stopCollect(){
-  if(!cmRunning || !cmAbort) return;
+  if(!cmRunning) return;
   const stop=document.getElementById('cmStop');
   stop.disabled=true; stop.textContent='Stopping…';
-  appendCollectLog('Stop requested — cancelling the running collect…');
+  if(cmJobId){
+    appendCollectLog('Stop requested — cancelling job #'+cmJobId+'…');
+    fetch('/admin/jobs/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:cmJobId})})
+      .then(r=>{ if(!r.ok){ return r.text().then(t=>{ throw new Error((t&&t.trim())||('HTTP '+r.status)); }); } })
+      .catch(e=>{ appendCollectLog('Cancel failed: '+e.message,'l-err'); stop.disabled=false; stop.textContent='Stop'; });
+    return;
+  }
+  if(!cmAbort) return;
+  appendCollectLog('Stop requested — cancelling the running upload…');
   cmAbort.abort();
 }
 // ---- Per-file download progress ----
@@ -546,20 +576,63 @@ function appendCollectLog(msg, cls){
 function finishCollectModal(cls, html){
   const m=document.getElementById('collectModal');
   m.dataset.done='1'; cmRunning=false; cmAbort=null;
+  document.getElementById('cmDetachHint').hidden=true;
   hideCollectDl();
   const rb=document.getElementById('cmResult'); rb.className='rbox '+cls; rb.innerHTML=html;
   const stop=document.getElementById('cmStop'); stop.disabled=true; stop.textContent='Stop';
   document.getElementById('cmClose').disabled=false;
 }
 function closeCollectModal(){
-  if(cmRunning) return; // ignore while a collect is still running
-  const m=document.getElementById('collectModal'); if(m.open) m.close();
+  const m=document.getElementById('collectModal');
+  if(cmRunning){
+    // A job-backed collect detaches: stop following, let the job run on. An
+    // upload stays attached — aborting would kill the transfer itself.
+    if(!cmJobId) return;
+    cmDetached=true;
+    if(cmAbort) cmAbort.abort();
+    return; // the follower's AbortError handler closes the modal
+  }
+  if(m.open) m.close();
+}
+
+// consumeNDJSON reads a streaming response body line by line, passing each
+// line to handle.
+async function consumeNDJSON(res, handle){
+  const reader=res.body.getReader(), dec=new TextDecoder();
+  let buf='';
+  for(;;){
+    const {value,done}=await reader.read();
+    if(value) buf+=dec.decode(value,{stream:true});
+    let nl; while((nl=buf.indexOf('\n'))>=0){ handle(buf.slice(0,nl)); buf=buf.slice(nl+1); }
+    if(done) break;
+  }
+  buf+=dec.decode(); if(buf.trim()) handle(buf);
+}
+
+// consumeCollectStream renders a job's NDJSON events into the modal. It
+// resolves with the final ExportResult, or throws with the job's failure
+// reason ("collect canceled" for a canceled job).
+async function consumeCollectStream(res){
+  let result=null, errMsg=null;
+  await consumeNDJSON(res, line=>{
+    line=line.trim(); if(!line) return;
+    let ev; try{ ev=JSON.parse(line); }catch(_){ return; }
+    // A log line follows every finished download (and every phase change), so
+    // it doubles as the signal to retire the current file's progress bar.
+    if(ev.type==='job'){ noteCollectJob(ev.id); }
+    else if(ev.type==='log'){ appendCollectLog(ev.message); hideCollectDl(); }
+    else if(ev.type==='dl') updateCollectDl(ev);
+    else if(ev.type==='done'){ result=ev.result||{}; hideCollectDl(); }
+    else if(ev.type==='error'){ errMsg=ev.error||'collect failed'; appendCollectLog(errMsg,'l-err'); hideCollectDl(); }
+  });
+  if(errMsg!=null) throw new Error(errMsg);
+  return result||{};
 }
 
 // streamCollect POSTs a collect with ?stream=1 and consumes the NDJSON progress
 // stream, appending each log line to the modal. It resolves with the final
 // ExportResult, or throws with the server's error message (or AbortError when
-// the Stop button aborted the signal).
+// the follow was aborted).
 async function streamCollect(url, body, signal){
   // The uploads form posts FormData, which takes the XHR path: the file
   // transfer itself is the long part, and only XHR reports upload progress.
@@ -568,27 +641,7 @@ async function streamCollect(url, body, signal){
   if(!res.ok || !res.body){
     const t=await res.text().catch(()=>''); throw new Error((t&&t.trim())||('HTTP '+res.status));
   }
-  const reader=res.body.getReader(), dec=new TextDecoder();
-  let buf='', result=null, errMsg=null;
-  const handle=line=>{
-    line=line.trim(); if(!line) return;
-    let ev; try{ ev=JSON.parse(line); }catch(_){ return; }
-    // A log line follows every finished download (and every phase change), so
-    // it doubles as the signal to retire the current file's progress bar.
-    if(ev.type==='log'){ appendCollectLog(ev.message); hideCollectDl(); }
-    else if(ev.type==='dl') updateCollectDl(ev);
-    else if(ev.type==='done'){ result=ev.result||{}; hideCollectDl(); }
-    else if(ev.type==='error'){ errMsg=ev.error||'collect failed'; appendCollectLog(errMsg,'l-err'); hideCollectDl(); }
-  };
-  for(;;){
-    const {value,done}=await reader.read();
-    if(value) buf+=dec.decode(value,{stream:true});
-    let nl; while((nl=buf.indexOf('\n'))>=0){ handle(buf.slice(0,nl)); buf=buf.slice(nl+1); }
-    if(done) break;
-  }
-  buf+=dec.decode(); if(buf.trim()) handle(buf);
-  if(errMsg!=null) throw new Error(errMsg);
-  return result||{};
+  return consumeCollectStream(res);
 }
 
 // runCollect wires one ecosystem's button to the progress modal: it disables the
@@ -617,11 +670,25 @@ async function runCollect(o){
     o.showFn(out.cls, out.msg);
     loadStatus();
   }catch(e){
-    if(e && e.name==='AbortError'){
-      // Stop was pressed: the server cancels the collect with the connection,
-      // aborting downloads and packing alike. Only a stop landing in the final
-      // sign-and-archive moment still exports, so point at the Status page.
+    if(e && e.name==='AbortError' && cmDetached){
+      // Close was pressed mid-run: only the follow stream was aborted; the
+      // job keeps running server-side.
+      const msg='&#8505; Job #'+esc(cmJobId)+' continues in the background &mdash; follow it under Jobs on the Overview page.';
+      finishCollectModal('warn', msg);
+      closeCollectModal();
+      o.showFn('warn', msg);
+    }else if(e && e.name==='AbortError'){
+      // An upload's Stop: the server cancels the collect with the connection,
+      // aborting the transfer and packing alike. Only a stop landing in the
+      // final sign-and-archive moment still exports, so point at Status.
       const msg='&#9632; Collect stopped. Nothing was exported &mdash; unless it had already reached the final signing step; check the Status page.';
+      finishCollectModal('warn', msg);
+      o.showFn('warn', msg);
+      loadStatus();
+    }else if(e && e.message==='collect canceled'){
+      // Stop was pressed (here or in another session): the job's context was
+      // cancelled and its stream ended with the terminal error event.
+      const msg='&#9632; Collect canceled. Nothing was exported &mdash; unless it had already reached the final signing step; check the Status page.';
       finishCollectModal('warn', msg);
       o.showFn('warn', msg);
       loadStatus();
@@ -691,7 +758,8 @@ function setView(view){
   document.querySelectorAll('nav button[data-view]').forEach(b=>{
     b.classList.toggle('active', b.dataset.view===view);
   });
-  if(view==='overview') loadAllWatches();
+  if(view==='overview'){ loadAllWatches(); loadJobs(); }
+  pollJobs(view==='overview'); // live jobs only while the Overview is showing
   if(view==='status') loadStatus();
   if(VIEW_STREAM[view]) loadWatchesInto(VIEW_STREAM[view]);
 }
@@ -1087,6 +1155,123 @@ async function loadStatus(){
   }
 }
 
+// ---- Jobs ----
+// The Overview's Jobs card lists every queued/running/finished collect across
+// all streams and sessions, refreshed by a light poll while the page shows.
+// View follows any job's live log in the collect modal; Cancel stops a queued
+// or running job.
+let jobsTimer=null, jobsCache={};
+
+function pollJobs(on){
+  if(on && jobsTimer==null){ jobsTimer=window.setInterval(()=>{ if(!document.hidden) loadJobs(); }, 2500); }
+  if(!on && jobsTimer!=null){ window.clearInterval(jobsTimer); jobsTimer=null; }
+}
+
+function jobStatePill(j){
+  if(j.state==='running') return '<span class="pill busy">running</span>';
+  if(j.state==='queued') return '<span class="pill q">queued'+(j.position?' &middot; '+esc(j.position)+' ahead':'')+'</span>';
+  if(j.state==='ok') return '<span class="pill ok">ok</span>';
+  if(j.state==='canceled') return '<span class="pill q">canceled</span>';
+  return '<span class="pill warn">error</span>';
+}
+
+// jobDetail is the small line under a job's state pill: live progress while
+// running, the success summary, or why it failed.
+function jobDetail(j){
+  if(j.state==='running'){
+    if(j.dl && j.dl.total>0) return esc(j.dl.name)+' &middot; '+Math.min(100,Math.floor(j.dl.done*100/j.dl.total))+'%';
+    return j.last_log?esc(j.last_log):'';
+  }
+  if(j.state==='error') return esc(j.error||'');
+  if(j.state==='ok') return esc(j.message||'');
+  return '';
+}
+
+function fmtDuration(start, end){
+  if(!start) return '&mdash;';
+  const s=new Date(start).getTime(), e=end?new Date(end).getTime():Date.now();
+  if(isNaN(s)) return '&mdash;';
+  let sec=Math.max(0,Math.round((e-s)/1000));
+  if(sec<60) return sec+'s';
+  if(sec<3600) return Math.floor(sec/60)+'m'+String(sec%60).padStart(2,'0')+'s';
+  return Math.floor(sec/3600)+'h'+String(Math.floor(sec/60)%60).padStart(2,'0')+'m';
+}
+
+function jobRow(j){
+  const by=j.requested_by||(j.kind==='watch'?'schedule':'');
+  const detail=jobDetail(j);
+  const cancel=(j.state==='queued'||j.state==='running')
+    ? '<button onclick="cancelJob('+j.id+')">Cancel</button>' : '';
+  return '<tr><td>'+esc(streamLabel(j.stream))+'</td>'+
+    '<td>'+esc(j.label)+(by?'<br><span class="wmsg">by '+esc(by)+'</span>':'')+'</td>'+
+    '<td>'+jobStatePill(j)+(detail?'<br><span class="wmsg">'+detail+'</span>':'')+'</td>'+
+    '<td>'+fmtTime(j.started_at||j.created_at)+'</td>'+
+    '<td class="num">'+fmtDuration(j.started_at, j.finished_at)+'</td>'+
+    '<td class="wactions"><button onclick="viewJobById('+j.id+')">View</button>'+cancel+'</td></tr>';
+}
+
+async function loadJobs(){
+  const box=document.getElementById('jobsBox');
+  if(!box) return;
+  try{
+    const r=await fetch('/admin/jobs',{cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const list=(await r.json()).jobs||[];
+    jobsCache={};
+    for(const j of list) jobsCache[j.id]=j;
+    if(!list.length){ box.innerHTML='<p class="empty">No jobs yet. Start a collect on an ecosystem page, or wait for a schedule.</p>'; return; }
+    box.innerHTML='<table><thead><tr><th>Stream</th><th>Job</th><th>Status</th>'+
+      '<th>Started</th><th class="num">Duration</th><th>Actions</th></tr></thead><tbody>'+
+      list.map(jobRow).join('')+'</tbody></table>';
+  }catch(e){ box.textContent='Failed to load jobs: '+e.message; }
+}
+
+async function cancelJob(id){
+  if(!confirm('Cancel this job?')) return;
+  try{
+    const r=await fetch('/admin/jobs/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
+    if(!r.ok){ const t=await r.text(); throw new Error((t&&t.trim())||('HTTP '+r.status)); }
+  }catch(e){ window.alert('Cancel failed: '+e.message); }
+  loadJobs();
+}
+
+function viewJobById(id){
+  const j=jobsCache[id];
+  viewJob(id, j?streamLabel(j.stream)+' — '+j.label:('Job #'+id));
+}
+
+// viewJob opens the collect modal following an existing job — anyone's,
+// running or finished — via /admin/jobs/follow.
+function viewJob(id, title){
+  openCollectModal(title);
+  noteCollectJob(id); // known up front: Stop cancels, Close detaches
+  void (async()=>{
+    try{
+      const res=await fetch('/admin/jobs/follow?id='+encodeURIComponent(id),{signal:cmAbort.signal,cache:'no-store'});
+      if(!res.ok || !res.body){
+        const t=await res.text().catch(()=>''); throw new Error((t&&t.trim())||('HTTP '+res.status));
+      }
+      const d=await consumeCollectStream(res);
+      let out=(d && d.skipped)
+        ? {cls:'ok', msg:'&#10003; No new content since the last export &mdash; nothing to send across the diode.'}
+        : {cls:'ok', msg:(d && d.bundle_id)?collectedMsg(d,'Collected','unit(s)'):'&#10003; Job finished.'};
+      if(d && d.diode_error){
+        out={cls:'warn', msg:out.msg+'<br>&#9888; Diode upload failed: '+esc(d.diode_error)+' &mdash; the bundle is archived and still staged; re-transmit it from the Status page.'};
+      }
+      finishCollectModal(out.cls, out.msg);
+    }catch(e){
+      if(e && e.name==='AbortError' && cmDetached){
+        finishCollectModal('warn','Stopped following; the job continues.');
+        closeCollectModal();
+      }else if(e && e.message==='collect canceled'){
+        finishCollectModal('warn','&#9632; Job canceled.');
+      }else if(e && e.name!=='AbortError'){
+        finishCollectModal('err','Error: '+esc(e.message));
+      }
+    }finally{ loadJobs(); }
+  })();
+}
+
 // ---- Schedules (watches) ----
 // Each ecosystem page schedules a recurring collect from its own inputs, so the
 // spec built here is exactly what that page's collect button would POST.
@@ -1212,7 +1397,13 @@ async function watchAction(action, id, stream){
   try{
     const r=await fetch('/admin/watches/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
     if(!r.ok){ const t=await r.text(); show('err','Error: '+esc(t.trim())); return; }
-    if(action==='run') show('ok','&#10003; Run started; the schedule updates when it finishes.');
+    if(action==='run'){
+      const d=await r.json().catch(()=>({}));
+      show('ok', d && d.job_id
+        ? '&#10003; Run queued as job #'+esc(d.job_id)+' &mdash; follow it under Jobs on the Overview page.'
+        : '&#10003; A run for this schedule is already queued or running &mdash; see Jobs on the Overview page.');
+      loadJobs();
+    }
     loadWatchesInto(stream);
     loadAllWatches();
   }catch(e){ show('err','Request failed: '+esc(e.message)); }
@@ -1223,6 +1414,8 @@ document.getElementById('collectModal').addEventListener('cancel', e=>{ if(cmRun
 
 loadStatus();
 loadAllWatches();
+loadJobs();
+pollJobs(true); // the initial view is the Overview
 </script>
 </body>
 </html>

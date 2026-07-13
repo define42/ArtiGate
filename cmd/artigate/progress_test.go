@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -36,11 +38,17 @@ func TestStreamCollectForwardsProgressThenDone(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/admin/containers/collect?stream=1", nil)
 	w := httptest.NewRecorder()
 
-	(&LowServer{}).streamCollect(w, r, func(ctx context.Context) (ExportResult, error) {
+	m := newJobManager()
+	j := testJob(streamContainers, func(ctx context.Context) (ExportResult, error) {
 		emitProgress(ctx, "→ %s", "alpine:3.20")
 		emitProgress(ctx, "    ↓ blob %s (%s)", "ab12cd34ef56", "3.1 MiB")
 		return ExportResult{Stream: "containers", Sequence: 7, ExportedModules: 1, BundleID: "containers-000007"}, nil
 	})
+	if _, err := m.enqueue(context.Background(), j); err != nil {
+		t.Fatal(err)
+	}
+	waitJobDone(t, j)
+	followJobNDJSON(w, r, j, false) // replay of a finished job: log…, terminal
 
 	if ct := w.Header().Get("Content-Type"); ct != "application/x-ndjson" {
 		t.Fatalf("Content-Type = %q, want application/x-ndjson", ct)
@@ -68,15 +76,17 @@ func TestStreamCollectForwardsProgressThenDone(t *testing.T) {
 	}
 }
 
-// The collect goroutine reads r.Body after streamCollect has already written
-// the streaming response headers. streamCollect buffers the body up front so
-// that read succeeds instead of failing with "invalid Read on closed Body".
+// The job worker reads r.Body after the response headers have long been
+// written (and possibly after the handler goroutine moved on). enqueueCollect
+// buffers the body up front so that read succeeds instead of failing with
+// "invalid Read on closed Body".
 func TestStreamCollectRunCanReadBodyAfterHeaders(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/admin/containers/collect?stream=1",
 		strings.NewReader(`{"images":["alpine:3.20"]}`))
 	w := httptest.NewRecorder()
 
-	(&LowServer{}).streamCollect(w, r, func(ctx context.Context) (ExportResult, error) {
+	ls := &LowServer{jobs: newJobManager()}
+	j, ok := ls.enqueueCollect(w, r, streamContainers, func(ctx context.Context) (ExportResult, error) {
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
 			return ExportResult{}, err
@@ -84,6 +94,10 @@ func TestStreamCollectRunCanReadBodyAfterHeaders(t *testing.T) {
 		emitProgress(ctx, "read %d body bytes", len(b))
 		return ExportResult{BundleID: "ok"}, nil
 	})
+	if !ok {
+		t.Fatalf("enqueueCollect refused: %s", w.Body.String())
+	}
+	followJobNDJSON(w, r, j, false)
 
 	events := decodeNDJSON(t, w.Body.String())
 	last := events[len(events)-1]
@@ -93,16 +107,24 @@ func TestStreamCollectRunCanReadBodyAfterHeaders(t *testing.T) {
 	if events[0]["message"] != "read 26 body bytes" {
 		t.Errorf("body read log = %v, want 'read 26 body bytes'", events[0]["message"])
 	}
+	if j.Label != "containers: alpine:3.20" {
+		t.Errorf("job label = %q, want derived from the image list", j.Label)
+	}
 }
 
 func TestStreamCollectReportsError(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/admin/go/collect?stream=1", nil)
 	w := httptest.NewRecorder()
 
-	(&LowServer{}).streamCollect(w, r, func(ctx context.Context) (ExportResult, error) {
+	m := newJobManager()
+	j := testJob(streamGo, func(ctx context.Context) (ExportResult, error) {
 		emitProgress(ctx, "Resolving the Go module graph…")
 		return ExportResult{}, errors.New("no go modules resolved")
 	})
+	if _, err := m.enqueue(context.Background(), j); err != nil {
+		t.Fatal(err)
+	}
+	followJobNDJSON(w, r, j, false)
 
 	events := decodeNDJSON(t, w.Body.String())
 	if len(events) == 0 {
@@ -193,17 +215,45 @@ func TestProgressReaderSilentForSmallDownloads(t *testing.T) {
 	}
 }
 
+// dlTriggerWriter is a recorder that releases the collect once the follower
+// has streamed the dl event, so the live-sample assertion below is
+// deterministic without concurrent recorder access.
+type dlTriggerWriter struct {
+	*httptest.ResponseRecorder
+
+	once sync.Once
+	hold chan struct{}
+}
+
+func (w *dlTriggerWriter) Write(b []byte) (int, error) {
+	if bytes.Contains(b, []byte(`"type":"dl"`)) {
+		w.once.Do(func() { close(w.hold) })
+	}
+	return w.ResponseRecorder.Write(b)
+}
+
 // TestStreamCollectForwardsDownloadEvents checks the wire format: download
-// samples reach the client as {"type":"dl",...} events among the log lines.
+// samples reach a live follower as {"type":"dl",...} events among the log
+// lines. The run holds the job open until the follower has seen the sample,
+// because dl samples are ephemeral — a finished job replays only its log.
 func TestStreamCollectForwardsDownloadEvents(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/admin/hf/collect?stream=1", nil)
-	w := httptest.NewRecorder()
+	w := &dlTriggerWriter{ResponseRecorder: httptest.NewRecorder(), hold: make(chan struct{})}
 
-	(&LowServer{}).streamCollect(w, r, func(ctx context.Context) (ExportResult, error) {
+	m := newJobManager()
+	emitted := make(chan struct{})
+	j := testJob(streamHF, func(ctx context.Context) (ExportResult, error) {
 		emitProgress(ctx, "→ hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0")
 		emitDownloadProgress(ctx, "blob ab12cd34ef56", 5<<20, 100<<20, 42<<20)
+		close(emitted)
+		<-w.hold // hold the job open until the follower streamed the sample
 		return ExportResult{BundleID: "hf-bundle-000001"}, nil
 	})
+	if _, err := m.enqueue(context.Background(), j); err != nil {
+		t.Fatal(err)
+	}
+	<-emitted
+	followJobNDJSON(w, r, j, false) // returns once the job's terminal event is written
 
 	events := decodeNDJSON(t, w.Body.String())
 	var dl map[string]any

@@ -8,6 +8,7 @@ package main
 // ARTIGATE_LOW_AUTH (see auth.go). The high side is never authenticated.
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -190,8 +191,10 @@ func (a *authManager) middleware(next http.Handler) http.Handler {
 			a.handleLogout(w, r)
 			return
 		}
-		if _, ok := a.currentUser(r); ok {
-			next.ServeHTTP(w, r)
+		if user, ok := a.currentUser(r); ok {
+			// Downstream handlers see who is acting (the job queue records who
+			// requested each collect).
+			next.ServeHTTP(w, r.WithContext(withRequestUser(r.Context(), user)))
 			return
 		}
 		if wantsHTML(r) { // a browser navigation: send it to the login page
@@ -200,6 +203,21 @@ func (a *authManager) middleware(next http.Handler) http.Handler {
 		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized) // an API/fetch call
 	})
+}
+
+// requestUserKey carries the authenticated username in a request context; the
+// unexported empty struct type makes it collision-free without a global.
+type requestUserKey struct{}
+
+func withRequestUser(ctx context.Context, user string) context.Context {
+	return context.WithValue(ctx, requestUserKey{}, user)
+}
+
+// requestUser returns the authenticated username behind a request, or "" when
+// authentication is disabled.
+func requestUser(ctx context.Context) string {
+	user, _ := ctx.Value(requestUserKey{}).(string)
+	return user
 }
 
 // currentUser returns the authenticated username from the session cookie, if the
