@@ -99,7 +99,19 @@ Both views back onto the same `/admin/watches*` API.
 | **Pause / disable** | Sets `enabled = 0`. The scheduler stops firing it; `next_run_at` is left untouched. |
 | **Enable** | Sets `enabled = 1` **and** `next_run_at = now`, so re-enabling makes it due promptly. |
 | **Run now** | Runs the watch immediately in the background, regardless of schedule. |
+| **Edit** | Opens the watch's label, interval, and stored collect spec for editing in place. The id, stream, enabled state, and run history are kept. |
 | **Delete** | Removes the watch permanently. |
+
+### Editing a schedule
+
+**Edit** (available in both views) opens a dialog with the watch's label, its interval, and the stored spec as editable JSON — so you can add a requirement to a Python schedule or bump an interval without deleting and recreating the watch (which would lose its run history). Saving POSTs `/admin/watches/update`.
+
+Two things to know about an edit's timing:
+
+- **The next run is re-spaced from the last run.** After an edit, a watch that has run before gets `next_run_at = last_run_at + interval`, so shortening the interval can make it due immediately; lengthening pushes the next run out. A watch that has never run keeps its next-run time (it is already due from creation).
+- **An in-flight run keeps the old spec.** A run that is already queued or running uses the spec it was enqueued with; the edited spec applies from the next run.
+
+The stream itself cannot be changed — a spec only makes sense for the stream it was written for. To move a schedule to a different ecosystem, delete it and create a new one from that ecosystem's page.
 
 !!! warning "Run now returns immediately and is fire-and-forget"
     A collect can take minutes, so `POST /admin/watches/run` starts the run in the background on a detached context and returns `{"status":"started"}` right away. That response says nothing about the collect's eventual outcome — poll `GET /admin/watches` and read the status fields to see how it went. Because the run detaches from the request, it is **not** cancelled when the HTTP request ends or the server shuts down.
@@ -184,6 +196,7 @@ The watch endpoints live under `/admin/` on the low side and are subject to the 
 |---|---|---|
 | `GET /admin/watches` | — | `{"watches":[…]}` |
 | `POST /admin/watches` | `{stream, label, spec, interval_seconds}` | the created `Watch` (with `id`) |
+| `POST /admin/watches/update` | `{id, label?, spec?, interval_seconds?}` | the updated `Watch` |
 | `POST /admin/watches/run` | `{"id":<n>}` | `{"status":"started"}` |
 | `POST /admin/watches/enable` | `{"id":<n>}` | `{"status":"ok"}` |
 | `POST /admin/watches/disable` | `{"id":<n>}` | `{"status":"ok"}` |
@@ -192,6 +205,7 @@ The watch endpoints live under `/admin/` on the low side and are subject to the 
 Notes on the request bodies:
 
 - On **create**, `spec` is sent as a raw JSON object (not a string) and stored verbatim; `label` defaults to `stream` when blank; the watch is always created enabled. The body limit is 8 MiB. Validation rejects unknown streams, intervals below 1 minute, and empty or invalid-JSON specs with HTTP 400.
+- On **update**, only `id` is required (unknown id → HTTP 404): a blank `label`, an omitted or `null` `spec`, and a zero `interval_seconds` each keep the watch's current value, and the merged result is validated like a create. The stream cannot be changed. The body limit is 8 MiB. See [Editing a schedule](#editing-a-schedule) for how the next run is re-spaced.
 - The **run / enable / disable / delete** endpoints all take `{"id":<n>}` (read up to 64 KiB); a missing or non-positive `id` returns HTTP 400, and **run** returns HTTP 404 if no watch has that id.
 
 ### List watches
@@ -219,6 +233,22 @@ curl http://localhost:8080/admin/watches
   ]
 }
 ```
+
+### Edit a watch
+
+```bash
+# change the interval to 2 hours and swap the spec; blank/omitted fields keep
+# their current value, and the stream stays fixed
+curl -X POST http://localhost:8080/admin/watches/update \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "id": 1,
+        "interval_seconds": 7200,
+        "spec": { "requirements": ["requests==2.32.4", "urllib3"] }
+      }'
+```
+
+The response is the updated `Watch`.
 
 ### Trigger, pause, resume, and remove a watch
 

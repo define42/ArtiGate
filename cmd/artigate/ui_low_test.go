@@ -85,6 +85,10 @@ func TestLowServerUIPage(t *testing.T) {
 		"/admin/watches", "loadWatchesInto", "Add schedule",
 		"scheduleGo()", `id="goEvery"`, `id="goWatches"`,
 		"schedulePython()", "scheduleApt()", "scheduleRpm()", "scheduleMaven()",
+		// Every schedule row offers Edit, opening a dialog that updates the
+		// label, interval, and stored collect spec in place.
+		"/admin/watches/update", `id="watchEditModal"`, "editWatch(", "saveWatchEdit",
+		`id="weLabel"`, `id="weEvery"`, `id="weUnit"`, `id="weSpec"`, ">Edit</button>",
 		"Mirror Go modules", `id="gomods"`, `id="gomod"`, `id="gosum"`, "collectGoMod", "/admin/go/collect",
 
 		"Mirror Python packages", `id="pyreqs"`, "collectPython", "/admin/python/collect",

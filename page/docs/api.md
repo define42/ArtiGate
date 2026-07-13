@@ -23,6 +23,7 @@ ArtiGate is a single binary with two roles that never share routes: `artigate lo
 | `/admin/{eco}/collect` | POST | Collect + export a bundle for one ecosystem |
 | `/admin/reexport` | POST | Re-transmit already-archived bundles |
 | `/admin/watches` | GET / POST | List / create scheduled pulls |
+| `/admin/watches/update` | POST | Edit a watch's label, interval, or spec in place |
 | `/admin/watches/{run,enable,disable,delete}` | POST | Act on a watch by id |
 | `/admin/bundles` | GET | Per-stream export status |
 | `/healthz` | any | Liveness (`ok\n`) |
@@ -407,6 +408,33 @@ Body `createWatchRequest`. Body limit **8 MiB**. Validation errors → **400**.
 | `interval_seconds` | int64 | Must be ≥ 60 |
 
 Returns the created `Watch`.
+
+#### `POST /admin/watches/update` — edit
+
+Body `updateWatchRequest`. Body limit **8 MiB**. This is the Edit button in the UI: it changes a watch's label, interval, and/or stored spec in place, keeping its `id`, stream, enabled state, and run history.
+
+```json
+{
+  "id": 1,
+  "label": "requests every 2h",
+  "interval_seconds": 7200,
+  "spec": { "requirements": ["requests==2.32.4"] }
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | int64 | Required; unknown id → **404** |
+| `label` | string | Optional; blank keeps the current label |
+| `spec` | JSON | Optional; omitted or `null` keeps the current spec |
+| `interval_seconds` | int64 | Optional; `0` keeps the current interval, otherwise must be ≥ 60 |
+
+The merged result is validated like a create (interval floor, valid-JSON spec) → **400**. The stream cannot be changed — delete and recreate instead. Returns the updated `Watch`.
+
+Two scheduling effects to know about:
+
+- If the watch has run before, `next_run_at` is re-spaced to `last_run_at + interval_seconds`, so shortening the interval can make it due immediately; a never-run watch keeps its `next_run_at`.
+- A run already queued or running keeps the spec it was enqueued with; the edit applies from the next run.
 
 #### Act on a watch by id
 

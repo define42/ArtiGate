@@ -137,6 +137,9 @@ const lowUIHTML = `<!DOCTYPE html>
   .cm-actions button:disabled { opacity: .5; cursor: default; }
   button.danger { background: #2e1416; color: #ff9ea3; border: 1px solid #7f2a30; border-radius: 6px; padding: .5rem 1rem; cursor: pointer; font: inherit; }
   button.danger:hover:not(:disabled) { background: #3a191c; }
+  .wemodal { border: 1px solid #2a2f3a; border-radius: 10px; background: #161a22; color: #e6e6e6; width: min(640px, calc(100% - 3rem)); max-height: calc(100dvh - 4rem); overflow: auto; padding: 1.1rem 1.25rem 1.25rem; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+  .wemodal::backdrop { background: rgba(6,8,12,.62); }
+  .wemodal h3 { margin: 0 0 .35rem; font-size: 1rem; }
 </style>
 </head>
 <body>
@@ -167,7 +170,7 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   <div class="card">
     <h2>Scheduled pulls</h2>
-    <p class="hint">Every schedule across all ecosystems, with its last run, status, and next run &mdash; so you can see at a glance whether they are working. Add or edit schedules on each ecosystem's page.</p>
+    <p class="hint">Every schedule across all ecosystems, with its last run, status, and next run &mdash; so you can see at a glance whether they are working. Add schedules on each ecosystem's page; <b>Edit</b> changes a schedule's label, interval, or collect spec in place.</p>
     <div id="allWatches"><p class="empty">Loading&hellip;</p></div>
   </div>
   </section>
@@ -471,6 +474,26 @@ const lowUIHTML = `<!DOCTYPE html>
       <button type="button" class="secondary" id="cmClose" onclick="closeCollectModal()">Close</button>
     </div>
   </div>
+</dialog>
+<dialog id="watchEditModal" class="wemodal" aria-label="Edit schedule">
+  <h3>Edit schedule</h3>
+  <p class="hint" id="weStream"></p>
+  <form class="gomod-form" onsubmit="saveWatchEdit(event)">
+    <label class="filelabel">Label
+      <input id="weLabel" type="text" autocomplete="off">
+    </label>
+    <label class="filelabel">Run every
+      <span class="every"><input id="weEvery" type="number" min="1" autocomplete="off"> <select id="weUnit" class="restream"><option value="60">minutes</option><option value="3600">hours</option><option value="86400">days</option></select></span>
+    </label>
+    <label class="filelabel">Collect spec <span class="opt">&mdash; the JSON body this schedule replays on each run, exactly what the page's collect would POST</span>
+      <textarea id="weSpec" rows="9" spellcheck="false" autocomplete="off"></textarea>
+    </label>
+    <div id="weResult" class="rbox"></div>
+    <div class="cm-actions">
+      <button type="button" class="secondary" onclick="closeWatchEdit()">Cancel</button>
+      <button type="submit" class="primary" id="weSave">Save</button>
+    </div>
+  </form>
 </dialog>
 <script>
 // If the session has expired, any API call returns 401; bounce to the login page.
@@ -1356,8 +1379,14 @@ function watchRow(wt, showStream){
     '<td>'+status+(wt.last_message?'<br><span class="wmsg">'+esc(wt.last_message)+'</span>':'')+'</td>'+
     '<td>'+fmtTime(wt.next_run_at)+'</td>'+
     '<td class="wactions"><button onclick="watchAction(\'run\','+wt.id+',\''+wt.stream+'\')">Run now</button>'+
+    '<button onclick="editWatch('+wt.id+')">Edit</button>'+
     toggle+'<button onclick="watchAction(\'delete\','+wt.id+',\''+wt.stream+'\')">Delete</button></td></tr>';
 }
+
+// watchesCache remembers each rendered watch by id (across both views), so the
+// Edit dialog can prefill from the row that was clicked without refetching.
+let watchesCache={};
+function cacheWatches(list){ for(const w of list) watchesCache[w.id]=w; }
 
 // loadWatchesInto renders the schedules for one stream into that ecosystem's
 // page (blank when the stream has none).
@@ -1367,7 +1396,9 @@ async function loadWatchesInto(stream){
   try{
     const r=await fetch('/admin/watches',{cache:'no-store'});
     if(!r.ok) throw new Error('HTTP '+r.status);
-    const list=((await r.json()).watches||[]).filter(w=>w.stream===stream);
+    const all=(await r.json()).watches||[];
+    cacheWatches(all);
+    const list=all.filter(w=>w.stream===stream);
     if(!list.length){ box.innerHTML=''; return; }
     box.innerHTML='<table><thead><tr><th>Schedule</th><th>Every</th><th>Enabled</th>'+
       '<th>Last run</th><th>Status</th><th>Next run</th><th>Actions</th></tr></thead><tbody>'+
@@ -1384,6 +1415,7 @@ async function loadAllWatches(){
     const r=await fetch('/admin/watches',{cache:'no-store'});
     if(!r.ok) throw new Error('HTTP '+r.status);
     const list=(await r.json()).watches||[];
+    cacheWatches(list);
     if(!list.length){ box.innerHTML='<p class="empty">No schedules yet. Add one from an ecosystem page.</p>'; return; }
     box.innerHTML='<table><thead><tr><th>Stream</th><th>Schedule</th><th>Every</th><th>Enabled</th>'+
       '<th>Last run</th><th>Status</th><th>Next run</th><th>Actions</th></tr></thead><tbody>'+
@@ -1407,6 +1439,65 @@ async function watchAction(action, id, stream){
     loadWatchesInto(stream);
     loadAllWatches();
   }catch(e){ show('err','Request failed: '+esc(e.message)); }
+}
+
+// ---- Edit schedule dialog ----
+// Edit opens a schedule in a small dialog: label, interval, and the stored
+// collect spec as pretty-printed JSON. Saving POSTs /admin/watches/update.
+// The stream is fixed at creation, and a run already queued or running keeps
+// the spec it was enqueued with — edits apply from the next run.
+let weWatch=null;
+
+function showWeResult(cls, html){
+  const el=document.getElementById('weResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function editWatch(id){
+  const wt=watchesCache[id];
+  if(!wt) return;
+  weWatch=wt;
+  document.getElementById('weStream').textContent=streamLabel(wt.stream)+' schedule #'+wt.id+
+    ' — the stream is fixed; changes apply from the next run.';
+  document.getElementById('weLabel').value=wt.label||'';
+  // Prefill the interval in the largest unit that divides it exactly, the same
+  // way the tables render it (an odd API-created interval falls back to minutes).
+  const sec=Number(wt.interval_seconds)||0;
+  const unit=(sec>0 && sec%86400===0)?86400:(sec>0 && sec%3600===0)?3600:60;
+  document.getElementById('weUnit').value=String(unit);
+  document.getElementById('weEvery').value=String(Math.max(1,Math.round(sec/unit)));
+  let spec=wt.spec||'';
+  try{ spec=JSON.stringify(JSON.parse(spec),null,2); }catch(_){ /* show the stored text as-is */ }
+  document.getElementById('weSpec').value=spec;
+  clearResult('weResult');
+  document.getElementById('watchEditModal').showModal();
+}
+
+function closeWatchEdit(){ document.getElementById('watchEditModal').close(); }
+
+async function saveWatchEdit(ev){
+  ev.preventDefault();
+  if(!weWatch) return;
+  const sec=intervalSeconds('weEvery','weUnit');
+  if(!sec){ showWeResult('err','Enter a positive schedule interval.'); return; }
+  let spec;
+  try{ spec=JSON.parse(document.getElementById('weSpec').value); }
+  catch(e){ showWeResult('err','The spec is not valid JSON: '+esc(e.message)); return; }
+  if(!spec || typeof spec!=='object' || Array.isArray(spec)){ showWeResult('err','The spec must be a JSON object, like the collect body it replays.'); return; }
+  const btn=document.getElementById('weSave');
+  btn.disabled=true;
+  try{
+    const r=await fetch('/admin/watches/update',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:weWatch.id, label:document.getElementById('weLabel').value.trim(), interval_seconds:sec, spec:spec})});
+    if(!r.ok){ const t=await r.text(); showWeResult('err','Error: '+esc(t.trim())); return; }
+    const stream=weWatch.stream;
+    closeWatchEdit();
+    (WATCH_SHOW[stream]||function(){})('ok','&#10003; Schedule updated.');
+    loadWatchesInto(stream);
+    loadAllWatches();
+  }catch(e){ showWeResult('err','Request failed: '+esc(e.message)); }
+  finally{ btn.disabled=false; }
 }
 
 // Block Esc/backdrop dismissal while a collect is still streaming.
