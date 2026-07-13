@@ -1055,7 +1055,12 @@ func validateAptMirror(m AptMirror, seen map[string]bool) error {
 	if m.Name == "" || len(m.Suites) == 0 {
 		return errors.New("apt mirror missing name or suites")
 	}
-	if strings.ContainsRune(m.Name, '/') {
+	// The mirror name becomes a path component under aptDir() on publish, so it
+	// must be a single safe segment. Validate it here — on the untrusted import
+	// side — exactly as the low side does at collect time (validateRelPath plus
+	// no separator); a bundle whose name is ".." must never reach a filepath.Join
+	// that would place regenerated metadata (or an os.RemoveAll) above aptDir().
+	if err := validateRelPath(m.Name); err != nil || strings.ContainsRune(m.Name, '/') {
 		return fmt.Errorf("invalid apt mirror name %q", m.Name)
 	}
 	suites := map[string]bool{}
@@ -1191,6 +1196,12 @@ func (s *HighServer) publishAptMirror(mirror AptMirror) error {
 		return err
 	}
 	mirrorRoot := filepath.Join(s.aptDir(), merged.Name)
+	// Containment backstop, independent of validateAptMirror: the mirror name is
+	// a path component here, and publishAptSuite/pruneAptDists both write files
+	// and os.RemoveAll under mirrorRoot, so refuse a name that escapes aptDir().
+	if !safeJoin(s.aptDir(), mirrorRoot) {
+		return fmt.Errorf("unsafe apt mirror name %q", merged.Name)
+	}
 	names := make([]string, 0, len(merged.Suites))
 	for _, suite := range merged.Suites {
 		if err := s.publishAptSuite(mirrorRoot, merged, suite); err != nil {

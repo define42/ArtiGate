@@ -1022,7 +1022,12 @@ func validateRpmMirror(m RpmMirror, seen map[string]bool) error {
 	if m.Name == "" || m.BaseURL == "" {
 		return errors.New("rpm mirror missing name or base_url")
 	}
-	if strings.ContainsRune(m.Name, '/') {
+	// The mirror name becomes a path component under rpmDir() on publish, so it
+	// must be a single safe segment. Validate it here — on the untrusted import
+	// side — exactly as the low side does at collect time (validateRelPath plus
+	// no separator); a bundle whose name is ".." must never reach a filepath.Join
+	// that would place regenerated metadata (or an os.RemoveAll) above rpmDir().
+	if err := validateRelPath(m.Name); err != nil || strings.ContainsRune(m.Name, '/') {
 		return fmt.Errorf("invalid rpm mirror name %q", m.Name)
 	}
 	if len(m.Repodata) == 0 {
@@ -1065,9 +1070,16 @@ func (s *HighServer) publishRpm(m *RpmManifest) error {
 }
 
 func (s *HighServer) publishRpmMirror(mirror RpmMirror) error {
+	// Containment backstop, independent of validateRpmMirror: the mirror name is
+	// a path component here, and this function both writes files and (via
+	// signing) reads a repodata dir, so refuse a name that escapes rpmDir().
+	mirrorRoot := filepath.Join(s.rpmDir(), mirror.Name)
+	if !safeJoin(s.rpmDir(), mirrorRoot) {
+		return fmt.Errorf("unsafe rpm mirror name %q", mirror.Name)
+	}
 	// Persist the latest snapshot's state (repodata entries + package list) so
 	// the dashboard and repomd reflect the current repository.
-	indexPath := filepath.Join(s.rpmDir(), mirror.Name, "index.json")
+	indexPath := filepath.Join(mirrorRoot, "index.json")
 	out, err := json.MarshalIndent(mirror, "", "  ")
 	if err != nil {
 		return err
@@ -1076,7 +1088,6 @@ func (s *HighServer) publishRpmMirror(mirror RpmMirror) error {
 		return err
 	}
 
-	mirrorRoot := filepath.Join(s.rpmDir(), mirror.Name)
 	repomd := buildRpmRepomd(mirrorRoot, mirror.Repodata)
 	if err := writeBytesAtomic(filepath.Join(mirrorRoot, "repodata", "repomd.xml"), repomd, 0o644); err != nil {
 		return err
