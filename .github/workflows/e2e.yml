@@ -68,6 +68,13 @@ jobs:
         env:
           ARTIGATE_E2E_REQUIRE_ALL: "1"
           ARTIGATE_E2E_WORKDIR: ${{ runner.temp }}/artigate-e2e
+          # Optional: a Hugging Face access token (read scope) authenticates
+          # the HF collects. Anonymous LFS downloads from shared runner IPs
+          # get intermittently rate-limited (HTTP 403 on public models),
+          # which flakes TestHFRepo/TestHFGGUF; the harness passes this
+          # through to the low server, and an unset secret keeps today's
+          # anonymous behavior.
+          ARTIGATE_HF_TOKEN: ${{ secrets.ARTIGATE_HF_TOKEN }}
         run: go test -tags e2e -v -count=1 -timeout 25m ./e2e
 
       - name: Upload server logs
