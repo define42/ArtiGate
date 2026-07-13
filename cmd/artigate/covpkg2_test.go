@@ -77,6 +77,9 @@ func TestCovP2_ValidateAptMirrorImport(t *testing.T) {
 	bad := []AptMirror{
 		{Name: "", Suites: []AptSuite{suite}},             // missing name
 		{Name: "a/b", Suites: []AptSuite{suite}},          // slash in name
+		{Name: "..", Suites: []AptSuite{suite}},           // parent-dir traversal
+		{Name: "../evil", Suites: []AptSuite{suite}},      // traversal with a slash
+		{Name: ".", Suites: []AptSuite{suite}},            // current-dir, not a real segment
 		{Name: "m", Suites: []AptSuite{{Name: "stable"}}}, // suite missing components/arch
 		{Name: "m", Suites: []AptSuite{{Name: "bad tok", Components: []string{"main"}, Architectures: []string{"amd64"}}}}, // bad token
 	}
@@ -362,6 +365,8 @@ func TestCovP2_ValidateRpmMirrorConfigAndImport(t *testing.T) {
 	bad := []RpmMirror{
 		{Name: "", BaseURL: "https://ex/repo"},                                       // missing name/baseurl
 		{Name: "a/b", BaseURL: "https://ex/repo", Repodata: good.Repodata},           // slash
+		{Name: "..", BaseURL: "https://ex/repo", Repodata: good.Repodata},            // parent-dir traversal
+		{Name: "../evil", BaseURL: "https://ex/repo", Repodata: good.Repodata},       // traversal with a slash
 		{Name: "m", BaseURL: "https://ex/repo"},                                      // no repodata
 		{Name: "m", BaseURL: "https://ex/repo", Repodata: []RpmData{{Href: "x.gz"}}}, // metadata not in files
 		{

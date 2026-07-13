@@ -3601,6 +3601,18 @@ func validateRelPath(rel string) error {
 	return nil
 }
 
+// validateMirrorName checks an APT/RPM mirror name that becomes a single path
+// component under the served repo root on the high side. It must be one safe
+// segment — the same rule the low side enforces at collect time, re-applied on
+// the untrusted import side so a signed bundle can never name a mirror ".." and
+// escape the repo subtree when its metadata is (re)published or pruned.
+func validateMirrorName(name string) error {
+	if err := validateRelPath(name); err != nil || strings.ContainsRune(name, '/') {
+		return fmt.Errorf("invalid mirror name %q", name)
+	}
+	return nil
+}
+
 // -----------------------------------------------------------------------------
 // Archive, hashes, atomic files
 // -----------------------------------------------------------------------------

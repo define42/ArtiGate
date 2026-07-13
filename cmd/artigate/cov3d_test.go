@@ -340,6 +340,66 @@ func TestCov3D_RunWatchBranches(t *testing.T) {
 	}
 }
 
+// TestCov3D_RecoverCollectPanic verifies the scheduler's panic firewall: a
+// collector that panics during a scheduled run is turned into an error (which
+// runWatch then records, advancing next_run_at) instead of propagating up the
+// bare scheduler goroutine and crashing the low server.
+func TestCov3D_RecoverCollectPanic(t *testing.T) {
+	// A panic becomes an error, not a process crash.
+	if _, err := recoverCollectPanic(streamGo, func() (ExportResult, error) {
+		panic("boom in collector")
+	}); err == nil {
+		t.Fatal("recoverCollectPanic swallowed the panic without returning an error")
+	} else if !strings.Contains(err.Error(), "panicked") {
+		t.Errorf("error = %q, want it to mention the panic", err)
+	}
+
+	// The clean path passes the result and nil error straight through.
+	want := ExportResult{Stream: streamGo, Sequence: 7}
+	got, err := recoverCollectPanic(streamGo, func() (ExportResult, error) { return want, nil })
+	if err != nil {
+		t.Fatalf("clean collect returned error: %v", err)
+	}
+	if got.Stream != want.Stream || got.Sequence != want.Sequence {
+		t.Errorf("clean collect result = %+v, want %+v", got, want)
+	}
+}
+
+// TestCov3D_RunWatchSurvivesPanickingCollect drives the record path with a
+// collect that panics inside the firewall, and asserts the run is contained and
+// recorded as a failed run (not propagated up the goroutine). This is the
+// firewall (recoverCollectPanic) and the record path (executeWatch) composed
+// exactly as runWatch composes them.
+func TestCov3D_RunWatchSurvivesPanickingCollect(t *testing.T) {
+	ls := newBareLowServer(t)
+	w, err := ls.watches.Create(Watch{Stream: streamGo, Label: "panic", Spec: `{}`, IntervalSeconds: 3600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// If the panic firewall regresses, this goroutine crashes the test binary
+		// rather than returning — exactly the production failure being guarded.
+		ls.executeWatch(w, func() (ExportResult, error) {
+			return recoverCollectPanic(w.Stream, func() (ExportResult, error) {
+				panic("collector blew up")
+			})
+		})
+	}()
+	<-done
+	got, err := ls.watches.Get(w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastStatus != "error" {
+		t.Fatalf("panicking watch status = %q, want error", got.LastStatus)
+	}
+	if got.NextRunAt.IsZero() {
+		t.Error("panicking watch did not get an advanced next_run_at; the schedule could tight-loop")
+	}
+}
+
 // TestCov3D_RunDueWatchesStoreError covers the Due()-error branch of the
 // scheduler drain.
 func TestCov3D_RunDueWatchesStoreError(t *testing.T) {

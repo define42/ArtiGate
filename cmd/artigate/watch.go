@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -282,8 +283,20 @@ func (s *LowServer) runWatch(ctx context.Context, w Watch) {
 		return
 	}
 	defer s.finishWatch(w.ID)
+	s.executeWatch(w, func() (ExportResult, error) {
+		return s.runWatchCollectSafely(ctx, w.Stream, w.Spec)
+	})
+}
 
-	res, err := s.runWatchCollect(ctx, w.Stream, w.Spec)
+// executeWatch runs one watch's collect closure and records the outcome
+// (status, message, and the advanced next_run_at). The collect is passed in
+// rather than called directly so the record path can be driven in tests with a
+// failing or panic-recovering collect and no real upstream. collect is expected
+// to be panic-safe (runWatch passes runWatchCollectSafely); any error it returns
+// is recorded as a failed run, which advances next_run_at and so cannot wedge
+// the schedule into a tight retry.
+func (s *LowServer) executeWatch(w Watch, collect func() (ExportResult, error)) {
+	res, err := collect()
 	status, message := "ok", watchRunMessage(res)
 	if err != nil {
 		status, message = "error", err.Error()
@@ -296,6 +309,35 @@ func (s *LowServer) runWatch(ctx context.Context, w Watch) {
 	if rerr := s.watches.RecordRun(w.ID, now, status, message, next); rerr != nil {
 		log.Printf("watch %d: record run: %v", w.ID, rerr)
 	}
+}
+
+// runWatchCollectSafely runs a scheduled collect and converts a panic into an
+// ordinary error. Scheduled collects run in the scheduler's own goroutine (and
+// run-now spawns a bare goroutine), so — unlike a collect driven over HTTP,
+// which net/http's per-request recovery contains — a collector panic on
+// malformed upstream data would otherwise propagate to the top of the goroutine
+// and crash the whole low server. Worse, the watch would still be due on the
+// next start, turning a single bad upstream response into a restart crash loop.
+// Recovering here keeps the failure to one run: the error is recorded and the
+// watch's next_run_at still advances, exactly as any other failed collect.
+func (s *LowServer) runWatchCollectSafely(ctx context.Context, stream, spec string) (ExportResult, error) {
+	return recoverCollectPanic(stream, func() (ExportResult, error) {
+		return s.runWatchCollect(ctx, stream, spec)
+	})
+}
+
+// recoverCollectPanic runs fn and turns any panic into an error so a collector
+// bug cannot crash the scheduler goroutine. Kept as a standalone function (not a
+// closure inline in runWatchCollectSafely) so the recovery is unit-testable with
+// a deliberately panicking fn.
+func recoverCollectPanic(stream string, fn func() (ExportResult, error)) (res ExportResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("collect panicked: %v", r)
+			log.Printf("watch collect panic recovered (stream %s): %v\n%s", stream, r, debug.Stack())
+		}
+	}()
+	return fn()
 }
 
 func watchRunMessage(res ExportResult) string {
