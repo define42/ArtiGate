@@ -276,18 +276,23 @@ func (s *LowServer) runDueWatches() {
 		return
 	}
 	for _, w := range due {
-		s.enqueueWatch(w)
+		if _, err := s.enqueueWatch(w); err != nil && !errors.Is(err, errWatchJobExists) {
+			// A full queue or a shutdown: the watch stays due, so the skipped
+			// run is retried on a later tick rather than lost.
+			log.Printf("watch %d (%s): not queued: %v", w.ID, w.Label, err)
+		}
 	}
 }
 
-// enqueueWatch queues one run of w, returning the job id — or 0 when the run
-// was not queued because a job for this watch already is (a due tick
-// overlapping a run-now, or a slow collect still going when the next interval
-// arrived) or the stream's queue is full. Either way the watch stays due, so
-// a skipped run is retried on a later tick rather than lost. The outcome is
-// recorded from the job's completion hook; a watch deleted while its job is
-// queued still runs, and its RecordRun then updates zero rows — harmless.
-func (s *LowServer) enqueueWatch(w Watch) int64 {
+// enqueueWatch queues one run of w and returns the job's id. It returns
+// errWatchJobExists when a job for this watch is already queued or running (a
+// due tick overlapping a run-now, or a slow collect still going when the next
+// interval arrived), and the queue's other refusals (errJobQueueFull,
+// errJobsClosed) verbatim so callers can tell a deduplicated run from a
+// dropped one. The outcome is recorded from the job's completion hook; a
+// watch deleted while its job is queued still runs, and its RecordRun then
+// updates zero rows — harmless.
+func (s *LowServer) enqueueWatch(w Watch) (int64, error) {
 	j := &Job{
 		Stream:      w.Stream,
 		Kind:        jobKindWatch,
@@ -300,12 +305,9 @@ func (s *LowServer) enqueueWatch(w Watch) int64 {
 		afterRun: func(res ExportResult, err error) { s.recordWatchOutcome(w, res, err) },
 	}
 	if _, err := s.jobs.enqueue(context.Background(), j); err != nil {
-		if !errors.Is(err, errWatchJobExists) {
-			log.Printf("watch %d (%s): not queued: %v", w.ID, w.Label, err)
-		}
-		return 0
+		return 0, err
 	}
-	return j.ID
+	return j.ID, nil
 }
 
 // executeWatch runs one watch's collect closure and records the outcome. The
@@ -514,8 +516,15 @@ func (s *LowServer) handleRunWatch(w http.ResponseWriter, r *http.Request) bool 
 	}
 	// Queue the run: a collect can take minutes, far longer than the request.
 	// job_id 0 means a job for this watch is already queued or running (the
-	// queue's dedup prevents it colliding with the scheduler).
-	jobID := s.enqueueWatch(watch)
+	// queue's dedup prevents it colliding with the scheduler) — the requested
+	// work is pending either way. Any other refusal (queue full, shutdown)
+	// means the run was dropped, which must reach the operator as an error,
+	// not a silent success.
+	jobID, err := s.enqueueWatch(watch)
+	if err != nil && !errors.Is(err, errWatchJobExists) {
+		http.Error(w, err.Error(), jobEnqueueStatus(err))
+		return true
+	}
 	writeJSON(w, map[string]any{"status": "started", "job_id": jobID})
 	return true
 }

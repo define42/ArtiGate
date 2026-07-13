@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -206,12 +207,12 @@ func TestWatchJobDedupAcrossTickAndRunNow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first := ls.enqueueWatch(w)
-	if first == 0 {
-		t.Fatal("first enqueue should produce a job")
+	first, err := ls.enqueueWatch(w)
+	if err != nil || first == 0 {
+		t.Fatalf("first enqueue = job %d, %v; want a job", first, err)
 	}
-	if again := ls.enqueueWatch(w); again != 0 {
-		t.Errorf("second enqueue produced job %d, want 0 (deduped)", again)
+	if _, err := ls.enqueueWatch(w); !errors.Is(err, errWatchJobExists) {
+		t.Errorf("second enqueue err = %v, want errWatchJobExists", err)
 	}
 	ls.runDueWatches() // the due tick is deduped the same way
 	if got := len(ls.jobs.list()); got != 2 {
@@ -236,6 +237,53 @@ func TestWatchJobDedupAcrossTickAndRunNow(t *testing.T) {
 	}
 }
 
+// A run-now that cannot be queued because the stream's queue is full is an
+// error the operator must see (429), not a silent "started" — unlike the
+// dedup case, nothing is pending, so the requested run would otherwise be
+// dropped until the schedule next fires (or forever, for a disabled watch).
+func TestRunWatchNowQueueFullIsError(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	w, err := ls.watches.Create(Watch{
+		Stream: streamGo, Label: "go: foo/bar",
+		Spec: `{"modules":["example.com/foo/bar@v1.0.0"]}`, IntervalSeconds: 3600, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Fill the go stream: one running job plus a full pending queue.
+	release := make(chan struct{})
+	defer close(release)
+	blocker := testJob(streamGo, func(context.Context) (ExportResult, error) {
+		<-release
+		return ExportResult{}, nil
+	})
+	if _, err := ls.jobs.enqueue(context.Background(), blocker); err != nil {
+		t.Fatal(err)
+	}
+	waitJobState(t, blocker, jobRunning)
+	for i := 0; i < jobQueueCap; i++ {
+		j := testJob(streamGo, func(context.Context) (ExportResult, error) {
+			return ExportResult{}, nil
+		})
+		if _, err := ls.jobs.enqueue(context.Background(), j); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := ls.enqueueWatch(w); !errors.Is(err, errJobQueueFull) {
+		t.Fatalf("enqueueWatch on full queue err = %v, want errJobQueueFull", err)
+	}
+	res := doLowReq(t, ls, http.MethodPost, "/admin/watches/run",
+		`{"id":`+strconv.FormatInt(w.ID, 10)+`}`)
+	if res.Code != http.StatusTooManyRequests {
+		t.Fatalf("run-now on full queue = %d %s, want 429", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "started") {
+		t.Errorf("run-now on full queue must not report started: %s", res.Body.String())
+	}
+}
+
 // Canceling a watch's job records the outcome, so the schedule advances
 // instead of immediately re-enqueueing the canceled run.
 func TestWatchJobCancelRecordsOutcome(t *testing.T) {
@@ -256,9 +304,9 @@ func TestWatchJobCancelRecordsOutcome(t *testing.T) {
 	if _, err := ls.jobs.enqueue(context.Background(), blocker); err != nil {
 		t.Fatal(err)
 	}
-	jobID := ls.enqueueWatch(w)
-	if jobID == 0 {
-		t.Fatal("watch job not enqueued")
+	jobID, err := ls.enqueueWatch(w)
+	if err != nil || jobID == 0 {
+		t.Fatalf("watch job not enqueued: job %d, %v", jobID, err)
 	}
 	if err := ls.jobs.cancel(jobID); err != nil {
 		t.Fatal(err)

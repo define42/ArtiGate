@@ -322,8 +322,8 @@ func TestCov3D_EnqueueWatchErrorRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id := ls.enqueueWatch(Watch{ID: w.ID, Stream: streamGo, Spec: "{not json", IntervalSeconds: 3600}); id == 0 {
-		t.Fatal("watch job not enqueued")
+	if id, err := ls.enqueueWatch(Watch{ID: w.ID, Stream: streamGo, Spec: "{not json", IntervalSeconds: 3600}); err != nil || id == 0 {
+		t.Fatalf("watch job not enqueued: job %d, %v", id, err)
 	}
 	waitWatchRecorded(t, ls, w.ID)
 	got, err := ls.watches.Get(w.ID)
