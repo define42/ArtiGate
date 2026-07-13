@@ -104,6 +104,53 @@ func TestWatchStoreDueAndEnable(t *testing.T) {
 	assertDueCount(t, store, time.Now().UTC().Add(time.Second), 1)
 }
 
+// TestWatchStoreUpdate covers editing a watch in place: label, spec, and
+// interval change; the next run is re-spaced from the last run at the new
+// interval, while a never-run watch keeps its existing next_run_at.
+func TestWatchStoreUpdate(t *testing.T) {
+	store := newTestWatchStore(t)
+
+	w, err := store.Create(Watch{
+		Stream: streamPython, Label: "py: requests",
+		Spec: `{"requirements":["requests"]}`, IntervalSeconds: 3600, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Never run: the edit keeps next_run_at (still due from creation).
+	before, _ := store.Get(w.ID)
+	w.Label, w.Spec, w.IntervalSeconds = "py: urllib3", `{"requirements":["urllib3"]}`, 7200
+	updated, err := store.Update(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Label != "py: urllib3" || updated.Spec != `{"requirements":["urllib3"]}` || updated.IntervalSeconds != 7200 {
+		t.Fatalf("Update = %+v", updated)
+	}
+	if !updated.NextRunAt.Equal(before.NextRunAt) {
+		t.Errorf("never-run next_run_at changed: %s -> %s", before.NextRunAt, updated.NextRunAt)
+	}
+
+	// Has run: the edit re-spaces the next run from that last run.
+	ranAt := time.Now().UTC().Truncate(time.Second)
+	if err := store.RecordRun(w.ID, ranAt, "ok", "bundle", ranAt.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	w, _ = store.Get(w.ID)
+	w.IntervalSeconds = 86400
+	updated, err = store.Update(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := ranAt.Add(24 * time.Hour); !updated.NextRunAt.Equal(want) {
+		t.Errorf("next_run_at = %s, want %s (last run + new interval)", updated.NextRunAt, want)
+	}
+	if updated.LastStatus != "ok" || updated.LastRunAt == nil || !updated.Enabled {
+		t.Errorf("edit must keep the run history and enabled state: %+v", updated)
+	}
+}
+
 // TestWatchStorePersists confirms watches survive a database reopen.
 func TestWatchStorePersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "watches.db")
@@ -384,5 +431,79 @@ func TestLowServerWatchEndpoints(t *testing.T) {
 	if bad := doLowReq(t, ls, http.MethodPost, "/admin/watches",
 		`{"stream":"nope","interval_seconds":3600,"spec":{"x":1}}`); bad.Code != http.StatusBadRequest {
 		t.Errorf("unknown-stream create status = %d, want 400", bad.Code)
+	}
+}
+
+// TestLowServerWatchUpdateEndpoint drives POST /admin/watches/update: a full
+// edit, a partial edit (blank fields keep their values), and the rejections.
+func TestLowServerWatchUpdateEndpoint(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	created, err := ls.watches.Create(Watch{
+		Stream: streamPython, Label: "py: requests",
+		Spec: `{"requirements":["requests"]}`, IntervalSeconds: 86400, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strconv.FormatInt(created.ID, 10)
+
+	// Full edit: label, interval, and spec all change; the response is the
+	// updated watch.
+	res := doLowReq(t, ls, http.MethodPost, "/admin/watches/update",
+		`{"id":`+id+`,"label":"py: urllib3","interval_seconds":3600,"spec":{"requirements":["urllib3"]}}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("update status %d: %s", res.Code, res.Body.String())
+	}
+	var updated Watch
+	if err := json.Unmarshal(res.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Label != "py: urllib3" || updated.IntervalSeconds != 3600 ||
+		updated.Spec != `{"requirements":["urllib3"]}` || updated.Stream != streamPython {
+		t.Fatalf("update returned %+v", updated)
+	}
+
+	// Partial edit: only the interval; label and spec keep their values.
+	if res := doLowReq(t, ls, http.MethodPost, "/admin/watches/update",
+		`{"id":`+id+`,"interval_seconds":7200}`); res.Code != http.StatusOK {
+		t.Fatalf("partial update status %d: %s", res.Code, res.Body.String())
+	}
+	got, err := ls.watches.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IntervalSeconds != 7200 || got.Label != "py: urllib3" || got.Spec != `{"requirements":["urllib3"]}` {
+		t.Fatalf("partial update stored %+v", got)
+	}
+
+	// A JSON-null spec also means "keep".
+	if res := doLowReq(t, ls, http.MethodPost, "/admin/watches/update",
+		`{"id":`+id+`,"spec":null,"label":"py: pinned"}`); res.Code != http.StatusOK {
+		t.Fatalf("null-spec update status %d: %s", res.Code, res.Body.String())
+	}
+	if got, _ := ls.watches.Get(created.ID); got.Spec != `{"requirements":["urllib3"]}` || got.Label != "py: pinned" {
+		t.Fatalf("null-spec update stored %+v", got)
+	}
+
+	// Rejections: too-short interval, unknown id, missing id, bad JSON.
+	if res := doLowReq(t, ls, http.MethodPost, "/admin/watches/update",
+		`{"id":`+id+`,"interval_seconds":5}`); res.Code != http.StatusBadRequest {
+		t.Errorf("short-interval update status = %d, want 400", res.Code)
+	}
+	if res := doLowReq(t, ls, http.MethodPost, "/admin/watches/update",
+		`{"id":99999,"interval_seconds":3600}`); res.Code != http.StatusNotFound {
+		t.Errorf("unknown-id update status = %d, want 404", res.Code)
+	}
+	if res := doLowReq(t, ls, http.MethodPost, "/admin/watches/update",
+		`{"interval_seconds":3600}`); res.Code != http.StatusBadRequest {
+		t.Errorf("missing-id update status = %d, want 400", res.Code)
+	}
+	if res := doLowReq(t, ls, http.MethodPost, "/admin/watches/update",
+		`{"id":`); res.Code != http.StatusBadRequest {
+		t.Errorf("bad-JSON update status = %d, want 400", res.Code)
+	}
+	// The rejected edits changed nothing.
+	if got, _ := ls.watches.Get(created.ID); got.IntervalSeconds != 7200 {
+		t.Errorf("rejected updates must not change the watch: %+v", got)
 	}
 }

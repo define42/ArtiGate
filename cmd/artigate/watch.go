@@ -187,6 +187,24 @@ func (s *WatchStore) SetEnabled(id int64, enabled bool) error {
 	return err
 }
 
+// Update stores a watch's edited label, spec, and interval, and returns the
+// updated row. A watch that has run before gets its next run re-spaced from
+// that last run at the new interval — shortening the interval pulls the next
+// run forward (possibly making it due immediately), lengthening pushes it out.
+// A never-run watch keeps its existing next_run_at, which is already due.
+func (s *WatchStore) Update(w Watch) (Watch, error) {
+	next := w.NextRunAt
+	if w.LastRunAt != nil {
+		next = w.LastRunAt.Add(time.Duration(w.IntervalSeconds) * time.Second)
+	}
+	if _, err := s.db.Exec(
+		"UPDATE watches SET label = ?, spec = ?, interval_seconds = ?, next_run_at = ? WHERE id = ?",
+		w.Label, w.Spec, w.IntervalSeconds, next.UTC().Format(watchTimeLayout), w.ID); err != nil {
+		return Watch{}, err
+	}
+	return s.Get(w.ID)
+}
+
 // Due returns the enabled watches whose next run time has arrived.
 func (s *WatchStore) Due(now time.Time) ([]Watch, error) {
 	rows, err := s.db.Query("SELECT "+watchCols+" FROM watches WHERE enabled = 1 AND next_run_at <= ? ORDER BY id",
@@ -424,6 +442,16 @@ type createWatchRequest struct {
 	IntervalSeconds int64           `json:"interval_seconds"`
 }
 
+// updateWatchRequest is the body of POST /admin/watches/update. The stream is
+// fixed at creation and cannot be changed; a blank/zero field keeps the
+// watch's current value, so a partial edit can never wipe the spec or label.
+type updateWatchRequest struct {
+	ID              int64           `json:"id"`
+	Label           string          `json:"label"`
+	Spec            json.RawMessage `json:"spec"`
+	IntervalSeconds int64           `json:"interval_seconds"`
+}
+
 type watchIDRequest struct {
 	ID int64 `json:"id"`
 }
@@ -441,6 +469,8 @@ func (s *LowServer) serveLowWatches(w http.ResponseWriter, r *http.Request) bool
 			return s.handleCreateWatch(w, r)
 		}
 		return false
+	case "/admin/watches/update":
+		return s.handleUpdateWatch(w, r)
 	case "/admin/watches/delete":
 		return s.watchAction(w, r, s.watches.Delete)
 	case "/admin/watches/enable":
@@ -481,6 +511,57 @@ func (s *LowServer) handleCreateWatch(w http.ResponseWriter, r *http.Request) bo
 	}
 	created, err := s.watches.Create(watch)
 	return respondJSONOrError(w, http.StatusInternalServerError, created, err)
+}
+
+// handleUpdateWatch edits an existing watch's label, spec, and interval in
+// place, keeping its id, stream, enabled state, and run history. A job already
+// queued or running for the watch still uses the spec it was enqueued with;
+// the edit takes effect from the next run.
+func (s *LowServer) handleUpdateWatch(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return true
+	}
+	var req updateWatchRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, fmt.Sprintf("parse watch request: %v", err), http.StatusBadRequest)
+		return true
+	}
+	if req.ID <= 0 {
+		http.Error(w, "missing watch id", http.StatusBadRequest)
+		return true
+	}
+	watch, err := s.watches.Get(req.ID)
+	if err != nil {
+		http.Error(w, "watch not found", http.StatusNotFound)
+		return true
+	}
+	applyWatchUpdate(&watch, req)
+	if err := validateWatch(watch); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return true
+	}
+	updated, err := s.watches.Update(watch)
+	return respondJSONOrError(w, http.StatusInternalServerError, updated, err)
+}
+
+// applyWatchUpdate merges an edit's fields into the stored watch. Blank/zero
+// fields (and a JSON null spec) keep their current value; the merged result
+// still goes through validateWatch before being stored.
+func applyWatchUpdate(w *Watch, req updateWatchRequest) {
+	if label := strings.TrimSpace(req.Label); label != "" {
+		w.Label = label
+	}
+	if spec := strings.TrimSpace(string(req.Spec)); spec != "" && spec != "null" {
+		w.Spec = spec
+	}
+	if req.IntervalSeconds != 0 {
+		w.IntervalSeconds = req.IntervalSeconds
+	}
 }
 
 func (s *LowServer) watchAction(w http.ResponseWriter, r *http.Request, action func(int64) error) bool {

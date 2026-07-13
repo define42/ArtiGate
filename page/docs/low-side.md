@@ -183,7 +183,7 @@ Re-export takes the same per-stream lock as a fresh export (so it cannot collide
 
 ## Scheduling
 
-Any collect form can be turned into a recurring **watch** with the "Schedule the above" row — pick an interval in hours or days and the stored spec re-runs on the scheduler tick. A watch replays exactly the collect body its page would POST, so moving references (a container tag, `@latest`, `resolve_deps`) re-resolve on every run, while dedup ensures unchanged upstreams produce no new bundles. See [Scheduling (watches)](scheduling.md) for the full model, the API, and the run-now / enable / disable controls.
+Any collect form can be turned into a recurring **watch** with the "Schedule the above" row — pick an interval in hours or days and the stored spec re-runs on the scheduler tick. A watch replays exactly the collect body its page would POST, so moving references (a container tag, `@latest`, `resolve_deps`) re-resolve on every run, while dedup ensures unchanged upstreams produce no new bundles. See [Scheduling (watches)](scheduling.md) for the full model, the API, and the run-now / edit / enable / disable controls.
 
 ## Fetching uses host tools and credentials
 
