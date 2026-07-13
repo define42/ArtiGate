@@ -149,6 +149,9 @@ func acmeTLSConfig(c TLSConfig, storageDir string) (*tls.Config, error) {
 		return nil, fmt.Errorf("acme: %w", err)
 	}
 	tlsCfg := magic.TLSConfig()
+	// Pin the same TLS 1.2 floor as the other modes; certmagic's default already
+	// matches, but set it explicitly so the guarantee is enforced here too.
+	tlsCfg.MinVersion = tls.VersionTLS12
 	tlsCfg.NextProtos = append([]string{"h2", "http/1.1"}, tlsCfg.NextProtos...)
 	return tlsCfg, nil
 }

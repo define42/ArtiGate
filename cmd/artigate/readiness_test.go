@@ -187,9 +187,9 @@ func TestIsCrossSiteBrowserRequest(t *testing.T) {
 	}
 }
 
-func TestCSRFGuardLow(t *testing.T) {
+func TestCSRFGuard(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	guard := csrfGuardLow(ok)
+	guard := csrfGuard(ok)
 
 	do := func(method, secFetch string) int {
 		rec := httptest.NewRecorder()

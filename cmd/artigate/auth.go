@@ -129,10 +129,19 @@ func verifyArgon2(password, phc string) bool {
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
+// decoyArgon2Hash is a well-formed argon2id hash (with the default cost
+// parameters) that matches no password. It exists only so an unknown username
+// costs the same verification work as a known one, denying a response-time
+// oracle for username enumeration.
+const decoyArgon2Hash = "$argon2id$v=19$m=65536,t=3,p=1$l8KDP2DnPYFDchr22wEHBg$8500PRCc3injeYsNzs6Zj8gZqCb8O3gAAcJauU9QOT4"
+
 // credentialOK reports whether user/pass match a configured argon2id credential.
 func credentialOK(users map[string]string, user, pass string) bool {
 	hash, ok := users[user]
 	if !ok {
+		// Spend equivalent argon2 work on a decoy so an unknown username is not
+		// distinguishable from a known one by how long the check takes.
+		_ = verifyArgon2(pass, decoyArgon2Hash)
 		return false
 	}
 	return verifyArgon2(pass, hash)

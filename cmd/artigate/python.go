@@ -272,6 +272,16 @@ func validatePipArg(kind, val string) error {
 			return fmt.Errorf("%s %q contains a control character", kind, val)
 		}
 	}
+	// ArtiGate mirrors wheels pip resolves from the index. A direct URL or local
+	// path bypasses that resolution and would have pip fetch (and the low side
+	// sign) an artifact from an operator-named host with no index checksum, so
+	// reject those forms — pin a versioned package from the index instead.
+	if strings.Contains(val, "://") {
+		return fmt.Errorf("%s %q must not be a URL; mirror a version resolved from the index instead", kind, val)
+	}
+	if kind == "requirement" && (strings.ContainsAny(val, "/\\") || strings.HasPrefix(val, ".")) {
+		return fmt.Errorf("requirement %q must be a package specifier, not a path or URL", val)
+	}
 	return nil
 }
 
