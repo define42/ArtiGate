@@ -118,15 +118,26 @@ because a one-way link cannot ask for retransmission:
 2. the low side's **Status page / `POST /admin/reexport`** re-transmits those
    sequences from the bundle archive — over the diode again.
 
+The re-send does not start from zero: the catcher keeps an abandoned
+transfer's completed FEC blocks beside the landing directory for 24 hours
+(they count against the unverified-storage quota), and a re-sent file with
+the same name and content hash resumes from them, so each attempt only has
+to deliver the blocks every earlier attempt lost. Under loss beyond the
+parity budget the catcher also evicts stuck half-received blocks instead of
+stalling, so one pass completes every block the link let through. Together
+these make a multi-gigabyte model bundle converge in a couple of re-sends on
+a lossy link, instead of demanding one perfect pass.
+
 The catcher logs one summary line whenever something happened: datagrams and
 bytes received, drops, **blocks repaired** (parity actually used), files
-landed / expired / failed. A steadily climbing repair count means the link or
+landed / expired / failed / resumed, and **blocks evicted** (loss beyond the
+parity budget). A steadily climbing repair count means the link or
 the rate limit needs attention *before* transfers start failing.
 
 The receiver also applies hard resource ceilings before content authentication:
 the same 64 GiB / 16 MiB / 4 KiB suffix limits as HTTP ingest, at most 16 active
 transfers and 32 open blocks per transfer, 64 MiB reserved reconstruction memory
-per transfer and 256 MiB globally, one million blocks per file, 4,096 remembered
+per transfer and 256 MiB globally, four million blocks per file, 4,096 remembered
 completed transfer IDs, and 64 cached Reed-Solomon encoder geometries. A block
 reserves its full data-plus-parity footprint before the first shard is retained.
 

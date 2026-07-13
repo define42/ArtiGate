@@ -333,7 +333,12 @@ curl -fT go-bundle-000042.tar.gz -H "Authorization: Bearer $TOKEN" \
 
 Ingress is bounded before verification: archives are limited to 64 GiB,
 manifests to 16 MiB, signatures to 4 KiB, and pending/quarantined/rejected files
-to 128 GiB in aggregate.
+to 128 GiB in aggregate. The archive bound is no ceiling on what a collect can
+carry: a collect whose new content would overflow it — a full safetensors
+repository easily does — is split automatically into consecutive sequenced
+bundles, each within the limit. The content ships in *part* bundles first and
+the ecosystem metadata arrives in the final bundle, which references the parts'
+files, so the model appears on the high side exactly once, complete.
 
 ### Built-in UDP diode transport (optional)
 
@@ -359,8 +364,14 @@ interface is what enables each side — ArtiGate configures the NIC itself
 Loss beyond the parity budget expires the transfer on the catcher (nothing
 partial ever lands) and is recovered the usual way: the gap shows on the high
 side's `/admin/missing`, and a low-side re-export re-transmits it from the
-archive. In Docker both sides need `network_mode: host`, `cap_add:
-[NET_ADMIN]`, and a root user — see `examples/docker-compose-diode-low.yml`,
+archive. The retry is cheap even for huge bundles, because recovery is
+per-block: the catcher keeps an expired transfer's completed FEC blocks beside
+the landing directory (for 24 hours), and the re-sent file — same name, same
+content hash — resumes from them, so each attempt only has to deliver the
+blocks every earlier attempt lost. A multi-gigabyte model bundle therefore
+converges on a lossy link instead of demanding one perfect pass. In Docker
+both sides need `network_mode: host`, `cap_add: [NET_ADMIN]`, and a root user
+— see `examples/docker-compose-diode-low.yml`,
 `examples/docker-compose-diode-high.yml`, and the
 [data-diode documentation](https://define42.github.io/ArtiGate/data-diode/)
 for tuning guidance.

@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"math/rand"
 	"net"
 	"net/http/httptest"
@@ -615,4 +617,263 @@ func TestLowToHighOverUDPDiode(t *testing.T) {
 		t.Fatalf("hf stream not imported over the UDP diode: %+v", st.Stream(streamHF))
 	}
 	assertHTTPBody(t, high.URL+"/v2/unsloth/gpt-oss-20b-GGUF/manifests/Q4_0", string(model.manifest))
+}
+
+// -----------------------------------------------------------------------------
+// Per-block recovery across re-sends (persisted partials)
+// -----------------------------------------------------------------------------
+
+// sendWithDeadBlocks feeds a file's datagrams into asm, dropping one more
+// shard than parity can repair from every block whose index dead reports —
+// those blocks can never complete in this pass.
+func sendWithDeadBlocks(t *testing.T, asm *diodeAssembler, name string, content []byte, pl diodePlan, dead func(block int) bool) {
+	t.Helper()
+	total := pl.totalShards()
+	now := time.Now()
+	for i, pkt := range collectDiodePackets(t, name, content, pl) {
+		if dead(i/total) && i%total < pl.parityShards+1 {
+			continue
+		}
+		asm.handleDatagram(pkt, now)
+	}
+}
+
+// TestDiodeResumeAfterExpiry is the per-chunk recovery loop: a transfer that
+// loses one block beyond the parity budget expires but keeps its completed
+// blocks, and the re-send — on a fresh assembler, as after a catcher restart
+// — resumes from them and lands byte-exact.
+func TestDiodeResumeAfterExpiry(t *testing.T) {
+	dir := t.TempDir()
+	pl := testDiodePlan(t)
+	content := testContent(4*pl.blockDataSize() + 100) // 5 blocks, short tail
+	const name = "hf-bundle-000042.tar.gz"
+
+	asm := newDiodeAssembler(dir, validBundleFileName, nil)
+	sendWithDeadBlocks(t, asm, name, content, pl, func(b int) bool { return b == 2 })
+	if fileExists(filepath.Join(dir, name)) {
+		t.Fatal("file landed despite an unrecoverable block")
+	}
+	asm.expireStale(time.Now().Add(diodeStaleAfter + time.Second))
+	if asm.stats.filesExpired != 1 {
+		t.Fatalf("filesExpired = %d, want 1", asm.stats.filesExpired)
+	}
+	st, ok := loadPartialState(udpPartialStatePath(dir, name))
+	if !ok || st.DoneCount != 4 || st.BlockCount != 5 || !fileExists(udpPartialPath(dir, name)) {
+		t.Fatalf("persisted partial = %+v (ok=%v), want 4/5 blocks kept", st, ok)
+	}
+
+	var landed []string
+	fresh := newDiodeAssembler(dir, validBundleFileName, func(n string) { landed = append(landed, n) })
+	sendWithDeadBlocks(t, fresh, name, content, pl, func(int) bool { return false })
+	got, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatalf("re-send did not land the file: %v (stats %+v)", err, fresh.stats)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatal("landed bytes differ from the sent file")
+	}
+	if fresh.stats.filesResumed != 1 || len(landed) != 1 {
+		t.Fatalf("resumed = %d, landed = %v, want one resumed landing", fresh.stats.filesResumed, landed)
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(dir, "*.udp-*")); len(leftovers) != 0 {
+		t.Fatalf("resume left files behind: %v", leftovers)
+	}
+}
+
+// TestDiodeEvictionKeepsLossyTransferMoving loses more blocks than the
+// open-block table holds: without eviction the transfer would stall there and
+// the tail's packets would all be dropped. With it, every still-recoverable
+// block completes on the first pass and the re-send finishes the job.
+func TestDiodeEvictionKeepsLossyTransferMoving(t *testing.T) {
+	dir := t.TempDir()
+	pl := testDiodePlan(t)
+	deadBlocks := diodeMaxOpenBlocks + 1
+	blocks := deadBlocks + 7
+	content := testContent(blocks * pl.blockDataSize())
+	const name = "hf-bundle-000007.tar.gz"
+
+	asm := newDiodeAssembler(dir, validBundleFileName, nil)
+	sendWithDeadBlocks(t, asm, name, content, pl, func(b int) bool { return b < deadBlocks })
+	if asm.stats.evictions == 0 {
+		t.Fatal("no open blocks were evicted despite loss beyond the open-block table")
+	}
+	asm.expireStale(time.Now().Add(diodeStaleAfter + time.Second))
+	st, ok := loadPartialState(udpPartialStatePath(dir, name))
+	if !ok || st.DoneCount != 7 {
+		t.Fatalf("persisted partial = %+v (ok=%v), want the 7 intact tail blocks kept", st, ok)
+	}
+
+	sendWithDeadBlocks(t, asm, name, content, pl, func(int) bool { return false })
+	got, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatalf("re-send did not land the file: %v (stats %+v)", err, asm.stats)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatal("landed bytes differ from the sent file")
+	}
+	if asm.stats.filesResumed != 1 {
+		t.Fatalf("filesResumed = %d, want 1", asm.stats.filesResumed)
+	}
+}
+
+// TestDiodeResumeIgnoresMismatchedPartial sends different content under a
+// name that has a persisted partial: the partial must not be adopted (its
+// blocks belong to other bytes), the new transfer lands on its own, and the
+// stale partial is cleaned up by the landing.
+func TestDiodeResumeIgnoresMismatchedPartial(t *testing.T) {
+	dir := t.TempDir()
+	pl := testDiodePlan(t)
+	const name = "go-bundle-000009.tar.gz"
+	contentA := testContent(4*pl.blockDataSize() + 100)
+
+	asm := newDiodeAssembler(dir, validBundleFileName, nil)
+	sendWithDeadBlocks(t, asm, name, contentA, pl, func(b int) bool { return b == 1 })
+	asm.expireStale(time.Now().Add(diodeStaleAfter + time.Second))
+	if !fileExists(udpPartialPath(dir, name)) {
+		t.Fatal("no partial persisted for content A")
+	}
+
+	contentB := append([]byte("different"), testContent(4*pl.blockDataSize()+91)...)
+	sendWithDeadBlocks(t, asm, name, contentB, pl, func(int) bool { return false })
+	got, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatalf("content B did not land: %v", err)
+	}
+	if !bytes.Equal(got, contentB) {
+		t.Fatal("landed bytes differ from content B")
+	}
+	if asm.stats.filesResumed != 0 {
+		t.Fatal("a partial of different content was adopted")
+	}
+	if fileExists(udpPartialPath(dir, name)) || fileExists(udpPartialStatePath(dir, name)) {
+		t.Fatal("stale partial survived a landing that supersedes it")
+	}
+}
+
+func TestBlockBitsetRoundtrip(t *testing.T) {
+	bitset := []uint64{0xdeadbeef, 0, 1<<63 | 5}
+	enc := encodeBlockBitset(bitset)
+	got, done, err := decodeBlockBitset(enc, 3*64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0] != bitset[0] || got[1] != bitset[1] || got[2] != bitset[2] {
+		t.Fatalf("roundtrip = %x", got)
+	}
+	if want := uint32(24 + 3); done != want { // popcounts: 24 + 0 + 3
+		t.Fatalf("done = %d, want %d", done, want)
+	}
+	if _, _, err := decodeBlockBitset(enc, 2*64); err == nil {
+		t.Error("wrong block count accepted")
+	}
+	if _, _, err := decodeBlockBitset(enc, 3*64-32); err == nil {
+		t.Error("bits beyond the block count accepted")
+	}
+	if _, _, err := decodeBlockBitset("!!!", 64); err == nil {
+		t.Error("bad base64 accepted")
+	}
+}
+
+// TestDiodePartialStateValidation drives probePartial through resume states
+// that must all be refused — a partial is only adopted for exactly the
+// content the packet announces, with internally consistent progress.
+func TestDiodePartialStateValidation(t *testing.T) {
+	pl := testDiodePlan(t)
+	const name = "npm-bundle-000012.tar.gz"
+	content := testContent(2*pl.blockDataSize() + 9)
+
+	valid := diodePartialState{
+		Name: name, FileSize: int64(len(content)),
+		SHA256:     containerSHADigestless(t, content),
+		BlockCount: 3, Written: int64(pl.blockDataSize()), DoneCount: 1,
+		BlocksDone: encodeBlockBitset([]uint64{1}),
+	}
+	pkt := diodePacket{Name: name, FileSize: int64(len(content)), BlockCount: 3, SHA256: sha256.Sum256(content)}
+
+	check := func(t *testing.T, mutate func(*diodePartialState), wantAdopt bool) {
+		t.Helper()
+		dir := t.TempDir()
+		asm := newDiodeAssembler(dir, validBundleFileName, nil)
+		st := valid
+		mutate(&st)
+		b, err := json.Marshal(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, udpPartialStatePath(dir, name), b)
+		writeFile(t, udpPartialPath(dir, name), content[:pl.blockDataSize()])
+		if got := asm.probePartial(&pkt) != nil; got != wantAdopt {
+			t.Errorf("adopt = %v, want %v", got, wantAdopt)
+		}
+	}
+
+	t.Run("valid state adopts", func(t *testing.T) { check(t, func(*diodePartialState) {}, true) })
+	t.Run("wrong sha", func(t *testing.T) {
+		check(t, func(st *diodePartialState) { st.SHA256 = strings.Repeat("0", 64) }, false)
+	})
+	t.Run("wrong size", func(t *testing.T) { check(t, func(st *diodePartialState) { st.FileSize++ }, false) })
+	t.Run("wrong block count", func(t *testing.T) { check(t, func(st *diodePartialState) { st.BlockCount = 4 }, false) })
+	t.Run("no progress", func(t *testing.T) {
+		check(t, func(st *diodePartialState) { st.DoneCount = 0; st.BlocksDone = encodeBlockBitset([]uint64{0}) }, false)
+	})
+	t.Run("claims completion", func(t *testing.T) {
+		check(t, func(st *diodePartialState) { st.DoneCount = 3; st.BlocksDone = encodeBlockBitset([]uint64{7}) }, false)
+	})
+	t.Run("bitset disagrees with done count", func(t *testing.T) {
+		check(t, func(st *diodePartialState) { st.DoneCount = 2 }, false)
+	})
+	t.Run("written beyond file", func(t *testing.T) {
+		check(t, func(st *diodePartialState) { st.Written = st.FileSize + 1 }, false)
+	})
+
+	t.Run("corrupt state json", func(t *testing.T) {
+		dir := t.TempDir()
+		asm := newDiodeAssembler(dir, validBundleFileName, nil)
+		writeFile(t, udpPartialStatePath(dir, name), []byte("{broken"))
+		writeFile(t, udpPartialPath(dir, name), content[:16])
+		if asm.probePartial(&pkt) != nil {
+			t.Error("corrupt state adopted")
+		}
+	})
+	t.Run("missing data file", func(t *testing.T) {
+		dir := t.TempDir()
+		asm := newDiodeAssembler(dir, validBundleFileName, nil)
+		b, err := json.Marshal(valid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, udpPartialStatePath(dir, name), b)
+		if asm.probePartial(&pkt) != nil {
+			t.Error("state without data adopted")
+		}
+	})
+}
+
+// containerSHADigestless is the bare hex sha256 of b.
+func containerSHADigestless(t *testing.T, b []byte) string {
+	t.Helper()
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// TestSendDiodeFileRejectsTooManyBlocks checks the send-side guard: a file
+// that would exceed the catcher's block-count bound fails immediately instead
+// of streaming into a black hole.
+func TestSendDiodeFileRejectsTooManyBlocks(t *testing.T) {
+	pl := testDiodePlan(t)
+	enc, err := reedsolomon.New(pl.dataShards, pl.parityShards)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := diodeFileMeta{
+		Name:     "go-bundle-000001.tar.gz",
+		FileSize: int64(diodeMaxBlockCount)*int64(pl.blockDataSize()) + 1,
+	}
+	err = sendDiodeFile(bytes.NewReader(nil), meta, pl, enc, func([]byte) error {
+		t.Fatal("a datagram was emitted for an unsendable file")
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "wire limit") {
+		t.Fatalf("oversized send = %v, want a wire-limit error", err)
+	}
 }

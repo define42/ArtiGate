@@ -880,7 +880,7 @@ func (s *LowServer) CollectContainers(ctx context.Context, req ContainerCollectR
 	}
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
-	res, err := s.exportIfNew(ctx, streamContainers, files, req.Force, func(seq int64) (ExportResult, error) {
+	res, err := s.exportIfNew(ctx, streamContainers, stageRoot, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeContainerBundle(ctx, seq, stageRoot, files, repos)
 	})
 	if err != nil {

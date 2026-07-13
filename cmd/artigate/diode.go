@@ -333,6 +333,19 @@ func isUDPTempName(name string) bool {
 	return strings.Contains(name, ".udp-")
 }
 
+// isUDPPartialName matches a persisted partial transfer and its resume state
+// (diodewire.go): kept bytes that count against the unverified storage quota
+// like any other stored transport data.
+func isUDPPartialName(name string) bool {
+	return strings.HasSuffix(name, udpPartialSuffix) || strings.HasSuffix(name, udpPartialStateSuffix)
+}
+
+// isUDPActiveTempName matches only in-progress UDP reassembly temp files,
+// whose bytes the assembler accounts for as active transfers instead.
+func isUDPActiveTempName(name string) bool {
+	return isUDPTempName(name) && !isUDPPartialName(name)
+}
+
 func firstErr(errs ...error) error {
 	for _, err := range errs {
 		if err != nil {
