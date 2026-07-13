@@ -178,10 +178,11 @@ func TestParseNpmLock(t *testing.T) {
 	    "node_modules/lodash": {"version": "4.17.21", "resolved": "https://registry.example/lodash/-/lodash-4.17.21.tgz", "integrity": "sha512-aaaa"},
 	    "node_modules/@scope/pkg": {"version": "1.0.0", "resolved": "https://registry.example/@scope/pkg/-/pkg-1.0.0.tgz", "integrity": "sha512-bbbb"},
 	    "node_modules/a/node_modules/lodash": {"version": "4.17.21", "resolved": "https://registry.example/lodash/-/lodash-4.17.21.tgz", "integrity": "sha512-aaaa"},
-	    "node_modules/alias": {"name": "real-name", "version": "2.0.0", "resolved": "https://registry.example/real-name/-/real-name-2.0.0.tgz"},
+	    "node_modules/alias": {"name": "real-name", "version": "2.0.0", "resolved": "https://registry.example/real-name/-/real-name-2.0.0.tgz", "integrity": "sha512-cccc"},
 	    "node_modules/linked": {"link": true, "resolved": "../somewhere"},
 	    "node_modules/bundled": {"version": "1.0.0", "inBundle": true},
 	    "node_modules/gitdep": {"version": "3.0.0", "resolved": "git+ssh://git@github.com/x/y.git#abc"},
+	    "node_modules/nointegrity": {"version": "9.9.9", "resolved": "https://registry.example/nointegrity/-/nointegrity-9.9.9.tgz"},
 	    "packages/workspace-app": {"version": "0.1.0"}
 	  }
 	}`
@@ -201,8 +202,20 @@ func TestParseNpmLock(t *testing.T) {
 	if len(entries) != 3 {
 		t.Errorf("expected 3 deduplicated entries, got %d: %v", len(entries), entries)
 	}
-	if len(skipped) != 1 || skipped[0].Module != "gitdep" {
-		t.Errorf("expected only the git dependency skipped, got %v", skipped)
+	// A git dependency (unsupported URL) and a registry entry with no integrity
+	// hash (unverifiable) are both skipped and reported, never forwarded.
+	skippedErr := map[string]string{}
+	for _, s := range skipped {
+		skippedErr[s.Module] = s.Error
+	}
+	if len(skipped) != 2 {
+		t.Errorf("expected 2 skipped deps, got %d: %v", len(skipped), skipped)
+	}
+	if _, ok := skippedErr["gitdep"]; !ok {
+		t.Errorf("expected gitdep skipped, got %v", skipped)
+	}
+	if msg, ok := skippedErr["nointegrity"]; !ok || !strings.Contains(msg, "integrity") {
+		t.Errorf("expected nointegrity skipped for missing integrity, got %v", skipped)
 	}
 
 	if _, _, err := parseNpmLock([]byte(`{"lockfileVersion":1,"dependencies":{}}`)); err == nil {

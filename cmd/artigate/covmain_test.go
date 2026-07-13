@@ -406,7 +406,7 @@ func TestCovMain_ImportLoop(t *testing.T) {
 	}
 	writeSignedBundle(t, hs.cfg.Landing, priv, 1, 0, []moduleSpec{{"github.com/foo/bar", "v1.0.0"}})
 
-	go hs.importLoop()
+	go hs.importLoop(t.Context())
 
 	deadline := time.Now().Add(3 * time.Second)
 	for {

@@ -928,6 +928,12 @@ func npmLockEntryFor(name string, p npmLockPackage) (npmLockEntry, *FailedModule
 	if u, err := url.Parse(p.Resolved); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return fail(fmt.Sprintf("unsupported resolved URL %q (only registry tarballs are mirrored)", p.Resolved))
 	}
+	// A registry tarball is mirrored only when the lockfile pins its integrity;
+	// without it the download could not be verified before being signed into a
+	// bundle, so skip and report it rather than forward unverified bytes.
+	if strings.TrimSpace(p.Integrity) == "" {
+		return fail("no integrity hash in lockfile (an unverifiable tarball is never mirrored)")
+	}
 	return npmLockEntry{Name: name, Version: p.Version, Resolved: p.Resolved, Integrity: p.Integrity}, nil
 }
 
@@ -988,6 +994,11 @@ func downloadNpmTarball(ctx context.Context, rawURL, integrity, dest string) (er
 	verifier, err := newSRIVerifier(integrity)
 	if err != nil {
 		return err
+	}
+	// Defense in depth: npmLockEntryFor already rejects integrity-less entries,
+	// but never let this function store a tarball it cannot verify.
+	if verifier == nil {
+		return errors.New("refusing to store an npm tarball with no integrity hash")
 	}
 	f, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
