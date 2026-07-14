@@ -8,9 +8,10 @@ rebuilds all metadata from the artifacts themselves. See
 [Architecture](architecture.md) and [Security & trust](security.md) for the model.
 
 !!! note "Source of truth"
-    The behaviour described here is defined in `cmd/artigate/main.go` and the
-    per-ecosystem collectors (`python.go`, `npm.go`, `apt.go`, `rpm.go`,
-    `java.go`, `container.go`, `hf.go`) under `cmd/artigate/`, and summarised in
+    The behaviour described here is defined in `cmd/artigate/lowside.go` /
+    `highside.go` and the per-ecosystem collectors (`python.go`, `npm.go`,
+    `apt.go`, `rpm.go`, `java.go`, `container.go`, `hf.go`) under
+    `cmd/artigate/`, and summarised in
     the project `README.md` "Notes and limitations" section. Where this page and
     the code ever disagree, the code wins.
 

@@ -17,7 +17,7 @@ import (
 
 // ExportResult mirrors the low side's collect response (cmd/artigate is
 // package main, so the shape is duplicated here; see ExportResult in
-// cmd/artigate/main.go).
+// cmd/artigate/lowside.go).
 type ExportResult struct {
 	Stream          string         `json:"stream"`
 	Sequence        int64          `json:"sequence"`
