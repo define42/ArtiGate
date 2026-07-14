@@ -749,3 +749,203 @@ func TestNpmUIWiring(t *testing.T) {
 		}
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Dist-tags: collection, validation, and serving
+// -----------------------------------------------------------------------------
+
+func TestNpmRegistryBaseFor(t *testing.T) {
+	for _, tt := range []struct{ name, resolved, want string }{
+		{"lodash", "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz", "https://registry.npmjs.org"},
+		{"@scope/pkg", "https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz", "https://registry.npmjs.org"},
+		{"left-pad", "https://nexus.corp/repository/npm-proxy/left-pad/-/left-pad-1.3.0.tgz", "https://nexus.corp/repository/npm-proxy"},
+		{"lodash", "https://cdn.example/other/path.tgz", ""},
+	} {
+		if got := npmRegistryBaseFor(tt.name, tt.resolved); got != tt.want {
+			t.Errorf("npmRegistryBaseFor(%q, %q) = %q, want %q", tt.name, tt.resolved, got, tt.want)
+		}
+	}
+}
+
+func TestValidateNpmDistTags(t *testing.T) {
+	good := map[string]map[string]string{
+		"lodash":     {"latest": "4.17.21", "next": "5.0.0-beta.1"},
+		"@scope/pkg": {"v2-latest": "2.0.0"},
+	}
+	if err := validateNpmDistTags(good); err != nil {
+		t.Fatalf("valid dist-tags rejected: %v", err)
+	}
+	for name, bad := range map[string]map[string]map[string]string{
+		"bad package name": {"../etc": {"latest": "1.0.0"}},
+		"bad tag name":     {"lodash": {".hidden": "1.0.0"}},
+		"tag with slash":   {"lodash": {"a/b": "1.0.0"}},
+		"bad version":      {"lodash": {"latest": "not-a-version"}},
+	} {
+		if err := validateNpmDistTags(bad); err == nil {
+			t.Errorf("%s: expected error, got nil", name)
+		}
+	}
+}
+
+// TestNpmFetchDistTags exercises the best-effort tag fetch: a registry
+// serving tags (with junk entries to drop), a package whose packument 404s,
+// and a package with an unusable resolved URL.
+func TestNpmFetchDistTags(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/lodash", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") != npmAbbreviatedType {
+			t.Errorf("packument fetched without the abbreviated media type: %q", r.Header.Get("Accept"))
+		}
+		_, _ = w.Write([]byte(`{"dist-tags":{"latest":"4.17.21","next":"5.0.0-beta.1","bad tag":"1.0.0","broken":"not_a_version"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	entries := []npmLockEntry{
+		{Name: "lodash", Resolved: srv.URL + "/lodash/-/lodash-4.17.21.tgz"},
+		{Name: "gone", Resolved: srv.URL + "/gone/-/gone-1.0.0.tgz"},
+		{Name: "weird", Resolved: "https://cdn.example/blob.tgz"},
+	}
+	tags := fetchNpmDistTags(context.Background(), entries)
+	if len(tags) != 1 || tags["lodash"] == nil {
+		t.Fatalf("fetchNpmDistTags = %+v, want lodash only", tags)
+	}
+	want := map[string]string{"latest": "4.17.21", "next": "5.0.0-beta.1"}
+	if len(tags["lodash"]) != len(want) || tags["lodash"]["latest"] != want["latest"] || tags["lodash"]["next"] != want["next"] {
+		t.Errorf("lodash tags = %+v, want %+v (junk dropped)", tags["lodash"], want)
+	}
+}
+
+// TestNpmDistTagsServing publishes two versions plus an upstream tag
+// snapshot and asserts the packument's dist-tags honor mirrored upstream
+// tags, filter tags whose target is absent, and regenerate latest; the
+// GET /npm/<name>/<tag> route resolves served tags only.
+func TestNpmDistTagsServing(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+
+	for _, v := range []string{"1.0.0", "1.1.0"} {
+		tgz := makeNpmTgz(t, "package", "tagpkg", v)
+		rel := "npm/packages/tagpkg/tagpkg-" + v + ".tgz"
+		abs := filepath.Join(hs.downloadDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, abs, tgz)
+		if err := hs.publishNpmPackage(NpmPackage{Name: "tagpkg", Version: v, Path: rel}); err != nil {
+			t.Fatalf("publishNpmPackage %s: %v", v, err)
+		}
+	}
+	// Upstream pinned latest at the OLDER release and tags a beta this mirror
+	// does not hold.
+	err := hs.publishNpmDistTags("tagpkg", map[string]string{
+		"latest": "1.0.0",
+		"stable": "1.1.0",
+		"beta":   "2.0.0-beta.1",
+	})
+	if err != nil {
+		t.Fatalf("publishNpmDistTags: %v", err)
+	}
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	code, body := httpGet(t, srv.URL+"/npm/tagpkg")
+	if code != http.StatusOK {
+		t.Fatalf("packument status %d", code)
+	}
+	var doc struct {
+		DistTags map[string]string `json:"dist-tags"`
+	}
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"latest": "1.0.0", "stable": "1.1.0"}
+	if len(doc.DistTags) != len(want) || doc.DistTags["latest"] != want["latest"] || doc.DistTags["stable"] != want["stable"] {
+		t.Errorf("dist-tags = %+v, want %+v (upstream latest honored, absent beta dropped)", doc.DistTags, want)
+	}
+
+	// The tag route serves the tagged version manifest; unknown and absent
+	// tags 404.
+	assertServed(t, srv.URL+"/npm/tagpkg/stable", `"version": "1.1.0"`)
+	for _, p := range []string{"/npm/tagpkg/beta", "/npm/tagpkg/nosuch"} {
+		if code, _ := httpGet(t, srv.URL+p); code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", p, code)
+		}
+	}
+
+	// Dropping the stored snapshot falls back to the regenerated latest.
+	if err := os.Remove(filepath.Join(hs.npmMetadataDir(), "tagpkg", "_tags.json")); err != nil {
+		t.Fatal(err)
+	}
+	_, body = httpGet(t, srv.URL+"/npm/tagpkg")
+	if !strings.Contains(body, `"latest": "1.1.0"`) {
+		t.Errorf("packument without stored tags lost the computed latest:\n%s", body)
+	}
+}
+
+// TestNpmDistTagsImportRejection proves import-time validation rejects a
+// manifest whose dist-tags are malformed.
+func TestNpmDistTagsImportRejection(t *testing.T) {
+	eco, ok := ecosystemFor(streamNpm)
+	if !ok {
+		t.Fatal("npm ecosystem not registered")
+	}
+	m := BundleManifest{Npm: &NpmManifest{
+		Packages: []NpmPackage{{Name: "a", Version: "1.0.0", Path: "npm/packages/a/a-1.0.0.tgz"}},
+		DistTags: map[string]map[string]string{"a": {"latest": "../evil"}},
+	}}
+	seen := map[string]bool{"npm/packages/a/a-1.0.0.tgz": true}
+	if err := eco.validateContent(m, seen); err == nil {
+		t.Fatal("malformed dist-tag version accepted at import")
+	}
+}
+
+// TestNpmPublishDistTagsHardening covers the stored-snapshot writer's gates:
+// bad package name, malformed tags, and a traversal-shaped name.
+func TestNpmPublishDistTagsHardening(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	if err := hs.publishNpmDistTags("../etc", map[string]string{"latest": "1.0.0"}); err == nil {
+		t.Error("traversal package name accepted")
+	}
+	if err := hs.publishNpmDistTags("lodash", map[string]string{"bad tag": "1.0.0"}); err == nil {
+		t.Error("malformed tag accepted")
+	}
+	if err := hs.publishNpmDistTags("lodash", map[string]string{"latest": "not-a-version"}); err == nil {
+		t.Error("malformed tag version accepted")
+	}
+	// A valid snapshot round-trips through the reader.
+	if err := hs.publishNpmDistTags("@scope/pkg", map[string]string{"latest": "1.0.0"}); err != nil {
+		t.Fatalf("valid snapshot rejected: %v", err)
+	}
+	got := hs.readNpmStoredTags("@scope/pkg")
+	if got["latest"] != "1.0.0" {
+		t.Errorf("stored tags = %+v", got)
+	}
+	if hs.readNpmStoredTags("never-published") != nil {
+		t.Error("missing snapshot did not read as no tags")
+	}
+	if hs.readNpmStoredTags("../escape") != nil {
+		t.Error("traversal read did not fail closed")
+	}
+}
+
+// TestNpmResolveTagGates covers the tag-route resolver's rejection branches.
+func TestNpmResolveTagGates(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	if got := hs.npmResolveTag("lodash", ".bad"); got != "" {
+		t.Errorf("invalid tag resolved to %q", got)
+	}
+	if got := hs.npmResolveTag("lodash", "latest"); got != "" {
+		t.Errorf("unknown package tag resolved to %q", got)
+	}
+	// A stored tag whose target version has no served manifest stays dead.
+	if err := hs.publishNpmDistTags("lodash", map[string]string{"beta": "9.9.9"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := hs.npmResolveTag("lodash", "beta"); got != "" {
+		t.Errorf("tag with absent target resolved to %q", got)
+	}
+}

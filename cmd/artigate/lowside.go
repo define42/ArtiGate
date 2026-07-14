@@ -76,7 +76,30 @@ type LowConfig struct {
 	OsvUpstream string
 	// GitBinary is the git command used to fetch Terraform modules that
 	// resolve to git sources.
-	GitBinary     string
+	GitBinary string
+	// CondaChannelBase optionally overrides the base URL bare conda channel
+	// names resolve under; empty means https://conda.anaconda.org.
+	CondaChannelBase string
+	// RubyGemsURL optionally overrides the gem server gems and their compact
+	// index are fetched from; empty means https://rubygems.org.
+	RubyGemsURL string
+	// ComposerRepoURL optionally overrides the Composer repository package
+	// metadata and dists are resolved from; empty means
+	// https://repo.packagist.org.
+	ComposerRepoURL string
+	// VSXRegistryURL optionally overrides the Open VSX registry VS Code
+	// extensions are fetched from; empty means https://open-vsx.org.
+	VSXRegistryURL string
+	// GalaxyServerURL optionally overrides the Galaxy server Ansible
+	// collections are fetched from; empty means https://galaxy.ansible.com.
+	GalaxyServerURL string
+	// CRANMirror optionally overrides the CRAN mirror R packages are fetched
+	// from; empty means https://cloud.r-project.org.
+	CRANMirror string
+	// PyPIJSON optionally overrides the JSON API base sdists are resolved
+	// from when a Python collect opts into source distributions; empty means
+	// https://pypi.org/pypi.
+	PyPIJSON      string
 	WatchInterval time.Duration
 	// ContainerRegistries optionally remaps container registry names to the
 	// endpoints they are fetched from, as comma-separated host=baseURL pairs.

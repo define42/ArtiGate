@@ -591,9 +591,14 @@ func TestDownloadVerifiedFile(t *testing.T) {
 		t.Errorf("404 must not create a file, stat = %v", err)
 	}
 
-	// Unknown checksum types fail closed.
-	if _, _, err := downloadVerifiedFile(ctx, srv.URL+"/file", filepath.Join(dir, "x"), 0, "md5", "irrelevant"); err == nil || !strings.Contains(err.Error(), "unsupported checksum type") {
-		t.Fatalf("md5 download = %v, want unsupported checksum type", err)
+	// Unknown checksum types fail closed. (MD5 is supported for CRAN's
+	// legacy indexes, so an actually-unknown algorithm stands in here.)
+	if _, _, err := downloadVerifiedFile(ctx, srv.URL+"/file", filepath.Join(dir, "x"), 0, "crc32", "irrelevant"); err == nil || !strings.Contains(err.Error(), "unsupported checksum type") {
+		t.Fatalf("crc32 download = %v, want unsupported checksum type", err)
+	}
+	// The MD5 path verifies like the others: a mismatch fails closed.
+	if _, _, err := downloadVerifiedFile(ctx, srv.URL+"/file", filepath.Join(dir, "y"), 0, "md5", strings.Repeat("0", 32)); err == nil || !strings.Contains(err.Error(), "md5 mismatch") {
+		t.Fatalf("tampered md5 download = %v, want md5 mismatch", err)
 	}
 }
 

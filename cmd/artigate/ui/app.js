@@ -18,6 +18,13 @@ const VIEW_TITLES = {
     helm: "Helm charts",
     nuget: "NuGet packages",
     apk: "Alpine packages",
+    conda: "Conda packages",
+    rubygems: "Ruby gems",
+    composer: "PHP Composer packages",
+    vsx: "VS Code extensions",
+    galaxy: "Ansible collections",
+    cran: "R packages (CRAN)",
+    git: "Git repositories",
     osv: "OSV advisories",
     uploads: "Uploaded files",
 };
@@ -66,6 +73,13 @@ const STREAM_LABELS = {
     helm: "Helm",
     nuget: "NuGet",
     apk: "Alpine",
+    conda: "Conda",
+    rubygems: "RubyGems",
+    composer: "Composer",
+    vsx: "VS Code",
+    galaxy: "Ansible",
+    cran: "CRAN",
+    git: "Git",
     osv: "OSV",
     uploads: "Uploads",
 };
@@ -1043,6 +1057,136 @@ function apkGuideSection(repos) {
 // openGuide shows the whole-ecosystem setup for Go/Python/Maven/containers
 // (one config for the mirror). APT/RPM set up per repository instead, via
 // openRepoGuide.
+function condaGuideSection(base) {
+    return {
+        heading: "Conda packages",
+        body: "Each mirrored channel is served under its mirror name (the tree's " +
+            "top-level folders) with repodata.json regenerated from the verified " +
+            "packages.",
+        blocks: [
+            {
+                label: "Install with conda / mamba / micromamba",
+                code: `conda install --override-channels -c ${base}/conda/<mirror> <package>\n` +
+                    `micromamba install -c ${base}/conda/<mirror> --override-channels <package>`,
+            },
+            {
+                label: "Pin the mirror in .condarc",
+                code: `channels:\n  - ${base}/conda/<mirror>\noverride_channels_enabled: true`,
+            },
+        ],
+        note: "repodata.json is rebuilt on this host from each package's verified " +
+            "repodata entry; only packages that are actually present are listed.",
+    };
+}
+function rubygemsGuideSection(base) {
+    return {
+        heading: "Ruby gems",
+        body: "The mirror serves the compact index Bundler and modern RubyGems " +
+            "resolve against, plus the .gem archives.",
+        blocks: [
+            {
+                label: "Gemfile",
+                code: `source "${base}/rubygems"\n\ngem "rake"`,
+            },
+            { label: "Install", code: "bundle install" },
+        ],
+        note: "/versions and /info/<gem> are regenerated on this host from the " +
+            "mirrored gems; each info line's checksum is the verified archive's " +
+            "SHA-256, so Bundler's checksum verification keeps working.",
+    };
+}
+function composerGuideSection(base) {
+    return {
+        heading: "PHP Composer packages",
+        body: "The mirror is a Composer v2 repository: point repositories at it and " +
+            "disable packagist.org.",
+        blocks: [
+            {
+                label: "composer.json",
+                code: `{\n  "repositories": {\n    "packagist.org": false,\n` +
+                    `    "mirror": { "type": "composer", "url": "${base}/composer" }\n  }\n}`,
+            },
+            { label: "Install", code: "composer require <vendor>/<package>" },
+        ],
+        note: "Package metadata is served from the signed bundle records and each " +
+            "dist URL points back at this host's verified zip archives.",
+    };
+}
+function vsxGuideSection(base) {
+    return {
+        heading: "VS Code extensions",
+        body: "The mirror answers the VS Code gallery API, so VSCodium and Code-OSS " +
+            "builds can search and install extensions from it.",
+        blocks: [
+            {
+                label: "Point the gallery at the mirror (VSCodium)",
+                code: `export VSCODE_GALLERY_SERVICE_URL=${base}/vsx/gallery\n` +
+                    `codium --install-extension <publisher>.<name>`,
+            },
+            {
+                label: "Or in product.json",
+                code: `"extensionsGallery": { "serviceUrl": "${base}/vsx/gallery" }`,
+            },
+            {
+                label: "Direct .vsix download",
+                code: `curl -fL -o ext.vsix ${base}/vsx/files/<publisher>/<name>/<publisher>.<name>-<version>.vsix\ncode --install-extension ext.vsix`,
+            },
+        ],
+        note: "Gallery metadata is regenerated from each extension's own embedded " +
+            "package.json; only extensions whose .vsix is present are listed.",
+    };
+}
+function galaxyGuideSection(base) {
+    return {
+        heading: "Ansible collections",
+        body: "The mirror answers the Galaxy v3 API ansible-galaxy installs from.",
+        blocks: [
+            {
+                label: "Install a collection",
+                code: `ansible-galaxy collection install <namespace>.<name> -s ${base}/galaxy/`,
+            },
+            {
+                label: "Or pin the server in ansible.cfg",
+                code: `[galaxy]\nserver_list = mirror\n\n[galaxy_server.mirror]\nurl=${base}/galaxy/`,
+            },
+        ],
+        note: "Version metadata (and each artifact's SHA-256 the client verifies) is " +
+            "regenerated from the mirrored tarballs' own MANIFEST.json.",
+    };
+}
+function cranGuideSection(base) {
+    return {
+        heading: "R packages (CRAN)",
+        body: "The mirror is a source CRAN repository: src/contrib with a PACKAGES " +
+            "index regenerated from each tarball's own DESCRIPTION.",
+        blocks: [
+            {
+                label: "Install from R",
+                code: `install.packages("<package>", repos = "${base}/cran")`,
+            },
+            {
+                label: "Or pin it for the session",
+                code: `options(repos = c(mirror = "${base}/cran"))`,
+            },
+        ],
+        note: "Only source packages are mirrored (type = \"source\"); R builds them " +
+            "locally like it does against any CRAN mirror.",
+    };
+}
+function gitGuideSection(base) {
+    return {
+        heading: "Git repositories",
+        body: "Each mirrored repository is served read-only over git's dumb HTTP " +
+            "protocol — stock git clones it with no extra setup.",
+        blocks: [
+            { label: "Clone", code: `git clone ${base}/git/<mirror>.git` },
+            { label: "List refs", code: `git ls-remote ${base}/git/<mirror>.git` },
+        ],
+        note: "The pack index is rebuilt on this host from the verified packfile; " +
+            "re-collecting on the low side refreshes the mirror to the current " +
+            "upstream refs.",
+    };
+}
 function openGuide() {
     const dialog = guideDialog();
     const body = byId("guideBody");
@@ -1083,9 +1227,23 @@ function openGuide() {
                                 ? helmGuideSection(base)
                                 : currentView === "nuget"
                                     ? nugetGuideSection(base)
-                                    : currentView === "osv"
-                                        ? osvGuideSection(base)
-                                        : goGuideSection(base);
+                                    : currentView === "conda"
+                                        ? condaGuideSection(base)
+                                        : currentView === "rubygems"
+                                            ? rubygemsGuideSection(base)
+                                            : currentView === "composer"
+                                                ? composerGuideSection(base)
+                                                : currentView === "vsx"
+                                                    ? vsxGuideSection(base)
+                                                    : currentView === "galaxy"
+                                                        ? galaxyGuideSection(base)
+                                                        : currentView === "cran"
+                                                            ? cranGuideSection(base)
+                                                            : currentView === "git"
+                                                                ? gitGuideSection(base)
+                                                                : currentView === "osv"
+                                                                    ? osvGuideSection(base)
+                                                                    : goGuideSection(base);
         renderGuideSections(body, [section]);
     }
     if (!dialog.open) {

@@ -62,6 +62,13 @@ const (
     streamHelm       = "helm"
     streamNuget      = "nuget"
     streamApk        = "apk"
+    streamConda      = "conda"
+    streamRubyGems   = "rubygems"
+    streamComposer   = "composer"
+    streamVSX        = "vsx"
+    streamGalaxy     = "galaxy"
+    streamCRAN       = "cran"
+    streamGit        = "git"
 )
 ```
 

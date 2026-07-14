@@ -87,6 +87,13 @@ func ecosystems() []ecosystem {
 		helmEcosystem(),
 		nugetEcosystem(),
 		apkEcosystem(),
+		condaEcosystem(),
+		rubygemsEcosystem(),
+		composerEcosystem(),
+		vsxEcosystem(),
+		galaxyEcosystem(),
+		cranEcosystem(),
+		gitEcosystem(),
 		osvEcosystem(),
 		uploadsEcosystem(),
 	}

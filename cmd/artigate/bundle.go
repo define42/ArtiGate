@@ -43,6 +43,13 @@ const (
 	streamHelm       = "helm"
 	streamNuget      = "nuget"
 	streamApk        = "apk"
+	streamConda      = "conda"
+	streamRubyGems   = "rubygems"
+	streamComposer   = "composer"
+	streamVSX        = "vsx"
+	streamGalaxy     = "galaxy"
+	streamCRAN       = "cran"
+	streamGit        = "git"
 	streamOsv        = "osv"
 	streamUploads    = "uploads"
 )
@@ -82,6 +89,13 @@ type BundleManifest struct {
 	Helm             *HelmManifest      `json:"helm,omitempty"`
 	Nuget            *NugetManifest     `json:"nuget,omitempty"`
 	Apk              *ApkManifest       `json:"apk,omitempty"`
+	Conda            *CondaManifest     `json:"conda,omitempty"`
+	RubyGems         *RubyGemsManifest  `json:"rubygems,omitempty"`
+	Composer         *ComposerManifest  `json:"composer,omitempty"`
+	VSX              *VSXManifest       `json:"vsx,omitempty"`
+	Galaxy           *GalaxyManifest    `json:"galaxy,omitempty"`
+	CRAN             *CRANManifest      `json:"cran,omitempty"`
+	Git              *GitManifest       `json:"git,omitempty"`
 	Osv              *OsvManifest       `json:"osv,omitempty"`
 	Uploads          *UploadsManifest   `json:"uploads,omitempty"`
 	Part             *BundlePartInfo    `json:"part,omitempty"`

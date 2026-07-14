@@ -3,9 +3,12 @@ name: E2E
 # Full end-to-end run: builds the real binary, starts a low+high pair wired
 # over the HTTP diode transport, collects every stream from its real
 # upstream (PyPI, proxy.golang.org, Maven Central, npmjs, cli.github.com,
-# Docker Hub, huggingface.co), and validates with the real client tools
-# (pip, go, mvn+java, npm+node, apt-get+dpkg-deb, dnf+rpm, docker,
-# huggingface_hub, curl). See e2e/doc.go.
+# Docker Hub, huggingface.co, conda.anaconda.org, rubygems.org,
+# repo.packagist.org, open-vsx.org, galaxy.ansible.com, cloud.r-project.org,
+# github.com), and validates with the real client tools (pip, go, mvn+java,
+# npm+node, apt-get+dpkg-deb, dnf+rpm, docker, huggingface_hub, curl,
+# micromamba, bundler, composer+php, ansible-galaxy, Rscript, git). See
+# e2e/doc.go.
 
 on:
   push:
@@ -37,14 +40,16 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install client tools (dnf, rpm, huggingface_hub CLI, terraform)
+      - name: Install client tools (dnf, rpm, huggingface_hub CLI, terraform, R, ansible, micromamba)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends dnf rpm
+          # ruby-bundler: the runner image ships ruby but no bundler binary.
+          sudo apt-get install -y --no-install-recommends dnf rpm r-base-core ruby-bundler
           if command -v pipx >/dev/null 2>&1; then
             pipx install huggingface_hub
+            pipx install ansible-core
           else
-            python3 -m pip install --user --break-system-packages huggingface_hub
+            python3 -m pip install --user --break-system-packages huggingface_hub ansible-core
           fi
           # The ubuntu-24.04 image dropped the HashiCorp tools; install a
           # pinned terraform when neither it nor tofu is present.
@@ -53,6 +58,9 @@ jobs:
               "https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip"
             sudo unzip -o /tmp/terraform.zip -d /usr/local/bin terraform
           fi
+          # micromamba: single static binary, the lightest real conda client.
+          curl -fsSL "https://micro.mamba.pm/api/micromamba/linux-64/latest" \
+            | sudo tar -xj -C /usr/local bin/micromamba
 
       - name: Preflight tool and upstream checks
         run: |
@@ -71,6 +79,12 @@ jobs:
           (terraform -version || tofu -version) | head -1
           helm version --short
           dotnet --version
+          ruby --version && bundle --version
+          php --version | head -1 && composer --version
+          ansible-galaxy --version | head -1
+          Rscript --version
+          micromamba --version
+          git --version
           # Fail fast if the suite's default GGUF reference has rotted
           # upstream (keep in sync with defaultGGUF in e2e/hf_test.go).
           curl -fsSI -o /dev/null "https://huggingface.co/v2/bartowski/SmolLM2-135M-Instruct-GGUF/manifests/Q4_K_M"
@@ -81,6 +95,15 @@ jobs:
           curl -fsSI -o /dev/null "https://charts.jetstack.io/index.yaml"
           curl -fsS -o /dev/null "https://api.nuget.org/v3/index.json"
           curl -fsSI -o /dev/null "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/x86_64/APKINDEX.tar.gz"
+          # ...and the second wave's upstreams (keep in sync with the pins in
+          # e2e/{conda,rubygems,composer,vsx,galaxy,cran,git}_test.go).
+          curl -fsSI -o /dev/null "https://conda.anaconda.org/conda-forge/noarch/repodata.json"
+          curl -fsSL -o /dev/null "https://rubygems.org/info/rake"
+          curl -fsS -o /dev/null "https://repo.packagist.org/p2/psr/container.json"
+          curl -fsS -o /dev/null "https://open-vsx.org/api/usernamehw/errorlens"
+          curl -fsSL -o /dev/null "https://galaxy.ansible.com/api/"
+          curl -fsSI -o /dev/null "https://cloud.r-project.org/src/contrib/PACKAGES.gz"
+          curl -fsS -o /dev/null "https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack"
 
       - name: Run end-to-end suite
         env:
