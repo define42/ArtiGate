@@ -1,10 +1,13 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -507,5 +510,228 @@ func TestCollectPythonAllSdistsFails(t *testing.T) {
 	}
 	if seq := ls.peekSequence(streamPython); seq != 1 {
 		t.Errorf("failed collect burned a sequence: next = %d, want 1", seq)
+	}
+}
+
+// writeWheelZip writes a real (zip) wheel at path with the given entries.
+func writeWheelZip(t *testing.T, path string, entries map[string]string) {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, content := range entries {
+		f, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, buf.Bytes())
+}
+
+// wheelMetadata renders a minimal core-metadata header block with an optional
+// Requires-Python header, followed by a description body whose look-alike
+// header must never be picked up.
+func wheelMetadata(requiresPython string) string {
+	m := "Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n"
+	if requiresPython != "" {
+		m += "Requires-Python: " + requiresPython + "\n"
+	}
+	return m + "\nDescription body\nRequires-Python: from-the-body\n"
+}
+
+func TestWheelRequiresPython(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name    string
+		entries map[string]string
+		want    string
+	}{
+		{"header present", map[string]string{
+			"demo/__init__.py":            "",
+			"demo-1.0.dist-info/METADATA": wheelMetadata(">=3.9"),
+		}, ">=3.9"},
+		{"no header", map[string]string{"demo-1.0.dist-info/METADATA": wheelMetadata("")}, ""},
+		{"lowercase and CRLF", map[string]string{
+			"demo-1.0.dist-info/METADATA": "name: demo\r\nrequires-python: >=3.8, <4\r\n\r\nbody\r\n",
+		}, ">=3.8, <4"},
+		{"nested dist-info ignored", map[string]string{"sub/demo-1.0.dist-info/METADATA": wheelMetadata(">=3.9")}, ""},
+	}
+	for _, tt := range tests {
+		p := filepath.Join(dir, strings.ReplaceAll(tt.name, " ", "_")+"-1.0-py3-none-any.whl")
+		writeWheelZip(t, p, tt.entries)
+		if got := wheelRequiresPython(p); got != tt.want {
+			t.Errorf("%s: wheelRequiresPython = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+
+	notZip := filepath.Join(dir, "bad-1.0-py3-none-any.whl")
+	writeFile(t, notZip, []byte("not a zip"))
+	if got := wheelRequiresPython(notZip); got != "" {
+		t.Errorf("non-zip wheel = %q, want empty", got)
+	}
+	if got := wheelRequiresPython(filepath.Join(dir, "absent.whl")); got != "" {
+		t.Errorf("missing wheel = %q, want empty", got)
+	}
+}
+
+func TestNegotiatePySimple(t *testing.T) {
+	tests := []struct{ accept, want string }{
+		{"", pySimpleLegacyType},
+		{"text/html", pySimpleLegacyType},
+		{"*/*", pySimpleLegacyType},
+		{"text/*", pySimpleLegacyType},
+		// pip's real Accept header prefers JSON.
+		{"application/vnd.pypi.simple.v1+json, application/vnd.pypi.simple.v1+html;q=0.1, text/html;q=0.01", pySimpleJSONType},
+		{"application/vnd.pypi.simple.v1+json", pySimpleJSONType},
+		{"application/vnd.pypi.simple.v1+html", pySimpleHTMLType},
+		{"application/vnd.pypi.simple.v1+json;q=0.2, text/html;q=0.9", pySimpleLegacyType},
+		{"application/vnd.pypi.simple.v1+json;q=0", pySimpleLegacyType}, // q=0 is never selected
+		{"application/json", pySimpleLegacyType},                        // unknown type falls back
+		{"Application/VND.PyPI.Simple.V1+JSON", pySimpleJSONType},       // media type is case-insensitive
+	}
+	for _, tt := range tests {
+		if got := negotiatePySimple(tt.accept); got != tt.want {
+			t.Errorf("negotiatePySimple(%q) = %q, want %q", tt.accept, got, tt.want)
+		}
+	}
+}
+
+// httpGetAccept is httpGet with an Accept request header; it also returns the
+// response Content-Type.
+func httpGetAccept(t *testing.T, rawURL, accept string) (int, string, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil) //nolint:noctx // short-lived test request
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", accept)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(body), resp.Header.Get("Content-Type")
+}
+
+// pipJSONAccept is the Accept header current pip sends to the Simple API.
+const pipJSONAccept = "application/vnd.pypi.simple.v1+json, application/vnd.pypi.simple.v1+html;q=0.1, text/html;q=0.01"
+
+// TestPySimpleRequiresPythonAndJSON proves the project page carries each
+// wheel's Requires-Python (PEP 503 data-requires-python, HTML-escaped) and
+// that the PEP 691 JSON representations are served under content negotiation,
+// with hashes and metadata read from the verified artifacts on disk.
+func TestPySimpleRequiresPythonAndJSON(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	if err := os.MkdirAll(hs.pythonDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeWheelZip(t, filepath.Join(hs.pythonDir(), "demo-1.0-py3-none-any.whl"),
+		map[string]string{"demo-1.0.dist-info/METADATA": wheelMetadata(">=3.9")})
+	writeFile(t, filepath.Join(hs.pythonDir(), "plain-2.0-py3-none-any.whl"), []byte("not-a-zip"))
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	// PEP 503 HTML: Requires-Python is emitted HTML-escaped on the anchor.
+	code, body := httpGet(t, srv.URL+"/simple/demo/")
+	if code != http.StatusOK || !strings.Contains(body, ` data-requires-python="&gt;=3.9"`) {
+		t.Errorf("HTML project page missing data-requires-python: status %d body %q", code, body)
+	}
+	// A wheel without readable metadata omits the attribute.
+	code, body = httpGet(t, srv.URL+"/simple/plain/")
+	if code != http.StatusOK || strings.Contains(body, "data-requires-python") {
+		t.Errorf("metadata-less wheel must omit the attribute: status %d body %q", code, body)
+	}
+
+	assertPySimpleProjectJSON(t, hs, srv.URL)
+
+	// JSON root index lists both projects.
+	code, body, contentType := httpGetAccept(t, srv.URL+"/simple/", pipJSONAccept)
+	if code != http.StatusOK || contentType != pySimpleJSONType {
+		t.Fatalf("JSON root: status %d content-type %q", code, contentType)
+	}
+	var root pySimpleRoot
+	if err := json.Unmarshal([]byte(body), &root); err != nil {
+		t.Fatal(err)
+	}
+	if root.Meta.APIVersion != "1.0" || len(root.Projects) != 2 ||
+		root.Projects[0].Name != "demo" || root.Projects[1].Name != "plain" {
+		t.Errorf("JSON root = %+v", root)
+	}
+
+	// The versioned HTML type is honored when the client prefers it.
+	code, body, contentType = httpGetAccept(t, srv.URL+"/simple/demo/", pySimpleHTMLType)
+	if code != http.StatusOK || contentType != pySimpleHTMLType || !strings.Contains(body, "data-requires-python") {
+		t.Errorf("versioned HTML: status %d content-type %q body %q", code, contentType, body)
+	}
+}
+
+// assertPySimpleProjectJSON checks the PEP 691 project page for the demo
+// wheel, decoding into a generic map so the exact JSON key spelling
+// (api-version, requires-python, hashes.sha256) is verified.
+func assertPySimpleProjectJSON(t *testing.T, hs *HighServer, baseURL string) {
+	t.Helper()
+	code, body, contentType := httpGetAccept(t, baseURL+"/simple/demo/", pipJSONAccept)
+	if code != http.StatusOK || contentType != pySimpleJSONType {
+		t.Fatalf("JSON project page: status %d content-type %q", code, contentType)
+	}
+	var page map[string]any
+	if err := json.Unmarshal([]byte(body), &page); err != nil {
+		t.Fatalf("JSON project page did not parse: %v\n%s", err, body)
+	}
+	if meta, _ := page["meta"].(map[string]any); meta["api-version"] != "1.0" {
+		t.Errorf("meta = %v, want api-version 1.0", page["meta"])
+	}
+	if page["name"] != "demo" {
+		t.Errorf("name = %v, want demo", page["name"])
+	}
+	files, _ := page["files"].([]any)
+	if len(files) != 1 {
+		t.Fatalf("files = %v, want one entry", page["files"])
+	}
+	file, _ := files[0].(map[string]any)
+	if file["filename"] != "demo-1.0-py3-none-any.whl" || file["url"] != "/packages/demo-1.0-py3-none-any.whl" {
+		t.Errorf("file identity = %v", file)
+	}
+	wantSum, err := sha256File(filepath.Join(hs.pythonDir(), "demo-1.0-py3-none-any.whl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hashes, _ := file["hashes"].(map[string]any); hashes["sha256"] != wantSum {
+		t.Errorf("hashes = %v, want sha256 %s", file["hashes"], wantSum)
+	}
+	if file["requires-python"] != ">=3.9" {
+		t.Errorf("requires-python = %v, want >=3.9", file["requires-python"])
+	}
+	if _, ok := file["yanked"]; ok {
+		t.Errorf("yanked must be omitted, got %v", file["yanked"])
+	}
+}
+
+// TestCollectPythonDistRequiresPython proves the collect step records each
+// wheel's Requires-Python in the manifest's project entries.
+func TestCollectPythonDistRequiresPython(t *testing.T) {
+	dest := t.TempDir()
+	writeWheelZip(t, filepath.Join(dest, "demo-1.0-py3-none-any.whl"),
+		map[string]string{"demo-1.0.dist-info/METADATA": wheelMetadata(">=3.10")})
+	_, projects, _, err := collectPythonDist(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || len(projects[0].Files) != 1 {
+		t.Fatalf("unexpected projects: %+v", projects)
+	}
+	if got := projects[0].Files[0].RequiresPython; got != ">=3.10" {
+		t.Errorf("manifest RequiresPython = %q, want %q", got, ">=3.10")
 	}
 }

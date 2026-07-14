@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -90,6 +91,43 @@ func newAptLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
 	}
 	t.Cleanup(func() { _ = ls.Close() })
 	return ls, priv
+}
+
+// TestFetchAptPackagesIndexXZAndLZ4 proves an archive that publishes only an
+// .xz or .lz4 Packages index can be mirrored — decompression shells out to
+// the same external tools the RPM adapter uses.
+func TestFetchAptPackagesIndexXZAndLZ4(t *testing.T) {
+	plain := []byte("Package: ok\nVersion: 1.0\nArchitecture: amd64\n" +
+		"Filename: pool/o/ok_1.0_amd64.deb\nSize: 4\nSHA256: " + strings.Repeat("a", 64) + "\n\n")
+	for _, tt := range []struct {
+		bin  string
+		rel  string
+		args []string
+	}{
+		{"xz", "main/binary-amd64/Packages.xz", []string{"--compress", "--stdout"}},
+		{"lz4", "main/binary-amd64/Packages.lz4", []string{"-z", "-c"}},
+	} {
+		t.Run(tt.bin, func(t *testing.T) {
+			if _, err := exec.LookPath(tt.bin); err != nil {
+				t.Skipf("%s not installed", tt.bin)
+			}
+			comp, err := runFilterCmd(tt.bin, plain, 1<<20, tt.args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mux := http.NewServeMux()
+			mux.HandleFunc("/dists/stable/"+tt.rel, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(comp) })
+			srv := httptest.NewServer(mux)
+			defer srv.Close()
+
+			ls, _ := newAptLowServer(t)
+			sums := map[string]aptChecksum{tt.rel: {sha256: aptSHA256(comp), size: int64(len(comp))}}
+			pkgs, err := ls.fetchAptPackagesIndex(context.Background(), srv.URL+"/dists/stable", "stable", "main", "amd64", sums)
+			if err != nil || len(pkgs) != 1 || pkgs[0].Package != "ok" {
+				t.Fatalf("fetchAptPackagesIndex via %s = %+v, %v", tt.bin, pkgs, err)
+			}
+		})
+	}
 }
 
 func TestDebVersionCompare(t *testing.T) {

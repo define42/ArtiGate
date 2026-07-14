@@ -839,13 +839,19 @@ func xzCompress(data []byte) ([]byte, error) {
 	return runXZ(data, maxMirroredFileBytes, "--compress", "--stdout")
 }
 
-// runXZ pipes data through the xz binary, failing once the output exceeds
-// limit rather than buffering an unbounded expansion (decompression-bomb
-// guard; the input is never copied, unlike a string round-trip).
+// runXZ pipes data through the xz binary.
 func runXZ(data []byte, limit int64, args ...string) ([]byte, error) {
+	return runFilterCmd("xz", data, limit, args...)
+}
+
+// runFilterCmd pipes data through an external stream (de)compressor such as
+// xz or lz4, failing once the output exceeds limit rather than buffering an
+// unbounded expansion (decompression-bomb guard; the input is never copied,
+// unlike a string round-trip).
+func runFilterCmd(bin string, data []byte, limit int64, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "xz", args...)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = bytes.NewReader(data)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -854,16 +860,16 @@ func runXZ(data []byte, limit int64, args ...string) ([]byte, error) {
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("xz %s: %w", strings.Join(args, " "), err)
+		return nil, fmt.Errorf("%s %s: %w", bin, strings.Join(args, " "), err)
 	}
 	out, readErr := io.ReadAll(io.LimitReader(stdout, limit+1))
 	if int64(len(out)) > limit {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return nil, fmt.Errorf("xz %s: output exceeds the %s cap", strings.Join(args, " "), formatBytes(limit))
+		return nil, fmt.Errorf("%s %s: output exceeds the %s cap", bin, strings.Join(args, " "), formatBytes(limit))
 	}
 	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("xz %s: %w\n%s", strings.Join(args, " "), err, tailBytes(stderr.Bytes(), 2048))
+		return nil, fmt.Errorf("%s %s: %w\n%s", bin, strings.Join(args, " "), err, tailBytes(stderr.Bytes(), 2048))
 	}
 	if readErr != nil {
 		return nil, readErr
