@@ -343,9 +343,12 @@ func (s *LowServer) collectAptIndex(ctx context.Context, base, distBase, name, s
 			return nil, nil, err
 		}
 		if !seenFile[mf.Path] {
-			if mf.Prior {
+			switch {
+			case mf.Prior:
 				emitProgress(ctx, "    ≡ %s already forwarded (download skipped)", path.Base(mf.Path))
-			} else {
+			case isDryRunCollect(ctx):
+				emitProgress(ctx, "    ~ %s (%s)", path.Base(mf.Path), formatBytes(mf.Size))
+			default:
 				emitProgress(ctx, "    ↓ %s (%s)", path.Base(mf.Path), formatBytes(mf.Size))
 			}
 			files = append(files, mf)
@@ -428,13 +431,17 @@ func (s *LowServer) fetchAptPackagesIndex(ctx context.Context, distBase, suite, 
 // never buffered in memory). A .deb whose index-declared SHA256 and size this
 // stream has already forwarded is not downloaded at all — it becomes a prior
 // manifest reference (the signed index supplies everything the manifest entry
-// needs).
+// needs) — and a dry run accounts for new .debs from the same declared
+// values, skipping their downloads too.
 func (s *LowServer) downloadAptDeb(ctx context.Context, base, mirror string, pkg AptPackage, stageRoot string, prior func(path, sha256 string) bool) (ManifestFile, error) {
 	if err := validateRelPath(pkg.Filename); err != nil {
 		return ManifestFile{}, fmt.Errorf("unsafe package Filename %q: %w", pkg.Filename, err)
 	}
 	if pkg.Size > 0 && prior(aptFileRel(mirror, pkg.Filename), pkg.SHA256) {
 		return ManifestFile{Path: aptFileRel(mirror, pkg.Filename), SHA256: pkg.SHA256, Size: pkg.Size, Prior: true}, nil
+	}
+	if skipDownloadForDryRun(ctx, pkg.SHA256, pkg.Size) {
+		return ManifestFile{Path: aptFileRel(mirror, pkg.Filename), SHA256: pkg.SHA256, Size: pkg.Size}, nil
 	}
 	rel := aptFileRel(mirror, pkg.Filename)
 	if err := validateRelPath(rel); err != nil {

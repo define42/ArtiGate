@@ -79,6 +79,7 @@ High-side clients:
 
 Useful admin endpoints:
   low:  POST /admin/{go,python,maven,apt,rpm,containers,npm,hf,crates,terraform,helm,nuget,apk}/collect
+        (append ?dry_run=1 for a size estimate — "N files, X GB new, K bundles" — with no export)
   low:  POST /admin/reexport?stream=go&sequences=42,45-47
   low:  GET  /admin/bundles
   high: POST /admin/import

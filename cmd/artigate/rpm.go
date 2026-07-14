@@ -708,27 +708,42 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 	mirror.Packages = pkgs
 	emitProgress(ctx, "  %s: %d package(s) [%s]", cfg.Name, len(pkgs), strings.Join(arches, " "))
 	for i, pkg := range pkgs {
-		// primary.xml already declares each .rpm's SHA-256 and size (the
-		// download below is verified against the same values), so packages
-		// this stream has already forwarded are not downloaded at all — they
-		// become prior manifest references. The metadata files above are
-		// always fetched: they are parsed (and possibly rewritten) locally.
-		if err := validateRelPath(pkg.Location); err != nil {
-			return RpmMirror{}, nil, fmt.Errorf("package %s: unsafe location %q: %w", pkg.Name, pkg.Location, err)
-		}
-		if rel := rpmFileRel(cfg.Name, pkg.Location); pkg.Size > 0 && prior(rel, pkg.SHA256) {
-			emitProgress(ctx, "    ≡ [%d/%d] %s already forwarded (download skipped)", i+1, len(pkgs), path.Base(pkg.Location))
-			files = append(files, ManifestFile{Path: rel, SHA256: pkg.SHA256, Size: pkg.Size, Prior: true})
-			continue
-		}
-		mf, err := s.downloadRpmFile(ctx, base, cfg.Name, pkg.Location, "sha256", pkg.SHA256, pkg.Size, stageRoot)
+		mf, err := s.rpmPackageFile(ctx, base, cfg.Name, pkg, stageRoot, prior, i+1, len(pkgs))
 		if err != nil {
-			return RpmMirror{}, nil, fmt.Errorf("package %s: %w", pkg.Name, err)
+			return RpmMirror{}, nil, err
 		}
-		emitProgress(ctx, "    ↓ [%d/%d] %s (%s)", i+1, len(pkgs), path.Base(pkg.Location), formatBytes(mf.Size))
 		files = append(files, mf)
 	}
 	return mirror, files, nil
+}
+
+// rpmPackageFile resolves one enumerated .rpm into its manifest entry.
+// primary.xml already declares each .rpm's SHA-256 and size (a download is
+// verified against the same values), so packages this stream has already
+// forwarded are not downloaded at all — they become prior manifest references
+// — and a dry run accounts for new packages from the index alone. Everything
+// else is downloaded and verified. The metadata files are always fetched:
+// they are parsed (and possibly rewritten) locally. i/n only feed the
+// progress lines.
+func (s *LowServer) rpmPackageFile(ctx context.Context, base, name string, pkg RpmPackage, stageRoot string, prior func(path, sha256 string) bool, i, n int) (ManifestFile, error) {
+	if err := validateRelPath(pkg.Location); err != nil {
+		return ManifestFile{}, fmt.Errorf("package %s: unsafe location %q: %w", pkg.Name, pkg.Location, err)
+	}
+	rel := rpmFileRel(name, pkg.Location)
+	if pkg.Size > 0 && prior(rel, pkg.SHA256) {
+		emitProgress(ctx, "    ≡ [%d/%d] %s already forwarded (download skipped)", i, n, path.Base(pkg.Location))
+		return ManifestFile{Path: rel, SHA256: pkg.SHA256, Size: pkg.Size, Prior: true}, nil
+	}
+	if skipDownloadForDryRun(ctx, pkg.SHA256, pkg.Size) {
+		emitProgress(ctx, "    ~ [%d/%d] %s (%s)", i, n, path.Base(pkg.Location), formatBytes(pkg.Size))
+		return ManifestFile{Path: rel, SHA256: pkg.SHA256, Size: pkg.Size}, nil
+	}
+	mf, err := s.downloadRpmFile(ctx, base, name, pkg.Location, "sha256", pkg.SHA256, pkg.Size, stageRoot)
+	if err != nil {
+		return ManifestFile{}, fmt.Errorf("package %s: %w", pkg.Name, err)
+	}
+	emitProgress(ctx, "    ↓ [%d/%d] %s (%s)", i, n, path.Base(pkg.Location), formatBytes(mf.Size))
+	return mf, nil
 }
 
 // fetchRepomd downloads repodata/repomd.xml and verifies repomd.xml.asc against

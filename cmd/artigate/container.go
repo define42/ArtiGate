@@ -779,7 +779,8 @@ func nextTagPage(link string) string {
 // already staged (shared layers) are skipped. When allowPrior is set, a blob
 // whose digest this stream has already forwarded is not downloaded at all —
 // it becomes a prior manifest reference (blobs are content-addressed, so the
-// descriptor supplies everything the manifest entry needs).
+// descriptor supplies everything the manifest entry needs) — and a dry run
+// accounts for new blobs from the descriptor the same way.
 func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRef, desc ociDescriptor, stageRoot string, seen map[string]bool, allowPrior bool) (ManifestFile, error) {
 	if !containerDigestRE.MatchString(desc.Digest) {
 		return ManifestFile{}, fmt.Errorf("%s: unsupported blob digest %q (only sha256 is supported)", ref, desc.Digest)
@@ -796,6 +797,13 @@ func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRe
 		emitProgress(ctx, "    ≡ blob %s already forwarded (download skipped)", shortDigest(desc.Digest))
 		seen[rel] = true
 		mf.Prior = true
+		return mf, nil
+	}
+	// allowPrior also gates the dry-run skip: the config blob is read back
+	// from staging for the platform check, so it must be fetched regardless.
+	if allowPrior && skipDownloadForDryRun(ctx, mf.SHA256, desc.Size) {
+		emitProgress(ctx, "    ~ blob %s (%s)", shortDigest(desc.Digest), formatBytes(desc.Size))
+		seen[rel] = true
 		return mf, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)

@@ -334,6 +334,29 @@ The index is independent of the re-export archive: re-transmitting a bundle
 never consults or updates it, and if the index is ever unavailable a collect
 simply downloads and exports as normal rather than wrongly skipping.
 
+### Dry run — estimate before you export
+
+Every ecosystem page has an **Estimate size** button next to *Collect &
+export* (the API equivalent is appending `?dry_run=1` to any
+`POST /admin/<stream>/collect`). A dry run answers *"N artifacts, ~X GB, Y
+new"* before you commit gigabytes to a rate-limited one-way link: it resolves
+the request, checks every file against the export dedup index, and plans the
+bundle split exactly like a real collect — then stops at the export threshold.
+Nothing is written, no bundle number is consumed, nothing is recorded as
+forwarded, and nothing is handed to the diode transport. The result reports
+the resolved totals, the new files and bytes that would actually cross the
+diode, an upper bound on the archived size, and how many sequenced bundles
+the content would ship as.
+
+Collectors whose upstream declares each file's SHA-256 and size (APT, RPM,
+container images, Hugging Face models and LFS files — the gigabyte-scale
+streams) estimate from metadata alone, so their dry runs download nothing but
+indexes. Tool-driven ecosystems (`go`, `pip`, `mvn`, `npm`, …) must still
+fetch into their local caches to learn sizes; the dry run then only spares
+the diode, not the low side's own bandwidth. Combined with `"force": true`
+the estimate covers the full self-contained bundle a forced collect would
+produce.
+
 ### Status and re-export
 
 The **Status** page shows each stream's next bundle number and the exported

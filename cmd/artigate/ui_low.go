@@ -198,6 +198,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="goForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="goBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectGoMod(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('goResult')">Reset</button>
       </div>
     </form>
@@ -236,6 +237,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="pyForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="pyBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectPython(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('pyResult')">Reset</button>
       </div>
     </form>
@@ -263,6 +265,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="mvnForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="mvnBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectMaven(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('mvnResult')">Reset</button>
       </div>
     </form>
@@ -293,6 +296,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="npmForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="npmBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectNpm(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('npmResult')">Reset</button>
       </div>
     </form>
@@ -321,6 +325,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="aptForce" type="checkbox"> Full bundle &mdash; re-download and re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="aptBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectApt(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('aptResult')">Reset</button>
       </div>
     </form>
@@ -349,6 +354,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="rpmForce" type="checkbox"> Full bundle &mdash; re-download and re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="rpmBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectRpm(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('rpmResult')">Reset</button>
       </div>
     </form>
@@ -373,6 +379,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="ctrForce" type="checkbox"> Full bundle &mdash; re-download and re-send even blobs the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="ctrBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectContainers(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('ctrResult')">Reset</button>
       </div>
     </form>
@@ -403,6 +410,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="hfForce" type="checkbox"> Full bundle &mdash; re-download and re-send even blobs the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="hfBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectHF(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('hfResult')">Reset</button>
       </div>
     </form>
@@ -429,6 +437,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="crForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="crBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectCrates(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('crResult')">Reset</button>
       </div>
     </form>
@@ -462,6 +471,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="tfForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="tfBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectTerraform(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('tfResult')">Reset</button>
       </div>
     </form>
@@ -492,6 +502,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="helmForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="helmBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectHelm(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('helmResult')">Reset</button>
       </div>
     </form>
@@ -517,6 +528,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="ngForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="ngBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectNuget(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('ngResult')">Reset</button>
       </div>
     </form>
@@ -554,6 +566,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="apkForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="apkBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectApk(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('apkResult')">Reset</button>
       </div>
     </form>
@@ -578,6 +591,7 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="pytarget-check"><input id="osvForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="osvBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectOsv(event, true)">Estimate size</button>
         <button class="secondary" type="reset" onclick="clearResult('osvResult')">Reset</button>
       </div>
     </form>
@@ -842,12 +856,12 @@ async function consumeCollectStream(res){
 // streamCollect POSTs a collect with ?stream=1 and consumes the NDJSON progress
 // stream, appending each log line to the modal. It resolves with the final
 // ExportResult, or throws with the server's error message (or AbortError when
-// the follow was aborted).
+// the follow was aborted). The url may already carry a query (?dry_run=1).
 async function streamCollect(url, body, signal){
   // The uploads form posts FormData, which takes the XHR path: the file
   // transfer itself is the long part, and only XHR reports upload progress.
   if((typeof FormData!=='undefined') && body instanceof FormData) return uploadCollect(url, body, signal);
-  const res=await fetch(url+'?stream=1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:signal});
+  const res=await fetch(url+(url.includes('?')?'&':'?')+'stream=1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:signal});
   if(!res.ok || !res.body){
     const t=await res.text().catch(()=>''); throw new Error((t&&t.trim())||('HTTP '+res.status));
   }
@@ -857,20 +871,23 @@ async function streamCollect(url, body, signal){
 // runCollect wires one ecosystem's button to the progress modal: it disables the
 // button, streams the collect, then renders the per-ecosystem summary (o.render)
 // in both the modal and the page's inline result box. A dedup skip is
-// rendered uniformly here.
+// rendered uniformly here, and so is a dry run (o.dry appends ?dry_run=1: the
+// server resolves and measures the collect but exports nothing).
 async function runCollect(o){
   const btn=document.getElementById(o.btnId), label=btn.textContent;
-  btn.disabled=true; btn.textContent=o.busyLabel||'Collecting…';
-  openCollectModal(o.title);
+  btn.disabled=true; btn.textContent=o.dry?'Estimating…':(o.busyLabel||'Collecting…');
+  openCollectModal(o.dry?o.title+' (dry run)':o.title);
   try{
-    const d=await streamCollect(o.url, o.body, cmAbort.signal);
+    const d=await streamCollect(o.dry?o.url+'?dry_run=1':o.url, o.body, cmAbort.signal);
     // A forced "full bundle" is a one-shot recovery action: clear the checkbox
     // once the collect worked, so the next collect returns to delta exports
-    // instead of silently re-sending everything each time.
-    if(o.forceId && o.body.force) document.getElementById(o.forceId).checked=false;
-    let out = (d && d.skipped)
-      ? {cls:'ok', msg:'&#10003; No new content since the last export &mdash; nothing to send across the diode.'}
-      : o.render(d);
+    // instead of silently re-sending everything each time. (A dry run is not
+    // a collect — the checkbox stays put for the real one.)
+    if(!o.dry && o.forceId && o.body.force) document.getElementById(o.forceId).checked=false;
+    let out;
+    if(d && d.dry_run) out=dryRunMsg(d);
+    else if(d && d.skipped) out={cls:'ok', msg:'&#10003; No new content since the last export &mdash; nothing to send across the diode.'};
+    else out=o.render(d);
     // A failed upload to the HTTP diode endpoint is a warning, not an error:
     // the bundle is committed and archived, ready to re-transmit.
     if(d && d.diode_error){
@@ -917,6 +934,22 @@ async function runCollect(o){
 function applyForce(body, boxId){
   if(document.getElementById(boxId).checked) body.force=true;
   return body;
+}
+
+// dryRunMsg renders a dry-run estimate: what a real collect would send across
+// the diode. Nothing was exported and no sequence number was consumed.
+function dryRunMsg(d){
+  const e=d.estimate||{};
+  let msg;
+  if(d.skipped){
+    msg='&#9878; Dry run: every resolved file ('+esc(e.total_files||0)+' file(s), '+formatBytes(e.total_bytes)+') has already been forwarded &mdash; a collect would skip.';
+  }else{
+    msg='&#9878; Dry run: a collect would send <b>'+esc(e.new_files)+' new file(s), '+formatBytes(e.new_bytes)+'</b> across the diode in '+esc(e.bundles)+' bundle(s) (&le; '+formatBytes(e.estimated_archive_bytes)+' archived).';
+    if(d.prior_files>0) msg+=' '+esc(d.prior_files)+' of '+esc(e.total_files)+' resolved file(s) are already forwarded and would ride along as prior references.';
+  }
+  const sk=(d.skipped_modules||[]).length;
+  if(sk) msg+='<br>&#9888; '+esc(sk)+' item(s) could not be fetched/resolved and are not counted.';
+  return {cls:'ok', msg:msg+' Nothing was exported.'};
 }
 
 // collectedMsg / skippedListHTML build the shared success line and the optional
@@ -1025,11 +1058,11 @@ async function goSpec(){
   return null;
 }
 
-async function collectGoMod(ev){
+async function collectGoMod(ev, dry){
   ev.preventDefault();
   const built=await goSpec();
   if(!built){ showGoResult('err','List at least one module, or upload a go.mod.'); return; }
-  runCollect({btnId:'goBtn', showFn:showGoResult, title:'Collecting Go modules',
+  runCollect({dry:dry, btnId:'goBtn', showFn:showGoResult, title:'Collecting Go modules',
     url:'/admin/go/collect', body:applyForce(built.spec,'goForce'), forceId:'goForce', render:d=>{
       const msg=collectedMsg(d,'Collected','module(s)');
       const sk=d.skipped_modules||[];
@@ -1093,13 +1126,13 @@ function pyTarget(){
   return t;
 }
 
-async function collectPython(ev){
+async function collectPython(ev, dry){
   ev.preventDefault();
   const parsed=parseRequirements(document.getElementById('pyreqs').value);
   if(!parsed.reqs.length){ showPyResult('err','Enter at least one requirement (one per line).'); return; }
   const body={requirements:parsed.reqs};
   const target=pyTarget(); if(target) body.target=target;
-  runCollect({btnId:'pyBtn', showFn:showPyResult, title:'Collecting Python packages',
+  runCollect({dry:dry, btnId:'pyBtn', showFn:showPyResult, title:'Collecting Python packages',
     url:'/admin/python/collect', body:applyForce(body,'pyForce'), forceId:'pyForce', render:d=>{
       let msg=collectedMsg(d,'Collected','package(s)'), warn=false;
       const sd=d.skipped_modules||[];
@@ -1115,7 +1148,7 @@ function showMvnResult(cls, html){
   el.innerHTML=html;
 }
 
-async function collectMaven(ev){
+async function collectMaven(ev, dry){
   ev.preventDefault();
   const pomInput=document.getElementById('mvnpom');
   const pomFile=pomInput.files && pomInput.files[0];
@@ -1124,7 +1157,7 @@ async function collectMaven(ev){
     .filter(l=>l && l.charAt(0)!=='#');
   if(!pomFile && !coords.length){ showMvnResult('err','Enter Maven coordinates or upload a pom.xml.'); return; }
   const body = pomFile ? {pom_xml: await pomFile.text()} : {coordinates: coords};
-  runCollect({btnId:'mvnBtn', showFn:showMvnResult, title:'Collecting Maven artifacts',
+  runCollect({dry:dry, btnId:'mvnBtn', showFn:showMvnResult, title:'Collecting Maven artifacts',
     url:'/admin/maven/collect', body:applyForce(body,'mvnForce'), forceId:'mvnForce',
     render:d=>({cls:'ok', msg:collectedMsg(d,'Collected','artifact(s)')})});
 }
@@ -1154,11 +1187,11 @@ async function npmSpec(){
   return null;
 }
 
-async function collectNpm(ev){
+async function collectNpm(ev, dry){
   ev.preventDefault();
   const built=await npmSpec();
   if(!built){ showNpmResult('err','List at least one package, or upload a package.json.'); return; }
-  runCollect({btnId:'npmBtn', showFn:showNpmResult, title:'Collecting NPM packages',
+  runCollect({dry:dry, btnId:'npmBtn', showFn:showNpmResult, title:'Collecting NPM packages',
     url:'/admin/npm/collect', body:applyForce(built.spec,'npmForce'), forceId:'npmForce', render:d=>{
       const msg=collectedMsg(d,'Collected','package(s)');
       const sk=d.skipped_modules||[];
@@ -1179,11 +1212,11 @@ function showAptResult(cls, html){
   el.innerHTML=html;
 }
 
-async function collectApt(ev){
+async function collectApt(ev, dry){
   ev.preventDefault();
   const src=document.getElementById('aptsrc').value.trim();
   if(!src){ showAptResult('err','Paste a deb822 source stanza.'); return; }
-  runCollect({btnId:'aptBtn', busyLabel:'Mirroring…', showFn:showAptResult, title:'Mirroring APT repository',
+  runCollect({dry:dry, btnId:'aptBtn', busyLabel:'Mirroring…', showFn:showAptResult, title:'Mirroring APT repository',
     url:'/admin/apt/collect', forceId:'aptForce',
     body:applyForce({source_list:src, newest_only:document.getElementById('aptnewest').checked},'aptForce'),
     render:d=>({cls:'ok', msg:collectedMsg(d,'Mirrored','package(s)')})});
@@ -1195,11 +1228,11 @@ function showRpmResult(cls, html){
   el.innerHTML=html;
 }
 
-async function collectRpm(ev){
+async function collectRpm(ev, dry){
   ev.preventDefault();
   const repo=document.getElementById('rpmrepo').value.trim();
   if(!repo){ showRpmResult('err','Paste a yum/dnf .repo stanza.'); return; }
-  runCollect({btnId:'rpmBtn', busyLabel:'Mirroring…', showFn:showRpmResult, title:'Mirroring RPM repository',
+  runCollect({dry:dry, btnId:'rpmBtn', busyLabel:'Mirroring…', showFn:showRpmResult, title:'Mirroring RPM repository',
     url:'/admin/rpm/collect', forceId:'rpmForce',
     body:applyForce({repo_file:repo, newest_only:document.getElementById('rpmnewest').checked},'rpmForce'),
     render:d=>({cls:'ok', msg:collectedMsg(d,'Mirrored','package(s)')})});
@@ -1217,11 +1250,11 @@ function ctrImages(){
     .map(s=>s.replace(/\s+#.*$/,'').trim()).filter(l=>l && l.charAt(0)!=='#');
 }
 
-async function collectContainers(ev){
+async function collectContainers(ev, dry){
   ev.preventDefault();
   const images=ctrImages();
   if(!images.length){ showCtrResult('err','List at least one image reference.'); return; }
-  runCollect({btnId:'ctrBtn', showFn:showCtrResult, title:'Collecting container images',
+  runCollect({dry:dry, btnId:'ctrBtn', showFn:showCtrResult, title:'Collecting container images',
     url:'/admin/containers/collect', body:applyForce({images:images},'ctrForce'), forceId:'ctrForce', render:d=>{
       const msg=collectedMsg(d,'Collected','image(s)');
       const sk=d.skipped_modules||[];
@@ -1261,11 +1294,11 @@ function hfBody(){
   return body;
 }
 
-async function collectHF(ev){
+async function collectHF(ev, dry){
   ev.preventDefault();
   const body=hfBody();
   if(!body){ showHFResult('err','List at least one model or repository reference.'); return; }
-  runCollect({btnId:'hfBtn', showFn:showHFResult, title:'Collecting AI models',
+  runCollect({dry:dry, btnId:'hfBtn', showFn:showHFResult, title:'Collecting AI models',
     url:'/admin/hf/collect', body:applyForce(body,'hfForce'), forceId:'hfForce', render:d=>{
       const msg=collectedMsg(d,'Collected','model(s)');
       const sk=d.skipped_modules||[];
@@ -1314,11 +1347,11 @@ function cratesBody(){
   return body;
 }
 
-async function collectCrates(ev){
+async function collectCrates(ev, dry){
   ev.preventDefault();
   const body=cratesBody();
   if(!body){ showCrResult('err','List at least one crate.'); return; }
-  runCollect({btnId:'crBtn', showFn:showCrResult, title:'Collecting Rust crates',
+  runCollect({dry:dry, btnId:'crBtn', showFn:showCrResult, title:'Collecting Rust crates',
     url:'/admin/crates/collect', body:applyForce(body,'crForce'), forceId:'crForce',
     render:d=>skippedItems(collectedMsg(d,'Collected','crate(s)'), d)});
 }
@@ -1346,11 +1379,11 @@ function terraformBody(){
   return body;
 }
 
-async function collectTerraform(ev){
+async function collectTerraform(ev, dry){
   ev.preventDefault();
   const body=terraformBody();
   if(!body){ showTfResult('err','List at least one provider or module.'); return; }
-  runCollect({btnId:'tfBtn', showFn:showTfResult, title:'Collecting Terraform providers/modules',
+  runCollect({dry:dry, btnId:'tfBtn', showFn:showTfResult, title:'Collecting Terraform providers/modules',
     url:'/admin/terraform/collect', body:applyForce(body,'tfForce'), forceId:'tfForce',
     render:d=>skippedItems(collectedMsg(d,'Collected','item(s)'), d)});
 }
@@ -1378,11 +1411,11 @@ function helmBody(){
   return body;
 }
 
-async function collectHelm(ev){
+async function collectHelm(ev, dry){
   ev.preventDefault();
   const body=helmBody();
   if(!body){ showHelmResult('err','Give the repository URL and at least one chart.'); return; }
-  runCollect({btnId:'helmBtn', showFn:showHelmResult, title:'Collecting Helm charts',
+  runCollect({dry:dry, btnId:'helmBtn', showFn:showHelmResult, title:'Collecting Helm charts',
     url:'/admin/helm/collect', body:applyForce(body,'helmForce'), forceId:'helmForce',
     render:d=>skippedItems(collectedMsg(d,'Collected','chart(s)'), d)});
 }
@@ -1405,11 +1438,11 @@ function nugetBody(){
   return {packages:packages, resolve_deps:document.getElementById('ngdeps').checked};
 }
 
-async function collectNuget(ev){
+async function collectNuget(ev, dry){
   ev.preventDefault();
   const body=nugetBody();
   if(!body){ showNgResult('err','List at least one package.'); return; }
-  runCollect({btnId:'ngBtn', showFn:showNgResult, title:'Collecting NuGet packages',
+  runCollect({dry:dry, btnId:'ngBtn', showFn:showNgResult, title:'Collecting NuGet packages',
     url:'/admin/nuget/collect', body:applyForce(body,'ngForce'), forceId:'ngForce',
     render:d=>skippedItems(collectedMsg(d,'Collected','package(s)'), d)});
 }
@@ -1442,11 +1475,11 @@ function apkBody(){
   return body;
 }
 
-async function collectApk(ev){
+async function collectApk(ev, dry){
   ev.preventDefault();
   const body=apkBody();
   if(!body){ showApkResult('err','Give the mirror base URL and at least one branch (or paste a repositories file).'); return; }
-  runCollect({btnId:'apkBtn', busyLabel:'Mirroring…', showFn:showApkResult, title:'Mirroring Alpine repository',
+  runCollect({dry:dry, btnId:'apkBtn', busyLabel:'Mirroring…', showFn:showApkResult, title:'Mirroring Alpine repository',
     url:'/admin/apk/collect', body:applyForce(body,'apkForce'), forceId:'apkForce',
     render:d=>skippedItems(collectedMsg(d,'Mirrored','package(s)'), d)});
 }
@@ -1470,11 +1503,11 @@ function osvBody(){
   return {ecosystems:ecosystems};
 }
 
-async function collectOsv(ev){
+async function collectOsv(ev, dry){
   ev.preventDefault();
   const body=osvBody();
   if(!body){ showOsvResult('err','List at least one OSV ecosystem name.'); return; }
-  runCollect({btnId:'osvBtn', busyLabel:'Mirroring…', showFn:showOsvResult, title:'Mirroring OSV databases',
+  runCollect({dry:dry, btnId:'osvBtn', busyLabel:'Mirroring…', showFn:showOsvResult, title:'Mirroring OSV databases',
     url:'/admin/osv/collect', body:applyForce(body,'osvForce'), forceId:'osvForce',
     render:d=>skippedItems(collectedMsg(d,'Mirrored','database(s)'), d)});
 }
@@ -1526,7 +1559,7 @@ function showUpResult(cls, html){
   el.innerHTML=html;
 }
 
-async function collectUploads(ev){
+async function collectUploads(ev, dry){
   ev.preventDefault();
   const folder=document.getElementById('upfolder').value.trim();
   const files=document.getElementById('upfiles').files;
@@ -1535,7 +1568,7 @@ async function collectUploads(ev){
   const fd=new FormData();
   fd.append('folder', folder);
   for(const f of files) fd.append('file', f);
-  runCollect({btnId:'upBtn', busyLabel:'Uploading…', showFn:showUpResult, title:'Uploading files',
+  runCollect({dry:dry, btnId:'upBtn', busyLabel:'Uploading…', showFn:showUpResult, title:'Uploading files',
     url:'/admin/uploads/collect', body:fd,
     render:d=>({cls:'ok', msg:collectedMsg(d,'Uploaded','file(s)')+' They will appear on the high side under <code>/uploads/'+esc(folder)+'/</code>.'})});
 }

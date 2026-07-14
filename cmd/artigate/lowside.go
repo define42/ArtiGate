@@ -486,11 +486,19 @@ func (s *LowServer) serveLowCollect(w http.ResponseWriter, r *http.Request) bool
 	// buffered JSON result as always; ?stream=1 (the dashboard's live progress
 	// modal) follows the job's NDJSON event stream instead. The handler
 	// re-reads r.Body when the job runs — enqueueCollect buffers it.
+	// ?dry_run=1 marks the job's context so the collect stops at the export
+	// threshold and answers with a size estimate.
 	handle, ok := s.collectHandlers()[r.URL.Path]
 	if !ok {
 		return false
 	}
-	run := func(ctx context.Context) (ExportResult, error) { return handle(ctx, r) }
+	dryRun := wantsDryRunCollect(r)
+	run := func(ctx context.Context) (ExportResult, error) {
+		if dryRun {
+			ctx = withDryRunCollect(ctx)
+		}
+		return handle(ctx, r)
+	}
 	s.runCollectJob(w, r, collectStreamFromPath(r.URL.Path), run)
 	return true
 }
@@ -754,6 +762,11 @@ type ExportResult struct {
 	// bundle itself is fine — committed, archived, and still staged in the
 	// export dir — so this is a "re-transmit me" signal, not a lost export.
 	DiodeError string `json:"diode_error,omitempty"`
+	// DryRun marks the result of a ?dry_run=1 collect: Estimate reports what
+	// a real collect would export; nothing was written, no sequence number
+	// was consumed, and nothing was recorded as forwarded.
+	DryRun   bool             `json:"dry_run,omitempty"`
+	Estimate *CollectEstimate `json:"estimate,omitempty"`
 }
 
 // FailedModule records a module that could not be fetched during a collect.
@@ -1125,12 +1138,19 @@ func (s *LowServer) commitSequence(stream string, seq int64) error {
 // temp file is removed, no sequence is committed); only the final
 // sign-and-archive steps run to completion, so a bundle is either fully
 // produced or not at all.
+//
+// A dry-run collect (?dry_run=1, carried on ctx) stops right after the dedup
+// marking: it answers with a size estimate of what would have been exported
+// and touches nothing — see dryRunExportResult.
 func (s *LowServer) exportIfNew(ctx context.Context, stream, baseDir string, files []ManifestFile, force bool, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ExportResult{}, fmt.Errorf("collect stopped before export: %w", err)
 	}
 	if !force {
 		s.markPriorFiles(stream, files)
+	}
+	if isDryRunCollect(ctx) {
+		return s.dryRunExportResult(ctx, stream, files)
 	}
 	delivered := countDelivered(files)
 	if delivered == 0 {

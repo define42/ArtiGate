@@ -384,6 +384,11 @@ func recoverCollectPanic(stream string, fn func() (ExportResult, error)) (res Ex
 }
 
 func watchRunMessage(res ExportResult) string {
+	// A dry run's message is already the full operator-facing summary
+	// (scheduled watches never dry-run, but the job list renders through here).
+	if res.DryRun {
+		return res.Message
+	}
 	if res.Skipped {
 		return "no new content since last export; skipped"
 	}

@@ -295,7 +295,9 @@ func (s *LowServer) collectUploads(ctx context.Context, folder string, staged []
 	if err != nil {
 		return ExportResult{}, err
 	}
-	res.Message = fmt.Sprintf("uploaded into folder %q", folder)
+	if !res.DryRun { // a dry run's message is its size estimate; keep it
+		res.Message = fmt.Sprintf("uploaded into folder %q", folder)
+	}
 	return res, nil
 }
 
