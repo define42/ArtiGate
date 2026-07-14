@@ -830,6 +830,106 @@ func TestOsvImportRejectsTamperedRecord(t *testing.T) {
 	}
 }
 
+// TestOsvPublishFailureFailsClosedAndRetries pins the consistency contract
+// around a failing publish. Install has already replaced the snapshot on
+// disk by the time publish runs, so a database whose derived state cannot
+// be regenerated must (a) fail the import as retryable — no sequence
+// commit, no rejection, the bundle stays in landing — and (b) leave no
+// stale derived state behind: the audit endpoint answers 404 rather than
+// serving advisories that describe the previous snapshot.
+func TestOsvPublishFailureFailsClosedAndRetries(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	rel := osvDBRel("npm")
+	record := func(zipBytes []byte) []OsvDatabase {
+		return []OsvDatabase{{Ecosystem: "npm", Path: rel, SHA256: aptSHA256(zipBytes), Advisories: 1}}
+	}
+	goodZip := osvTestNpmZip(t)
+	osvWriteSignedBundle(t, hs.cfg.Landing, priv, 1, record(goodZip), map[string][]byte{rel: goodZip})
+	if res, err := hs.ImportNext(); err != nil || !res.Imported {
+		t.Fatalf("good import = %+v, %v", res, err)
+	}
+	if code, out := postAuditBulk(t, srv.URL, `{"testpkg":["1.0.0"]}`, false); code != http.StatusOK || len(out["testpkg"]) != 1 {
+		t.Fatalf("audit before failure = %d %+v", code, out)
+	}
+
+	// Sequence 2 delivers a zip whose entries have valid advisory filenames
+	// but garbage JSON bodies: it passes manifest validation and the byte
+	// gate, installs (replacing the good snapshot), regenerates meta (the
+	// advisory count is filename-based), and then the audit index rebuild
+	// finds no parsable advisories.
+	badZip := osvTestZip(t, map[string]string{"GHSA-bad-bad-badd.json": "not json"})
+	osvWriteSignedBundle(t, hs.cfg.Landing, priv, 2, record(badZip), map[string][]byte{rel: badZip})
+	res, err := hs.ImportNext()
+	if err == nil || res.Imported || len(res.RejectedBundles) != 0 {
+		t.Fatalf("failing publish: result %+v, err %v; want a retryable (not rejected) failure", res, err)
+	}
+	// The new snapshot is installed and served; the audit endpoint fails
+	// closed instead of answering from the previous snapshot's index.
+	if code, body := httpGet(t, srv.URL+"/osv/npm/all.zip"); code != http.StatusOK || body != string(badZip) {
+		t.Errorf("installed snapshot: status %d, %d byte(s), want the new zip", code, len(body))
+	}
+	if code, _ := postAuditBulk(t, srv.URL, `{"testpkg":["1.0.0"]}`, false); code != http.StatusNotFound {
+		t.Errorf("audit after failed publish = %d, want 404", code)
+	}
+	// Meta regenerated before the rebuild failed, so the database stays
+	// listed — it was the audit index alone that predated the snapshot.
+	if code, body := httpGet(t, srv.URL+"/osv/ecosystems.txt"); code != http.StatusOK || body != "npm\n" {
+		t.Errorf("ecosystems.txt after failed publish = %d %q", code, body)
+	}
+	// The sequence was not committed: the next pass retries and fails again,
+	// still loudly.
+	if _, err := hs.ImportNext(); err == nil {
+		t.Fatal("retry pass reported success while the database is unpublishable")
+	}
+	// A re-transmitted, fixed bundle at the same sequence heals everything.
+	fixedZip := osvTestZip(t, map[string]string{"GHSA-aaaa-bbbb-cccc.json": osvTestGHSA})
+	osvWriteSignedBundle(t, hs.cfg.Landing, priv, 2, record(fixedZip), map[string][]byte{rel: fixedZip})
+	if res, err := hs.ImportNext(); err != nil || !res.Imported {
+		t.Fatalf("fixed import = %+v, %v", res, err)
+	}
+	if code, out := postAuditBulk(t, srv.URL, `{"testpkg":["1.0.0"]}`, false); code != http.StatusOK || len(out["testpkg"]) != 1 {
+		t.Errorf("audit after recovery = %d %+v", code, out)
+	}
+}
+
+// TestOsvPublishMetaFailureDropsAllDerivedState covers the earlier failure
+// branch: a snapshot that cannot even be described (not a readable zip)
+// drops both the stale metadata and the stale audit index, so nothing —
+// listing, dashboard, or audit — keeps describing the previous snapshot.
+func TestOsvPublishMetaFailureDropsAllDerivedState(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	rel := osvDBRel("npm")
+	record := func(payload []byte) []OsvDatabase {
+		return []OsvDatabase{{Ecosystem: "npm", Path: rel, SHA256: aptSHA256(payload), Advisories: 1}}
+	}
+	goodZip := osvTestNpmZip(t)
+	osvWriteSignedBundle(t, hs.cfg.Landing, priv, 1, record(goodZip), map[string][]byte{rel: goodZip})
+	if res, err := hs.ImportNext(); err != nil || !res.Imported {
+		t.Fatalf("good import = %+v, %v", res, err)
+	}
+
+	notAZip := []byte("these bytes are hash-verified but not a zip archive")
+	osvWriteSignedBundle(t, hs.cfg.Landing, priv, 2, record(notAZip), map[string][]byte{rel: notAZip})
+	res, err := hs.ImportNext()
+	if err == nil || res.Imported || len(res.RejectedBundles) != 0 {
+		t.Fatalf("failing publish: result %+v, err %v; want a retryable (not rejected) failure", res, err)
+	}
+	if code, _ := postAuditBulk(t, srv.URL, `{"testpkg":["1.0.0"]}`, false); code != http.StatusNotFound {
+		t.Errorf("audit after meta failure = %d, want 404", code)
+	}
+	if code, _ := httpGet(t, srv.URL+"/osv/ecosystems.txt"); code != http.StatusNotFound {
+		t.Errorf("ecosystems.txt after meta failure = %d, want 404 (stale listing dropped)", code)
+	}
+}
+
 // TestOsvDashboardListAndDetail covers the high-side dashboard helpers over
 // an imported bundle.
 func TestOsvDashboardListAndDetail(t *testing.T) {
