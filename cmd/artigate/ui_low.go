@@ -160,6 +160,13 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="helm" onclick="setView('helm')">Helm</button>
     <button type="button" data-view="nuget" onclick="setView('nuget')">NuGet</button>
     <button type="button" data-view="apk" onclick="setView('apk')">Alpine</button>
+    <button type="button" data-view="conda" onclick="setView('conda')">Conda</button>
+    <button type="button" data-view="rubygems" onclick="setView('rubygems')">RubyGems</button>
+    <button type="button" data-view="composer" onclick="setView('composer')">Composer</button>
+    <button type="button" data-view="vsx" onclick="setView('vsx')">VS Code</button>
+    <button type="button" data-view="galaxy" onclick="setView('galaxy')">Ansible</button>
+    <button type="button" data-view="cran" onclick="setView('cran')">CRAN</button>
+    <button type="button" data-view="git" onclick="setView('git')">Git</button>
     <button type="button" data-view="osv" onclick="setView('osv')">OSV</button>
     <button type="button" data-view="uploads" onclick="setView('uploads')">Uploads</button>
     <button type="button" data-view="status" onclick="setView('status')">Status</button>
@@ -580,6 +587,193 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   </section>
 
+  <section class="view" id="view-conda" hidden>
+  <div class="card">
+    <h2>Mirror Conda packages</h2>
+    <p class="hint">Give the channel (a name like <code>conda-forge</code>, or a full channel URL) and the packages to mirror; each package's dependency closure is resolved greedily against the channel's repodata and mirrored with it. The high side serves the channel under <code>&lt;high&gt;/conda/&lt;mirror&gt;</code> with repodata.json regenerated from the verified packages. Same as POSTing to <code>/admin/conda/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectConda(event)">
+      <label class="filelabel">Channel
+        <input id="condachannel" type="text" placeholder="conda-forge" autocomplete="off">
+      </label>
+      <label class="filelabel">Subdirs <span class="opt">&mdash; comma-separated platform subdirs; noarch is always included</span>
+        <input id="condasubdirs" type="text" placeholder="linux-64" autocomplete="off">
+      </label>
+      <label class="filelabel">Packages <span class="opt">&mdash; one per line; name, name==1.2.3, or name&gt;=1.2</span>
+        <textarea id="condapkgs" rows="4" placeholder="numpy&#10;scipy==1.13.1" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="condaForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="condaBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectConda(event, true)">Estimate size</button>
+        <button class="secondary" type="reset" onclick="clearResult('condaResult')">Reset</button>
+      </div>
+    </form>
+    <div id="condaResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="condaEvery" type="number" min="1" value="1" autocomplete="off"> <select id="condaUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleConda()">Add schedule</button>
+    </div>
+    <div id="condaWatches" class="watchlist"></div>
+  </div>
+  </section>
+
+  <section class="view" id="view-rubygems" hidden>
+  <div class="card">
+    <h2>Mirror Ruby gems</h2>
+    <p class="hint">List gems &mdash; one per line, <code>name</code> or <code>name@1.2.3</code>. Each gem's runtime dependency closure is resolved from the upstream compact index and mirrored with it. The high side serves a compact-index gem source at <code>&lt;high&gt;/rubygems</code> for Bundler (<code>source "&lt;high&gt;/rubygems"</code>). Same as POSTing to <code>/admin/rubygems/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectRubygems(event)">
+      <label class="filelabel">Gems <span class="opt">&mdash; one per line; name or name@version</span>
+        <textarea id="rubygemsgems" rows="4" placeholder="rails&#10;rake@13.2.1" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="rubygemsForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="rubygemsBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectRubygems(event, true)">Estimate size</button>
+        <button class="secondary" type="reset" onclick="clearResult('rubygemsResult')">Reset</button>
+      </div>
+    </form>
+    <div id="rubygemsResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="rubygemsEvery" type="number" min="1" value="1" autocomplete="off"> <select id="rubygemsUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleRubygems()">Add schedule</button>
+    </div>
+    <div id="rubygemsWatches" class="watchlist"></div>
+  </div>
+  </section>
+
+  <section class="view" id="view-composer" hidden>
+  <div class="card">
+    <h2>Mirror PHP Composer packages</h2>
+    <p class="hint">List packages &mdash; one per line, <code>vendor/project</code> or <code>vendor/project:1.2.3</code>. Each package's require closure is resolved from the upstream Composer repository and mirrored with it. The high side serves a Composer repository at <code>&lt;high&gt;/composer</code> (point <code>repositories</code> at it and disable packagist.org). Same as POSTing to <code>/admin/composer/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectComposer(event)">
+      <label class="filelabel">Packages <span class="opt">&mdash; one per line; vendor/project or vendor/project:version</span>
+        <textarea id="composerpkgs" rows="4" placeholder="monolog/monolog&#10;psr/container:2.0.2" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="composerForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="composerBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectComposer(event, true)">Estimate size</button>
+        <button class="secondary" type="reset" onclick="clearResult('composerResult')">Reset</button>
+      </div>
+    </form>
+    <div id="composerResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="composerEvery" type="number" min="1" value="1" autocomplete="off"> <select id="composerUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleComposer()">Add schedule</button>
+    </div>
+    <div id="composerWatches" class="watchlist"></div>
+  </div>
+  </section>
+
+  <section class="view" id="view-vsx" hidden>
+  <div class="card">
+    <h2>Mirror VS Code extensions</h2>
+    <p class="hint">List extensions &mdash; one per line, <code>publisher.name</code> or <code>publisher.name@1.2.3</code> &mdash; fetched from the Open VSX registry. Extension dependencies and packs are mirrored with them. The high side answers the VS Code gallery API at <code>&lt;high&gt;/vsx/gallery</code>; point VSCodium's <code>extensionsGallery.serviceUrl</code> (or <code>VSCODE_GALLERY_SERVICE_URL</code>) at it. Same as POSTing to <code>/admin/vsx/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectVsx(event)">
+      <label class="filelabel">Extensions <span class="opt">&mdash; one per line; publisher.name or publisher.name@version</span>
+        <textarea id="vsxexts" rows="4" placeholder="golang.Go&#10;redhat.vscode-yaml" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="vsxForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="vsxBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectVsx(event, true)">Estimate size</button>
+        <button class="secondary" type="reset" onclick="clearResult('vsxResult')">Reset</button>
+      </div>
+    </form>
+    <div id="vsxResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="vsxEvery" type="number" min="1" value="1" autocomplete="off"> <select id="vsxUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleVsx()">Add schedule</button>
+    </div>
+    <div id="vsxWatches" class="watchlist"></div>
+  </div>
+  </section>
+
+  <section class="view" id="view-galaxy" hidden>
+  <div class="card">
+    <h2>Mirror Ansible collections</h2>
+    <p class="hint">List collections &mdash; one per line, <code>namespace.name</code> or <code>namespace.name@1.5.4</code>. Collection dependencies are resolved from the upstream Galaxy server and mirrored too. The high side answers the Galaxy v3 API at <code>&lt;high&gt;/galaxy</code> (<code>ansible-galaxy collection install ns.name -s &lt;high&gt;/galaxy/</code>). Same as POSTing to <code>/admin/galaxy/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectGalaxy(event)">
+      <label class="filelabel">Collections <span class="opt">&mdash; one per line; namespace.name or namespace.name@version</span>
+        <textarea id="galaxycols" rows="4" placeholder="ansible.posix&#10;community.general@8.5.0" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="galaxyForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="galaxyBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectGalaxy(event, true)">Estimate size</button>
+        <button class="secondary" type="reset" onclick="clearResult('galaxyResult')">Reset</button>
+      </div>
+    </form>
+    <div id="galaxyResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="galaxyEvery" type="number" min="1" value="1" autocomplete="off"> <select id="galaxyUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleGalaxy()">Add schedule</button>
+    </div>
+    <div id="galaxyWatches" class="watchlist"></div>
+  </div>
+  </section>
+
+  <section class="view" id="view-cran" hidden>
+  <div class="card">
+    <h2>Mirror R packages (CRAN)</h2>
+    <p class="hint">List packages &mdash; one per line, <code>name</code> or <code>name@1.2-3</code> (older releases come from the mirror's Archive). Each package's runtime dependency closure (Depends/Imports/LinkingTo) is mirrored with it. The high side serves a source CRAN repository at <code>&lt;high&gt;/cran</code> (<code>install.packages("pkg", repos = "&lt;high&gt;/cran")</code>). Same as POSTing to <code>/admin/cran/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectCran(event)">
+      <label class="filelabel">Packages <span class="opt">&mdash; one per line; name or name@version</span>
+        <textarea id="cranpkgs" rows="4" placeholder="jsonlite&#10;data.table@1.15.4" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="cranForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="cranBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectCran(event, true)">Estimate size</button>
+        <button class="secondary" type="reset" onclick="clearResult('cranResult')">Reset</button>
+      </div>
+    </form>
+    <div id="cranResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="cranEvery" type="number" min="1" value="1" autocomplete="off"> <select id="cranUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleCran()">Add schedule</button>
+    </div>
+    <div id="cranWatches" class="watchlist"></div>
+  </div>
+  </section>
+
+  <section class="view" id="view-git" hidden>
+  <div class="card">
+    <h2>Mirror a git repository</h2>
+    <p class="hint">Give the upstream clone URL. The repository's branches and tags are fetched over the smart HTTP protocol and shipped as one self-contained packfile; the high side rebuilds the pack index itself and serves the repository read-only, so <code>git clone &lt;high&gt;/git/&lt;mirror&gt;.git</code> works with stock git. Re-collecting refreshes the mirror to the current upstream state. Same as POSTing to <code>/admin/git/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectGit(event)">
+      <label class="filelabel">Repository URL
+        <input id="giturl" type="text" placeholder="https://github.com/org/repo.git" autocomplete="off">
+      </label>
+      <label class="filelabel">Mirror name <span class="opt">&mdash; optional; defaults to a slug of the URL</span>
+        <input id="gitname" type="text" placeholder="repo" autocomplete="off">
+      </label>
+      <label class="filelabel">Refs <span class="opt">&mdash; optional; one full ref per line to restrict the mirror (refs/heads/main, refs/tags/v1.2.3)</span>
+        <textarea id="gitrefs" rows="3" placeholder="refs/heads/main" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="gitForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="gitBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectGit(event, true)">Estimate size</button>
+        <button class="secondary" type="reset" onclick="clearResult('gitResult')">Reset</button>
+      </div>
+    </form>
+    <div id="gitResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="gitEvery" type="number" min="1" value="1" autocomplete="off"> <select id="gitUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleGit()">Add schedule</button>
+    </div>
+    <div id="gitWatches" class="watchlist"></div>
+  </div>
+  </section>
+
   <section class="view" id="view-osv" hidden>
   <div class="card">
     <h2>Mirror OSV vulnerability databases</h2>
@@ -644,6 +838,13 @@ const lowUIHTML = `<!DOCTYPE html>
         <option value="helm">Helm</option>
         <option value="nuget">NuGet</option>
         <option value="apk">Alpine (apk)</option>
+        <option value="conda">Conda</option>
+        <option value="rubygems">RubyGems</option>
+        <option value="composer">Composer</option>
+        <option value="vsx">VS Code extensions</option>
+        <option value="galaxy">Ansible Galaxy</option>
+        <option value="cran">CRAN</option>
+        <option value="git">Git</option>
         <option value="osv">OSV</option>
         <option value="uploads">Uploads</option>
       </select>
@@ -700,7 +901,7 @@ const lowUIHTML = `<!DOCTYPE html>
 // If the session has expired, any API call returns 401; bounce to the login page.
 (function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers',hf:'AI Models',crates:'Crates',terraform:'Terraform',helm:'Helm',nuget:'NuGet',apk:'Alpine',osv:'OSV',uploads:'Uploads'})[name]||name;}
+function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers',hf:'AI Models',crates:'Crates',terraform:'Terraform',helm:'Helm',nuget:'NuGet',apk:'Alpine',conda:'Conda',rubygems:'RubyGems',composer:'Composer',vsx:'VS Code',galaxy:'Ansible',cran:'CRAN',git:'Git',osv:'OSV',uploads:'Uploads'})[name]||name;}
 // clearResult hides an ecosystem's inline result box; the Reset button pairs it
 // with the form's native field reset (type="reset").
 function clearResult(id){const el=document.getElementById(id); if(el){ el.className='rbox'; el.innerHTML=''; }}
@@ -992,7 +1193,7 @@ function outboundCell(inOutbound){
 // VIEW_STREAM maps each ecosystem view to its backend stream (now identical
 // names); views without a stream (overview, status) are absent, so it doubles as
 // the "is this an ecosystem page" test.
-const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers',hf:'hf',crates:'crates',terraform:'terraform',helm:'helm',nuget:'nuget',apk:'apk',osv:'osv'};
+const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers',hf:'hf',crates:'crates',terraform:'terraform',helm:'helm',nuget:'nuget',apk:'apk',conda:'conda',rubygems:'rubygems',composer:'composer',vsx:'vsx',galaxy:'galaxy',cran:'cran',git:'git',osv:'osv'};
 function setView(view){
   // The sections themselves are the source of truth (every <section class="view">
   // has id "view-<name>"), so a newly added page can never be missing here and
@@ -1518,6 +1719,204 @@ async function scheduleOsv(){
   createWatch('osv','OSV: '+body.ecosystems.slice(0,3).join(', '), body, 'osvEvery','osvUnit', showOsvResult);
 }
 
+function showCondaResult(cls, html){
+  const el=document.getElementById('condaResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function condaBody(){
+  const channel=document.getElementById('condachannel').value.trim();
+  const packages=linesOf('condapkgs');
+  if(!channel || !packages.length) return null;
+  const body={channel:channel, packages:packages};
+  const subdirs=commaList('condasubdirs');
+  if(subdirs.length) body.subdirs=subdirs;
+  return body;
+}
+
+async function collectConda(ev, dry){
+  ev.preventDefault();
+  const body=condaBody();
+  if(!body){ showCondaResult('err','Give the channel and at least one package.'); return; }
+  runCollect({dry:dry, btnId:'condaBtn', showFn:showCondaResult, title:'Collecting Conda packages',
+    url:'/admin/conda/collect', body:applyForce(body,'condaForce'), forceId:'condaForce',
+    render:d=>skippedItems(collectedMsg(d,'Collected','package(s)'), d)});
+}
+
+async function scheduleConda(){
+  const body=condaBody();
+  if(!body){ showCondaResult('err','Give the channel and at least one package to schedule.'); return; }
+  createWatch('conda','Conda: '+body.packages.slice(0,3).join(', '), body, 'condaEvery','condaUnit', showCondaResult);
+}
+
+function showRubygemsResult(cls, html){
+  const el=document.getElementById('rubygemsResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function rubygemsBody(){
+  const gems=linesOf('rubygemsgems');
+  if(!gems.length) return null;
+  return {gems:gems};
+}
+
+async function collectRubygems(ev, dry){
+  ev.preventDefault();
+  const body=rubygemsBody();
+  if(!body){ showRubygemsResult('err','List at least one gem.'); return; }
+  runCollect({dry:dry, btnId:'rubygemsBtn', showFn:showRubygemsResult, title:'Collecting Ruby gems',
+    url:'/admin/rubygems/collect', body:applyForce(body,'rubygemsForce'), forceId:'rubygemsForce',
+    render:d=>skippedItems(collectedMsg(d,'Collected','gem(s)'), d)});
+}
+
+async function scheduleRubygems(){
+  const body=rubygemsBody();
+  if(!body){ showRubygemsResult('err','List at least one gem to schedule.'); return; }
+  createWatch('rubygems','RubyGems: '+body.gems.slice(0,3).join(', '), body, 'rubygemsEvery','rubygemsUnit', showRubygemsResult);
+}
+
+function showComposerResult(cls, html){
+  const el=document.getElementById('composerResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function composerBody(){
+  const packages=linesOf('composerpkgs');
+  if(!packages.length) return null;
+  return {packages:packages};
+}
+
+async function collectComposer(ev, dry){
+  ev.preventDefault();
+  const body=composerBody();
+  if(!body){ showComposerResult('err','List at least one package.'); return; }
+  runCollect({dry:dry, btnId:'composerBtn', showFn:showComposerResult, title:'Collecting Composer packages',
+    url:'/admin/composer/collect', body:applyForce(body,'composerForce'), forceId:'composerForce',
+    render:d=>skippedItems(collectedMsg(d,'Collected','package(s)'), d)});
+}
+
+async function scheduleComposer(){
+  const body=composerBody();
+  if(!body){ showComposerResult('err','List at least one package to schedule.'); return; }
+  createWatch('composer','Composer: '+body.packages.slice(0,3).join(', '), body, 'composerEvery','composerUnit', showComposerResult);
+}
+
+function showVsxResult(cls, html){
+  const el=document.getElementById('vsxResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function vsxBody(){
+  const extensions=linesOf('vsxexts');
+  if(!extensions.length) return null;
+  return {extensions:extensions};
+}
+
+async function collectVsx(ev, dry){
+  ev.preventDefault();
+  const body=vsxBody();
+  if(!body){ showVsxResult('err','List at least one extension.'); return; }
+  runCollect({dry:dry, btnId:'vsxBtn', showFn:showVsxResult, title:'Collecting VS Code extensions',
+    url:'/admin/vsx/collect', body:applyForce(body,'vsxForce'), forceId:'vsxForce',
+    render:d=>skippedItems(collectedMsg(d,'Collected','extension(s)'), d)});
+}
+
+async function scheduleVsx(){
+  const body=vsxBody();
+  if(!body){ showVsxResult('err','List at least one extension to schedule.'); return; }
+  createWatch('vsx','VS Code: '+body.extensions.slice(0,3).join(', '), body, 'vsxEvery','vsxUnit', showVsxResult);
+}
+
+function showGalaxyResult(cls, html){
+  const el=document.getElementById('galaxyResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function galaxyBody(){
+  const collections=linesOf('galaxycols');
+  if(!collections.length) return null;
+  return {collections:collections};
+}
+
+async function collectGalaxy(ev, dry){
+  ev.preventDefault();
+  const body=galaxyBody();
+  if(!body){ showGalaxyResult('err','List at least one collection.'); return; }
+  runCollect({dry:dry, btnId:'galaxyBtn', showFn:showGalaxyResult, title:'Collecting Ansible collections',
+    url:'/admin/galaxy/collect', body:applyForce(body,'galaxyForce'), forceId:'galaxyForce',
+    render:d=>skippedItems(collectedMsg(d,'Collected','collection(s)'), d)});
+}
+
+async function scheduleGalaxy(){
+  const body=galaxyBody();
+  if(!body){ showGalaxyResult('err','List at least one collection to schedule.'); return; }
+  createWatch('galaxy','Ansible: '+body.collections.slice(0,3).join(', '), body, 'galaxyEvery','galaxyUnit', showGalaxyResult);
+}
+
+function showCranResult(cls, html){
+  const el=document.getElementById('cranResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function cranBody(){
+  const packages=linesOf('cranpkgs');
+  if(!packages.length) return null;
+  return {packages:packages};
+}
+
+async function collectCran(ev, dry){
+  ev.preventDefault();
+  const body=cranBody();
+  if(!body){ showCranResult('err','List at least one package.'); return; }
+  runCollect({dry:dry, btnId:'cranBtn', showFn:showCranResult, title:'Collecting R packages',
+    url:'/admin/cran/collect', body:applyForce(body,'cranForce'), forceId:'cranForce',
+    render:d=>skippedItems(collectedMsg(d,'Collected','package(s)'), d)});
+}
+
+async function scheduleCran(){
+  const body=cranBody();
+  if(!body){ showCranResult('err','List at least one package to schedule.'); return; }
+  createWatch('cran','CRAN: '+body.packages.slice(0,3).join(', '), body, 'cranEvery','cranUnit', showCranResult);
+}
+
+function showGitResult(cls, html){
+  const el=document.getElementById('gitResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function gitBody(){
+  const url=document.getElementById('giturl').value.trim();
+  if(!url) return null;
+  const body={url:url};
+  const name=document.getElementById('gitname').value.trim();
+  if(name) body.name=name;
+  const refs=linesOf('gitrefs');
+  if(refs.length) body.refs=refs;
+  return body;
+}
+
+async function collectGit(ev, dry){
+  ev.preventDefault();
+  const body=gitBody();
+  if(!body){ showGitResult('err','Give the repository URL.'); return; }
+  runCollect({dry:dry, btnId:'gitBtn', showFn:showGitResult, title:'Mirroring git repository',
+    url:'/admin/git/collect', body:applyForce(body,'gitForce'), forceId:'gitForce',
+    render:d=>skippedItems(collectedMsg(d,'Mirrored','repository(ies)'), d)});
+}
+
+async function scheduleGit(){
+  const body=gitBody();
+  if(!body){ showGitResult('err','Give the repository URL to schedule.'); return; }
+  createWatch('git','Git: '+body.url, body, 'gitEvery','gitUnit', showGitResult);
+}
+
 // uploadCollect POSTs multipart form data with XMLHttpRequest instead of the
 // NDJSON stream: fetch exposes no upload progress, and streaming a response
 // while the browser is still sending the body trips HTTP/1.1's half-duplex
@@ -1722,8 +2121,8 @@ function viewJob(id, title){
 // ---- Schedules (watches) ----
 // Each ecosystem page schedules a recurring collect from its own inputs, so the
 // spec built here is exactly what that page's collect button would POST.
-const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',npm:'npmWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches',hf:'hfWatches',crates:'crWatches',terraform:'tfWatches',helm:'helmWatches',nuget:'ngWatches',apk:'apkWatches',osv:'osvWatches'};
-const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,npm:showNpmResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult,hf:showHFResult,crates:showCrResult,terraform:showTfResult,helm:showHelmResult,nuget:showNgResult,apk:showApkResult,osv:showOsvResult};
+const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',npm:'npmWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches',hf:'hfWatches',crates:'crWatches',terraform:'tfWatches',helm:'helmWatches',nuget:'ngWatches',apk:'apkWatches',conda:'condaWatches',rubygems:'rubygemsWatches',composer:'composerWatches',vsx:'vsxWatches',galaxy:'galaxyWatches',cran:'cranWatches',git:'gitWatches',osv:'osvWatches'};
+const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,npm:showNpmResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult,hf:showHFResult,crates:showCrResult,terraform:showTfResult,helm:showHelmResult,nuget:showNgResult,apk:showApkResult,conda:showCondaResult,rubygems:showRubygemsResult,composer:showComposerResult,vsx:showVsxResult,galaxy:showGalaxyResult,cran:showCranResult,git:showGitResult,osv:showOsvResult};
 
 function intervalSeconds(everyId, unitId){
   const n=parseInt(document.getElementById(everyId).value,10);

@@ -87,6 +87,7 @@ func ecosystems() []ecosystem {
 		helmEcosystem(),
 		nugetEcosystem(),
 		apkEcosystem(),
+		cranEcosystem(),
 		osvEcosystem(),
 		uploadsEcosystem(),
 	}
