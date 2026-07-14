@@ -93,6 +93,7 @@ func ecosystems() []ecosystem {
 		vsxEcosystem(),
 		galaxyEcosystem(),
 		cranEcosystem(),
+		gitEcosystem(),
 		osvEcosystem(),
 		uploadsEcosystem(),
 	}
