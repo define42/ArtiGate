@@ -176,12 +176,17 @@ func loadOrCreateSessionKeys(path string) (hashKey, blockKey []byte, err error) 
 	return b[:sessionHashKeyLen], b[sessionHashKeyLen:], nil
 }
 
-// middleware enforces authentication on every request except the health check
-// and the login/logout endpoints, which it handles itself.
+// middleware enforces authentication on every request except the health check,
+// the /metrics scrape endpoint, and the login/logout endpoints, which it
+// handles itself.
 func (a *authManager) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/healthz":
+		case "/healthz", "/metrics":
+			// Operational endpoints a monitoring system scrapes without a login,
+			// like the health check. They expose only the same non-secret status
+			// the dashboard shows; front the listener with a proxy or firewall the
+			// scrape port to restrict them.
 			next.ServeHTTP(w, r)
 			return
 		case "/login":
