@@ -1044,3 +1044,29 @@ func TestCondaCandidateOrdering(t *testing.T) {
 		}
 	}
 }
+
+// TestCondaMirrorNameDefaults pins the default mirror naming: a bare channel
+// name is its own mirror name (the high side serves /conda/conda-forge for a
+// "conda-forge" collect), while a full URL falls back to the URL slug, and an
+// explicit name always wins.
+func TestCondaMirrorNameDefaults(t *testing.T) {
+	ls, _ := newCondaLowServer(t)
+	base := func(req CondaCollectRequest) string {
+		t.Helper()
+		req.Packages = []string{"pkg"}
+		mirror, _, _, err := ls.validateCondaRequest(req)
+		if err != nil {
+			t.Fatalf("validateCondaRequest(%+v): %v", req, err)
+		}
+		return mirror
+	}
+	if got := base(CondaCollectRequest{Channel: "conda-forge"}); got != "conda-forge" {
+		t.Errorf("bare channel mirror = %q, want conda-forge", got)
+	}
+	if got := base(CondaCollectRequest{Channel: "conda-forge", Name: "sci"}); got != "sci" {
+		t.Errorf("explicit name mirror = %q, want sci", got)
+	}
+	if got := base(CondaCollectRequest{Channel: "https://repo.example/stack"}); got == "" || strings.Contains(got, "/") {
+		t.Errorf("URL channel mirror = %q, want a path-safe slug", got)
+	}
+}

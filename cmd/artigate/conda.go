@@ -935,8 +935,9 @@ func condaDependsSummary(depends []string) string {
 //
 // Channel is a bare channel name ("conda-forge", resolved under the
 // configured channel base) or a full http(s) channel URL. Name optionally
-// names the mirror under /conda/<name> on the high side; it defaults to a
-// slug of the channel URL. Subdirs lists the platform subdirectories to
+// names the mirror under /conda/<name> on the high side; it defaults to the
+// bare channel name itself, or to a slug of the URL when Channel is a full
+// URL. Subdirs lists the platform subdirectories to
 // resolve in ("linux-64", "osx-arm64", ...); "noarch" is always searched too
 // because conda clients always pair a platform with noarch, and an empty
 // list means just noarch. Packages are MatchSpec-subset specs: "name"
@@ -999,7 +1000,14 @@ func (s *LowServer) validateCondaRequest(req CondaCollectRequest) (mirror, chann
 	}
 	mirror = req.Name
 	if mirror == "" {
-		mirror = aptMirrorName(channelURL)
+		// A bare channel name is its own natural mirror name — the operator
+		// who mirrors "conda-forge" expects /conda/conda-forge on the high
+		// side. Only a full channel URL falls back to the URL slug.
+		if !strings.Contains(req.Channel, "://") {
+			mirror = strings.TrimSpace(req.Channel)
+		} else {
+			mirror = aptMirrorName(channelURL)
+		}
 	}
 	if err := validateMirrorName(mirror); err != nil {
 		return "", "", nil, err
