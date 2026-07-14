@@ -80,7 +80,7 @@ artigate low \
 | `--export-dir` | `/var/spool/diode-out` | Directory where signed bundles are written |
 | `--private-key` | `""` (**required**) | Base64 Ed25519 private key path |
 | `--upstream-goproxy` | `https://proxy.golang.org,direct` | GOPROXY for the low-side fetcher; use `direct` to fetch from GitHub/VCS |
-| `--gosumdb` | `sum.golang.org` | GOSUMDB for the low-side fetcher |
+| `--gosumdb` | `sum.golang.org` | GOSUMDB for the low-side fetcher; also the checksum database whose records go collects capture for high-side clients (`off` disables mirroring) |
 | `--goprivate` | `""` | GOPRIVATE for private modules |
 | `--gonosumdb` | `""` | GONOSUMDB for private modules |
 | `--gonoproxy` | `""` | GONOPROXY for private modules |

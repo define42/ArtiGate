@@ -746,13 +746,15 @@ function goGuideSection(base: string): GuideSection {
       "“,off” means Go builds only from what this mirror has imported and never " +
       "reaches out to the internet.",
     blocks: [
-      { label: "Configure the client", code: `go env -w GOPROXY=${base}/go,off\ngo env -w GOSUMDB=off` },
+      { label: "Configure the client", code: `go env -w GOPROXY=${base}/go,off` },
       { label: "Reproducible builds (CI)", code: "go build -mod=readonly ./...\ngo test -mod=readonly ./..." },
     ],
     note:
-      "GOSUMDB is off because the public checksum database is unreachable when " +
-      "air-gapped — rely on your committed go.sum. The mirror serves only " +
-      "versions whose hashes were verified when their signed bundle was imported.",
+      "GOSUMDB stays on: the mirror serves the checksum database's signed " +
+      "records and Merkle proofs under go/sumdb/, captured when each module " +
+      "was mirrored, so go verifies modules end to end while offline. Only " +
+      "modules mirrored before checksum-db capture existed lack records — " +
+      "re-collect them once on the low side, or go env -w GOSUMDB=off.",
   };
 }
 

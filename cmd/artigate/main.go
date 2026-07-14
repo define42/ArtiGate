@@ -75,7 +75,9 @@ const usageText = `Usage:
 
 High-side clients:
   GOPROXY=http://high-proxy:8080/go,off
-  GOSUMDB=off
+  (GOSUMDB stays on: the mirror serves the checksum database's mirrored
+   records under /go/sumdb/. Modules mirrored before sumdb capture existed
+   need one re-collect first — until then use GOSUMDB=off.)
 
 Useful admin endpoints:
   low:  POST /admin/{go,python,maven,apt,rpm,containers,npm,hf,crates,terraform,helm,nuget,apk}/collect

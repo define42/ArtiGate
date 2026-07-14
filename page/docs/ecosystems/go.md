@@ -114,8 +114,8 @@ Configurable flags:
 | `--gotoolchain` | `auto` | `GOTOOLCHAIN` | set only when non-empty |
 | `--go` | `go` | *(binary path)* | which `go` to run |
 
-!!! tip "Checksum verification happens here"
-    `GOSUMDB` **defaults on** (`sum.golang.org`) on the low side. This is the security boundary: modules are verified against the public checksum database *before* they enter the trusted zone. The high side never re-checks against a sumdb — the signed bundle is the substitute trust anchor (see [Client setup](#client-setup)).
+!!! tip "Checksum verification happens here — and travels with the bundle"
+    `GOSUMDB` **defaults on** (`sum.golang.org`) on the low side. This is the first security boundary: modules are verified against the public checksum database *before* they enter the trusted zone. Each collect additionally **captures the database's signed lookup records and Merkle tiles** for the collected modules and ships them in the same bundle, so high-side clients keep `GOSUMDB` on and re-verify every module against the database's own public key — see [Checksum-database mirroring](#checksum-database-mirroring).
 
 ### Toolchain selection
 
@@ -178,33 +178,37 @@ Behavioural notes:
 
 ## Client setup
 
-Point air-gapped clients at the high side and turn the checksum database off:
+Point air-gapped clients at the high side; the checksum database stays **on**:
 
 ```bash
 export GOPROXY=https://high-proxy:8080/go,off
-export GOSUMDB=off
 ```
 
 Or per-invocation:
 
 ```bash
-GOPROXY=https://high-proxy:8080/go,off GOSUMDB=off go build ./...
+GOPROXY=https://high-proxy:8080/go,off go build ./...
 ```
 
 - **`GOPROXY=<base>/go,off`** — `/go` is where ArtiGate's proxy lives, and the trailing `,off` forbids any fallback to a direct/VCS fetch. The client can only ever obtain modules ArtiGate has already mirrored.
-- **`GOSUMDB=off`** — the client must not consult a checksum database.
+- **`GOSUMDB` stays at its default** (`sum.golang.org`): the GOPROXY protocol lets a proxy answer checksum-database requests, and ArtiGate's high side does, under `/go/sumdb/…` — the client never needs to reach the real database.
 
-### Why there is no sumdb mirroring
+### Checksum-database mirroring
 
-ArtiGate mirrors **no** checksum database — there is no `sumdb/` route on the high side, and nothing from `sum.golang.org` is ever stored or transferred. That is deliberate:
+The high side answers the GOPROXY protocol's sumdb passthrough (`/go/sumdb/<name>/supported`, `latest`, `lookup/…`, `tile/…`) from records captured at collect time, so clients keep full **end-to-end sumdb verification** while offline:
 
-- Checksums were already verified **on the low side at collect time** (`GOSUMDB=sum.golang.org`), before the module entered the trusted zone.
-- Integrity across the diode is guaranteed instead by the **Ed25519-signed manifest** plus per-file **SHA-256** verification on import, and by immutable-file conflict detection. The high side re-derives everything it serves from verified bytes and never trusts transferred metadata.
-- A `GOSUMDB` left on would make the client try to reach the public sumdb over the network — unreachable in an air-gapped environment, and blocked by `,off` anyway. Hence `GOSUMDB=off` is required; the signed-bundle chain is the trust anchor.
+- For every collected `module@version`, the low side captures the database's **signed lookup record** and the **Merkle tiles** proving it — using the same `golang.org/x/mod/sumdb` client the go toolchain embeds, so everything is verified against the database's public key before it is stored.
+- Before each bundle, the whole captured corpus is **re-verified under the database's latest signed tree head**, which also captures consistency proofs between the tree heads of earlier bundles and the current one, and full versions of tiles that were partial when the tree was smaller. Any mix of old and new lookups a client fetches therefore verifies, in any order.
+- The client re-checks all of it against `sum.golang.org`'s own key — the mirror cannot alter a record without the client noticing. The signed-bundle chain remains the transport trust anchor; the sumdb chain is verified end to end on top of it.
+- Modules matching the low side's `GONOSUMDB`/`GOPRIVATE` are never looked up (private modules stay private); clients handle them with their own `GONOSUMDB`/`GOPRIVATE`, as with any proxy.
+- A capture problem (say, the database is briefly unreachable) never blocks the collect: the modules still export, the gaps are reported in the collect result under `sumdb`, and the next collect heals them.
+
+!!! note "Mirrors built before sumdb capture existed"
+    Modules shipped by older bundles have no captured records yet, so clients asking for them get a `404` from `/go/sumdb/…/lookup/…` and fail verification. One re-collect of those modules on the low side backfills the records (dedup keeps the module files themselves from being re-shipped — the bundle carries just the sumdb data); a scheduled watch's next run does this automatically. Until then, those clients need `GOSUMDB=off`. Deployments that set `--gosumdb off` on the low side capture nothing, and clients keep using `GOSUMDB=off` exactly as before.
 
 ## Limitations
 
-- **`.ziphash` is never transferred.** The route exists and passes the completeness check, but the file itself was never bundled, so a `.ziphash` request `404`s. This is inert in practice: clients configured with `GOSUMDB=off` do not request `.ziphash`.
+- **`.ziphash` is never transferred.** The route exists and passes the completeness check, but the file itself was never bundled, so a `.ziphash` request `404`s. This is inert in practice: `.ziphash` is a local cache artifact, not part of the GOPROXY protocol — the toolchain hashes the downloaded zip itself and checks it against the mirrored checksum database.
 - **Pseudo-versions are hidden from `/@v/list`.** They are still fetchable by exact version, and `/@latest` falls back to the newest pseudo-version only when a module has no tagged release.
 - **`go_mod` mode ignores `modules`/`resolve_deps`.** See the precedence warning above.
 - **The synthetic collect module pins `go 1.16`.** Project (`go_mod`) mode instead honours the real `go` directive from the uploaded file.
