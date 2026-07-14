@@ -3,11 +3,14 @@
 // transport, collects from the real upstreams (PyPI, proxy.golang.org,
 // Maven Central, registry.npmjs.org, crates.io, registry.terraform.io,
 // charts.jetstack.io, api.nuget.org, cli.github.com, Docker Hub,
-// huggingface.co, and — via a one-package miniature repository built from
-// real dl-cdn.alpinelinux.org artifacts — Alpine), and validates every
-// stream with its real client tool: pip, go, mvn+java, npm+node, cargo,
-// terraform (or tofu), helm, dotnet, apt-get+dpkg-deb, dnf+rpm, apk (inside
-// an Alpine container), docker, huggingface_hub's CLI, and curl.
+// huggingface.co, conda.anaconda.org, rubygems.org, repo.packagist.org,
+// open-vsx.org, galaxy.ansible.com, cloud.r-project.org, github.com, and —
+// via a one-package miniature repository built from real
+// dl-cdn.alpinelinux.org artifacts — Alpine), and validates every stream
+// with its real client tool: pip, go, mvn+java, npm+node, cargo, terraform
+// (or tofu), helm, dotnet, apt-get+dpkg-deb, dnf+rpm, apk (inside an Alpine
+// container), docker, huggingface_hub's CLI, micromamba (or conda),
+// bundler, composer, ansible-galaxy, Rscript, git, and curl.
 //
 // Everything except this file is behind the "e2e" build tag, so the default
 // `go build ./...`, `go vet ./...`, `go test ./...`, and golangci-lint runs
