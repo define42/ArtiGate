@@ -192,6 +192,11 @@ Auth (env, low side only):
 Monitoring (env, both sides):
   GET /metrics           Prometheus telemetry (per-stream lag, gap age, bundle counts/bytes,
                          quota, disk, schedule/import outcomes); open like /healthz.
+  GET /readyz            readiness: 503 with the failing checks when the side cannot do its
+                         job (high: blocked streams, stalled/failing import passes, undrained
+                         backlog, exhausted transport quota; low: failed diode transfers,
+                         unreadable schedule store, missing export spool); 200 "ok" otherwise
+                         (?verbose lists every check). /healthz stays pure liveness.
   ARTIGATE_WEBHOOK_URL   http/https endpoint POSTed a JSON event on schedule_failed (low),
                          bundle_rejected / gap_detected (high); unset disables it.
   ARTIGATE_WEBHOOK_TOKEN optional bearer token sent with each webhook POST.
@@ -729,8 +734,8 @@ func (s *LowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not found", http.StatusNotFound)
 }
 
-// serveLowAdmin handles the health check and /admin/* routes. It reports
-// whether it has written a response for the request.
+// serveLowAdmin handles the monitoring endpoints and /admin/* routes. It
+// reports whether it has written a response for the request.
 func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if s.serveLowCollect(w, r) {
 		return true
@@ -741,11 +746,10 @@ func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if s.serveLowJobs(w, r) {
 		return true
 	}
+	if serveObservability(w, r, s.serveReadyz, s.serveMetrics) {
+		return true
+	}
 	switch {
-	case r.URL.Path == "/healthz":
-		_, _ = w.Write([]byte("ok\n"))
-	case r.URL.Path == "/metrics":
-		s.serveMetrics(w, r)
 	case r.URL.Path == "/admin/reexport" && r.Method == http.MethodPost:
 		res, err := s.HandleReexportRequest(r)
 		return respondJSONOrError(w, http.StatusBadRequest, res, err)
@@ -2432,6 +2436,11 @@ func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
 		importKick:  make(chan struct{}, 1),
 		metrics:     newHighMetrics(),
 	}
+	// Start the /readyz pass clock at construction: the import pipeline is
+	// presumed fresh at startup and must complete a real pass within the grace
+	// window, instead of reporting an infinite age (or failing readiness while
+	// the very first tick is still pending).
+	hs.metrics.recordImportPass(nil, time.Now().UTC())
 	if err := hs.loadState(); err != nil {
 		return nil, err
 	}
@@ -2551,14 +2560,13 @@ func (s *HighServer) requireLocalAdmin(w http.ResponseWriter, r *http.Request) b
 	return false
 }
 
-// serveHighAdmin handles the health check and /admin/* routes. It reports
-// whether it has written a response for the request.
+// serveHighAdmin handles the monitoring endpoints and /admin/* routes. It
+// reports whether it has written a response for the request.
 func (s *HighServer) serveHighAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if serveObservability(w, r, s.serveReadyz, s.serveMetrics) {
+		return true
+	}
 	switch {
-	case r.URL.Path == "/healthz":
-		_, _ = w.Write([]byte("ok\n"))
-	case r.URL.Path == "/metrics":
-		s.serveMetrics(w, r)
 	case r.URL.Path == "/admin/import" && r.Method == http.MethodPost:
 		if !s.requireLocalAdmin(w, r) {
 			return true
@@ -2824,7 +2832,16 @@ func (s *HighServer) knownStreamsLocked() ([]string, error) {
 	return streams, nil
 }
 
+// ImportNext runs one full import pass and records its completion time and
+// outcome for the /readyz pipeline/backlog checks, whichever path triggered it
+// (the background loop, a diode-ingest kick, or a manual /admin/import).
 func (s *HighServer) ImportNext() (ImportResult, error) {
+	res, err := s.importPass()
+	s.metrics.recordImportPass(err, time.Now().UTC())
+	return res, err
+}
+
+func (s *HighServer) importPass() (ImportResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

@@ -635,8 +635,9 @@ When set, the dashboard presents a sign-in page and, after a successful login,
 carries the session in an encrypted, signed cookie (gorilla/securecookie); a
 **Log out** button in the header clears it. Sessions last 12 hours and survive a
 restart (the cookie keys are persisted to `<root>/session.key`). The `/healthz`
-probe stays open so container health checks keep working. The **high side is
-never authenticated** — it serves only already-verified public mirror content.
+and `/readyz` probes and the `/metrics` scrape endpoint stay open so container
+health checks and monitoring keep working. The **high side is never
+authenticated** — it serves only already-verified public mirror content.
 
 **When `ARTIGATE_LOW_AUTH` is unset the low-side dashboard is unauthenticated** —
 including the mutating `/admin/*` endpoints — so bind it to localhost or a trusted
@@ -699,6 +700,46 @@ artigate_high_unverified_transport_bytes 734003200
 Counters reset on process restart, as is standard for Prometheus; the derived
 gauges (sequences, lag, quota, disk) are computed live from on-disk state on
 every scrape, so they never drift from reality.
+
+### `/readyz` (readiness)
+
+`GET /healthz` is pure liveness — it answers `ok` as long as the process
+serves, and is what container health checks and load balancers should keep
+using. **`GET /readyz`** is the readiness probe next to it: it runs real
+go/no-go checks against the same live state the dashboard shows and answers
+**200 `ok`** when the side can do its job, or **503** with one
+`[-] check: reason` line per failing check when it cannot (append `?verbose`
+to list every check on success too). Like `/healthz` and `/metrics`, it stays
+open when auth is enabled.
+
+The **low side** is not ready when the schedule store cannot be read
+(`watch-store`), the export spool directory is missing (`export-spool`), or a
+bundle's last diode transfer — UDP pitch or HTTP upload — failed and its files
+still sit in the outbound spool awaiting a re-transmit (`diode-transfer`; a
+successful re-export clears it).
+
+The **high side** is not ready when import status cannot be computed
+(`import-status`), a stream is blocked waiting for a missing bundle
+(`stream-gaps`), complete bundles sit ready to import with no import pass
+completing inside the grace window — three `--import-interval`s, at least a
+minute (`import-backlog`), import passes stopped completing or the last pass
+failed (`import-pipeline`), or the shared unverified-transport quota is
+exhausted so the diode cannot land new bundles (`transport-quota`).
+
+```console
+$ curl -s http://high:8080/readyz
+[+] import-status ok
+[-] stream-gaps: stream go waiting for missing bundle 42 for 15m7s
+[+] import-backlog ok
+[+] import-pipeline ok (last pass 4s ago)
+[+] transport-quota ok (700.0 MiB of 128.0 GiB used)
+not ready
+```
+
+Point alerting at `/readyz` (or scrape both: a 503 names exactly what to fix),
+and keep orchestrator liveness probes on `/healthz` so a blocked stream — which
+the high side deliberately survives while continuing to serve everything
+already verified — never causes a restart loop.
 
 ### Failure webhooks
 

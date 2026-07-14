@@ -376,7 +376,12 @@ func (s *LowServer) uploadBundleIfConfigured(ctx context.Context, res *ExportRes
 		s.pitchBundle(ctx, res)
 	case s.cfg.DiodeURL != "":
 		s.uploadBundleToHTTPDiode(ctx, res)
+	default:
+		return
 	}
+	// Feed the /readyz diode-transfer check: a failure marks the bundle stuck
+	// until a later transfer of the same bundle (a re-export, say) succeeds.
+	s.metrics.recordDiodeTransfer(res.BundleID, res.DiodeError)
 }
 
 // uploadBundleToHTTPDiode pushes a bundle to the HTTP diode endpoint.

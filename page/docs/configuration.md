@@ -110,7 +110,9 @@ artigate low \
 - `POST /admin/reexport?stream=go&sequences=42,45-47` (`stream` defaults to `go`; also accepts a JSON body `{"stream":"go","sequences":"42,45-47"}`)
 - `GET /admin/bundles`
 - `GET /admin/watches`, `POST /admin/watches`, `POST /admin/watches/{update,run,enable,disable,delete}` — the [watch scheduler](scheduling.md)
-- `GET /healthz` → `ok\n` (always open, even with auth enabled)
+- `GET /healthz` → `ok\n` (liveness; always open, even with auth enabled)
+- `GET /readyz` → `200 ok` / `503` with the failing checks — schedule store, export spool, stuck diode transfers (always open; `?verbose` lists every check)
+- `GET /metrics` → Prometheus telemetry (always open)
 
 !!! warning
     Without `ARTIGATE_LOW_AUTH`, the dashboard **and** all mutating `/admin/*` endpoints are unauthenticated — anyone who can reach the listener can drive collects and re-exports. Bind to localhost/a trusted network or enable auth. See [Security & trust](security.md).
@@ -151,7 +153,9 @@ artigate high \
 - `POST /admin/import`
 - `GET /admin/missing`
 - `GET /admin/status`
-- `GET /healthz`
+- `GET /healthz` (liveness)
+- `GET /readyz` → `200 ok` / `503` with the failing checks — blocked streams, undrained backlog, stalled/failing import passes, exhausted transport quota (`?verbose` lists every check)
+- `GET /metrics` → Prometheus telemetry
 - `PUT|POST /diode/<bundle-file>` — bundle ingest, only when `ARTIGATE_DIODE_INGEST=on` (403 otherwise)
 
 ---
@@ -167,7 +171,7 @@ There are **no** environment variables for `keygen` or `hashpw`. The TLS variabl
 | `ARTIGATE_LOW_AUTH` | unset (auth disabled) | One or more `username:<argon2id-hash>` credentials, separated by `;` or newlines (`\n`/`\r`) — **not commas** |
 | `ARTIGATE_LOW_COOKIE_SECURE` | `auto` | Session cookie `Secure` attribute: `auto` follows ArtiGate's own TLS; `true`/`false` override |
 
-When `ARTIGATE_LOW_AUTH` yields at least one credential, the dashboard requires a form login and sessions are carried in an encrypted, signed cookie (`artigate_session`, 12 hours, `HttpOnly`, `SameSite=Lax`). Keys persist in `<root>/session.key` (`0o600`, 96 bytes) so sessions survive a restart. `/healthz` stays open and a **Log out** button appears.
+When `ARTIGATE_LOW_AUTH` yields at least one credential, the dashboard requires a form login and sessions are carried in an encrypted, signed cookie (`artigate_session`, 12 hours, `HttpOnly`, `SameSite=Lax`). Keys persist in `<root>/session.key` (`0o600`, 96 bytes) so sessions survive a restart. `/healthz`, `/readyz`, and `/metrics` stay open and a **Log out** button appears.
 
 Parsing rules and gotchas:
 

@@ -2,7 +2,7 @@
 
 The low side is ArtiGate's internet-facing **exporter**. Operators drive it to fetch artifacts with the native package toolchains, pack each fetch into a signed three-file bundle, and write those bundles to the export directory for the data diode to carry across to the [high side](high-side.md).
 
-The low side is deliberately *not* a proxy. It never serves modules to clients — `ServeHTTP` accepts only `/admin/*` routes, the dashboard UI, and `/healthz`; everything else returns `404`. Pulling is a separate concern that lives entirely on the high side.
+The low side is deliberately *not* a proxy. It never serves modules to clients — `ServeHTTP` accepts only `/admin/*` routes, the dashboard UI, and the monitoring endpoints (`/healthz`, `/readyz`, `/metrics`); everything else returns `404`. Pulling is a separate concern that lives entirely on the high side.
 
 ## Running it
 

@@ -125,13 +125,17 @@ func writeDiskMetrics(p *promWriter, targets []diskTarget) {
 // -----------------------------------------------------------------------------
 
 // lowMetrics holds the low-side facts that cannot be recomputed from disk at
-// scrape time: scheduled-collect outcome counters and the last time each stream
-// collected successfully.
+// scrape time: scheduled-collect outcome counters, the last time each stream
+// collected successfully, and which bundles' diode transfers last failed.
 type lowMetrics struct {
 	mu          sync.Mutex
 	runsOK      map[string]int64
 	runsFailed  map[string]int64
 	lastSuccess map[string]time.Time
+	// diodeFailed maps a bundle ID to its last failed diode transfer's error;
+	// a later successful transfer of the same bundle clears it. /readyz reports
+	// the entries whose files still wait in the outbound spool.
+	diodeFailed map[string]string
 }
 
 func newLowMetrics() *lowMetrics {
@@ -139,6 +143,7 @@ func newLowMetrics() *lowMetrics {
 		runsOK:      map[string]int64{},
 		runsFailed:  map[string]int64{},
 		lastSuccess: map[string]time.Time{},
+		diodeFailed: map[string]string{},
 	}
 }
 
@@ -156,6 +161,36 @@ func (m *lowMetrics) recordCollect(stream string, ok bool, at time.Time) {
 		return
 	}
 	m.runsFailed[stream]++
+}
+
+// recordDiodeTransfer records one bundle transfer's outcome (empty errDetail
+// means success) for the /readyz diode-transfer check. Safe on a nil receiver.
+func (m *lowMetrics) recordDiodeTransfer(bundleID, errDetail string) {
+	if m == nil || bundleID == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if errDetail == "" {
+		delete(m.diodeFailed, bundleID)
+		return
+	}
+	m.diodeFailed[bundleID] = errDetail
+}
+
+// diodeFailures copies the failed-transfer records for /readyz to read without
+// holding the lock while it stats the outbound spool.
+func (m *lowMetrics) diodeFailures() map[string]string {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]string, len(m.diodeFailed))
+	for k, v := range m.diodeFailed {
+		out[k] = v
+	}
+	return out
 }
 
 // snapshot copies the counters and timestamps for the scrape handler to read
@@ -182,16 +217,19 @@ type gapEvent struct {
 
 // highMetrics holds the high-side facts not recomputable from disk: import and
 // rejection counters, per-stream last-import timestamps, import-loop errors,
-// and when each currently-open gap first appeared (for gap-age reporting and
-// edge-triggered gap webhooks).
+// when each currently-open gap first appeared (for gap-age reporting and
+// edge-triggered gap webhooks), and the last import pass's completion time and
+// outcome (for the /readyz pipeline and backlog checks).
 type highMetrics struct {
-	mu           sync.Mutex
-	imported     map[string]int64
-	rejected     map[string]int64
-	gapsDetected map[string]int64
-	lastImport   map[string]time.Time
-	gapSince     map[string]time.Time
-	importErrors int64
+	mu                sync.Mutex
+	imported          map[string]int64
+	rejected          map[string]int64
+	gapsDetected      map[string]int64
+	lastImport        map[string]time.Time
+	gapSince          map[string]time.Time
+	importErrors      int64
+	lastImportPassEnd time.Time
+	lastImportPassErr string
 }
 
 func newHighMetrics() *highMetrics {
@@ -232,6 +270,23 @@ func (m *highMetrics) recordImportError() {
 	m.importErrors++
 }
 
+// recordImportPass notes the completion of one full import pass (ImportNext),
+// whatever triggered it — the background loop, a diode-ingest kick, or a
+// manual /admin/import. /readyz fails when passes stop completing or the last
+// one failed. Safe on a nil receiver.
+func (m *highMetrics) recordImportPass(err error, at time.Time) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastImportPassEnd = at
+	m.lastImportPassErr = ""
+	if err != nil {
+		m.lastImportPassErr = err.Error()
+	}
+}
+
 // observeGaps reconciles the per-stream gap state against a fresh import status
 // and returns the streams that have newly become blocked. A stream stays "since
 // first seen" until it unblocks, so a persistent gap ages without re-firing;
@@ -258,26 +313,30 @@ func (m *highMetrics) observeGaps(status ImportStatus, now time.Time) []gapEvent
 }
 
 // highSnapshot is a lock-free copy of the high-side counters for the scrape
-// handler to format.
+// and readiness handlers to format.
 type highSnapshot struct {
-	imported     map[string]int64
-	rejected     map[string]int64
-	gapsDetected map[string]int64
-	lastImport   map[string]time.Time
-	gapSince     map[string]time.Time
-	importErrors int64
+	imported          map[string]int64
+	rejected          map[string]int64
+	gapsDetected      map[string]int64
+	lastImport        map[string]time.Time
+	gapSince          map[string]time.Time
+	importErrors      int64
+	lastImportPassEnd time.Time
+	lastImportPassErr string
 }
 
 func (m *highMetrics) snapshot() highSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return highSnapshot{
-		imported:     copyInt64Map(m.imported),
-		rejected:     copyInt64Map(m.rejected),
-		gapsDetected: copyInt64Map(m.gapsDetected),
-		lastImport:   copyTimeMap(m.lastImport),
-		gapSince:     copyTimeMap(m.gapSince),
-		importErrors: m.importErrors,
+		imported:          copyInt64Map(m.imported),
+		rejected:          copyInt64Map(m.rejected),
+		gapsDetected:      copyInt64Map(m.gapsDetected),
+		lastImport:        copyTimeMap(m.lastImport),
+		gapSince:          copyTimeMap(m.gapSince),
+		importErrors:      m.importErrors,
+		lastImportPassEnd: m.lastImportPassEnd,
+		lastImportPassErr: m.lastImportPassErr,
 	}
 }
 

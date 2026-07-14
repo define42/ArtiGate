@@ -3,7 +3,7 @@
 ArtiGate is a single binary with two roles that never share routes: `artigate low` (the collector/exporter — every `/admin/*/collect`, re-export, watch, and the low dashboard) and `artigate high` (a read-only mirror that serves imported bundle contents). This page documents every HTTP endpoint on both sides, with the exact request-body fields and response shapes taken from the Go structs in `cmd/artigate`.
 
 !!! note "Two roles, two route tables"
-    The low side is an **exporter only** — it has no package pull-through. Anything that is not `/admin/*`, `/healthz`, `/`, or `/ui*` returns `404`. Only the [high side](high-side.md) serves package contents to clients. See [Architecture](architecture.md) for the full model and [Low side](low-side.md) / [High side](high-side.md) for operations.
+    The low side is an **exporter only** — it has no package pull-through. Anything that is not `/admin/*`, `/healthz`, `/readyz`, `/metrics`, `/`, or `/ui*` returns `404`. Only the [high side](high-side.md) serves package contents to clients. See [Architecture](architecture.md) for the full model and [Low side](low-side.md) / [High side](high-side.md) for operations.
 
 ## Conventions
 
@@ -27,6 +27,8 @@ ArtiGate is a single binary with two roles that never share routes: `artigate lo
 | `/admin/watches/{run,enable,disable,delete}` | POST | Act on a watch by id |
 | `/admin/bundles` | GET | Per-stream export status |
 | `/healthz` | any | Liveness (`ok\n`) |
+| `/readyz` | GET/HEAD | Readiness — `200 ok` / `503` with the failing checks |
+| `/metrics` | GET/HEAD | Prometheus telemetry |
 | `/`, `/ui`, `/ui/` | GET/HEAD | Dashboard HTML |
 | `/ui/api/status` | GET/HEAD | Same payload as `/admin/bundles` |
 
@@ -607,7 +609,9 @@ Both return the identical `LowBundleStatus` payload.
 
 ### Health & dashboard
 
-- `GET /healthz` → body `ok\n`, no JSON.
+- `GET /healthz` → body `ok\n`, no JSON. Pure liveness: it answers as long as the process serves.
+- `GET /readyz` → **200** `ok\n` when the low side can do its job, **503** with a `[-] check: reason` line per failing check when it cannot. Checks: the schedule store answers (`watch-store`), the export spool directory exists (`export-spool`), and no bundle's last diode transfer failed while its files still wait in the outbound spool (`diode-transfer`). Append `?verbose` to list every check on success too. GET/HEAD only; always open, even with auth enabled.
+- `GET /metrics` → Prometheus text-exposition telemetry (see the README's monitoring section). GET/HEAD only; always open.
 - `GET /`, `/ui`, `/ui/` → the self-contained HTML dashboard (tabs: Overview / Go / Python / Maven / NPM / APT / RPM / Containers / AI Models / Crates / Terraform / Helm / NuGet / Alpine / Status). Non-read methods → **405**.
 
 ---
@@ -620,7 +624,9 @@ Both return the identical `LowBundleStatus` payload.
 
 | Route | Method | Returns |
 |---|---|---|
-| `/healthz` | any | `ok\n` |
+| `/healthz` | any | `ok\n` (pure liveness) |
+| `/readyz` | GET/HEAD | `200 ok` when the import pipeline is healthy; `503` listing the failing checks when a stream is blocked on a missing bundle (`stream-gaps`), landed bundles sit undrained (`import-backlog`), import passes stopped completing or the last one failed (`import-pipeline`), import status is uncomputable (`import-status`), or the unverified-transport quota is exhausted (`transport-quota`). `?verbose` lists every check on success too |
+| `/metrics` | GET/HEAD | Prometheus telemetry |
 | `/admin/import` | POST | `ImportResult` JSON (imports the next in-order bundle), or 500 |
 | `/admin/status` | GET | `ImportStatus` JSON |
 | `/admin/missing` | GET | `ImportStatus` JSON (an alias of `/admin/status`) |
