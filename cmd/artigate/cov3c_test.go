@@ -670,7 +670,7 @@ func TestCov3C_UploadsDetailErrors(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// ui.go: cachedLists / listGoModules / goDetail error branches
+// ui.go: cachedTrees / listGoModules / goDetail error branches
 // -----------------------------------------------------------------------------
 
 func TestCov3C_ListGoModulesNoDir(t *testing.T) {
@@ -686,16 +686,16 @@ func TestCov3C_ListGoModulesNoDir(t *testing.T) {
 func TestCov3C_CachedListsAndTreeError(t *testing.T) {
 	cov3CSkipIfRoot(t)
 	srv := mixedHighServer(t) // imports Go modules under go/
-	// Break the Go module tree so listGoModules (the first cachedLists step)
-	// errors, surfacing as a 500 from handleUITree and a direct cachedLists error.
+	// Break the Go module tree so listGoModules (the first cachedTrees step)
+	// errors, surfacing as a 500 from handleUITree and a direct cachedTrees error.
 	hs := srv.Config.Handler.(*HighServer)
 	cov3CChmod(t, hs.goModuleDir(), 0)
 
 	if code, _ := httpGet(t, srv.URL+"/ui/api/tree?eco=go"); code != http.StatusInternalServerError {
 		t.Errorf("tree with broken go dir = %d, want 500", code)
 	}
-	if _, err := hs.cachedLists(); err == nil {
-		t.Error("cachedLists should error on an unreadable go module dir")
+	if _, err := hs.cachedTrees(); err == nil {
+		t.Error("cachedTrees should error on an unreadable go module dir")
 	}
 	if _, err := hs.listGoModules(); err == nil {
 		t.Error("listGoModules should error on an unreadable go module dir")

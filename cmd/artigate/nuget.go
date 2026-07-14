@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -28,6 +29,30 @@ import (
 	"strings"
 	"time"
 )
+
+// nugetEcosystem is the NuGet package stream's registry entry (see
+// ecosystems in ecosystem.go).
+func nugetEcosystem() ecosystem {
+	return ecosystem{
+		stream:       streamNuget,
+		label:        "NuGet",
+		title:        "NuGet packages",
+		collect:      (*LowServer).HandleNugetCollect,
+		watchCollect: watchAdapter((*LowServer).CollectNuget),
+		flags: func(fs *flag.FlagSet, cfg *LowConfig) {
+			fs.StringVar(&cfg.NugetSource, "nuget-source", "", "NuGet v3 service index packages are resolved from (default "+defaultNugetSource+")")
+		},
+		manifestContent: func(m BundleManifest) bool { return m.Nuget != nil && len(m.Nuget.Packages) > 0 },
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateNugetPackages(m.Nuget.Packages, seen)
+		},
+		contentDesc: "nuget packages",
+		publish:     func(s *HighServer, m BundleManifest) error { return s.publishNuget(m.Nuget) },
+		serve:       (*HighServer).serveNuget,
+		scanTree:    flatTreeScan((*HighServer).listNugetPackages),
+		detail:      (*HighServer).nugetDetail,
+	}
+}
 
 const defaultNugetSource = "https://api.nuget.org/v3/index.json"
 
@@ -706,6 +731,8 @@ func (s *HighServer) nugetDetail(spec string) (UIDetail, error) {
 // in an imported bundle from the archive's own embedded .nuspec. A package
 // whose archive cannot be parsed is logged and skipped (its version 404s)
 // rather than wedging the stream's import forever.
+// publishNuget regenerates the served NuGet metadata from each package's own
+// embedded .nuspec (never trusting transferred metadata).
 func (s *HighServer) publishNuget(m *NugetManifest) error {
 	if m == nil {
 		return nil

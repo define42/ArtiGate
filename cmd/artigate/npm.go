@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"hash"
 	"io"
@@ -41,6 +42,31 @@ import (
 	"strings"
 	"time"
 )
+
+// npmEcosystem is the NPM package stream's registry entry (see ecosystems in
+// ecosystem.go).
+func npmEcosystem() ecosystem {
+	return ecosystem{
+		stream:       streamNpm,
+		label:        "NPM",
+		title:        "NPM packages",
+		collect:      (*LowServer).HandleNpmCollect,
+		watchCollect: watchAdapter((*LowServer).CollectNpm),
+		flags: func(fs *flag.FlagSet, cfg *LowConfig) {
+			fs.StringVar(&cfg.NpmBinary, "npm", "npm", "npm command used to resolve NPM package graphs")
+			fs.StringVar(&cfg.NpmRegistry, "npm-registry", "", "registry URL npm resolves against (default: npm's own configuration)")
+		},
+		manifestContent: func(m BundleManifest) bool { return m.Npm != nil && len(m.Npm.Packages) > 0 },
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateNpmPackages(m.Npm.Packages, seen)
+		},
+		contentDesc: "npm packages",
+		publish:     func(s *HighServer, m BundleManifest) error { return s.publishNpm(m.Npm) },
+		serve:       (*HighServer).serveNpm,
+		scanTree:    flatTreeScan((*HighServer).listNpmPackages),
+		detail:      (*HighServer).npmDetail,
+	}
+}
 
 // -----------------------------------------------------------------------------
 // Manifest types
@@ -399,6 +425,8 @@ func npmLatestVersion(versions []string) string {
 // an imported bundle from the tarball's own embedded package.json. A package
 // whose tarball cannot be parsed is logged and skipped (its version 404s)
 // rather than wedging the stream's import forever.
+// publishNpm regenerates the served npm metadata from each tarball's own
+// embedded package.json (never trusting a transferred packument).
 func (s *HighServer) publishNpm(m *NpmManifest) error {
 	if m == nil {
 		return nil

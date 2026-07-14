@@ -35,6 +35,32 @@ import (
 	"time"
 )
 
+// uploadsEcosystem is the uploaded-file stream's registry entry (see
+// ecosystems in ecosystem.go). An upload has no upstream to re-pull — the
+// file bytes arrive with the request — so it has no watch hook, and its
+// verified files are served straight from the repository, so no publish hook
+// either.
+func uploadsEcosystem() ecosystem {
+	return ecosystem{
+		stream:          streamUploads,
+		label:           "Uploads",
+		title:           "Uploaded files",
+		collect:         (*LowServer).HandleUploadsCollect,
+		noSchedule:      "uploads cannot be scheduled; upload again when the content changes",
+		manifestContent: func(m BundleManifest) bool { return m.Uploads != nil && len(m.Uploads.Files) > 0 },
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateUploadsManifest(m.Uploads, seen, m.Files)
+		},
+		contentDesc: "uploaded files",
+		serve:       (*HighServer).serveUploads,
+		scanTree: func(s *HighServer) (uiTree, error) {
+			folders, err := s.listUploadedFolders()
+			return uploadsTree(folders), err
+		},
+		detail: (*HighServer).uploadsDetail,
+	}
+}
+
 // UploadsManifest is the uploads section of a bundle manifest.
 type UploadsManifest struct {
 	Files []UploadFile `json:"files"`

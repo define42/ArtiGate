@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -41,6 +42,31 @@ import (
 
 	goversion "github.com/hashicorp/go-version"
 )
+
+// containersEcosystem is the container image stream's registry entry (see
+// ecosystems in ecosystem.go).
+func containersEcosystem() ecosystem {
+	return ecosystem{
+		stream:       streamContainers,
+		label:        "Containers",
+		title:        "Container images",
+		collect:      (*LowServer).HandleContainerCollect,
+		watchCollect: watchAdapter((*LowServer).CollectContainers),
+		flags: func(fs *flag.FlagSet, cfg *LowConfig) {
+			fs.StringVar(&cfg.ContainerRegistries, "container-registry", "", "comma-separated host=baseURL overrides for container registries (e.g. docker.io=https://mirror.example.com)")
+		},
+		manifestContent: func(m BundleManifest) bool { return m.Containers != nil && len(m.Containers.Repos) > 0 },
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateContainerRepos(m.Containers.Repos, seen, m.Files)
+		},
+		contentDesc: "container repos",
+		publish:     func(s *HighServer, m BundleManifest) error { return s.publishContainers(m.Containers) },
+		serve:       (*HighServer).serveContainers,
+		scanTree:    segmentTreeScan((*HighServer).listContainerRepos),
+		detail:      (*HighServer).containerDetail,
+		repoList:    (*HighServer).containerRepoList,
+	}
+}
 
 // -----------------------------------------------------------------------------
 // Manifest types

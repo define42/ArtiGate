@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -30,6 +31,30 @@ import (
 	"strings"
 	"time"
 )
+
+// cratesEcosystem is the Rust crate stream's registry entry (see ecosystems
+// in ecosystem.go).
+func cratesEcosystem() ecosystem {
+	return ecosystem{
+		stream:       streamCrates,
+		label:        "Crates",
+		title:        "Rust crates",
+		collect:      (*LowServer).HandleCratesCollect,
+		watchCollect: watchAdapter((*LowServer).CollectCrates),
+		flags: func(fs *flag.FlagSet, cfg *LowConfig) {
+			fs.StringVar(&cfg.CratesIndex, "crates-index", "", "sparse registry index Rust crates are resolved from (default "+defaultCratesIndex+")")
+		},
+		manifestContent: func(m BundleManifest) bool { return m.Crates != nil && len(m.Crates.Crates) > 0 },
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateCrates(m.Crates.Crates, seen, m.Files)
+		},
+		contentDesc: "crates",
+		publish:     func(s *HighServer, m BundleManifest) error { return s.publishCrates(m.Crates) },
+		serve:       (*HighServer).serveCrates,
+		scanTree:    flatTreeScan((*HighServer).listCratesPackages),
+		detail:      (*HighServer).cratesDetail,
+	}
+}
 
 const defaultCratesIndex = "https://index.crates.io"
 

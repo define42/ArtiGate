@@ -46,14 +46,15 @@ const (
 	streamUploads    = "uploads"
 )
 
-// knownStreams is the set of built-in ecosystem streams, shown in the low-side
-// status even before anything has been exported.
+// knownStreams is the set of built-in ecosystem streams in registry order,
+// shown in the low-side status even before anything has been exported.
 func knownStreams() []string {
-	return []string{
-		streamGo, streamPython, streamMaven, streamApt, streamRpm, streamContainers,
-		streamNpm, streamHF, streamCrates, streamTerraform, streamHelm, streamNuget,
-		streamApk, streamUploads,
+	ecos := ecosystems()
+	streams := make([]string, 0, len(ecos))
+	for _, e := range ecos {
+		streams = append(streams, e.stream)
 	}
+	return streams
 }
 
 const manifestSignaturePHPrefix = "ed25519ph:"

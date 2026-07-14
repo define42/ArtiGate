@@ -266,15 +266,19 @@ func (s *HighServer) unverifiedTransportBytesExcept(skip func(string) bool) (int
 func (s *HighServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Each ecosystem claims its own URL space — Go under /go/, like every other
 	// ecosystem under its own prefix — and reports whether it handled the
-	// request; anything unclaimed is not found.
-	for _, serve := range []func(http.ResponseWriter, *http.Request) bool{
-		s.serveHighAdmin, s.serveDiode, s.serveGo, s.servePython, s.serveMaven, s.serveApt,
-		s.serveRpm, s.serveHF, s.serveContainers, s.serveNpm, s.serveCrates, s.serveTerraform,
-		s.serveHelm, s.serveNuget, s.serveApk, s.serveUploads, s.serveUI,
-	} {
-		if serve(w, r) {
+	// request; anything unclaimed is not found. The ecosystems get a look in
+	// registry order, which is what makes that order load-bearing (hf before
+	// containers; see ecosystems).
+	if s.serveHighAdmin(w, r) || s.serveDiode(w, r) {
+		return
+	}
+	for _, e := range ecosystems() {
+		if e.serve(s, w, r) {
 			return
 		}
+	}
+	if s.serveUI(w, r) {
+		return
 	}
 	http.Error(w, "not found", http.StatusNotFound)
 }
@@ -1274,41 +1278,15 @@ func markPresentComplete(dir, stream string, seqs []int64, present map[int64]boo
 	return maxSeen
 }
 
-// manifestEcoCheck pairs "this ecosystem has content in the manifest" with the
-// validator to run over it.
-type manifestEcoCheck struct {
-	present bool
-	check   func(map[string]bool) error
-}
-
-// hfManifestPresent / tfManifestPresent report whether a manifest carries any
-// content of their ecosystem (each has two content lists).
-func hfManifestPresent(m BundleManifest) bool {
-	return m.HuggingFace != nil && (len(m.HuggingFace.Models) > 0 || len(m.HuggingFace.Repos) > 0)
-}
-
-func tfManifestPresent(m BundleManifest) bool {
-	return m.Terraform != nil && (len(m.Terraform.Providers) > 0 || len(m.Terraform.Modules) > 0)
-}
-
-func manifestEcoChecks(m BundleManifest) []manifestEcoCheck {
-	return []manifestEcoCheck{
-		{len(m.Modules) > 0, func(s map[string]bool) error { return validateManifestModules(m.Modules, s) }},
-		{m.Python != nil && len(m.Python.Projects) > 0, func(s map[string]bool) error { return validatePythonProjects(m.Python.Projects, s) }},
-		{m.Maven != nil && len(m.Maven.Artifacts) > 0, func(s map[string]bool) error { return validateMavenArtifacts(m.Maven.Artifacts, s) }},
-		{m.Apt != nil && len(m.Apt.Mirrors) > 0, func(s map[string]bool) error { return validateAptMirrors(m.Apt.Mirrors, s) }},
-		{m.Rpm != nil && len(m.Rpm.Mirrors) > 0, func(s map[string]bool) error { return validateRpmMirrors(m.Rpm.Mirrors, s) }},
-		{m.Containers != nil && len(m.Containers.Repos) > 0, func(s map[string]bool) error { return validateContainerRepos(m.Containers.Repos, s, m.Files) }},
-		{m.Npm != nil && len(m.Npm.Packages) > 0, func(s map[string]bool) error { return validateNpmPackages(m.Npm.Packages, s) }},
-		{hfManifestPresent(m), func(s map[string]bool) error { return validateHF(m.HuggingFace, s, m.Files) }},
-		{m.Crates != nil && len(m.Crates.Crates) > 0, func(s map[string]bool) error { return validateCrates(m.Crates.Crates, s, m.Files) }},
-		{tfManifestPresent(m), func(s map[string]bool) error { return validateTerraformManifest(m.Terraform, s, m.Files) }},
-		{m.Helm != nil && len(m.Helm.Repos) > 0, func(s map[string]bool) error { return validateHelmRepos(m.Helm.Repos, s) }},
-		{m.Nuget != nil && len(m.Nuget.Packages) > 0, func(s map[string]bool) error { return validateNugetPackages(m.Nuget.Packages, s) }},
-		{m.Apk != nil && len(m.Apk.Mirrors) > 0, func(s map[string]bool) error { return validateApkMirrors(m.Apk.Mirrors, s) }},
-		{m.Uploads != nil && len(m.Uploads.Files) > 0, func(s map[string]bool) error { return validateUploadsManifest(m.Uploads, s, m.Files) }},
-		{m.Part != nil, func(map[string]bool) error { return validateBundlePart(m.Part, m.Files) }},
+// noManifestContentError names, per ecosystem, the content a valid manifest
+// could have carried; a manifest carrying none of it is rejected with this.
+func noManifestContentError() error {
+	ecos := ecosystems()
+	kinds := make([]string, 0, len(ecos))
+	for _, e := range ecos {
+		kinds = append(kinds, e.contentDesc)
 	}
+	return fmt.Errorf("manifest contains no %s, or content-part marker", strings.Join(kinds, ", "))
 }
 
 // validateBundlePart checks a split collect's content-part marker: sane
@@ -1330,17 +1308,23 @@ func validateManifestCompleteness(m BundleManifest) error {
 		return err
 	}
 	matched := false
-	for _, e := range manifestEcoChecks(m) {
-		if !e.present {
+	for _, e := range ecosystems() {
+		if !e.manifestContent(m) {
 			continue
 		}
 		matched = true
-		if err := e.check(seen); err != nil {
+		if err := e.validateContent(m, seen); err != nil {
+			return err
+		}
+	}
+	if m.Part != nil {
+		matched = true
+		if err := validateBundlePart(m.Part, m.Files); err != nil {
 			return err
 		}
 	}
 	if !matched {
-		return errors.New("manifest contains no modules, python projects, maven artifacts, apt mirrors, rpm mirrors, container repos, npm packages, hugging face models, crates, terraform providers/modules, helm charts, nuget packages, apk mirrors, uploaded files, or content-part marker")
+		return noManifestContentError()
 	}
 	return nil
 }
@@ -1407,43 +1391,16 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 	if err := s.installVerifiedFiles(staging, manifest.Files, goFiles); err != nil {
 		return err
 	}
-	// Regenerate APT repository metadata from the accumulated stanzas of the
-	// .deb files now present (never trusting the transferred Release/Packages).
-	if err := s.publishApt(manifest.Apt); err != nil {
-		return err
-	}
-	if err := s.publishRpm(manifest.Rpm); err != nil {
-		return err
-	}
-	if err := s.publishContainers(manifest.Containers); err != nil {
-		return err
-	}
-	// Regenerate the served npm metadata from each tarball's own embedded
-	// package.json (never trusting a transferred packument).
-	if err := s.publishNpm(manifest.Npm); err != nil {
-		return err
-	}
-	if err := s.publishHF(manifest.HuggingFace); err != nil {
-		return err
-	}
-	if err := s.publishCrates(manifest.Crates); err != nil {
-		return err
-	}
-	if err := s.publishTerraform(manifest.Terraform); err != nil {
-		return err
-	}
-	// Regenerate index.yaml from each chart's own embedded Chart.yaml (never
-	// trusting a transferred repository index).
-	if err := s.publishHelm(manifest.Helm); err != nil {
-		return err
-	}
-	// Regenerate the served NuGet metadata from each package's own embedded
-	// .nuspec (never trusting transferred metadata).
-	if err := s.publishNuget(manifest.Nuget); err != nil {
-		return err
-	}
-	if err := s.publishApk(manifest.Apk); err != nil {
-		return err
+	// Each ecosystem regenerates its served repository metadata from the
+	// artifacts actually installed (never trusting a transferred index); a
+	// publish hook no-ops on a manifest without its ecosystem's content.
+	for _, e := range ecosystems() {
+		if e.publish == nil {
+			continue
+		}
+		if err := e.publish(s, manifest); err != nil {
+			return err
+		}
 	}
 	// Complete markers are written only after all files are installed.
 	return s.writeCompleteMarkers(manifest.Modules)
