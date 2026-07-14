@@ -65,7 +65,7 @@ const (
 )
 ```
 
-`knownStreams()` returns all thirteen; they appear in status even before anything has been exported. The `go` stream deliberately keeps the pre-multi-stream numbering for backward compatibility.
+`knownStreams()` returns every stream registered in `ecosystems()` (`cmd/artigate/ecosystem.go`) — the single registry the collect routes, watch dispatch, manifest validation, publish sequence, high-side URL routing, and dashboard wiring all derive from; they appear in status even before anything has been exported. The `go` stream deliberately keeps the pre-multi-stream numbering for backward compatibility.
 
 | Concern | Low side | High side |
 |---|---|---|

@@ -241,13 +241,15 @@ func (s *WatchStore) RecordRun(id int64, ranAt time.Time, status, message string
 
 // validateWatch checks a watch's stream, interval, and spec before it is stored.
 func validateWatch(w Watch) error {
-	if !isKnownStream(w.Stream) {
+	eco, ok := ecosystemFor(w.Stream)
+	if !ok {
 		return fmt.Errorf("unknown stream %q", w.Stream)
 	}
-	// An upload has no upstream to re-pull — the file bytes arrive with the
-	// request — so scheduling one can never do anything useful.
-	if w.Stream == streamUploads {
-		return errors.New("uploads cannot be scheduled; upload again when the content changes")
+	// A stream without a watch hook has no upstream to re-pull (uploads: the
+	// file bytes arrive with the request), so scheduling one can never do
+	// anything useful.
+	if eco.watchCollect == nil {
+		return errors.New(eco.noSchedule)
 	}
 	if time.Duration(w.IntervalSeconds)*time.Second < minWatchInterval {
 		return fmt.Errorf("interval must be at least %s", minWatchInterval)
@@ -262,12 +264,8 @@ func validateWatch(w Watch) error {
 }
 
 func isKnownStream(stream string) bool {
-	for _, k := range knownStreams() {
-		if k == stream {
-			return true
-		}
-	}
-	return false
+	_, ok := ecosystemFor(stream)
+	return ok
 }
 
 // -----------------------------------------------------------------------------
@@ -409,38 +407,14 @@ func watchRunMessage(res ExportResult) string {
 }
 
 // runWatchCollect dispatches a stored watch spec to the matching collector.
+// A stream without a watch hook reports itself unknown, matching the pre-
+// registry dispatch (validateWatch refuses to store such watches anyway).
 func (s *LowServer) runWatchCollect(ctx context.Context, stream, spec string) (ExportResult, error) {
-	b := []byte(spec)
-	switch stream {
-	case streamGo:
-		return decodeAndCollect(ctx, b, s.CollectGo)
-	case streamPython:
-		return decodeAndCollect(ctx, b, s.CollectPython)
-	case streamMaven:
-		return decodeAndCollect(ctx, b, s.CollectMaven)
-	case streamApt:
-		return decodeAndCollect(ctx, b, s.CollectApt)
-	case streamRpm:
-		return decodeAndCollect(ctx, b, s.CollectRpm)
-	case streamContainers:
-		return decodeAndCollect(ctx, b, s.CollectContainers)
-	case streamNpm:
-		return decodeAndCollect(ctx, b, s.CollectNpm)
-	case streamHF:
-		return decodeAndCollect(ctx, b, s.CollectHF)
-	case streamCrates:
-		return decodeAndCollect(ctx, b, s.CollectCrates)
-	case streamTerraform:
-		return decodeAndCollect(ctx, b, s.CollectTerraform)
-	case streamHelm:
-		return decodeAndCollect(ctx, b, s.CollectHelm)
-	case streamNuget:
-		return decodeAndCollect(ctx, b, s.CollectNuget)
-	case streamApk:
-		return decodeAndCollect(ctx, b, s.CollectApk)
-	default:
+	eco, ok := ecosystemFor(stream)
+	if !ok || eco.watchCollect == nil {
 		return ExportResult{}, fmt.Errorf("unknown stream %q", stream)
 	}
+	return eco.watchCollect(s, ctx, []byte(spec))
 }
 
 // decodeAndCollect unmarshals a watch spec into the collector's request type and

@@ -46,6 +46,28 @@ import (
 	"time"
 )
 
+// aptEcosystem is the APT mirror stream's registry entry (see ecosystems in
+// ecosystem.go).
+func aptEcosystem() ecosystem {
+	return ecosystem{
+		stream:          streamApt,
+		label:           "APT",
+		title:           "APT packages",
+		collect:         (*LowServer).HandleAptCollect,
+		watchCollect:    watchAdapter((*LowServer).CollectApt),
+		manifestContent: func(m BundleManifest) bool { return m.Apt != nil && len(m.Apt.Mirrors) > 0 },
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateAptMirrors(m.Apt.Mirrors, seen)
+		},
+		contentDesc: "apt mirrors",
+		publish:     func(s *HighServer, m BundleManifest) error { return s.publishApt(m.Apt) },
+		serve:       (*HighServer).serveApt,
+		scanTree:    segmentTreeScan((*HighServer).listAptMirrors),
+		detail:      (*HighServer).aptDetail,
+		repoList:    (*HighServer).aptRepoList,
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Manifest types
 // -----------------------------------------------------------------------------
@@ -1119,6 +1141,9 @@ func (s *HighServer) aptDir() string {
 // are installed. Metadata is rebuilt from the accumulated stanzas of packages
 // whose .deb is actually present — the transferred Release/Packages are never
 // served as-is.
+// publishApt regenerates the APT repository metadata from the accumulated
+// stanzas of the .deb files now present (never trusting the transferred
+// Release/Packages).
 func (s *HighServer) publishApt(m *AptManifest) error {
 	if m == nil {
 		return nil

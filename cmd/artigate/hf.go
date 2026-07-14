@@ -47,6 +47,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,6 +60,37 @@ import (
 	"strings"
 	"time"
 )
+
+// hfEcosystem is the Hugging Face model stream's registry entry (see
+// ecosystems in ecosystem.go). It must precede the containers entry in the
+// registry: mirrored models answer the container-registry protocol (/v2/...)
+// for their own repositories and fall through for everything else.
+func hfEcosystem() ecosystem {
+	return ecosystem{
+		stream:       streamHF,
+		label:        "AI Models",
+		title:        "AI models (Hugging Face)",
+		collect:      (*LowServer).HandleHFCollect,
+		watchCollect: watchAdapter((*LowServer).CollectHF),
+		flags: func(fs *flag.FlagSet, cfg *LowConfig) {
+			fs.StringVar(&cfg.HFEndpoint, "hf-endpoint", "", "Hugging Face endpoint models are fetched from (default https://huggingface.co); ARTIGATE_HF_TOKEN optionally authenticates gated models")
+		},
+		// Both content lists count: GGUF model variants and full repository
+		// snapshots travel in the same manifest field.
+		manifestContent: func(m BundleManifest) bool {
+			return m.HuggingFace != nil && (len(m.HuggingFace.Models) > 0 || len(m.HuggingFace.Repos) > 0)
+		},
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateHF(m.HuggingFace, seen, m.Files)
+		},
+		contentDesc: "hugging face models",
+		publish:     func(s *HighServer, m BundleManifest) error { return s.publishHF(m.HuggingFace) },
+		serve:       (*HighServer).serveHF,
+		scanTree:    segmentTreeScan((*HighServer).listHFModels),
+		detail:      (*HighServer).hfDetail,
+		repoList:    (*HighServer).hfRepoList,
+	}
+}
 
 // -----------------------------------------------------------------------------
 // Manifest types

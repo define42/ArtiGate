@@ -33,6 +33,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// helmEcosystem is the Helm chart stream's registry entry (see ecosystems in
+// ecosystem.go).
+func helmEcosystem() ecosystem {
+	return ecosystem{
+		stream:          streamHelm,
+		label:           "Helm",
+		title:           "Helm charts",
+		collect:         (*LowServer).HandleHelmCollect,
+		watchCollect:    watchAdapter((*LowServer).CollectHelm),
+		manifestContent: func(m BundleManifest) bool { return m.Helm != nil && len(m.Helm.Repos) > 0 },
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateHelmRepos(m.Helm.Repos, seen)
+		},
+		contentDesc: "helm charts",
+		publish:     func(s *HighServer, m BundleManifest) error { return s.publishHelm(m.Helm) },
+		serve:       (*HighServer).serveHelm,
+		scanTree:    segmentTreeScan((*HighServer).listHelmCharts),
+		detail:      (*HighServer).helmDetail,
+	}
+}
+
 // helmMaxChartYAMLBytes caps one Chart.yaml parsed from a chart archive.
 const helmMaxChartYAMLBytes = 8 << 20
 
@@ -206,6 +227,8 @@ type helmStoredChart struct {
 // imported bundle. A chart whose archive cannot be parsed is logged and
 // skipped (it stays out of index.yaml) rather than wedging the stream's
 // import forever.
+// publishHelm regenerates index.yaml from each chart's own embedded
+// Chart.yaml (never trusting a transferred repository index).
 func (s *HighServer) publishHelm(m *HelmManifest) error {
 	if m == nil {
 		return nil

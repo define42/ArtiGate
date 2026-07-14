@@ -41,6 +41,28 @@ import (
 	"time"
 )
 
+// rpmEcosystem is the RPM mirror stream's registry entry (see ecosystems in
+// ecosystem.go).
+func rpmEcosystem() ecosystem {
+	return ecosystem{
+		stream:          streamRpm,
+		label:           "RPM",
+		title:           "RPM packages",
+		collect:         (*LowServer).HandleRpmCollect,
+		watchCollect:    watchAdapter((*LowServer).CollectRpm),
+		manifestContent: func(m BundleManifest) bool { return m.Rpm != nil && len(m.Rpm.Mirrors) > 0 },
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateRpmMirrors(m.Rpm.Mirrors, seen)
+		},
+		contentDesc: "rpm mirrors",
+		publish:     func(s *HighServer, m BundleManifest) error { return s.publishRpm(m.Rpm) },
+		serve:       (*HighServer).serveRpm,
+		scanTree:    segmentTreeScan((*HighServer).listRpmMirrors),
+		detail:      (*HighServer).rpmDetail,
+		repoList:    (*HighServer).rpmRepoList,
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Manifest types
 // -----------------------------------------------------------------------------

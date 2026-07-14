@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"flag"
 	"fmt"
 	"html"
 	"io"
@@ -40,6 +41,29 @@ import (
 	"strings"
 	"time"
 )
+
+// mavenEcosystem is the Maven artifact stream's registry entry (see
+// ecosystems in ecosystem.go).
+func mavenEcosystem() ecosystem {
+	return ecosystem{
+		stream:       streamMaven,
+		label:        "Maven",
+		title:        "Maven artifacts",
+		collect:      (*LowServer).HandleMavenCollect,
+		watchCollect: watchAdapter((*LowServer).CollectMaven),
+		flags: func(fs *flag.FlagSet, cfg *LowConfig) {
+			fs.StringVar(&cfg.MavenBinary, "maven", "mvn", "maven command used to resolve Java/Maven artifacts")
+		},
+		manifestContent: func(m BundleManifest) bool { return m.Maven != nil && len(m.Maven.Artifacts) > 0 },
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateMavenArtifacts(m.Maven.Artifacts, seen)
+		},
+		contentDesc: "maven artifacts",
+		serve:       (*HighServer).serveMaven,
+		scanTree:    segmentTreeScan((*HighServer).listMavenArtifacts),
+		detail:      (*HighServer).mavenDetail,
+	}
+}
 
 // -----------------------------------------------------------------------------
 // Manifest types

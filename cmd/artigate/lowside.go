@@ -201,19 +201,15 @@ func runLow(args []string) {
 	serveLow(cfg, ls)
 }
 
-// registerLowEcosystemFlags declares the per-ecosystem tool and upstream
-// overrides on the low-side flag set.
+// registerLowEcosystemFlags declares each registered ecosystem's tool and
+// upstream overrides on the low-side flag set (flag help output is sorted by
+// name, so registration order does not matter).
 func registerLowEcosystemFlags(fs *flag.FlagSet, cfg *LowConfig) {
-	fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
-	fs.StringVar(&cfg.MavenBinary, "maven", "mvn", "maven command used to resolve Java/Maven artifacts")
-	fs.StringVar(&cfg.NpmBinary, "npm", "npm", "npm command used to resolve NPM package graphs")
-	fs.StringVar(&cfg.NpmRegistry, "npm-registry", "", "registry URL npm resolves against (default: npm's own configuration)")
-	fs.StringVar(&cfg.HFEndpoint, "hf-endpoint", "", "Hugging Face endpoint models are fetched from (default https://huggingface.co); ARTIGATE_HF_TOKEN optionally authenticates gated models")
-	fs.StringVar(&cfg.ContainerRegistries, "container-registry", "", "comma-separated host=baseURL overrides for container registries (e.g. docker.io=https://mirror.example.com)")
-	fs.StringVar(&cfg.CratesIndex, "crates-index", "", "sparse registry index Rust crates are resolved from (default https://index.crates.io)")
-	fs.StringVar(&cfg.TerraformRegistry, "terraform-registry", "", "registry Terraform providers/modules are fetched from (default https://registry.terraform.io; use https://registry.opentofu.org for OpenTofu)")
-	fs.StringVar(&cfg.NugetSource, "nuget-source", "", "NuGet v3 service index packages are resolved from (default https://api.nuget.org/v3/index.json)")
-	fs.StringVar(&cfg.GitBinary, "git", "git", "git command used to fetch Terraform modules from git sources")
+	for _, e := range ecosystems() {
+		if e.flags != nil {
+			e.flags(fs, cfg)
+		}
+	}
 }
 
 // serveLow wires up TLS, optional low-side authentication, the scheduler, and the
@@ -459,25 +455,19 @@ func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// collectHandlers maps each collect endpoint to its request handler. Every
-// route is named by its stream constant (collectStreamFromPath relies on it).
+// collectHandlers maps each registered ecosystem's collect endpoint to its
+// request handler. Every route is named by its stream (collectStreamFromPath
+// relies on it).
 func (s *LowServer) collectHandlers() map[string]func(context.Context, *http.Request) (ExportResult, error) {
-	return map[string]func(context.Context, *http.Request) (ExportResult, error){
-		"/admin/go/collect":         s.HandleGoCollect,
-		"/admin/python/collect":     s.HandlePythonCollect,
-		"/admin/maven/collect":      s.HandleMavenCollect,
-		"/admin/apt/collect":        s.HandleAptCollect,
-		"/admin/rpm/collect":        s.HandleRpmCollect,
-		"/admin/containers/collect": s.HandleContainerCollect,
-		"/admin/npm/collect":        s.HandleNpmCollect,
-		"/admin/hf/collect":         s.HandleHFCollect,
-		"/admin/crates/collect":     s.HandleCratesCollect,
-		"/admin/terraform/collect":  s.HandleTerraformCollect,
-		"/admin/helm/collect":       s.HandleHelmCollect,
-		"/admin/nuget/collect":      s.HandleNugetCollect,
-		"/admin/apk/collect":        s.HandleApkCollect,
-		"/admin/uploads/collect":    s.HandleUploadsCollect,
+	ecos := ecosystems()
+	handlers := make(map[string]func(context.Context, *http.Request) (ExportResult, error), len(ecos))
+	for _, e := range ecos {
+		collect := e.collect
+		handlers["/admin/"+e.stream+"/collect"] = func(ctx context.Context, r *http.Request) (ExportResult, error) {
+			return collect(s, ctx, r)
+		}
 	}
+	return handlers
 }
 
 // serveLowCollect dispatches the per-ecosystem collect endpoints. It reports

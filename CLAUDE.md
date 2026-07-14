@@ -57,6 +57,14 @@ used.)
 - **Each ecosystem is an independently sequenced stream** so one stalled bundle
   never blocks the others. Bundle production is serialized per stream by
   `streamLock`.
+- **Every per-ecosystem dispatch derives from the registry** in
+  `cmd/artigate/ecosystem.go`: adding an ecosystem means writing its
+  `fooEcosystem()` descriptor in its own file and appending it to
+  `ecosystems()` — do not hand-wire routes, validation, publish, serving, or
+  dashboard maps. `TestEcosystemRegistryWiring` fails with a precise message
+  for anything still missing (UI labels/forms in `ui_low.go` and `ui/app.ts`,
+  the nav buttons, the `e2e/<stream>_test.go` file). Registry order is the
+  high-side URL-claim order; `hf` must stay ahead of `containers`.
 - **The low side holds the signing key** and is the privileged control plane;
   the high side serves only already-verified public content and is unauthenticated.
 - Background goroutines (the watch scheduler, diode workers) must not let a panic

@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"html"
 	"io"
@@ -26,6 +27,32 @@ import (
 	"strings"
 	"time"
 )
+
+// pythonEcosystem is the Python wheel stream's registry entry (see
+// ecosystems in ecosystem.go).
+func pythonEcosystem() ecosystem {
+	return ecosystem{
+		stream:       streamPython,
+		label:        "Python",
+		title:        "Python packages",
+		collect:      (*LowServer).HandlePythonCollect,
+		watchCollect: watchAdapter((*LowServer).CollectPython),
+		flags: func(fs *flag.FlagSet, cfg *LowConfig) {
+			fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
+		},
+		manifestContent: func(m BundleManifest) bool { return m.Python != nil && len(m.Python.Projects) > 0 },
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validatePythonProjects(m.Python.Projects, seen)
+		},
+		contentDesc: "python projects",
+		serve:       (*HighServer).servePython,
+		scanTree: func(s *HighServer) (uiTree, error) {
+			projects, err := s.listPythonProjects()
+			return pythonTree(projects), err
+		},
+		detail: (*HighServer).pythonDetail,
+	}
+}
 
 // -----------------------------------------------------------------------------
 // Manifest types

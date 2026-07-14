@@ -39,6 +39,28 @@ import (
 	"time"
 )
 
+// apkEcosystem is the Alpine package stream's registry entry (see ecosystems
+// in ecosystem.go).
+func apkEcosystem() ecosystem {
+	return ecosystem{
+		stream:          streamApk,
+		label:           "Alpine",
+		title:           "Alpine packages",
+		collect:         (*LowServer).HandleApkCollect,
+		watchCollect:    watchAdapter((*LowServer).CollectApk),
+		manifestContent: func(m BundleManifest) bool { return m.Apk != nil && len(m.Apk.Mirrors) > 0 },
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateApkMirrors(m.Apk.Mirrors, seen)
+		},
+		contentDesc: "apk mirrors",
+		publish:     func(s *HighServer, m BundleManifest) error { return s.publishApk(m.Apk) },
+		serve:       (*HighServer).serveApk,
+		scanTree:    segmentTreeScan((*HighServer).listApkPackages),
+		detail:      (*HighServer).apkDetail,
+		repoList:    (*HighServer).apkRepoList,
+	}
+}
+
 // apkMaxControlBytes caps one decompressed signature/control segment read
 // while locating a package's control checksum (decompression-bomb guard).
 const apkMaxControlBytes = 16 << 20

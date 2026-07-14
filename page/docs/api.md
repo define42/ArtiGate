@@ -890,7 +890,7 @@ Inventory is memoized for **3 seconds**, so freshly imported content appears wit
 
 #### `GET /ui/api/repos?eco=<eco>` → `UIReposResponse`
 
-Valid only for `eco` ∈ `apt | rpm | containers | hf | apk`; anything else → **400** `"repos are only available for apt, rpm, containers, hf, and apk"`. For `hf`, entries with `"kind":"repo"` are full repository snapshots (consumed via `HF_ENDPOINT`); the rest are GGUF models with their variant tags. For `apk`, each mirror lists its branch/repository/architecture selections as suites, with `"kind":"apk"` and `signed` reporting whether `--apk-rsa-key` is configured.
+Valid only for `eco` ∈ `apt | rpm | containers | hf | apk`; anything else → **400** `"repos are only available for apt, rpm, hf, containers, and apk"`. For `hf`, entries with `"kind":"repo"` are full repository snapshots (consumed via `HF_ENDPOINT`); the rest are GGUF models with their variant tags. For `apk`, each mirror lists its branch/repository/architecture selections as suites, with `"kind":"apk"` and `signed` reporting whether `--apk-rsa-key` is configured.
 
 ```json
 { "repos": [

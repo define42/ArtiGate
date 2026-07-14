@@ -412,7 +412,7 @@ func TestCov4_FirstPomIn(t *testing.T) {
 	}
 }
 
-// TestCov4_CachedListsError drives cachedLists's error-return branch by making
+// TestCov4_CachedListsError drives cachedTrees's error-return branch by making
 // the Go module tree unreadable so listGoModules's WalkDir fails.
 func TestCov4_CachedListsError(t *testing.T) {
 	if os.Geteuid() == 0 {
@@ -432,7 +432,7 @@ func TestCov4_CachedListsError(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 
-	if _, err := hs.cachedLists(); err == nil {
-		t.Fatal("cachedLists should propagate the WalkDir permission error")
+	if _, err := hs.cachedTrees(); err == nil {
+		t.Fatal("cachedTrees should propagate the WalkDir permission error")
 	}
 }

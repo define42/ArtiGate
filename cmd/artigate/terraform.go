@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -33,6 +34,35 @@ import (
 	"strings"
 	"time"
 )
+
+// terraformEcosystem is the Terraform provider/module stream's registry
+// entry (see ecosystems in ecosystem.go).
+func terraformEcosystem() ecosystem {
+	return ecosystem{
+		stream:       streamTerraform,
+		label:        "Terraform",
+		title:        "Terraform providers & modules",
+		collect:      (*LowServer).HandleTerraformCollect,
+		watchCollect: watchAdapter((*LowServer).CollectTerraform),
+		flags: func(fs *flag.FlagSet, cfg *LowConfig) {
+			fs.StringVar(&cfg.TerraformRegistry, "terraform-registry", "", "registry Terraform providers/modules are fetched from (default "+defaultTerraformRegistry+"; use https://registry.opentofu.org for OpenTofu)")
+			fs.StringVar(&cfg.GitBinary, "git", "git", "git command used to fetch Terraform modules from git sources")
+		},
+		// Both content lists count: providers and modules travel in the same
+		// manifest field.
+		manifestContent: func(m BundleManifest) bool {
+			return m.Terraform != nil && (len(m.Terraform.Providers) > 0 || len(m.Terraform.Modules) > 0)
+		},
+		validateContent: func(m BundleManifest, seen map[string]bool) error {
+			return validateTerraformManifest(m.Terraform, seen, m.Files)
+		},
+		contentDesc: "terraform providers/modules",
+		publish:     func(s *HighServer, m BundleManifest) error { return s.publishTerraform(m.Terraform) },
+		serve:       (*HighServer).serveTerraform,
+		scanTree:    segmentTreeScan((*HighServer).listTerraformItems),
+		detail:      (*HighServer).terraformDetail,
+	}
+}
 
 const defaultTerraformRegistry = "https://registry.terraform.io"
 

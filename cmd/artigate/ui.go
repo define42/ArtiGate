@@ -67,7 +67,7 @@ type UITreeNode struct {
 type treeCache struct {
 	mu     sync.Mutex
 	expiry time.Time
-	lists  ecoLists
+	trees  map[string]uiTree
 }
 
 func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
@@ -156,30 +156,43 @@ type UIReposResponse struct {
 // handleUIRepos lists the mirrored repositories of an ecosystem so the "Set me
 // up" guide can render correct per-repository client config.
 func (s *HighServer) handleUIRepos(w http.ResponseWriter, r *http.Request) {
-	var (
-		repos []UIRepo
-		err   error
-	)
-	switch r.URL.Query().Get("eco") {
-	case "apt":
-		repos, err = s.aptRepoList()
-	case "rpm":
-		repos, err = s.rpmRepoList()
-	case "containers":
-		repos, err = s.containerRepoList()
-	case "hf":
-		repos, err = s.hfRepoList()
-	case "apk":
-		repos, err = s.apkRepoList()
-	default:
-		http.Error(w, "repos are only available for apt, rpm, containers, hf, and apk", http.StatusBadRequest)
+	eco, ok := ecosystemFor(r.URL.Query().Get("eco"))
+	if !ok || eco.repoList == nil {
+		http.Error(w, "repos are only available for "+joinWithAnd(repoListStreams()), http.StatusBadRequest)
 		return
 	}
+	repos, err := eco.repoList(s)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, UIReposResponse{Repos: repos})
+}
+
+// repoListStreams names the streams whose ecosystems publish a repository
+// list for the "Set me up" guide.
+func repoListStreams() []string {
+	var out []string
+	for _, e := range ecosystems() {
+		if e.repoList != nil {
+			out = append(out, e.stream)
+		}
+	}
+	return out
+}
+
+// joinWithAnd renders a list as prose: "a", "a and b", "a, b, and c".
+func joinWithAnd(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		return items[0] + " and " + items[1]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + ", and " + items[len(items)-1]
+	}
 }
 
 // handleUITree returns the immediate children of a node in a package tree.
@@ -189,110 +202,77 @@ func (s *HighServer) handleUITree(w http.ResponseWriter, r *http.Request) {
 	eco := r.URL.Query().Get("eco")
 	path := r.URL.Query().Get("path")
 
-	lists, err := s.cachedLists()
+	trees, err := s.cachedTrees()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	writeJSON(w, map[string][]UITreeNode{"nodes": ecoTreeChildren(lists, eco, path)})
+	writeJSON(w, map[string][]UITreeNode{"nodes": ecoTreeChildren(trees, eco, path)})
 }
 
-// ecoTreeChildren picks the tree builder an ecosystem's names call for:
+// ecoTreeChildren renders one node's children from an ecosystem's scanned
+// tree. An unknown eco key keeps rendering the Go tree, as it did before the
+// dashboard grew per-ecosystem views.
+func ecoTreeChildren(trees map[string]uiTree, eco, path string) []UITreeNode {
+	if t, ok := trees[eco]; ok {
+		return t.children(path)
+	}
+	return trees[streamGo].children(path)
+}
+
+// uiTree is one ecosystem's scanned dashboard inventory; it renders the
+// immediate children of a node in the lazily-loaded package tree. The
+// concrete shape is the tree builder the ecosystem's names call for:
 // slash-separated names (Go modules, Maven coordinates, mirror/package keys,
-// terraform addresses) use the segment tree; flat names (npm — a scope is part
-// of the name — crates, nuget) use the two-level package tree.
-func ecoTreeChildren(lists ecoLists, eco, path string) []UITreeNode {
-	segmentTrees := map[string][]UIModule{
-		"maven": lists.maven, "apt": lists.apt, "rpm": lists.rpm,
-		"containers": lists.containers, "hf": lists.hf, "terraform": lists.terraform,
-		"helm": lists.helm, "apk": lists.apk,
-	}
-	flatTrees := map[string][]UIModule{
-		"npm": lists.npm, "crates": lists.crates, "nuget": lists.nuget,
-	}
-	if eco == "python" {
-		return pythonTreeChildren(lists.python, path)
-	}
-	if eco == "uploads" {
-		return uploadsTreeChildren(lists.uploads, path)
-	}
-	if mods, ok := segmentTrees[eco]; ok {
-		return goTreeChildren(mods, path)
-	}
-	if pkgs, ok := flatTrees[eco]; ok {
-		return npmTreeChildren(pkgs, path)
-	}
-	return goTreeChildren(lists.mods, path)
+// terraform addresses) use segmentTree; flat names (npm — a scope is part of
+// the name — crates, nuget) use the two-level flatTree; Python wheels and
+// uploaded folders have trees of their own.
+type uiTree interface {
+	children(path string) []UITreeNode
 }
 
-// ecoLists holds the mirrored inventory for each ecosystem's dashboard tree.
-type ecoLists struct {
-	mods       []UIModule
-	python     []UIProject
-	maven      []UIModule
-	apt        []UIModule
-	rpm        []UIModule
-	containers []UIModule
-	npm        []UIModule
-	hf         []UIModule
-	crates     []UIModule
-	terraform  []UIModule
-	helm       []UIModule
-	nuget      []UIModule
-	apk        []UIModule
-	uploads    []UploadedFolder
-}
+type (
+	segmentTree []UIModule
+	flatTree    []UIModule
+	pythonTree  []UIProject
+	uploadsTree []UploadedFolder
+)
 
-// cachedLists returns the mirrored inventory across ecosystems, memoized for a
+func (t segmentTree) children(path string) []UITreeNode { return goTreeChildren(t, path) }
+func (t flatTree) children(path string) []UITreeNode    { return npmTreeChildren(t, path) }
+func (t pythonTree) children(path string) []UITreeNode  { return pythonTreeChildren(t, path) }
+func (t uploadsTree) children(path string) []UITreeNode { return uploadsTreeChildren(t, path) }
+
+// cachedTrees returns the mirrored inventory across ecosystems, memoized for a
 // few seconds so a burst of lazy expand requests reuses one scan.
-func (s *HighServer) cachedLists() (ecoLists, error) {
+func (s *HighServer) cachedTrees() (map[string]uiTree, error) {
 	s.tree.mu.Lock()
 	defer s.tree.mu.Unlock()
 	if time.Now().Before(s.tree.expiry) {
-		return s.tree.lists, nil
+		return s.tree.trees, nil
 	}
-	fresh, err := s.scanEcoLists()
+	fresh, err := s.scanEcoTrees()
 	if err != nil {
-		return ecoLists{}, err
+		return nil, err
 	}
-	s.tree.lists = fresh
+	s.tree.trees = fresh
 	s.tree.expiry = time.Now().Add(3 * time.Second)
 	return fresh, nil
 }
 
-// scanEcoLists walks every ecosystem's repository tree once.
-func (s *HighServer) scanEcoLists() (ecoLists, error) {
-	var out ecoLists
-	var err error
-	if out.python, err = s.listPythonProjects(); err != nil {
-		return ecoLists{}, err
-	}
-	if out.uploads, err = s.listUploadedFolders(); err != nil {
-		return ecoLists{}, err
-	}
-	for _, scan := range []struct {
-		dst  *[]UIModule
-		list func() ([]UIModule, error)
-	}{
-		{&out.mods, s.listGoModules},
-		{&out.maven, s.listMavenArtifacts},
-		{&out.apt, s.listAptMirrors},
-		{&out.rpm, s.listRpmMirrors},
-		{&out.containers, s.listContainerRepos},
-		{&out.npm, s.listNpmPackages},
-		{&out.hf, s.listHFModels},
-		{&out.crates, s.listCratesPackages},
-		{&out.terraform, s.listTerraformItems},
-		{&out.helm, s.listHelmCharts},
-		{&out.nuget, s.listNugetPackages},
-		{&out.apk, s.listApkPackages},
-	} {
-		if *scan.dst, err = scan.list(); err != nil {
-			return ecoLists{}, err
+// scanEcoTrees walks every registered ecosystem's repository tree once.
+func (s *HighServer) scanEcoTrees() (map[string]uiTree, error) {
+	ecos := ecosystems()
+	trees := make(map[string]uiTree, len(ecos))
+	for _, e := range ecos {
+		t, err := e.scanTree(s)
+		if err != nil {
+			return nil, err
 		}
+		trees[e.stream] = t
 	}
-	return out, nil
+	return trees, nil
 }
 
 // goTreeChildren returns the immediate children of prefix in the Go module path
@@ -528,20 +508,14 @@ type UIImageLayer struct {
 }
 
 // handleUIDetail returns details for a selected leaf. path is "module@version"
-// for Go and a wheel filename for Python.
+// for Go and a wheel filename for Python. An unknown eco key keeps describing
+// Go modules, as it did before the dashboard grew per-ecosystem views.
 func (s *HighServer) handleUIDetail(w http.ResponseWriter, r *http.Request) {
-	details := map[string]func(string) (UIDetail, error){
-		"python": s.pythonDetail, "maven": s.mavenDetail, "apt": s.aptDetail,
-		"rpm": s.rpmDetail, "containers": s.containerDetail, "npm": s.npmDetail,
-		"hf": s.hfDetail, "crates": s.cratesDetail, "terraform": s.terraformDetail,
-		"helm": s.helmDetail, "nuget": s.nugetDetail, "apk": s.apkDetail,
-		"uploads": s.uploadsDetail,
+	describe := (*HighServer).goDetail
+	if e, ok := ecosystemFor(r.URL.Query().Get("eco")); ok {
+		describe = e.detail
 	}
-	describe, ok := details[r.URL.Query().Get("eco")]
-	if !ok {
-		describe = s.goDetail
-	}
-	detail, err := describe(r.URL.Query().Get("path"))
+	detail, err := describe(s, r.URL.Query().Get("path"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
