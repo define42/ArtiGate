@@ -678,16 +678,22 @@ func validatePythonRequest(req PythonCollectRequest) error {
 			return err
 		}
 	}
-	if req.Target == nil {
+	return validatePythonTarget(req.Target)
+}
+
+// validatePythonTarget validates the optional cross-target selectors that
+// become pip arguments.
+func validatePythonTarget(t *PythonTarget) error {
+	if t == nil {
 		return nil
 	}
-	if req.Target.OnlyBinary != nil && !*req.Target.OnlyBinary {
+	if t.OnlyBinary != nil && !*t.OnlyBinary {
 		return errors.New("target.only_binary=false is not supported; Python collection is wheels-only")
 	}
 	for _, f := range []struct{ kind, val string }{
-		{"python_version", req.Target.PythonVersion},
-		{"implementation", req.Target.Implementation},
-		{"abi", req.Target.ABI},
+		{"python_version", t.PythonVersion},
+		{"implementation", t.Implementation},
+		{"abi", t.ABI},
 	} {
 		if f.val == "" {
 			continue
@@ -696,7 +702,7 @@ func validatePythonRequest(req PythonCollectRequest) error {
 			return err
 		}
 	}
-	for _, p := range req.Target.Platforms {
+	for _, p := range t.Platforms {
 		if err := validatePipArg("platform", p); err != nil {
 			return err
 		}
