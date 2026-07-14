@@ -71,7 +71,7 @@ func TestLowServerUIPage(t *testing.T) {
 		"/admin/reexport", "Re-transmit bundles", "/ui/api/status",
 		// Export-status table shows each bundle's size.
 		"formatBytes", "size_bytes", `<th class="num">Size</th>`,
-		// Top menu splits each ecosystem onto its own view/page.
+		// The sidebar menu splits each ecosystem onto its own view/page.
 		"function setView(", `data-view="overview"`, `data-view="go"`, `data-view="maven"`, `data-view="status"`,
 		`id="view-overview"`, `id="view-go"`, `id="view-maven"`, `id="view-status"`,
 		// Overview page lists every schedule and whether it is working.

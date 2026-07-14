@@ -312,8 +312,8 @@ func TestHighServerUIPage(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("index status = %d", code)
 	}
-	// The page shell has the title, the top menu (Go / Python), the "Set me up"
-	// guide toggle and its container, and loads the JS.
+	// The page shell has the title, the stream sidebar menu (Go / Python), the
+	// "Set me up" guide toggle and its container, and loads the JS.
 	for _, want := range []string{
 		"<title>ArtiGate</title>",
 		`data-view="overview"`,
