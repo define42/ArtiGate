@@ -353,14 +353,20 @@ func (s *LowServer) executeWatch(w Watch, collect func() (ExportResult, error)) 
 // the run was enqueued, so an interval edited mid-run is honored (w only
 // labels the log lines here).
 func (s *LowServer) recordWatchOutcome(w Watch, res ExportResult, err error) {
+	now := time.Now().UTC()
 	status, message := "ok", watchRunMessage(res)
 	if err != nil {
 		status, message = "error", err.Error()
 		log.Printf("watch %d (%s) failed: %v", w.ID, w.Label, err)
+		s.metrics.recordCollect(w.Stream, false, now)
+		s.notifier.notify("schedule_failed", map[string]any{
+			"stream": w.Stream, "watch_id": w.ID, "label": w.Label, "error": err.Error(),
+		})
 	} else {
 		log.Printf("watch %d (%s): %s", w.ID, w.Label, message)
+		s.metrics.recordCollect(w.Stream, true, now)
 	}
-	if rerr := s.watches.RecordRun(w.ID, time.Now().UTC(), status, message); rerr != nil {
+	if rerr := s.watches.RecordRun(w.ID, now, status, message); rerr != nil {
 		log.Printf("watch %d: record run: %v", w.ID, rerr)
 	}
 }

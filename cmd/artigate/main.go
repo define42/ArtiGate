@@ -189,6 +189,13 @@ Auth (env, low side only):
   ARTIGATE_LOW_COOKIE_SECURE=auto|true|false   (default auto: Secure follows ArtiGate's own TLS)
   Set to 'true' when ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy.
 
+Monitoring (env, both sides):
+  GET /metrics           Prometheus telemetry (per-stream lag, gap age, bundle counts/bytes,
+                         quota, disk, schedule/import outcomes); open like /healthz.
+  ARTIGATE_WEBHOOK_URL   http/https endpoint POSTed a JSON event on schedule_failed (low),
+                         bundle_rejected / gap_detected (high); unset disables it.
+  ARTIGATE_WEBHOOK_TOKEN optional bearer token sent with each webhook POST.
+
 `
 
 // -----------------------------------------------------------------------------
@@ -444,6 +451,10 @@ type LowServer struct {
 	// the transport limit (diodeMaxArchiveBytes). Tests shrink it to exercise
 	// splitting without gigabytes of fixture data.
 	splitBudget int64
+	// metrics holds the in-memory schedule/collect counters the /metrics
+	// endpoint reports; notifier posts failure webhooks (nil when unconfigured).
+	metrics  *lowMetrics
+	notifier *webhookNotifier
 }
 
 func runLow(args []string) {
@@ -512,6 +523,7 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 	users, err := parseLowAuth(os.Getenv("ARTIGATE_LOW_AUTH"))
 	must(err)
 	guardLowExposure(cfg.Listen, len(users) > 0, tc.Mode)
+	ls.notifier = mustWebhookNotifier("low")
 
 	// A SIGINT/SIGTERM (Ctrl-C, docker stop, systemd stop) cancels this context,
 	// stopping the scheduler and draining the HTTP server before runLow's
@@ -673,6 +685,7 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 		watchTick:              cfg.WatchInterval,
 		jobs:                   newJobManager(),
 		containerRegistryBases: registryBases,
+		metrics:                newLowMetrics(),
 	}
 	if err := ls.loadState(); err != nil {
 		return nil, err
@@ -731,6 +744,8 @@ func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 	switch {
 	case r.URL.Path == "/healthz":
 		_, _ = w.Write([]byte("ok\n"))
+	case r.URL.Path == "/metrics":
+		s.serveMetrics(w, r)
 	case r.URL.Path == "/admin/reexport" && r.Method == http.MethodPost:
 		res, err := s.HandleReexportRequest(r)
 		return respondJSONOrError(w, http.StatusBadRequest, res, err)
@@ -2310,6 +2325,10 @@ type HighServer struct {
 	tree        treeCache
 	importKick  chan struct{}
 	importOnce  sync.Once
+	// metrics holds the in-memory import/reject/gap counters the /metrics
+	// endpoint reports; notifier posts failure webhooks (nil when unconfigured).
+	metrics  *highMetrics
+	notifier *webhookNotifier
 }
 
 // applyHighEnvConfig fills the environment-driven high-side settings (diode
@@ -2353,6 +2372,7 @@ func runHigh(args []string) {
 	must(err)
 	hs, err := NewHighServer(cfg, pub)
 	must(err)
+	hs.notifier = mustWebhookNotifier("high")
 	startCatcherIfConfigured(hs)
 
 	// A SIGINT/SIGTERM cancels this context, stopping the import loop and
@@ -2410,6 +2430,7 @@ func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
 		downloadDir: dl,
 		statePath:   filepath.Join(cfg.Root, "import-state.json"),
 		importKick:  make(chan struct{}, 1),
+		metrics:     newHighMetrics(),
 	}
 	if err := hs.loadState(); err != nil {
 		return nil, err
@@ -2536,6 +2557,8 @@ func (s *HighServer) serveHighAdmin(w http.ResponseWriter, r *http.Request) bool
 	switch {
 	case r.URL.Path == "/healthz":
 		_, _ = w.Write([]byte("ok\n"))
+	case r.URL.Path == "/metrics":
+		s.serveMetrics(w, r)
 	case r.URL.Path == "/admin/import" && r.Method == http.MethodPost:
 		if !s.requireLocalAdmin(w, r) {
 			return true
@@ -2709,6 +2732,7 @@ func (s *HighServer) importLoop(ctx context.Context) {
 		}
 		res, err := s.ImportNext()
 		if err != nil {
+			s.metrics.recordImportError()
 			log.Printf("import failed: %v", err)
 			continue
 		}
@@ -2759,6 +2783,15 @@ func (s *HighServer) ImportStatus() (ImportStatus, error) {
 	if err := s.quarantineFutureBundlesLocked(); err != nil {
 		return ImportStatus{}, err
 	}
+	return s.importStatusLocked()
+}
+
+// importStatusReadOnly reports the same per-stream status as ImportStatus but
+// without the quarantine sweep, so the /metrics scrape observes state without
+// moving files on disk.
+func (s *HighServer) importStatusReadOnly() (ImportStatus, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.importStatusLocked()
 }
 
@@ -2825,6 +2858,7 @@ func (s *HighServer) ImportNext() (ImportResult, error) {
 	if err != nil {
 		return ImportResult{}, err
 	}
+	s.observeGapsAndNotify(status)
 	message := importWaitMessage(status)
 	if len(rejected) > 0 {
 		message = fmt.Sprintf("rejected invalid bundle(s): %s; %s", strings.Join(rejected, ", "), message)
@@ -2834,6 +2868,22 @@ func (s *HighServer) ImportNext() (ImportResult, error) {
 		RejectedBundles: rejected, Message: message,
 	}
 	return result, errors.Join(streamErrors...)
+}
+
+// observeGapsAndNotify updates the gap-age state from a fresh import status and
+// fires one gap_detected webhook for each stream that just became blocked by a
+// missing bundle. It is edge-triggered: a persistent gap notifies once and then
+// only ages. Called from the import loop (not the /metrics scrape) so scraping
+// never emits webhooks.
+func (s *HighServer) observeGapsAndNotify(status ImportStatus) {
+	if s.metrics == nil {
+		return
+	}
+	for _, ev := range s.metrics.observeGaps(status, time.Now().UTC()) {
+		s.notifier.notify("gap_detected", map[string]any{
+			"stream": ev.stream, "blocking_sequence": ev.seq,
+		})
+	}
 }
 
 type streamDrainResult struct {
@@ -2993,6 +3043,7 @@ func (s *HighServer) commitImportedStateLocked(stream, bundleID string, sequence
 		s.state.ImportedAt = prevAt
 		return fmt.Errorf("bundle %s: files installed but import state was not persisted (will retry): %w", bundleID, err)
 	}
+	s.metrics.recordImport(stream, s.state.ImportedAt)
 	return nil
 }
 
@@ -3206,7 +3257,28 @@ func (s *HighServer) rejectBundleLocked(srcDir, bundleID, reason string) error {
 	if len(reason) > maxReason {
 		reason = reason[:maxReason]
 	}
-	return writeBytesAtomic(filepath.Join(dstDir, bundleID+".reason.txt"), []byte(reason+"\n"), 0o644)
+	if err := writeBytesAtomic(filepath.Join(dstDir, bundleID+".reason.txt"), []byte(reason+"\n"), 0o644); err != nil {
+		return err
+	}
+	// Every rejection path — import-time signature/hash failures and sort-time
+	// unsupported/too-far bundles — funnels through here, so it is the single
+	// place to count rejections and notify. Delivery is async and never blocks
+	// the import that holds s.mu.
+	stream := streamOfBundleID(bundleID)
+	s.metrics.recordReject(stream)
+	s.notifier.notify("bundle_rejected", map[string]any{
+		"stream": stream, "bundle": bundleID, "reason": reason,
+	})
+	return nil
+}
+
+// streamOfBundleID extracts the stream name from a bundle id like
+// "go-bundle-000042"; it returns "" for an unrecognized id.
+func streamOfBundleID(bundleID string) string {
+	if i := strings.Index(bundleID, "-bundle-"); i > 0 {
+		return bundleID[:i]
+	}
+	return ""
 }
 
 // reapUnverifiedLocked frees the shared unverified-bytes quota from data that

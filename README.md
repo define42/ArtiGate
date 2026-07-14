@@ -652,6 +652,84 @@ TLS. If ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy, set
 > see `.env.example`. Direct binary/systemd deployments may still leave auth
 > unset only when strict network controls protect the low-side control plane.
 
+## Monitoring and alerting
+
+ArtiGate is built to run unattended behind a diode, so both sides expose
+telemetry an ops team can scrape and alert on — a stalled stream or a failing
+nightly schedule should page someone, not wait for a human to notice a
+dashboard.
+
+### `/metrics` (Prometheus)
+
+Both sides serve Prometheus text-exposition metrics at **`GET /metrics`** on the
+same listener as the dashboard. Like `/healthz`, the endpoint stays open when
+`ARTIGATE_LOW_AUTH` is set (a scraper cannot log in), and it exposes only the
+same non-secret status the dashboard already shows — firewall the scrape port or
+front it with an authenticating proxy if you need it restricted. No extra
+configuration is required.
+
+The **low side** reports, per stream, the next bundle sequence, retained and
+still-outbound bundle counts and their on-diode bytes, scheduled-collect run
+counters and each stream's last successful collect, the queued/running/finished
+job counts, and free/total disk on the root and export directories:
+
+```
+artigate_low_next_sequence{stream="python"} 42
+artigate_low_bundle_bytes{stream="python"} 1830482
+artigate_low_schedule_runs_total{stream="python",status="error"} 1
+artigate_low_last_successful_collect_timestamp_seconds{stream="python"} 1720000000
+artigate_disk_free_bytes{dir="export"} 5.36870912e+10
+```
+
+The **high side** reports, per stream, the last-imported and highest-seen
+sequence, **import lag** (`highest_seen − last_imported`), whether the stream is
+**blocked** on a missing bundle and for how long (**gap age**), quarantine
+depth, last successful import, cumulative imported/rejected counts, the shared
+unverified-transport quota and its usage, and disk on the root and landing
+directories:
+
+```
+artigate_high_import_lag{stream="go"} 3
+artigate_high_stream_blocked{stream="go"} 1
+artigate_high_gap_age_seconds{stream="go"} 907
+artigate_high_bundles_rejected_total{stream="go"} 0
+artigate_high_unverified_transport_bytes 734003200
+```
+
+Counters reset on process restart, as is standard for Prometheus; the derived
+gauges (sequences, lag, quota, disk) are computed live from on-disk state on
+every scrape, so they never drift from reality.
+
+### Failure webhooks
+
+Set **`ARTIGATE_WEBHOOK_URL`** (on either or both sides) to have ArtiGate POST a
+small JSON document when something goes wrong, so an alert reaches a channel
+without polling. **`ARTIGATE_WEBHOOK_TOKEN`** (optional) is sent as a
+`Authorization: Bearer …` header.
+
+| Event | Side | Fires when |
+|---|---|---|
+| `schedule_failed` | low | a scheduled collect run fails (upstream error, panic, cancel) |
+| `bundle_rejected` | high | a bundle is rejected on import or sorting (bad signature/hash, unsupported, too far ahead) |
+| `gap_detected` | high | a stream becomes blocked because a later bundle arrived before the next expected one |
+
+```jsonc
+// POST body
+{
+  "event": "gap_detected",
+  "side": "high",
+  "time": "2026-07-14T12:00:00Z",
+  "stream": "go",
+  "blocking_sequence": 42
+}
+```
+
+Delivery is best-effort and fire-and-forget: a slow or unreachable receiver
+never blocks an import or a scheduler tick, and failures are logged rather than
+retried — the `/metrics` counters remain the durable record. `gap_detected` is
+edge-triggered (one notification per gap; the gap then ages via
+`artigate_high_gap_age_seconds` until it fills).
+
 ## Notes and limitations
 
 - The **low-side dashboard** is a privileged control plane — it holds the signing
