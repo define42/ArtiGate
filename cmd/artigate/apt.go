@@ -823,6 +823,8 @@ func newRepoHash(algo string) (hash.Hash, error) {
 		return sha512.New(), nil
 	case "sha1", "sha":
 		return sha1.New(), nil //nolint:gosec // verifying a legacy repo-declared checksum
+	case "md5":
+		return md5.New(), nil //nolint:gosec // verifying a legacy repo-declared checksum (CRAN publishes only MD5)
 	default:
 		return nil, fmt.Errorf("unsupported checksum type %q", algo)
 	}
