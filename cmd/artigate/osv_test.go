@@ -930,6 +930,223 @@ func TestOsvPublishMetaFailureDropsAllDerivedState(t *testing.T) {
 	}
 }
 
+// osvImportGoodNpmBundle seeds one healthy npm database import (sequence 1)
+// and proves its derived state serves, so a following test can break the
+// tree and watch that state get suppressed.
+func osvImportGoodNpmBundle(t *testing.T, hs *HighServer, priv ed25519.PrivateKey, base string) {
+	t.Helper()
+	zipBytes := osvTestNpmZip(t)
+	rel := osvDBRel("npm")
+	rec := []OsvDatabase{{Ecosystem: "npm", Path: rel, SHA256: aptSHA256(zipBytes), Advisories: 1}}
+	osvWriteSignedBundle(t, hs.cfg.Landing, priv, 1, rec, map[string][]byte{rel: zipBytes})
+	if res, err := hs.ImportNext(); err != nil || !res.Imported {
+		t.Fatalf("good import = %+v, %v", res, err)
+	}
+	if code, out := postAuditBulk(t, base, `{"testpkg":["1.0.0"]}`, false); code != http.StatusOK || len(out["testpkg"]) != 1 {
+		t.Fatalf("audit before failure = %d %+v", code, out)
+	}
+	if code, body := httpGet(t, base+"/osv/ecosystems.txt"); code != http.StatusOK || body != "npm\n" {
+		t.Fatalf("ecosystems.txt before failure = %d %q", code, body)
+	}
+}
+
+// osvQueueNpmBundle drops a well-formed npm database bundle at the given
+// sequence into landing without importing it.
+func osvQueueNpmBundle(t *testing.T, hs *HighServer, priv ed25519.PrivateKey, seq int64) {
+	t.Helper()
+	zipBytes := osvTestNpmZip(t)
+	rel := osvDBRel("npm")
+	rec := []OsvDatabase{{Ecosystem: "npm", Path: rel, SHA256: aptSHA256(zipBytes), Advisories: 1}}
+	osvWriteSignedBundle(t, hs.cfg.Landing, priv, seq, rec, map[string][]byte{rel: zipBytes})
+}
+
+// TestOsvPublishFailureEmptiesUnremovableDerivedState covers the drop path
+// when the failure that broke the publish also blocks the unlink: with the
+// meta directory unwritable, writeJSONAtomic cannot regenerate npm.json and
+// os.Remove cannot unlink the stale one. The stale file must still be
+// suppressed — emptied in place — so the ecosystem delists instead of the
+// listing serving metadata for a snapshot that is no longer installed, and
+// fixing the directory heals everything on the next retry of the same
+// bundle.
+func TestOsvPublishFailureEmptiesUnremovableDerivedState(t *testing.T) {
+	cov3CSkipIfRoot(t)
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	osvImportGoodNpmBundle(t, hs, priv, srv.URL)
+
+	cov3CChmod(t, hs.osvMetaDir(), 0o555)
+	osvQueueNpmBundle(t, hs, priv, 2)
+	res, err := hs.ImportNext()
+	if err == nil || res.Imported || len(res.RejectedBundles) != 0 {
+		t.Fatalf("failing publish: result %+v, err %v; want a retryable (not rejected) failure", res, err)
+	}
+	metaPath := filepath.Join(hs.osvMetaDir(), "npm.json")
+	if fi, err := os.Stat(metaPath); err != nil || fi.Size() != 0 {
+		t.Errorf("stale metadata after failed drop: stat %v, want the file emptied in place", err)
+	}
+	if code, _ := httpGet(t, srv.URL+"/osv/ecosystems.txt"); code != http.StatusNotFound {
+		t.Errorf("ecosystems.txt after failed publish = %d, want 404 (stale listing suppressed)", code)
+	}
+	if code, _ := postAuditBulk(t, srv.URL, `{"testpkg":["1.0.0"]}`, false); code != http.StatusNotFound {
+		t.Errorf("audit after failed publish = %d, want 404", code)
+	}
+
+	// Fixing the directory heals on retry: the bundle is still in landing.
+	cov3CChmod(t, hs.osvMetaDir(), 0o755)
+	if res, err := hs.ImportNext(); err != nil || !res.Imported {
+		t.Fatalf("retry after heal = %+v, %v", res, err)
+	}
+	if code, body := httpGet(t, srv.URL+"/osv/ecosystems.txt"); code != http.StatusOK || body != "npm\n" {
+		t.Errorf("ecosystems.txt after recovery = %d %q", code, body)
+	}
+	if code, out := postAuditBulk(t, srv.URL, `{"testpkg":["1.0.0"]}`, false); code != http.StatusOK || len(out["testpkg"]) != 1 {
+		t.Errorf("audit after recovery = %d %+v", code, out)
+	}
+}
+
+// TestOsvPublishFailureBlocksUnsuppressibleMeta covers the last rung of the
+// suppression ladder for the stored metadata: with the meta directory
+// unwritable and the metadata file itself read-only, the stale npm.json can
+// be neither removed nor emptied — yet it must not be served. The bytes stay
+// intact and parsable on disk, so only the in-memory block can explain the
+// delisting; a successful publish rewrite lifts it.
+func TestOsvPublishFailureBlocksUnsuppressibleMeta(t *testing.T) {
+	cov3CSkipIfRoot(t)
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	osvImportGoodNpmBundle(t, hs, priv, srv.URL)
+
+	metaPath := filepath.Join(hs.osvMetaDir(), "npm.json")
+	cov3CChmod(t, hs.osvMetaDir(), 0o555)
+	cov3CChmod(t, metaPath, 0o444)
+	osvQueueNpmBundle(t, hs, priv, 2)
+	res, err := hs.ImportNext()
+	if err == nil || res.Imported || len(res.RejectedBundles) != 0 {
+		t.Fatalf("failing publish: result %+v, err %v; want a retryable (not rejected) failure", res, err)
+	}
+	if !strings.Contains(err.Error(), "suppressing it in memory") {
+		t.Errorf("import error %q does not report the in-memory suppression", err)
+	}
+	// The stale file is untouched and would still parse — the block alone
+	// keeps it out of the listing.
+	var st osvStoredDB
+	if b, err := os.ReadFile(metaPath); err != nil || json.Unmarshal(b, &st) != nil || st.Ecosystem != "npm" {
+		t.Fatalf("stale metadata should be intact on disk (read %v, parsed %+v)", err, st)
+	}
+	if code, _ := httpGet(t, srv.URL+"/osv/ecosystems.txt"); code != http.StatusNotFound {
+		t.Errorf("ecosystems.txt after failed publish = %d, want 404 (stale metadata blocked)", code)
+	}
+	if code, _ := postAuditBulk(t, srv.URL, `{"testpkg":["1.0.0"]}`, false); code != http.StatusNotFound {
+		t.Errorf("audit after failed publish = %d, want 404", code)
+	}
+
+	// A writable tree again: the retry rewrites the metadata, which unblocks
+	// the path.
+	cov3CChmod(t, hs.osvMetaDir(), 0o755)
+	cov3CChmod(t, metaPath, 0o644)
+	if res, err := hs.ImportNext(); err != nil || !res.Imported {
+		t.Fatalf("retry after heal = %+v, %v", res, err)
+	}
+	if code, body := httpGet(t, srv.URL+"/osv/ecosystems.txt"); code != http.StatusOK || body != "npm\n" {
+		t.Errorf("ecosystems.txt after recovery = %d %q", code, body)
+	}
+}
+
+// TestOsvPublishFailureBlocksUnsuppressibleAuditIndex covers the same last
+// rung for the npm audit index, whose serving path additionally memoizes
+// the parsed file: with osv/ unwritable and npm-audit.json read-only, the
+// rebuild fails and the stale index can be neither removed nor emptied. The
+// bulk route must answer 404 anyway — the block must also flush the warm
+// in-process memo, since the file's stat identity never changed — while the
+// fresh metadata keeps the database listed.
+func TestOsvPublishFailureBlocksUnsuppressibleAuditIndex(t *testing.T) {
+	cov3CSkipIfRoot(t)
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	osvImportGoodNpmBundle(t, hs, priv, srv.URL)
+
+	auditPath := hs.osvNpmAuditIndexPath()
+	cov3CChmod(t, filepath.Dir(auditPath), 0o555)
+	cov3CChmod(t, auditPath, 0o444)
+	osvQueueNpmBundle(t, hs, priv, 2)
+	res, err := hs.ImportNext()
+	if err == nil || res.Imported || len(res.RejectedBundles) != 0 {
+		t.Fatalf("failing publish: result %+v, err %v; want a retryable (not rejected) failure", res, err)
+	}
+	if !strings.Contains(err.Error(), "suppressing it in memory") {
+		t.Errorf("import error %q does not report the in-memory suppression", err)
+	}
+	if fi, err := os.Stat(auditPath); err != nil || fi.Size() == 0 {
+		t.Fatalf("stale audit index should be intact on disk (stat %v)", err)
+	}
+	if code, _ := postAuditBulk(t, srv.URL, `{"testpkg":["1.0.0"]}`, false); code != http.StatusNotFound {
+		t.Errorf("audit after failed publish = %d, want 404 (stale index and memo blocked)", code)
+	}
+	// The metadata regenerated before the rebuild failed, so the database
+	// itself stays listed.
+	if code, body := httpGet(t, srv.URL+"/osv/ecosystems.txt"); code != http.StatusOK || body != "npm\n" {
+		t.Errorf("ecosystems.txt after failed publish = %d %q", code, body)
+	}
+
+	cov3CChmod(t, filepath.Dir(auditPath), 0o755)
+	cov3CChmod(t, auditPath, 0o644)
+	if res, err := hs.ImportNext(); err != nil || !res.Imported {
+		t.Fatalf("retry after heal = %+v, %v", res, err)
+	}
+	if code, out := postAuditBulk(t, srv.URL, `{"testpkg":["1.0.0"]}`, false); code != http.StatusOK || len(out["testpkg"]) != 1 {
+		t.Errorf("audit after recovery = %d %+v", code, out)
+	}
+}
+
+// TestSuppressStaleDerivedLadder pins suppressStaleDerived rung by rung:
+// removal when the directory allows it, in-place truncation when only the
+// file is writable, the in-memory block when nothing is — and that a later
+// rung's success clears an earlier block.
+func TestSuppressStaleDerivedLadder(t *testing.T) {
+	cov3CSkipIfRoot(t)
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	dir := filepath.Join(hs.downloadDir, "osv", "meta")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "stale.json")
+	writeFile(t, p, []byte(`{"ecosystem":"npm"}`))
+
+	cov3CChmod(t, dir, 0o555)
+	cov3CChmod(t, p, 0o444)
+	if err := hs.suppressStaleDerived(p); err == nil || !hs.derivedBlocks.blocked(p) {
+		t.Fatalf("read-only dir and file: err %v, blocked %v; want the in-memory block", err, hs.derivedBlocks.blocked(p))
+	}
+	// Absent files never error or stay blocked (nothing stale can be read).
+	missing := filepath.Join(hs.downloadDir, "osv", "gone.json")
+	if err := hs.suppressStaleDerived(missing); err != nil || hs.derivedBlocks.blocked(missing) {
+		t.Fatalf("missing file: err %v, blocked %v", err, hs.derivedBlocks.blocked(missing))
+	}
+
+	// A writable file behind a read-only directory is emptied in place, and
+	// that success lifts the earlier block.
+	cov3CChmod(t, p, 0o644)
+	if err := hs.suppressStaleDerived(p); err != nil || hs.derivedBlocks.blocked(p) {
+		t.Fatalf("truncate rung: err %v, blocked %v", err, hs.derivedBlocks.blocked(p))
+	}
+	if fi, err := os.Stat(p); err != nil || fi.Size() != 0 {
+		t.Fatalf("truncate rung left stat %v, want an empty file", err)
+	}
+
+	// A writable directory removes the file outright.
+	cov3CChmod(t, dir, 0o755)
+	if err := hs.suppressStaleDerived(p); err != nil || fileExists(p) {
+		t.Fatalf("remove rung: err %v, exists %v", err, fileExists(p))
+	}
+}
+
 // TestOsvDashboardListAndDetail covers the high-side dashboard helpers over
 // an imported bundle.
 func TestOsvDashboardListAndDetail(t *testing.T) {
