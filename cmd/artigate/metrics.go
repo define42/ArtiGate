@@ -134,7 +134,10 @@ type lowMetrics struct {
 	lastSuccess map[string]time.Time
 	// diodeFailed maps a bundle ID to its last failed diode transfer's error;
 	// a later successful transfer of the same bundle clears it. /readyz reports
-	// the entries whose files still wait in the outbound spool.
+	// the entries whose files still wait in the outbound spool. Unlike the
+	// counters, this state survives restarts: with a push diode configured,
+	// startup rebuilds it from the bundles still staged in the spool
+	// (restoreDiodeTransferBacklog), so a restart cannot hide a stuck transfer.
 	diodeFailed map[string]string
 }
 

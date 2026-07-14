@@ -151,7 +151,10 @@ func (s *LowServer) checkExportSpool() readyCheck {
 // or HTTP upload) failed and its files still sit in the outbound spool
 // awaiting a re-transmit. A transfer that later succeeds clears the record;
 // files that leave the spool any other way (an operator carrying them across
-// by hand) clear it too, since the failure is then moot.
+// by hand) clear it too, since the failure is then moot. Restarts do not
+// clear it: startup re-marks whatever is still staged in the spool
+// (restoreDiodeTransferBacklog), so the check keeps failing across a redeploy
+// until the bundle actually transfers.
 func (s *LowServer) checkDiodeTransfers() readyCheck {
 	c := readyCheck{name: "diode-transfer"}
 	var stuck []string

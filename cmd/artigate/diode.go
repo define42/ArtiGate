@@ -37,6 +37,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -409,6 +410,46 @@ func (s *LowServer) clearOutboundBundle(bundleID string) {
 			log.Printf("diode transfer %s: clear outbound: %v", bundleID, err)
 		}
 	}
+}
+
+// diodeRestartFailureDetail marks a failure record inferred from the outbound
+// spool at startup rather than observed from a live transfer.
+const diodeRestartFailureDetail = "transfer did not complete before the process restarted"
+
+// restoreDiodeTransferBacklog re-arms the /readyz diode-transfer check after a
+// restart. The per-bundle failure records live only in memory, but with a push
+// diode configured (UDP pitcher or HTTP endpoint) the export dir is exactly
+// the retry spool: every successful transfer clears its files, so a complete
+// bundle still staged when the process starts is one whose last transfer
+// failed — or was cut short by the restart itself. Re-mark each such bundle so
+// readiness keeps reporting it until a re-transmit succeeds, instead of
+// reporting ready until the bundle is re-exported and fails again. With no
+// push transport the export dir is the folder-diode outbox, where staged
+// bundles are simply awaiting carriage, so nothing is inferred.
+func (s *LowServer) restoreDiodeTransferBacklog() {
+	if s.pitcher == nil && s.cfg.DiodeURL == "" {
+		return
+	}
+	streams, err := findBundleStreams(s.cfg.ExportDir)
+	if err != nil {
+		log.Printf("diode transfer: cannot scan outbound spool %s for stuck bundles: %v", s.cfg.ExportDir, err)
+		return
+	}
+	var stuck []string
+	for stream, seqs := range streams {
+		for _, seq := range filterCompleteSequences(s.cfg.ExportDir, stream, seqs) {
+			stuck = append(stuck, bundleIDFor(stream, seq))
+		}
+	}
+	if len(stuck) == 0 {
+		return
+	}
+	sort.Strings(stuck)
+	for _, id := range stuck {
+		s.metrics.recordDiodeTransfer(id, diodeRestartFailureDetail)
+	}
+	log.Printf("diode transfer: %d bundle(s) staged in %s never finished transferring; /readyz reports them until a re-transmit succeeds: %s",
+		len(stuck), s.cfg.ExportDir, strings.Join(stuck, ", "))
 }
 
 // pushBundleToDiode uploads the bundle's three files from the export dir, the
