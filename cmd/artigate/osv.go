@@ -347,24 +347,37 @@ type osvStoredDB struct {
 }
 
 // publishOsv regenerates the served metadata for every database in an
-// imported bundle. A database that cannot be inspected is logged and
-// skipped (it stays out of ecosystems.txt) rather than wedging the
-// stream's import forever.
+// imported bundle. Unlike the per-version publish hooks — where a failed
+// record merely 404s, and absence is fail-closed — a database whose derived
+// state cannot be regenerated must fail the import: install has already
+// replaced the snapshot on disk, so pressing on would commit the sequence
+// (never to be retried) while the previous import's metadata — worst of all
+// the npm audit index — kept describing bytes that are no longer installed.
+// The stale derived state is dropped before returning, so while the bundle
+// retries (an operational error: it stays in landing and /readyz's
+// import-pipeline check reports the failing pass) the audit endpoint
+// answers 404 ("audit unavailable"), never stale advisories. The content
+// passed collect-time validation and the byte gate, so a failure that
+// persists across retries means trusted-side corruption — exactly what
+// should stop the stream and page an operator.
 func (s *HighServer) publishOsv(m *OsvManifest) error {
 	if m == nil {
 		return nil
 	}
+	var errs []error
 	for _, db := range m.Databases {
 		if err := s.publishOsvDatabase(db); err != nil {
-			log.Printf("osv publish %s: %v", db.Ecosystem, err)
+			errs = append(errs, fmt.Errorf("osv publish %s: %w", db.Ecosystem, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // publishOsvDatabase re-derives one ecosystem's stored metadata from the
 // installed zip (advisory count, hash, size) and, for the npm database,
-// rebuilds the npm bulk-audit index (osvnpmaudit.go).
+// rebuilds the npm bulk-audit index (osvnpmaudit.go). On failure every
+// piece of derived state that predates the just-installed snapshot is
+// removed, so nothing ever describes a snapshot other than the one on disk.
 func (s *HighServer) publishOsvDatabase(db OsvDatabase) error {
 	if err := validateOsvEcosystemName(db.Ecosystem); err != nil {
 		return err
@@ -373,6 +386,29 @@ func (s *HighServer) publishOsvDatabase(db OsvDatabase) error {
 	if db.Path != osvDBRel(db.Ecosystem) || !safeJoin(s.osvDBsDir(), abs) {
 		return fmt.Errorf("unsafe database path %s", db.Path)
 	}
+	if err := s.regenerateOsvMeta(db.Ecosystem, abs); err != nil {
+		// The metadata on disk (if any) still describes the previous
+		// snapshot; drop it — and npm's audit index with it — rather than
+		// serve descriptions of bytes that are no longer installed.
+		s.dropOsvMeta(db.Ecosystem)
+		s.dropNpmAuditIndex(db.Ecosystem)
+		return err
+	}
+	if db.Ecosystem == osvNpmEcosystem {
+		if err := s.rebuildNpmAuditIndex(abs); err != nil {
+			// The meta regenerated above is fresh and correct; only the
+			// audit index still describes the previous snapshot. Absent, the
+			// bulk route 404s until a retry rebuilds it (fail closed).
+			s.dropNpmAuditIndex(db.Ecosystem)
+			return err
+		}
+	}
+	return nil
+}
+
+// regenerateOsvMeta re-derives one ecosystem's stored metadata from the
+// installed database zip.
+func (s *HighServer) regenerateOsvMeta(name, abs string) error {
 	count, err := osvZipAdvisoryCount(abs)
 	if err != nil {
 		return err
@@ -385,18 +421,39 @@ func (s *HighServer) publishOsvDatabase(db OsvDatabase) error {
 	if err != nil {
 		return err
 	}
-	st := osvStoredDB{Ecosystem: db.Ecosystem, SHA256: sum, Size: fi.Size(), Advisories: count, Imported: time.Now().UTC()}
-	out := filepath.Join(s.osvMetaDir(), osvSlug(db.Ecosystem)+".json")
+	st := osvStoredDB{Ecosystem: name, SHA256: sum, Size: fi.Size(), Advisories: count, Imported: time.Now().UTC()}
+	out := filepath.Join(s.osvMetaDir(), osvSlug(name)+".json")
 	if !safeJoin(s.osvMetaDir(), out) {
-		return fmt.Errorf("unsafe metadata path for %s", db.Ecosystem)
+		return fmt.Errorf("unsafe metadata path for %s", name)
 	}
-	if err := writeJSONAtomic(out, st, 0o644); err != nil {
-		return err
+	return writeJSONAtomic(out, st, 0o644)
+}
+
+// dropOsvMeta removes one ecosystem's stored metadata, delisting it from
+// ecosystems.txt and the dashboard until a publish succeeds again.
+func (s *HighServer) dropOsvMeta(name string) {
+	p := filepath.Join(s.osvMetaDir(), osvSlug(name)+".json")
+	if safeJoin(s.osvMetaDir(), p) {
+		removeStaleDerived(p)
 	}
-	if db.Ecosystem == osvNpmEcosystem {
-		return s.rebuildNpmAuditIndex(abs)
+}
+
+// dropNpmAuditIndex removes the npm bulk-audit index (a no-op for other
+// ecosystems' databases). The serving cache re-stats the file per request,
+// so removal alone flips the bulk route to 404.
+func (s *HighServer) dropNpmAuditIndex(name string) {
+	if name == osvNpmEcosystem {
+		removeStaleDerived(s.osvNpmAuditIndexPath())
 	}
-	return nil
+}
+
+// removeStaleDerived deletes one regenerated-state file; a file already
+// absent is fine, anything else is only loggable (the publish error that
+// triggered the drop is already failing the import).
+func removeStaleDerived(p string) {
+	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("osv: removing stale derived state %s: %v", p, err)
+	}
 }
 
 // readOsvStored loads one ecosystem's regenerated metadata by slug and
