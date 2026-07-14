@@ -18,6 +18,7 @@ const VIEW_TITLES = {
     helm: "Helm charts",
     nuget: "NuGet packages",
     apk: "Alpine packages",
+    osv: "OSV advisories",
     uploads: "Uploaded files",
 };
 let currentView = "overview";
@@ -65,6 +66,7 @@ const STREAM_LABELS = {
     helm: "Helm",
     nuget: "NuGet",
     apk: "Alpine",
+    osv: "OSV",
     uploads: "Uploads",
 };
 function streamLabel(name) {
@@ -593,13 +595,14 @@ function npmGuideSection(base) {
         blocks: [
             {
                 label: "~/.npmrc  (or /etc/npmrc, or per-project .npmrc)",
-                code: `registry=${base}/npm/\naudit=false\nfund=false\nupdate-notifier=false`,
+                code: `registry=${base}/npm/\nfund=false\nupdate-notifier=false`,
             },
             { label: "Install", code: "npm install" },
         ],
-        note: "audit is off because the security-advisory endpoint needs the public " +
-            "registry. Do not mix in another registry — this mirror is the single " +
-            "source of truth. Only registry tarballs are mirrored (no git dependencies).",
+        note: "npm audit works once the OSV \"npm\" database is mirrored (see the OSV " +
+            "page); until then add audit=false, because the advisory endpoint answers " +
+            "404. Do not mix in another registry — this mirror is the single source " +
+            "of truth. Only registry tarballs are mirrored (no git dependencies).",
     };
 }
 function mavenGuideSection(base) {
@@ -981,6 +984,29 @@ function nugetGuideSection(base) {
 }
 // apkGuideSection shows /etc/apk/repositories lines for each mirrored Alpine
 // mirror, built from the live repo list so they are copy-paste ready.
+function osvGuideSection(base) {
+    return {
+        heading: "OSV advisories",
+        body: "Each mirrored OSV ecosystem's advisory database is served in the " +
+            "upstream bucket's layout: ecosystems.txt, one all.zip per ecosystem, " +
+            "and single advisories by id.",
+        blocks: [
+            {
+                label: "Download databases for an offline scanner (e.g. osv-scanner)",
+                code: `curl -fsSL ${base}/osv/ecosystems.txt\n` +
+                    `curl -fL -o npm-all.zip ${base}/osv/npm/all.zip    # any listed ecosystem`,
+            },
+            {
+                label: "Fetch one advisory",
+                code: `curl -fsSL ${base}/osv/npm/GHSA-xxxx-xxxx-xxxx.json`,
+            },
+        ],
+        note: "Place each all.zip where your scanner expects its offline database " +
+            "(osv-scanner: <cache>/osv-scanner/<ecosystem>/all.zip, then run with " +
+            "--offline). With the \"npm\" database mirrored, this host also answers " +
+            "npm audit on its npm registry — clients no longer need audit=false.",
+    };
+}
 function apkGuideSection(repos) {
     const base = serverBase();
     const lines = [];
@@ -1055,7 +1081,9 @@ function openGuide() {
                                 ? helmGuideSection(base)
                                 : currentView === "nuget"
                                     ? nugetGuideSection(base)
-                                    : goGuideSection(base);
+                                    : currentView === "osv"
+                                        ? osvGuideSection(base)
+                                        : goGuideSection(base);
         renderGuideSections(body, [section]);
     }
     if (!dialog.open) {

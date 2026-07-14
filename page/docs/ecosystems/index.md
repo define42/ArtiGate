@@ -1,18 +1,18 @@
 # Ecosystems
 
-ArtiGate mirrors **thirteen** artifact ecosystems across a one-way data diode. Each is a self-contained stream with the same lifecycle — the low side *collects* upstream artifacts, packs them into a signed *bundle*, the diode carries it, and the high side *imports* and *serves* it — but the input format and the client protocol differ per ecosystem. This page is the hub; each row links to its full page.
+ArtiGate mirrors **fourteen** ecosystems across a one-way data diode — thirteen artifact ecosystems plus the OSV vulnerability-advisory feed that lets the air-gapped side audit them. Each is a self-contained stream with the same lifecycle — the low side *collects* upstream artifacts, packs them into a signed *bundle*, the diode carries it, and the high side *imports* and *serves* it — but the input format and the client protocol differ per ecosystem. This page is the hub; each row links to its full page.
 
 ## The common flow
 
 Every ecosystem follows the same **collect → bundle → import → serve** path described in [Architecture](../architecture.md):
 
-1. **Collect** — an operator (or a [watch](../scheduling.md)) sends `POST /admin/{ecosystem}/collect` to the [low side](../low-side.md). Go, Python, Maven, and NPM shell out to their *native* CLI (`go`, `pip`, `mvn`, `npm`); APT, RPM, containers, AI models, crates, Terraform, Helm, NuGet, and Alpine are fetched directly over the ecosystem's own HTTP protocol (deb822 index + `.deb` files, repodata + `.rpm` files, the OCI/Docker registry API, the Hugging Face Hub's Ollama-compatible and file APIs, the cargo sparse index, the Terraform registry protocols — plus the `git` tool for `git::` module sources — Helm's `index.yaml`, the NuGet v3 flat container, and `APKINDEX` + `.apk` files respectively).
+1. **Collect** — an operator (or a [watch](../scheduling.md)) sends `POST /admin/{ecosystem}/collect` to the [low side](../low-side.md). Go, Python, Maven, and NPM shell out to their *native* CLI (`go`, `pip`, `mvn`, `npm`); APT, RPM, containers, AI models, crates, Terraform, Helm, NuGet, Alpine, and OSV are fetched directly over the ecosystem's own HTTP protocol (deb822 index + `.deb` files, repodata + `.rpm` files, the OCI/Docker registry API, the Hugging Face Hub's Ollama-compatible and file APIs, the cargo sparse index, the Terraform registry protocols — plus the `git` tool for `git::` module sources — Helm's `index.yaml`, the NuGet v3 flat container, `APKINDEX` + `.apk` files, and the OSV bucket's per-ecosystem `all.zip` archives respectively).
 2. **Bundle** — the fetched files are packed into a signed three-file bundle (`<bundleID>.tar.gz`, `.manifest.json`, `.manifest.json.sig`) and written to the export directory. Each ecosystem is an independently-numbered [stream](../architecture.md), so a slow container mirror never blocks a Python collect.
-3. **Import** — the [high side](../high-side.md) verifies the Ed25519 signature and every SHA-256 hash, installs the artifacts immutably, and imports strictly in sequence order per stream.
+3. **Import** — the [high side](../high-side.md) verifies the Ed25519 signature and every SHA-256 hash, installs the artifacts immutably (advisory-database snapshots being the deliberate exception — each replaces its predecessor), and imports strictly in sequence order per stream.
 4. **Serve** — the high side **regenerates** all repository metadata from the artifacts actually present (it never trusts a transferred index) and serves clients under a per-ecosystem base path.
 
 !!! note "One manifest, one stream per ecosystem"
-    All thirteen streams share the same [bundle format](../architecture.md). The manifest `type` field is always the legacy string `"go-module-bundle"` regardless of ecosystem — the real ecosystem is carried by the `stream` field (`go`, `python`, `maven`, `npm`, `apt`, `rpm`, `containers`, `hf`, `crates`, `terraform`, `helm`, `nuget`, `apk`) and the populated sub-manifest.
+    All fourteen streams share the same [bundle format](../architecture.md). The manifest `type` field is always the legacy string `"go-module-bundle"` regardless of ecosystem — the real ecosystem is carried by the `stream` field (`go`, `python`, `maven`, `npm`, `apt`, `rpm`, `containers`, `hf`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `osv`) and the populated sub-manifest.
 
 ## Comparison
 
@@ -31,11 +31,12 @@ Every ecosystem follows the same **collect → bundle → import → serve** pat
 | [Helm charts](helm.md) | A chart repository URL plus chart specs (`nginx@21.1.0`) | Classic Helm (`index.yaml`) repository per mirror | `/helm/<mirror>` | `helm` |
 | [NuGet](nuget.md) | Package specs (`Newtonsoft.Json@13.0.3`, or bare for the newest stable) | NuGet v3 feed (service index, flat container, registration, search) | `/nuget/` | `dotnet` / `nuget` |
 | [Alpine (apk)](apk.md) | A mirror base + branches/repositories/architectures, or a pasted `/etc/apk/repositories` file | Alpine repository (regenerated `APKINDEX.tar.gz`) | `/apk/<mirror>` | `apk` |
+| [OSV advisories](osv.md) | OSV ecosystem names (`npm`, `PyPI`, `Alpine:v3.22`, …) | OSV database feed (upstream bucket layout) + `npm audit` on the npm registry | `/osv/` | `osv-scanner --offline`, `npm audit`, `curl` |
 
 !!! tip "Client base paths are stable"
     The high side claims each URL space separately (`serveGo`, `servePython`, …); anything outside these prefixes returns `404`. Point clients at `<high-base>/go`, pip at the `<high-base>/simple` index, and so on.
 
-## The thirteen ecosystems
+## The fourteen ecosystems
 
 ### Go modules → [go.md](go.md)
 
@@ -89,6 +90,10 @@ Collect takes package specs (`Newtonsoft.Json@13.0.3`, or a bare `Serilog` for t
 
 Collect takes a mirror base plus branches/repositories/architectures (defaults: `main`, `x86_64`) or a pasted `/etc/apk/repositories` file, and is **newest-only by default** like APT/RPM. Every `.apk` is verified against the `APKINDEX`-declared size and `Q1` control checksum; the verbatim stanzas travel inside the signed manifest and the high side regenerates `APKINDEX.tar.gz` under `/apk/<mirror>`, gated on the packages present — optionally RSA-signed with `--apk-rsa-key` so stock `apk` clients skip `--allow-untrusted`.
 
+### OSV advisories → [osv.md](osv.md)
+
+The audit companion to all of the above: collect takes **OSV ecosystem names** (`npm`, `PyPI`, `Go`, `crates.io`, `Alpine:v3.22`, `Debian:12`, …) and fetches each name's current `all.zip` advisory database from the [osv.dev](https://osv.dev) bucket. The high side serves the verified snapshots in the upstream bucket's own layout under `/osv/` (plus single advisories by id, streamed from the zip) for offline scanners — and mirroring the `npm` database makes **`npm audit` work against the mirror's npm registry**, so clients drop `audit=false`. Databases are *snapshots*: each import replaces the previous one, an unchanged database dedups to a no-op, and a daily [schedule](../scheduling.md) keeps the air-gapped advisory picture current.
+
 ## Cross-cutting notes
 
 Each ecosystem trades completeness for airgap-friendliness in a different way. Know these before you build a mirror:
@@ -103,6 +108,7 @@ Each ecosystem trades completeness for airgap-friendliness in a different way. K
 | Terraform | **Named providers for the selected platforms + named modules** — `platforms` defaults to `linux_amd64`; module dependencies are not auto-resolved |
 | Helm | **Exactly the charts you name** — chart dependencies are not auto-resolved |
 | AI models | **Exactly what you name** — one variant per reference; a repository snapshot is every file at one pinned commit (minus `repo_exclude`) |
+| OSV | **Whole databases, replaced on refresh** — each named ecosystem's full `all.zip`, the one mutable mirrored subtree |
 
 !!! warning "Content dedup is per stream"
     The low side's export dedup ([`exported.db`](../architecture.md#export-deduplication-and-delta-bundles)) is **per stream**. A re-collect of an unchanged upstream is skipped and consumes no sequence number; a partly-changed one ships a **delta bundle** carrying only the new files. APT, RPM, container, and Hugging Face LFS collects even skip *downloading* files the index says were already forwarded. It does not dedup across ecosystems, `"force": true` bypasses it per collect, and [re-export](../low-side.md) bypasses it entirely.

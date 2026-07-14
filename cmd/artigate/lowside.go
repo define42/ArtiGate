@@ -70,6 +70,10 @@ type LowConfig struct {
 	// NugetSource optionally overrides the NuGet v3 service index packages are
 	// resolved from; empty means https://api.nuget.org/v3/index.json.
 	NugetSource string
+	// OsvUpstream optionally overrides the base URL OSV vulnerability
+	// databases (per-ecosystem all.zip archives) are fetched from; empty
+	// means https://osv-vulnerabilities.storage.googleapis.com.
+	OsvUpstream string
 	// GitBinary is the git command used to fetch Terraform modules that
 	// resolve to git sources.
 	GitBinary     string

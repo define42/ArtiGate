@@ -160,6 +160,7 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="helm" onclick="setView('helm')">Helm</button>
     <button type="button" data-view="nuget" onclick="setView('nuget')">NuGet</button>
     <button type="button" data-view="apk" onclick="setView('apk')">Alpine</button>
+    <button type="button" data-view="osv" onclick="setView('osv')">OSV</button>
     <button type="button" data-view="uploads" onclick="setView('uploads')">Uploads</button>
     <button type="button" data-view="status" onclick="setView('status')">Status</button>
   </nav>
@@ -566,6 +567,30 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   </section>
 
+  <section class="view" id="view-osv" hidden>
+  <div class="card">
+    <h2>Mirror OSV vulnerability databases</h2>
+    <p class="hint">List OSV ecosystem names &mdash; one per line, exactly as <a href="https://osv.dev" rel="noreferrer">osv.dev</a> spells them: <code>npm</code>, <code>PyPI</code>, <code>Go</code>, <code>crates.io</code>, <code>Maven</code>, <code>NuGet</code>, <code>Alpine:v3.22</code>, <code>Debian:12</code>, &hellip; Each name's current <code>all.zip</code> advisory database is fetched and re-exported as a snapshot; an unchanged database dedups to a no-op, so a daily schedule is cheap. The high side serves them under <code>&lt;high&gt;/osv/&hellip;</code> for offline scanners, and the <code>npm</code> database additionally answers <code>npm audit</code> against the mirror. Same as POSTing to <code>/admin/osv/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectOsv(event)">
+      <label class="filelabel">Ecosystems <span class="opt">&mdash; one OSV ecosystem name per line</span>
+        <textarea id="osvecos" rows="4" placeholder="npm&#10;PyPI&#10;Go" autocomplete="off"></textarea>
+      </label>
+      <label class="pytarget-check"><input id="osvForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="osvBtn">Collect &amp; export</button>
+        <button class="secondary" type="reset" onclick="clearResult('osvResult')">Reset</button>
+      </div>
+    </form>
+    <div id="osvResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule this mirror:</span>
+      <span class="every"><input id="osvEvery" type="number" min="1" value="1" autocomplete="off"> <select id="osvUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleOsv()">Add schedule</button>
+    </div>
+    <div id="osvWatches" class="watchlist"></div>
+  </div>
+  </section>
+
   <section class="view" id="view-uploads" hidden>
   <div class="card">
     <h2>Upload files</h2>
@@ -605,6 +630,7 @@ const lowUIHTML = `<!DOCTYPE html>
         <option value="helm">Helm</option>
         <option value="nuget">NuGet</option>
         <option value="apk">Alpine (apk)</option>
+        <option value="osv">OSV</option>
         <option value="uploads">Uploads</option>
       </select>
       <input id="seq" type="text" placeholder="42,45-47" autocomplete="off" autofocus>
@@ -660,7 +686,7 @@ const lowUIHTML = `<!DOCTYPE html>
 // If the session has expired, any API call returns 401; bounce to the login page.
 (function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers',hf:'AI Models',crates:'Crates',terraform:'Terraform',helm:'Helm',nuget:'NuGet',apk:'Alpine',uploads:'Uploads'})[name]||name;}
+function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers',hf:'AI Models',crates:'Crates',terraform:'Terraform',helm:'Helm',nuget:'NuGet',apk:'Alpine',osv:'OSV',uploads:'Uploads'})[name]||name;}
 // clearResult hides an ecosystem's inline result box; the Reset button pairs it
 // with the form's native field reset (type="reset").
 function clearResult(id){const el=document.getElementById(id); if(el){ el.className='rbox'; el.innerHTML=''; }}
@@ -933,7 +959,7 @@ function outboundCell(inOutbound){
 // VIEW_STREAM maps each ecosystem view to its backend stream (now identical
 // names); views without a stream (overview, status) are absent, so it doubles as
 // the "is this an ecosystem page" test.
-const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers',hf:'hf',crates:'crates',terraform:'terraform',helm:'helm',nuget:'nuget',apk:'apk'};
+const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers',hf:'hf',crates:'crates',terraform:'terraform',helm:'helm',nuget:'nuget',apk:'apk',osv:'osv'};
 function setView(view){
   // The sections themselves are the source of truth (every <section class="view">
   // has id "view-<name>"), so a newly added page can never be missing here and
@@ -1432,6 +1458,33 @@ async function scheduleApk(){
   createWatch('apk', label, body, 'apkEvery','apkUnit', showApkResult);
 }
 
+function showOsvResult(cls, html){
+  const el=document.getElementById('osvResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function osvBody(){
+  const ecosystems=linesOf('osvecos');
+  if(!ecosystems.length) return null;
+  return {ecosystems:ecosystems};
+}
+
+async function collectOsv(ev){
+  ev.preventDefault();
+  const body=osvBody();
+  if(!body){ showOsvResult('err','List at least one OSV ecosystem name.'); return; }
+  runCollect({btnId:'osvBtn', busyLabel:'Mirroring…', showFn:showOsvResult, title:'Mirroring OSV databases',
+    url:'/admin/osv/collect', body:applyForce(body,'osvForce'), forceId:'osvForce',
+    render:d=>skippedItems(collectedMsg(d,'Mirrored','database(s)'), d)});
+}
+
+async function scheduleOsv(){
+  const body=osvBody();
+  if(!body){ showOsvResult('err','List at least one OSV ecosystem name to schedule.'); return; }
+  createWatch('osv','OSV: '+body.ecosystems.slice(0,3).join(', '), body, 'osvEvery','osvUnit', showOsvResult);
+}
+
 // uploadCollect POSTs multipart form data with XMLHttpRequest instead of the
 // NDJSON stream: fetch exposes no upload progress, and streaming a response
 // while the browser is still sending the body trips HTTP/1.1's half-duplex
@@ -1636,8 +1689,8 @@ function viewJob(id, title){
 // ---- Schedules (watches) ----
 // Each ecosystem page schedules a recurring collect from its own inputs, so the
 // spec built here is exactly what that page's collect button would POST.
-const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',npm:'npmWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches',hf:'hfWatches',crates:'crWatches',terraform:'tfWatches',helm:'helmWatches',nuget:'ngWatches',apk:'apkWatches'};
-const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,npm:showNpmResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult,hf:showHFResult,crates:showCrResult,terraform:showTfResult,helm:showHelmResult,nuget:showNgResult,apk:showApkResult};
+const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',npm:'npmWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches',hf:'hfWatches',crates:'crWatches',terraform:'tfWatches',helm:'helmWatches',nuget:'ngWatches',apk:'apkWatches',osv:'osvWatches'};
+const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,npm:showNpmResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult,hf:showHFResult,crates:showCrResult,terraform:showTfResult,helm:showHelmResult,nuget:showNgResult,apk:showApkResult,osv:showOsvResult};
 
 function intervalSeconds(everyId, unitId){
   const n=parseInt(document.getElementById(everyId).value,10);

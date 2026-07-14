@@ -43,6 +43,7 @@ const (
 	streamHelm       = "helm"
 	streamNuget      = "nuget"
 	streamApk        = "apk"
+	streamOsv        = "osv"
 	streamUploads    = "uploads"
 )
 
@@ -81,6 +82,7 @@ type BundleManifest struct {
 	Helm             *HelmManifest      `json:"helm,omitempty"`
 	Nuget            *NugetManifest     `json:"nuget,omitempty"`
 	Apk              *ApkManifest       `json:"apk,omitempty"`
+	Osv              *OsvManifest       `json:"osv,omitempty"`
 	Uploads          *UploadsManifest   `json:"uploads,omitempty"`
 	Part             *BundlePartInfo    `json:"part,omitempty"`
 	Files            []ManifestFile     `json:"files"`

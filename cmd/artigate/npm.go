@@ -185,20 +185,26 @@ type npmStoredManifest struct {
 }
 
 // serveNpm handles the npm registry routes under /npm/: packument
-// (/npm/<name>), version manifest (/npm/<name>/<version>), and tarball
-// download (/npm/<name>/-/<file>.tgz). Scoped names arrive either literal
-// (@scope/pkg) or URL-encoded (@scope%2fpkg); both decode to the same path.
-// It reports whether it wrote a response for the request.
+// (/npm/<name>), version manifest (/npm/<name>/<version>), tarball
+// download (/npm/<name>/-/<file>.tgz), and the bulk-audit endpoint backed
+// by the mirrored OSV npm database (osvnpmaudit.go). Scoped names arrive
+// either literal (@scope/pkg) or URL-encoded (@scope%2fpkg); both decode to
+// the same path. It reports whether it wrote a response for the request.
 func (s *HighServer) serveNpm(w http.ResponseWriter, r *http.Request) bool {
 	p := r.URL.Path
 	if p != "/npm" && !strings.HasPrefix(p, "/npm/") {
 		return false
 	}
+	rest := strings.Trim(strings.TrimPrefix(p, "/npm"), "/")
+	// npm audit POSTs, so its route must dodge the read-method gate below.
+	if rest == npmAuditBulkRoute {
+		s.handleNpmAuditBulk(w, r)
+		return true
+	}
 	if !isReadMethod(r) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return true
 	}
-	rest := strings.Trim(strings.TrimPrefix(p, "/npm"), "/")
 	if name, file, ok := splitNpmTarballPath(rest); ok {
 		s.handleNpmTarball(w, r, name, file)
 		return true
