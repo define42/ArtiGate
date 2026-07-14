@@ -1,10 +1,13 @@
 // Package e2e holds ArtiGate's end-to-end suite. It builds the real
 // artigate binary, starts a low+high pair wired over the HTTP diode
 // transport, collects from the real upstreams (PyPI, proxy.golang.org,
-// Maven Central, registry.npmjs.org, cli.github.com, Docker Hub,
-// huggingface.co), and validates every stream with its real client tool:
-// pip, go, mvn+java, npm+node, apt-get+dpkg-deb, dnf+rpm, docker,
-// huggingface_hub's CLI, and curl.
+// Maven Central, registry.npmjs.org, crates.io, registry.terraform.io,
+// charts.jetstack.io, api.nuget.org, cli.github.com, Docker Hub,
+// huggingface.co, and — via a one-package miniature repository built from
+// real dl-cdn.alpinelinux.org artifacts — Alpine), and validates every
+// stream with its real client tool: pip, go, mvn+java, npm+node, cargo,
+// terraform (or tofu), helm, dotnet, apt-get+dpkg-deb, dnf+rpm, apk (inside
+// an Alpine container), docker, huggingface_hub's CLI, and curl.
 //
 // Everything except this file is behind the "e2e" build tag, so the default
 // `go build ./...`, `go vet ./...`, `go test ./...`, and golangci-lint runs
