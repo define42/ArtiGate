@@ -4,32 +4,38 @@
 [![docs](https://img.shields.io/badge/docs-define42.github.io%2FArtiGate-green)](https://define42.github.io/ArtiGate/)
 
 ArtiGate is a dependency mirror for **one-way data-diode networks**. It mirrors
-Go modules, Python (PyPI) wheels, Java (Maven) artifacts, NPM packages, Rust
-crates, Terraform/OpenTofu providers and modules, Helm charts, NuGet packages,
-APT (`.deb`), RPM (`.rpm`), and Alpine (`.apk`) repositories, container images
-(Docker/OCI, linux/amd64), AI models from Hugging Face (GGUF for Ollama, plus
-full safetensors repositories), and OSV vulnerability-advisory databases from
-the internet into an air-gapped network, and serves them there in each
-ecosystem's native format — so the air-gapped side can not only build against
-mirrored dependencies but also audit them.
+Go modules, Python (PyPI) wheels and opt-in sdists, Java (Maven) artifacts,
+NPM packages, Rust crates, Terraform/OpenTofu providers and modules, Helm
+charts, NuGet packages, APT (`.deb`), RPM (`.rpm`), and Alpine (`.apk`)
+repositories, Conda channels, Ruby gems, PHP Composer packages, VS Code
+extensions (from Open VSX), Ansible Galaxy collections, R packages (CRAN),
+raw git repositories, container images (Docker/OCI, linux/amd64), AI models
+from Hugging Face (GGUF for Ollama, plus full safetensors repositories), and
+OSV vulnerability-advisory databases from the internet into an air-gapped
+network, and serves them there in each ecosystem's native format — so the
+air-gapped side can not only build against mirrored dependencies but also
+audit them.
 
 One binary, two modes:
 
 - **`low`** — runs on the internet side. From its web dashboard you give it a spec
   (a `go.mod` or module list, a Python requirements list, Maven coordinates, a
   `package.json` or NPM package list, a crate/provider/chart/NuGet list, an APT
-  source, a `.repo`, an Alpine repositories file, a list of container images,
-  a list of Hugging Face model references, or a list of OSV ecosystem names);
-  it fetches the artifacts from upstream and writes **signed, numbered bundle
-  files**.
+  source, a `.repo`, an Alpine repositories file, a conda channel and package
+  list, a gem/Composer/extension/collection/CRAN package list, a git clone
+  URL, a list of container images, a list of Hugging Face model references,
+  or a list of OSV ecosystem names); it fetches the artifacts from upstream
+  and writes **signed, numbered bundle files**.
 - **`high`** — runs air-gapped. It imports the bundles (in order, verifying every
   signature and hash) and serves them as a GOPROXY, a PyPI index, a Maven 2
   repository, an NPM registry (including `npm audit`, answered from the
   mirrored OSV data), a cargo sparse registry, a Terraform/OpenTofu
   provider+module registry, Helm repositories, a NuGet v3 feed, APT/RPM/Alpine
-  repositories, a read-only OCI container registry, an Ollama-compatible
-  model registry with a Hugging Face Hub download API, and an OSV advisory
-  feed for offline vulnerability scanners.
+  repositories, conda channels, a RubyGems compact-index source, a Composer
+  repository, a VS Code extension gallery, an Ansible Galaxy v3 API, a CRAN
+  mirror, read-only git repositories (dumb HTTP), a read-only OCI container
+  registry, an Ollama-compatible model registry with a Hugging Face Hub
+  download API, and an OSV advisory feed for offline vulnerability scanners.
 
 ```
   spec ──▶ [ low ] ──▶ signed bundles ──▶ ((diode)) ──▶ [ high ] ──▶ clients
@@ -115,11 +121,14 @@ and environment variable.
   `go.sum`) to mirror exactly what it builds. The full dependency graph is always
   fetched.
 - **Python** — a requirements list (paste or upload `requirements.txt`). Wheels
-  only (no sdists), enforced with `--only-binary=:all:` for every collect so
-  package build hooks never run beside the signing key. The collect fails when a
-  package in the closure has no compatible wheel. An optional cross-target
-  downloads wheels for the high-side interpreter/platform rather than the
-  low-side host.
+  by default, enforced with `--only-binary=:all:` for every collect so package
+  build hooks never run beside the signing key. Packages that publish no wheel
+  can be opted into source distributions via the request's `sdists` list —
+  those are fetched straight from the index's JSON API (never through pip, so
+  still no build hooks) and verified against the API-declared SHA-256; clients
+  build them locally exactly as they would against PyPI. An optional
+  cross-target downloads wheels for the high-side interpreter/platform rather
+  than the low-side host.
 - **Java** — Maven coordinates (`groupId:artifactId:version`, one per line) or an
   uploaded `pom.xml`. Only the pom's dependency information is used — build
   sections, profiles, and repository overrides are rejected, so an uploaded pom
@@ -266,6 +275,61 @@ and environment variable.
   `apk --allow-untrusted`. The upstream index carries no whole-file hash, so a
   scheduled re-collect re-downloads packages on the low side and dedups at
   export — the bundle still carries only new content.
+- **Conda** — a channel (a name like `conda-forge` under
+  `https://conda.anaconda.org`, or a full channel URL, `--conda-channel-base`
+  overrides the alias base) plus package specs (`numpy`, `scipy==1.13.1`,
+  `pandas>=2.0,<3`) and platform subdirs (`noarch` is always searched).
+  Dependencies are resolved greedily against the channel's repodata; each
+  package file is verified against its repodata-declared SHA-256, and the
+  verbatim repodata entries travel inside the signed manifest. The high side
+  regenerates per-subdir `repodata.json` from the entries whose packages are
+  present, so `conda`/`mamba`/`micromamba` install from
+  `<high>/conda/<mirror>`. Big channels are genuinely large — mirroring
+  conda-forge's platform subdirs needs a generous RAM budget on the low side.
+- **RubyGems** — gem specs, one per line (`rake@13.2.1`, or a bare `rails` for
+  the newest release; `--rubygems-url` overrides the upstream). The runtime
+  dependency closure is resolved from the compact index and every `.gem` is
+  verified against its index-declared SHA-256; the verbatim `/info` lines
+  travel inside the signed manifest. The high side regenerates a compact
+  index (`/versions`, `/info/<gem>`, `/names`) gated on the gems present, so
+  Bundler works with `source "<high>/rubygems"`.
+- **Composer** — PHP package specs, one per line (`monolog/monolog`, or
+  `psr/container:2.0.2` to pin; `--composer-repo` overrides the upstream).
+  The require closure is resolved from the Composer v2 (p2) metadata over
+  stable releases; each release's expanded version object travels inside the
+  signed manifest with its dist/source sections stripped. The high side
+  re-renders the p2 API from those verified objects — dist URLs point back at
+  its own verified zips — so `composer install` works against
+  `<high>/composer` with packagist.org disabled.
+- **VS Code extensions** — extension ids, one per line (`golang.Go`, or
+  `redhat.vscode-yaml@1.14.0` to pin), fetched from Open VSX
+  (`--vsx-registry` overrides). Extension dependencies and packs are mirrored
+  with them. The high side regenerates gallery metadata from each `.vsix`'s
+  own embedded `package.json` and answers the VS Code gallery query API at
+  `<high>/vsx/gallery` — point VSCodium's `extensionsGallery.serviceUrl` (or
+  `VSCODE_GALLERY_SERVICE_URL`) at it, or download `.vsix` files directly.
+- **Ansible** — Galaxy collection specs, one per line (`ansible.posix`, or
+  `community.general@8.5.0` to pin; `--galaxy-server` overrides the
+  upstream). Dependencies from each collection's metadata are resolved and
+  mirrored; artifacts are verified against the API-declared SHA-256. The high
+  side regenerates a Galaxy v3 API from each artifact's own embedded
+  `MANIFEST.json`, so `ansible-galaxy collection install ns.name -s
+  <high>/galaxy/` works.
+- **CRAN** — R package specs, one per line (`jsonlite`, or `data.table@1.15.4`
+  for a superseded release, fetched from the mirror's Archive;
+  `--cran-mirror` overrides the upstream). The runtime dependency closure
+  (Depends/Imports/LinkingTo, minus base packages) is mirrored as source
+  packages verified against the index MD5. The high side regenerates
+  `src/contrib/PACKAGES(.gz)` from each tarball's own `DESCRIPTION`, so
+  `install.packages("pkg", repos = "<high>/cran")` works.
+- **Git** — a clone URL (plus an optional mirror name and ref list). The low
+  side speaks the smart HTTP protocol as a pure-Go client — no git binary
+  beside the signing key — fetches every selected branch and tag as one
+  self-contained packfile, and fully verifies it (trailer hash, every object,
+  every delta) before signing. The high side re-verifies the pack, rebuilds
+  the `.idx` itself, and serves the repository over git's dumb HTTP protocol,
+  so `git clone <high>/git/<mirror>.git` works with stock git. Each
+  re-collect refreshes the mirror to the current upstream refs.
 
 For APT, RPM, and Alpine, a **"Newest version only"** checkbox (on by default)
 mirrors just the latest version of each package; untick it to mirror every
