@@ -105,7 +105,7 @@ resource "null_resource" "probe" {}
 // tfE2EHigh is the TLS-serving high side of the terraform test.
 type tfE2EHigh struct {
 	srv  *server
-	host string // "localhost:<port>" — the registry host in source addresses
+	host string // "127.0.0.1:<port>" — the registry host in source addresses
 }
 
 // tfE2EStartTLSHigh starts a second high server with a self-signed
@@ -156,7 +156,7 @@ func tfE2EStartTLSHigh(t *testing.T, bundleID string) tfE2EHigh {
 		if err != nil {
 			t.Fatal(err)
 		}
-		srv.url = fmt.Sprintf("https://localhost:%d", port)
+		srv.url = fmt.Sprintf("https://127.0.0.1:%d", port)
 		if err := tfE2EWaitTLSHealthz(srv); err == nil {
 			break
 		}
@@ -173,7 +173,10 @@ func tfE2EStartTLSHigh(t *testing.T, bundleID string) tfE2EHigh {
 		}
 	})
 
-	high := tfE2EHigh{srv: srv, host: fmt.Sprintf("localhost:%d", port)}
+	// terraform requires a module registry hostname to contain a dot, so the
+	// source addresses use the dotted loopback IP (covered by the generated
+	// certificate's IP SAN), never "localhost".
+	high := tfE2EHigh{srv: srv, host: fmt.Sprintf("127.0.0.1:%d", port)}
 	tfE2EWaitTLSImported(t, high)
 	return high
 }
