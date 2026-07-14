@@ -3,9 +3,11 @@ package main
 // Python (PyPI) ecosystem adapter. The low side runs `pip download` to collect
 // wheels, then packs them into the same numbered, signed ArtiGate bundle format
 // used for Go modules. The high side imports those wheels and serves them
-// through the PyPI Simple Repository API (PEP 503).
+// through the PyPI Simple Repository API — PEP 503 HTML and PEP 691 JSON,
+// selected by content negotiation.
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -78,6 +81,66 @@ func parseWheelFilename(filename string) (project, version string, ok bool) {
 	return normalizePyName(parts[0]), parts[1], true
 }
 
+// maxWheelMetadataBytes caps the decompressed METADATA bytes read from a
+// wheel, so a hostile zip entry cannot balloon in memory; the Requires-Python
+// header sits in the leading header block, far below this.
+const maxWheelMetadataBytes = 4 << 20
+
+// wheelRequiresPython returns the Requires-Python specifier embedded in the
+// wheel at path, or "" when the wheel, its METADATA, or the header is absent
+// or unreadable (serving then simply omits the attribute). Reading it from
+// the wheel itself follows the high side's rule of regenerating all index
+// metadata from the verified artifacts actually present.
+func wheelRequiresPython(path string) string {
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		return ""
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		if !isWheelMetadataPath(f.Name) {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return ""
+		}
+		data, err := io.ReadAll(io.LimitReader(rc, maxWheelMetadataBytes))
+		_ = rc.Close()
+		if err != nil {
+			return ""
+		}
+		return metadataRequiresPython(data)
+	}
+	return ""
+}
+
+// isWheelMetadataPath reports whether a zip entry is the wheel's top-level
+// {name}-{version}.dist-info/METADATA core metadata file.
+func isWheelMetadataPath(name string) bool {
+	dir, file, ok := strings.Cut(name, "/")
+	return ok && file == "METADATA" && strings.HasSuffix(dir, ".dist-info")
+}
+
+// metadataRequiresPython scans the RFC 822-style header block of a core
+// metadata file for Requires-Python, stopping at the blank line that starts
+// the description body. Folded continuation lines are skipped.
+func metadataRequiresPython(data []byte) string {
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			return ""
+		}
+		if line[0] == ' ' || line[0] == '\t' {
+			continue
+		}
+		if key, val, ok := strings.Cut(line, ":"); ok && strings.EqualFold(key, "Requires-Python") {
+			return strings.TrimSpace(val)
+		}
+	}
+	return ""
+}
+
 // validatePythonProjects checks that every project names a version and lists
 // files that appear in the manifest's overall file set.
 func validatePythonProjects(projects []PythonProject, seen map[string]bool) error {
@@ -98,13 +161,106 @@ func validatePythonProjects(projects []PythonProject, seen map[string]bool) erro
 }
 
 // -----------------------------------------------------------------------------
-// High side: PyPI Simple Repository API
+// High side: PyPI Simple Repository API (PEP 503 HTML, PEP 691 JSON)
 // -----------------------------------------------------------------------------
+
+// PEP 691 media types for the Simple API. Legacy text/html serves browsers
+// and older clients; the versioned types are selected by content negotiation.
+const (
+	pySimpleJSONType   = "application/vnd.pypi.simple.v1+json"
+	pySimpleHTMLType   = "application/vnd.pypi.simple.v1+html"
+	pySimpleLegacyType = "text/html"
+
+	// pySimpleAPIVersion is the PEP 691 api-version advertised in JSON meta.
+	pySimpleAPIVersion = "1.0"
+)
 
 type pyFileEntry struct {
 	filename string
 	project  string
 	version  string
+}
+
+// pySimpleServable maps one Accept media range to the Simple API
+// representation it selects, or "" when it selects none.
+func pySimpleServable(mediaType string) string {
+	switch mediaType {
+	case pySimpleJSONType:
+		return pySimpleJSONType
+	case pySimpleHTMLType:
+		return pySimpleHTMLType
+	case pySimpleLegacyType, "text/*", "*/*":
+		return pySimpleLegacyType
+	}
+	return ""
+}
+
+// acceptMediaRange splits one Accept header element into its lowercased media
+// type and q-value (1 when absent or unparsable).
+func acceptMediaRange(part string) (string, float64) {
+	fields := strings.Split(part, ";")
+	q := 1.0
+	for _, param := range fields[1:] {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(param), "q="); ok {
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				q = f
+			}
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(fields[0])), q
+}
+
+// negotiatePySimple picks the Simple API representation (PEP 691 JSON,
+// versioned HTML, or legacy text/html) the Accept header ranks highest. An
+// absent or unmatched Accept falls back to legacy HTML so browsers and older
+// pip keep working; a q=0 range is never selected, and ties keep the range
+// listed first.
+func negotiatePySimple(accept string) string {
+	best, bestQ := "", 0.0
+	for _, part := range strings.Split(accept, ",") {
+		mediaType, q := acceptMediaRange(part)
+		serve := pySimpleServable(mediaType)
+		if serve == "" || q <= bestQ {
+			continue
+		}
+		best, bestQ = serve, q
+	}
+	if best == "" {
+		return pySimpleLegacyType
+	}
+	return best
+}
+
+// pySimpleMeta is the PEP 691 response meta object.
+type pySimpleMeta struct {
+	APIVersion string `json:"api-version"`
+}
+
+// pySimpleProjectRef is one project entry of the JSON root index.
+type pySimpleProjectRef struct {
+	Name string `json:"name"`
+}
+
+// pySimpleRoot is the PEP 691 JSON root index.
+type pySimpleRoot struct {
+	Meta     pySimpleMeta         `json:"meta"`
+	Projects []pySimpleProjectRef `json:"projects"`
+}
+
+// pySimpleFile is one file entry of a PEP 691 JSON project page. Yanked is
+// omitted deliberately: ArtiGate never yanks a mirrored wheel.
+type pySimpleFile struct {
+	Filename       string            `json:"filename"`
+	URL            string            `json:"url"`
+	Hashes         map[string]string `json:"hashes"`
+	RequiresPython string            `json:"requires-python,omitempty"`
+}
+
+// pySimpleProject is the PEP 691 JSON project page.
+type pySimpleProject struct {
+	Meta  pySimpleMeta   `json:"meta"`
+	Name  string         `json:"name"`
+	Files []pySimpleFile `json:"files"`
 }
 
 func (s *HighServer) pythonDir() string {
@@ -145,16 +301,16 @@ func (s *HighServer) servePython(w http.ResponseWriter, r *http.Request) bool {
 	}
 	switch {
 	case p == "/simple" || p == "/simple/":
-		s.handlePySimpleRoot(w)
+		s.handlePySimpleRoot(w, r)
 	case strings.HasPrefix(p, "/simple/"):
-		s.handlePySimpleProject(w, p)
+		s.handlePySimpleProject(w, r, p)
 	default:
 		s.handlePyPackage(w, r, p)
 	}
 	return true
 }
 
-func (s *HighServer) handlePySimpleRoot(w http.ResponseWriter) {
+func (s *HighServer) handlePySimpleRoot(w http.ResponseWriter, r *http.Request) {
 	files, err := s.scanPyFiles()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -170,46 +326,109 @@ func (s *HighServer) handlePySimpleRoot(w http.ResponseWriter) {
 	}
 	sort.Strings(projects)
 
+	contentType := negotiatePySimple(r.Header.Get("Accept"))
+	if contentType == pySimpleJSONType {
+		root := pySimpleRoot{Meta: pySimpleMeta{APIVersion: pySimpleAPIVersion}, Projects: make([]pySimpleProjectRef, 0, len(projects))}
+		for _, p := range projects {
+			root.Projects = append(root.Projects, pySimpleProjectRef{Name: p})
+		}
+		writePySimpleJSON(w, root)
+		return
+	}
+
 	var b strings.Builder
 	b.WriteString("<!DOCTYPE html>\n<html>\n  <body>\n")
 	for _, p := range projects {
 		fmt.Fprintf(&b, "    <a href=\"/simple/%s/\">%s</a>\n", url.PathEscape(p), html.EscapeString(p))
 	}
 	b.WriteString("  </body>\n</html>\n")
-	writeHTML(w, b.String())
+	writeHTMLAs(w, contentType, b.String())
 }
 
-func (s *HighServer) handlePySimpleProject(w http.ResponseWriter, urlPath string) {
-	project := normalizePyName(strings.Trim(strings.TrimPrefix(urlPath, "/simple/"), "/"))
+// pyProjectFile is one wheel served on a project page. Its hash and its
+// Requires-Python both come from the verified artifact on disk — the wheel's
+// own embedded metadata — never from transferred index data.
+type pyProjectFile struct {
+	filename       string
+	sha256         string
+	requiresPython string
+}
+
+// pyProjectFiles hashes and reads the metadata of every wheel of one project,
+// sorted by filename.
+func (s *HighServer) pyProjectFiles(project string) ([]pyProjectFile, error) {
 	files, err := s.scanPyFiles()
+	if err != nil {
+		return nil, err
+	}
+	var out []pyProjectFile
+	for _, f := range files {
+		if f.project != project {
+			continue
+		}
+		abs := filepath.Join(s.pythonDir(), f.filename)
+		sum, err := sha256File(abs)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, pyProjectFile{filename: f.filename, sha256: sum, requiresPython: wheelRequiresPython(abs)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].filename < out[j].filename })
+	return out, nil
+}
+
+func (s *HighServer) handlePySimpleProject(w http.ResponseWriter, r *http.Request, urlPath string) {
+	project := normalizePyName(strings.Trim(strings.TrimPrefix(urlPath, "/simple/"), "/"))
+	matched, err := s.pyProjectFiles(project)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	var matched []pyFileEntry
-	for _, f := range files {
-		if f.project == project {
-			matched = append(matched, f)
-		}
 	}
 	if len(matched) == 0 {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	sort.Slice(matched, func(i, j int) bool { return matched[i].filename < matched[j].filename })
+	contentType := negotiatePySimple(r.Header.Get("Accept"))
+	if contentType == pySimpleJSONType {
+		writePySimpleJSON(w, pySimpleProjectJSON(project, matched))
+		return
+	}
+	writeHTMLAs(w, contentType, pySimpleProjectHTML(project, matched))
+}
 
+// pySimpleProjectJSON renders a project's PEP 691 JSON page.
+func pySimpleProjectJSON(project string, files []pyProjectFile) pySimpleProject {
+	out := pySimpleProject{
+		Meta:  pySimpleMeta{APIVersion: pySimpleAPIVersion},
+		Name:  project,
+		Files: make([]pySimpleFile, 0, len(files)),
+	}
+	for _, f := range files {
+		out.Files = append(out.Files, pySimpleFile{
+			Filename:       f.filename,
+			URL:            "/packages/" + url.PathEscape(f.filename),
+			Hashes:         map[string]string{"sha256": f.sha256},
+			RequiresPython: f.requiresPython,
+		})
+	}
+	return out
+}
+
+// pySimpleProjectHTML renders a project's PEP 503 HTML page, carrying each
+// wheel's requires-python in the data-requires-python attribute so pip can
+// skip releases that do not support the client's interpreter.
+func pySimpleProjectHTML(project string, files []pyProjectFile) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "<!DOCTYPE html>\n<html>\n  <body>\n    <h1>Links for %s</h1>\n", html.EscapeString(project))
-	for _, f := range matched {
-		sum, err := sha256File(filepath.Join(s.pythonDir(), f.filename))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+	for _, f := range files {
+		attr := ""
+		if f.requiresPython != "" {
+			attr = " data-requires-python=\"" + html.EscapeString(f.requiresPython) + "\""
 		}
-		fmt.Fprintf(&b, "    <a href=\"/packages/%s#sha256=%s\">%s</a>\n", url.PathEscape(f.filename), sum, html.EscapeString(f.filename))
+		fmt.Fprintf(&b, "    <a href=\"/packages/%s#sha256=%s\"%s>%s</a>\n", url.PathEscape(f.filename), f.sha256, attr, html.EscapeString(f.filename))
 	}
 	b.WriteString("  </body>\n</html>\n")
-	writeHTML(w, b.String())
+	return b.String()
 }
 
 func (s *HighServer) handlePyPackage(w http.ResponseWriter, r *http.Request, urlPath string) {
@@ -229,6 +448,22 @@ func (s *HighServer) handlePyPackage(w http.ResponseWriter, r *http.Request, url
 func writeHTML(w http.ResponseWriter, body string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = io.WriteString(w, body)
+}
+
+// writeHTMLAs writes an HTML body under the negotiated Simple API content
+// type (the PEP 691 versioned HTML type, or legacy text/html).
+func writeHTMLAs(w http.ResponseWriter, contentType, body string) {
+	if contentType == pySimpleLegacyType {
+		writeHTML(w, body)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	_, _ = io.WriteString(w, body)
+}
+
+func writePySimpleJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", pySimpleJSONType)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // -----------------------------------------------------------------------------
@@ -471,15 +706,17 @@ type pyDist struct {
 	skipped   []FailedModule
 }
 
-// addWheel hashes one wheel and records it under its project. A filename that
-// does not parse as a wheel is ignored.
+// addWheel hashes one wheel and records it under its project, together with
+// the Requires-Python specifier read from the wheel's own metadata. A filename
+// that does not parse as a wheel is ignored.
 func (d *pyDist) addWheel(dest, name string) error {
 	project, version, ok := parseWheelFilename(name)
 	if !ok {
 		return nil
 	}
 	rel := path.Join("python", "packages", name)
-	mf, err := hashManifestFile(filepath.Join(dest, name), rel)
+	abs := filepath.Join(dest, name)
+	mf, err := hashManifestFile(abs, rel)
 	if err != nil {
 		return err
 	}
@@ -491,7 +728,10 @@ func (d *pyDist) addWheel(dest, name string) error {
 		d.byProject[key] = p
 		d.order = append(d.order, key)
 	}
-	p.Files = append(p.Files, PythonFile{Filename: name, Path: rel, SHA256: mf.SHA256})
+	p.Files = append(p.Files, PythonFile{
+		Filename: name, Path: rel, SHA256: mf.SHA256,
+		RequiresPython: wheelRequiresPython(abs),
+	})
 	return nil
 }
 

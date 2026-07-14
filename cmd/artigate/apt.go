@@ -367,13 +367,17 @@ func (s *LowServer) fetchAptRelease(ctx context.Context, distBase, signedBy stri
 // suite/component/architecture and parses its stanzas into AptPackage records.
 func (s *LowServer) fetchAptPackagesIndex(ctx context.Context, distBase, suite, comp, arch string, checksums map[string]aptChecksum) ([]AptPackage, error) {
 	dir := comp + "/binary-" + arch
-	// Prefer gzip (stdlib) then plain; the index path is validated against the
-	// signed Release checksums.
+	// Prefer gzip (stdlib), then xz and lz4 (shelling to the same external
+	// tools the RPM adapter uses), then plain — some archives publish only an
+	// xz or lz4 index. Whichever is chosen, the index path is validated
+	// against the signed Release checksums.
 	candidates := []struct {
 		rel        string
 		decompress func([]byte) ([]byte, error)
 	}{
 		{dir + "/Packages.gz", func(b []byte) ([]byte, error) { return gunzip(b, maxIndexPlainBytes) }},
+		{dir + "/Packages.xz", xzDecompress},
+		{dir + "/Packages.lz4", lz4Decompress},
 		{dir + "/Packages", func(b []byte) ([]byte, error) { return b, nil }},
 	}
 	for _, c := range candidates {
@@ -801,6 +805,13 @@ func verifySHA256(data []byte, want string) error {
 		return fmt.Errorf("sha256 mismatch: got %x want %s", got, want)
 	}
 	return nil
+}
+
+// lz4Decompress decompresses one lz4 repository index by shelling to the lz4
+// binary (the same pattern as the RPM adapter's xz), with output capped at
+// maxIndexPlainBytes since the result is parsed in memory.
+func lz4Decompress(data []byte) ([]byte, error) {
+	return runFilterCmd("lz4", data, maxIndexPlainBytes, "-d", "-c")
 }
 
 // gunzip decompresses b, refusing to expand beyond limit bytes — repo indexes
