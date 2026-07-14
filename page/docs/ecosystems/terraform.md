@@ -80,7 +80,7 @@ terraform/providers/<ns>/<type>/<version>/signing_keys.json
 
 Module versions resolve through `…/versions` (newest non-prerelease unless pinned), and the registry names the source location (`X-Terraform-Get` on a 204, or a 200 body's `location`). Two source forms are mirrored:
 
-- **https archives** — a `.tar.gz`/`.tgz` URL (or `?archive=tar.gz`), downloaded directly and stored as-is;
+- **https archives** — a `.tar.gz`/`.tgz` URL (or `?archive=tar.gz`), downloaded directly and stored as-is. A go-getter subdirectory selector (`//*` or `//path/to/dir`, the module registry protocol's usual form) is stripped from the fetched URL, and the selected directory is extracted and repacked as the module root — only go-getter's `archive` hint is removed from the query, so signed-URL parameters survive;
 - **`git::` sources** — `git::https://…[//subdir]?ref=<ref>`, cloned with the `git` tool (shallow for a tag/branch ref, full clone + detached checkout otherwise; `GIT_TERMINAL_PROMPT=0`, 10-minute timeout) and the requested tree **repacked as a deterministic tar.gz** — sorted paths, epoch timestamps, fixed ownership and modes, `.git` and symlinks skipped.
 
 Either way the archive lands at the canonical path `terraform/modules/<ns>/<name>/<system>/<version>/module.tar.gz`. Determinism (a stable upstream archive, or the normalized git repack) means re-collecting an unchanged module produces identical bytes and [dedups](../architecture.md#export-deduplication-and-delta-bundles) cleanly. Other go-getter schemes (`s3::`, `gcs::`, ssh remotes, …) are skipped and reported.

@@ -14,6 +14,8 @@ package main
 // against the mirrored upstream signatures.
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1288,21 +1290,195 @@ func resolveTfGet(dlURL, got string) (string, error) {
 }
 
 // fetchTerraformModuleArchive materializes a module source as a deterministic
-// tar.gz at abs: https archive sources download directly; git:: sources are
-// cloned with the git tool and repacked.
+// tar.gz at abs: an https archive source downloads directly, unless it carries
+// a go-getter subdirectory selector ("//*", "//modules/x" — the module
+// registry protocol's usual form), in which case the archive is extracted and
+// the selected directory repacked as the module root, the way go-getter
+// re-roots it for terraform. git:: sources are cloned with the git tool and
+// repacked.
 func (s *LowServer) fetchTerraformModuleArchive(ctx context.Context, source, abs string) (string, int64, error) {
 	if gitURL, ok := strings.CutPrefix(source, "git::"); ok {
 		return s.packGitModule(ctx, gitURL, abs)
 	}
-	u, err := url.Parse(source)
+	dlURL, subdir, err := splitArchiveSource(source)
+	if err != nil {
+		return "", 0, err
+	}
+	if subdir == "" {
+		return downloadFileSHA256(ctx, dlURL, abs)
+	}
+	return s.repackArchiveSubdir(ctx, dlURL, subdir, abs)
+}
+
+// splitArchiveSource validates an http(s) archive source and separates the
+// go-getter subdirectory selector from the URL to fetch. Only go-getter's own
+// "archive" hint is removed from the query; every other parameter (signed-URL
+// tokens and the like) stays on the request, as go-getter passes them through.
+func splitArchiveSource(source string) (dlURL, subdir string, err error) {
+	raw, subdir := sourceDirSubdir(source)
+	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return "", 0, fmt.Errorf("unsupported module source %q (only git:: and http(s) archives are mirrored)", source)
+		return "", "", fmt.Errorf("unsupported module source %q (only git:: and http(s) archives are mirrored)", source)
 	}
-	if !strings.HasSuffix(u.Path, ".tar.gz") && !strings.HasSuffix(u.Path, ".tgz") && u.Query().Get("archive") != "tar.gz" {
-		return "", 0, fmt.Errorf("unsupported module source %q (not a tar.gz archive)", source)
+	q := u.Query()
+	if !strings.HasSuffix(u.Path, ".tar.gz") && !strings.HasSuffix(u.Path, ".tgz") && q.Get("archive") != "tar.gz" {
+		return "", "", fmt.Errorf("unsupported module source %q (not a tar.gz archive)", source)
 	}
-	u.RawQuery = ""
-	return downloadFileSHA256(ctx, u.String(), abs)
+	if q.Has("archive") {
+		q.Del("archive")
+		u.RawQuery = q.Encode()
+	}
+	return u.String(), subdir, nil
+}
+
+// sourceDirSubdir splits a go-getter source string into the real URL and the
+// //subdir selector, with go-getter's own rules: the selector starts at the
+// first "//" after the scheme separator and ends before the "?", whose query
+// belongs to the URL.
+func sourceDirSubdir(src string) (string, string) {
+	stop := len(src)
+	if i := strings.Index(src, "?"); i >= 0 {
+		stop = i
+	}
+	offset := 0
+	if i := strings.Index(src[:stop], "://"); i >= 0 {
+		offset = i + 3
+	}
+	i := strings.Index(src[offset:stop], "//")
+	if i < 0 {
+		return src, ""
+	}
+	i += offset
+	return src[:i] + src[stop:], strings.Trim(src[i+2:stop], "/")
+}
+
+// tfModuleMaxExtractBytes caps the decompressed size of a module archive being
+// re-rooted (decompression-bomb guard; real modules are kilobytes to a few
+// megabytes).
+const tfModuleMaxExtractBytes = 2 << 30
+
+// repackArchiveSubdir downloads an http(s) archive source, extracts it, and
+// repacks the selected subdirectory as the module root.
+func (s *LowServer) repackArchiveSubdir(ctx context.Context, dlURL, subdir, abs string) (string, int64, error) {
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return "", 0, err
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(abs), "archive-")
+	if err != nil {
+		return "", 0, err
+	}
+	defer os.RemoveAll(tmp)
+	archive := filepath.Join(tmp, "src.tar.gz")
+	if _, _, err := downloadFileSHA256(ctx, dlURL, archive); err != nil {
+		return "", 0, err
+	}
+	tree := filepath.Join(tmp, "tree")
+	if err := extractTarGzTree(archive, tree); err != nil {
+		return "", 0, err
+	}
+	root, err := resolveArchiveSubdir(tree, subdir)
+	if err != nil {
+		return "", 0, err
+	}
+	return packModuleTree(root, abs)
+}
+
+// extractTarGzTree unpacks a module archive's regular files into dir, guarding
+// against path traversal and capping the decompressed size. Directories are
+// created as needed; links and special entries are skipped, like the module
+// tree packer skips them.
+func extractTarGzTree(archivePath, dir string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	remaining := int64(tfModuleMaxExtractBytes)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		n, err := extractTarGzFile(tr, hdr.Name, dir, remaining)
+		if err != nil {
+			return err
+		}
+		remaining -= n
+	}
+}
+
+// extractTarGzFile writes one archive entry under dir, bounded by the
+// remaining decompression budget.
+func extractTarGzFile(tr *tar.Reader, name, dir string, remaining int64) (int64, error) {
+	rel := path.Clean(strings.TrimPrefix(name, "./"))
+	if validateRelPath(rel) != nil {
+		return 0, fmt.Errorf("module archive entry %q has an unsafe path", name)
+	}
+	abs := filepath.Join(dir, filepath.FromSlash(rel))
+	if !safeJoin(dir, abs) {
+		return 0, fmt.Errorf("module archive entry %q has an unsafe path", name)
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return 0, err
+	}
+	w, err := os.OpenFile(abs, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return 0, err
+	}
+	n, copyErr := io.Copy(w, io.LimitReader(tr, remaining+1))
+	if err := errors.Join(copyErr, w.Close()); err != nil {
+		return n, err
+	}
+	if n > remaining {
+		return n, fmt.Errorf("module archive expands beyond the %s cap", formatBytes(tfModuleMaxExtractBytes))
+	}
+	return n, nil
+}
+
+// resolveArchiveSubdir locates the selector inside an extracted archive: a
+// literal path, or a glob — registry sources use "//*" for "the single
+// top-level directory, whatever its name" — that must match exactly one
+// directory, as go-getter requires.
+func resolveArchiveSubdir(root, subdir string) (string, error) {
+	if strings.Contains(subdir, "..") || strings.ContainsRune(subdir, '\\') {
+		return "", fmt.Errorf("unsafe module subdirectory %q", subdir)
+	}
+	if !strings.ContainsAny(subdir, "*?[") {
+		p := filepath.Join(root, filepath.FromSlash(subdir))
+		if validateRelPath(subdir) != nil || !safeJoin(root, p) {
+			return "", fmt.Errorf("unsafe module subdirectory %q", subdir)
+		}
+		if st, err := os.Stat(p); err != nil || !st.IsDir() {
+			return "", fmt.Errorf("module subdirectory %q not found in the archive", subdir)
+		}
+		return p, nil
+	}
+	matches, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(subdir)))
+	if err != nil {
+		return "", fmt.Errorf("invalid module subdirectory pattern %q", subdir)
+	}
+	var dirs []string
+	for _, m := range matches {
+		if st, err := os.Stat(m); err == nil && st.IsDir() && safeJoin(root, m) {
+			dirs = append(dirs, m)
+		}
+	}
+	if len(dirs) != 1 {
+		return "", fmt.Errorf("module subdirectory pattern %q matches %d directories in the archive, want exactly 1", subdir, len(dirs))
+	}
+	return dirs[0], nil
 }
 
 // packGitModule clones a git module source ("<repo-url>[//subdir]?ref=<ref>")
@@ -1333,6 +1509,12 @@ func (s *LowServer) packGitModule(ctx context.Context, gitURL, abs string) (stri
 			return "", 0, fmt.Errorf("unsafe module subdirectory %q", subdir)
 		}
 	}
+	return packModuleTree(root, abs)
+}
+
+// packModuleTree packs a resolved module root deterministically and returns
+// the archive's manifest hash and size.
+func packModuleTree(root, abs string) (string, int64, error) {
 	if err := packDirTarGz(root, abs); err != nil {
 		return "", 0, err
 	}

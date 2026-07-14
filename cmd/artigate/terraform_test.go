@@ -859,9 +859,10 @@ func TestTerraformModuleArchivePipeline(t *testing.T) {
 		t.Errorf("X-Terraform-Get = %q, want %q", got, wantGet)
 	}
 
-	// The X-Terraform-Get target should serve the exact mirrored tar.gz, but
-	// the artifact file route is currently broken (see the skipped
-	// TestTerraformArtifactRoutes); verify the imported archive on disk.
+	// The X-Terraform-Get target serves the exact mirrored tar.gz
+	// (TestTerraformArtifactRoutes drives the route); verify the imported
+	// archive bytes on disk here. A subdir-less https source mirrors
+	// bit-faithfully — no repack.
 	data, err := os.ReadFile(filepath.Join(hs.downloadDir, filepath.FromSlash(mod.Path)))
 	if err != nil || !bytes.Equal(data, archive) {
 		t.Fatalf("imported module archive: %v (%d bytes, want %d)", err, len(data), len(archive))
@@ -878,6 +879,134 @@ func TestTerraformModuleArchivePipeline(t *testing.T) {
 		if code, _ := httpGet(t, srv.URL+miss); code != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want 404", miss, code)
 		}
+	}
+}
+
+// TestTerraformSplitArchiveSource covers go-getter source splitting for http
+// archive sources: the //subdir selector leaves the fetched URL, the query
+// stays with the URL, and only go-getter's "archive" hint is dropped from it
+// (signed-URL parameters must survive).
+func TestTerraformSplitArchiveSource(t *testing.T) {
+	tests := []struct {
+		source, dlURL, subdir string
+	}{
+		{"https://h/m/a.tar.gz", "https://h/m/a.tar.gz", ""},
+		{"https://h/m/a.tgz", "https://h/m/a.tgz", ""},
+		{"https://h/dl?archive=tar.gz", "https://h/dl", ""},
+		// The module registry protocol's documented sample form.
+		{"https://h/repo/tarball/v0.0.1//*?archive=tar.gz", "https://h/repo/tarball/v0.0.1", "*"},
+		{"https://h/m/a.tar.gz//modules/x", "https://h/m/a.tar.gz", "modules/x"},
+		{"https://h/m/a.tar.gz//modules/x/?archive=tar.gz&token=s3cr3t", "https://h/m/a.tar.gz?token=s3cr3t", "modules/x"},
+	}
+	for _, tt := range tests {
+		dlURL, subdir, err := splitArchiveSource(tt.source)
+		if err != nil || dlURL != tt.dlURL || subdir != tt.subdir {
+			t.Errorf("splitArchiveSource(%q) = (%q, %q, %v), want (%q, %q)",
+				tt.source, dlURL, subdir, err, tt.dlURL, tt.subdir)
+		}
+	}
+	for _, source := range []string{
+		"ftp://h/a.tar.gz",
+		"https://h/not-an-archive",
+		"https://h/not-an-archive//*",
+		"https://h/a.zip?archive=zip",
+	} {
+		if _, _, err := splitArchiveSource(source); err == nil {
+			t.Errorf("splitArchiveSource(%q) accepted an unsupported source", source)
+		}
+	}
+}
+
+// TestTerraformResolveArchiveSubdir covers selector resolution inside an
+// extracted archive: literal paths, the "//*" single-top-directory wildcard,
+// deeper globs, and the unsafe/ambiguous rejections.
+func TestTerraformResolveArchiveSubdir(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "repo-abc", "modules", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "repo-abc", "file.tf"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for sub, want := range map[string]string{
+		"*":                    filepath.Join(root, "repo-abc"),
+		"repo-abc":             filepath.Join(root, "repo-abc"),
+		"repo-abc/modules/sub": filepath.Join(root, "repo-abc", "modules", "sub"),
+		"*/modules/sub":        filepath.Join(root, "repo-abc", "modules", "sub"),
+	} {
+		if got, err := resolveArchiveSubdir(root, sub); err != nil || got != want {
+			t.Errorf("resolveArchiveSubdir(%q) = (%q, %v), want %q", sub, got, err, want)
+		}
+	}
+	for _, sub := range []string{"..", "../x", "a\\b", "nope", "repo-abc/file.tf", "*/nope"} {
+		if _, err := resolveArchiveSubdir(root, sub); err == nil {
+			t.Errorf("resolveArchiveSubdir(%q) = nil error, want error", sub)
+		}
+	}
+	// Two top-level directories make the wildcard ambiguous.
+	if err := os.MkdirAll(filepath.Join(root, "second"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveArchiveSubdir(root, "*"); err == nil {
+		t.Error("ambiguous wildcard accepted")
+	}
+}
+
+// TestTerraformModuleArchiveSubdirPipeline mirrors modules whose registry
+// download is the module-registry-protocol sample form: an https endpoint
+// with a go-getter "//*" (or concrete //path) selector and ?archive=tar.gz
+// hint. The selector must leave the fetched URL — the fake upstream serves
+// only the clean path — and the selected directory must be repacked as the
+// module root, or terraform init unpacks an unusable tree.
+func TestTerraformModuleArchiveSubdirPipeline(t *testing.T) {
+	reg := newFakeTfRegistry(t)
+	upstream := tfTestTarGz(t, map[string]string{
+		"org-repo-abc123/main.tf":            "# module root\n",
+		"org-repo-abc123/modules/sub/sub.tf": "# nested\n",
+	})
+	reg.serveBytes("/tarball/v1.0.0", upstream)
+	reg.registerModule("org", "vpc", "aws", "1.0.0", reg.srv.URL+"/tarball/v1.0.0//*?archive=tar.gz")
+	reg.serveBytes("/tarball/v2.0.0", upstream)
+	reg.registerModule("org", "sub", "aws", "2.0.0",
+		reg.srv.URL+"/tarball/v2.0.0//org-repo-abc123/modules/sub?archive=tar.gz")
+	ls, priv := tfTestLowServer(t, reg.srv.URL, "")
+
+	res, err := ls.CollectTerraform(context.Background(), TerraformCollectRequest{
+		Modules: []string{"org/vpc/aws", "org/sub/aws"},
+	})
+	if err != nil {
+		t.Fatalf("CollectTerraform: %v", err)
+	}
+	if res.ExportedModules != 2 || len(res.SkippedModules) != 0 {
+		t.Fatalf("unexpected collect result: %+v", res)
+	}
+
+	hs := tfTestImport(t, ls, priv, res.BundleID)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	// "//*" re-roots the single top-level directory: its content sits at the
+	// archive root, without the upstream directory prefix.
+	code, body := httpGet(t, srv.URL+"/terraform/modules/org/vpc/aws/1.0.0/module.tar.gz")
+	if code != http.StatusOK {
+		t.Fatalf("wildcard module archive status %d", code)
+	}
+	entries := tfTestListTarGz(t, []byte(body))
+	if entries["main.tf"] != "# module root\n" || entries["modules/sub/sub.tf"] != "# nested\n" {
+		t.Errorf("re-rooted archive entries = %v", entries)
+	}
+	if _, hasTop := entries["org-repo-abc123/main.tf"]; hasTop {
+		t.Error("archive still carries the upstream top-level directory")
+	}
+
+	// A concrete "//path" selector re-roots that nested directory.
+	code, body = httpGet(t, srv.URL+"/terraform/modules/org/sub/aws/2.0.0/module.tar.gz")
+	if code != http.StatusOK {
+		t.Fatalf("subdir module archive status %d", code)
+	}
+	entries = tfTestListTarGz(t, []byte(body))
+	if len(entries) != 1 || entries["sub.tf"] != "# nested\n" {
+		t.Errorf("nested-selector archive entries = %v", entries)
 	}
 }
 
