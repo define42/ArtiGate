@@ -811,6 +811,7 @@ Client: `nuget.config` source `<base>/nuget/v3/index.json` with `<clear />`. See
 | `/nuget/v3-flatcontainer/<id>/<ver>/<id>.<ver>.nupkg` | The package archive |
 | `/nuget/v3-flatcontainer/<id>/<ver>/<id>.nuspec` | The verbatim embedded nuspec |
 | `/nuget/v3/registration/<id>/index.json` | Registration index (single inlined page with catalog entries and dependency groups) |
+| `/nuget/v3/registration/<id>/<version>.json` | Registration leaf for one version (inlined catalog entry, `listed`, index backlink) |
 | `/nuget/v3/search?q=<text>` | Minimal search (case-insensitive substring on the id) |
 
 #### Alpine (apk) — prefix `/apk`

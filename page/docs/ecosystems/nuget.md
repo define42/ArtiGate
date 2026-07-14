@@ -100,6 +100,7 @@ The high side serves a read-only NuGet v3 feed under `/nuget/` (GET/HEAD only):
 | `GET /nuget/v3-flatcontainer/<id>/<ver>/<id>.<ver>.nupkg` | The package archive |
 | `GET /nuget/v3-flatcontainer/<id>/<ver>/<id>.nuspec` | The verbatim embedded `.nuspec` |
 | `GET /nuget/v3/registration/<id>/index.json` | Registration index: a single inlined page whose leaves carry the catalog entry (identity, dependency groups) and `packageContent` URL |
+| `GET /nuget/v3/registration/<id>/<version>.json` | Registration leaf for one version (the `@id` the index items and search results advertise): the inlined catalog entry plus `listed` and the index backlink |
 | `GET /nuget/v3/search?q=<text>` | Minimal search: case-insensitive substring match on the id |
 
 URLs in the service index and registration pages are absolute, computed from the request host, so the feed works under any name that reaches it. Registration pages are what lets clients resolve dependencies offline; the minimal search backs `dotnet package search` and the IDE package browsers for what is actually mirrored.

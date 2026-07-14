@@ -448,16 +448,46 @@ func (s *HighServer) readNugetStored(id, version string) (nugetStoredManifest, e
 	return st, nil
 }
 
-// handleNugetRegistration serves one package's registration index: a single
-// inlined page whose leaves carry the catalog entry (identity, dependency
-// groups) and the package content URL.
+// handleNugetRegistration dispatches the registration routes: the per-package
+// index ({id}/index.json) and the per-version leaf ({id}/{version}.json) that
+// the index items and the search results advertise as their "@id".
 func (s *HighServer) handleNugetRegistration(w http.ResponseWriter, r *http.Request, rest string) {
 	segs := strings.Split(strings.ToLower(rest), "/")
-	if len(segs) != 2 || segs[1] != "index.json" || validateNugetID(segs[0]) != nil {
+	if len(segs) != 2 || validateNugetID(segs[0]) != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	id := segs[0]
+	if segs[1] == "index.json" {
+		s.handleNugetRegistrationIndex(w, r, segs[0])
+		return
+	}
+	version, ok := strings.CutSuffix(segs[1], ".json")
+	if !ok || validateNugetVersion(version) != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	s.handleNugetRegistrationLeaf(w, r, segs[0], nugetNormalizeVersion(version))
+}
+
+// handleNugetRegistrationLeaf serves one version's registration leaf document:
+// the same inlined catalog entry the index carries, plus the listed flag and
+// the backlink to the registration index, as clients following a search
+// result's versions[].@id expect.
+func (s *HighServer) handleNugetRegistrationLeaf(w http.ResponseWriter, r *http.Request, id, version string) {
+	leaf := s.nugetRegistrationLeaf(npmBaseURL(r), id, version)
+	if leaf == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	leaf["listed"] = true
+	leaf["registration"] = npmBaseURL(r) + "/nuget/v3/registration/" + id + "/index.json"
+	writeJSON(w, leaf)
+}
+
+// handleNugetRegistrationIndex serves one package's registration index: a
+// single inlined page whose leaves carry the catalog entry (identity,
+// dependency groups) and the package content URL.
+func (s *HighServer) handleNugetRegistrationIndex(w http.ResponseWriter, r *http.Request, id string) {
 	versions, err := s.nugetVersions(id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

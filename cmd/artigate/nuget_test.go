@@ -818,6 +818,53 @@ func nugetTestAssertPipelineRegistration(t *testing.T, base string) {
 	if code, _ := httpGet(t, base+"/nuget/v3/registration/DEP.ONE/index.json"); code != http.StatusOK {
 		t.Errorf("mixed-case registration = %d, want 200", code)
 	}
+	nugetTestAssertRegistrationLeaf(t, base)
+}
+
+// nugetTestAssertRegistrationLeaf follows the leaf URL the index items and the
+// search results advertise as their "@id" — clients open version metadata
+// through it, so it must resolve to a leaf document carrying the inlined
+// catalog entry, the listed flag, and the backlink to the registration index.
+func nugetTestAssertRegistrationLeaf(t *testing.T, base string) {
+	t.Helper()
+	leafURL := base + "/nuget/v3/registration/root.pkg/2.0.0.json"
+	code, body := httpGet(t, leafURL)
+	if code != http.StatusOK {
+		t.Fatalf("registration leaf status %d: %s", code, body)
+	}
+	var leaf struct {
+		ID           string `json:"@id"`
+		Listed       bool   `json:"listed"`
+		Registration string `json:"registration"`
+		Content      string `json:"packageContent"`
+		CatalogEntry struct {
+			ID      string `json:"id"`
+			Version string `json:"version"`
+		} `json:"catalogEntry"`
+	}
+	if err := json.Unmarshal([]byte(body), &leaf); err != nil {
+		t.Fatalf("registration leaf is not JSON: %v", err)
+	}
+	if leaf.ID != leafURL || !leaf.Listed {
+		t.Errorf("leaf identity = %+v, want @id %q and listed", leaf, leafURL)
+	}
+	if leaf.Registration != base+"/nuget/v3/registration/root.pkg/index.json" {
+		t.Errorf("leaf registration backlink = %q", leaf.Registration)
+	}
+	if want := base + "/nuget/v3-flatcontainer/root.pkg/2.0.0/root.pkg.2.0.0.nupkg"; leaf.Content != want {
+		t.Errorf("leaf packageContent = %q, want %q", leaf.Content, want)
+	}
+	if leaf.CatalogEntry.ID != "Root.Pkg" || leaf.CatalogEntry.Version != "2.0.0" {
+		t.Errorf("leaf catalog entry = %+v", leaf.CatalogEntry)
+	}
+	// Mixed case and non-normalized version spellings resolve to the same
+	// leaf; an unmirrored version 404s.
+	if code, _ := httpGet(t, base+"/nuget/v3/registration/ROOT.PKG/2.0.0.0.json"); code != http.StatusOK {
+		t.Errorf("mixed-case/non-normalized leaf = %d, want 200", code)
+	}
+	if code, _ := httpGet(t, base+"/nuget/v3/registration/root.pkg/9.9.9.json"); code != http.StatusNotFound {
+		t.Errorf("unmirrored version leaf = %d, want 404", code)
+	}
 }
 
 func nugetTestAssertPipelineSearch(t *testing.T, base string) {
@@ -1120,6 +1167,10 @@ func TestNugetHighRouteHardening(t *testing.T) {
 		"/nuget/v3/registration/../solo.pkg/index.json",
 		"/nuget/v3/registration/missing.pkg/index.json",
 		"/nuget/v3/registration/solo.pkg/extra/index.json",
+		"/nuget/v3/registration/solo.pkg/..%2f1.0.0.json", // hostile leaf version
+		"/nuget/v3/registration/solo.pkg/notaversion.json",
+		"/nuget/v3/registration/solo.pkg/1.0.0.json.bak",
+		"/nuget/v3/registration/missing.pkg/1.0.0.json",
 		"/nuget/v3/nope",
 	} {
 		if code, _ := httpGet(t, srv.URL+p); code != http.StatusNotFound {
