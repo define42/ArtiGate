@@ -226,14 +226,15 @@ The high side serves **only** what crossed the diode as signed, verified bundles
 ```bash
 # Go: ,off forbids any upstream fallback (NOT ,direct)
 export GOPROXY=http://high-proxy:8080/go,off
-export GOSUMDB=off
+# GOSUMDB stays on: ArtiGate serves the mirrored checksum database at
+# <base>/go/sumdb/, so verification needs no upstream either.
 ```
 
 The same principle applies to every ecosystem — configure ArtiGate as the sole registry/mirror with **no secondary or public upstream**:
 
 | Ecosystem | Rule |
 |---|---|
-| Go | `GOPROXY=<base>/go,off`, `GOSUMDB=off` — `,off` not `,direct` |
+| Go | `GOPROXY=<base>/go,off` — `,off` not `,direct`; `GOSUMDB` stays on (served from the mirror) |
 | npm | ArtiGate as the only registry; no upstream fallback |
 | Python (PyPI) | ArtiGate as the sole index; no extra `--extra-index-url` |
 | Maven | ArtiGate as the only repository / mirror-of `*` |

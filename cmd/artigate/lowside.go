@@ -767,6 +767,9 @@ type ExportResult struct {
 	// was consumed, and nothing was recorded as forwarded.
 	DryRun   bool             `json:"dry_run,omitempty"`
 	Estimate *CollectEstimate `json:"estimate,omitempty"`
+	// SumDB summarizes the Go checksum-database capture that rode along with
+	// a go collect. Unset on other streams and when GOSUMDB is off.
+	SumDB *GoSumDBStatus `json:"sumdb,omitempty"`
 }
 
 // FailedModule records a module that could not be fetched during a collect.
@@ -851,6 +854,11 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 		// or burn a sequence number the high side would then wait on forever.
 		return ExportResult{}, fmt.Errorf("no modules could be fetched: %s", summarizeFailures(failed))
 	}
+	// Capture the checksum-database records for the fetched modules so the
+	// high side can answer the GOPROXY sumdb passthrough; a capture problem
+	// never blocks the modules from exporting.
+	sumdbFiles, sumdbStatus := s.captureGoSumDB(ctx, requestRecordsOf(mods), req.Force)
+	files = append(files, sumdbFiles...)
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 	res, err := s.exportIfNew(ctx, streamGo, s.downloadDir, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeGoBundle(ctx, streamGo, seq, mods, files)
@@ -859,6 +867,7 @@ func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (Export
 		return ExportResult{}, err
 	}
 	res.SkippedModules = failed
+	res.SumDB = sumdbStatus
 	return res, nil
 }
 

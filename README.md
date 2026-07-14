@@ -491,7 +491,11 @@ and serves only complete versions.
 ```bash
 # Go
 go env -w GOPROXY=https://artigate-high.local/go,off
-go env -w GOSUMDB=off
+# GOSUMDB stays on (the default): the mirror also serves the checksum
+# database's signed records and Merkle proofs under /go/sumdb/, captured when
+# each module was mirrored, so `go` keeps end-to-end sumdb verification
+# offline. Only for modules mirrored by bundles from before sumdb capture
+# existed: re-collect them once on the low side, or `go env -w GOSUMDB=off`.
 ```
 
 ```ini
@@ -838,8 +842,16 @@ edge-triggered (one notification per gap; the gap then ages via
   loopback callers unless `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN=on` (set this when a
   published-port or reverse-proxy hop makes local admin appear non-loopback, and
   keep the listener itself restricted at the host).
-- **Go**: no sumdb mirroring — use `GOSUMDB=off` on the high side and rely on your
-  committed `go.sum` plus the signed bundles.
+- **Go**: the checksum database (`sum.golang.org` by default) is mirrored per
+  module: each collect also captures the signed lookup records and Merkle tiles
+  the low-side toolchain verified, and the high side answers the GOPROXY
+  `sumdb/…` passthrough — so clients keep `GOSUMDB` enabled and re-verify every
+  module against the database's own key, fully offline. Modules mirrored by
+  bundles from before sumdb capture existed have no records yet; one re-collect
+  on the low side (a watch's next run does it) backfills them, and until then
+  those clients need `GOSUMDB=off`. Private modules follow the low side's
+  `GONOSUMDB`/`GOPRIVATE` and are never looked up; with `--gosumdb off` nothing
+  is captured and clients use `GOSUMDB=off` as before.
 - **Python**: wheels only (no sdists), always enforced. A package with no
   compatible wheel fails the collect; pin a wheel-bearing version or exclude it.
 - **Java/Maven**: release versions only; SNAPSHOT and dynamic/range versions are

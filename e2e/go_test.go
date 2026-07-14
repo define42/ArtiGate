@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,7 +12,10 @@ import (
 // TestGoModules mirrors rsc.io/quote's module graph from proxy.golang.org
 // and builds+runs a consumer with the real go toolchain pointed at the high
 // side's GOPROXY — with ",off" as the fallback so any miss in the mirror is
-// a hard failure, never a silent fetch from the internet.
+// a hard failure, never a silent fetch from the internet. GOSUMDB stays
+// enabled: the mirror serves the captured sum.golang.org records and tiles,
+// so the toolchain's end-to-end checksum-database verification runs against
+// the mirror alone.
 func TestGoModules(t *testing.T) {
 	stack.Prepare(t)
 	goBin := requireTool(t, "go")
@@ -47,9 +51,25 @@ func main() {
 	fmt.Println(quote.Go())
 }
 `)
+	// The mirror must advertise checksum-database passthrough — otherwise the
+	// toolchain would fall back to the real sum.golang.org, which the
+	// air-gapped deployment this simulates cannot reach.
+	resp, err := http.Get(stack.HighURL + "/go/sumdb/sum.golang.org/supported")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sumdb passthrough probe = %d, want 200", resp.StatusCode)
+	}
+
 	env := []string{
 		"GOPROXY=" + stack.HighURL + "/go,off",
-		"GOSUMDB=off", // no sumdb mirroring by design; trust the signed bundles
+		// GOSUMDB stays on: the collect captured sum.golang.org's records and
+		// proofs for every mirrored module, and the high side serves them
+		// under /go/sumdb/ — so the toolchain checksum-verifies end to end
+		// against the mirror alone.
+		"GOSUMDB=sum.golang.org",
 		// -modcacherw keeps the module cache deletable by t.TempDir cleanup
 		// (go marks it read-only by default, which non-root CI cannot remove).
 		"GOFLAGS=-mod=mod -modcacherw",

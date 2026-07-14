@@ -207,6 +207,9 @@ func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
 	if err := os.MkdirAll(dl, 0o755); err != nil {
 		return nil, err
 	}
+	// Bundles imported by a pre-sumdb-serving binary installed sumdb/ files
+	// at the download root; move them where serveGoSumDB reads them.
+	migrateLegacyGoSumDBDir(dl)
 	hs := &HighServer{
 		cfg:         cfg,
 		publicKey:   pub,
@@ -302,6 +305,13 @@ func (s *HighServer) serveGo(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return true
+	}
+	// The checksum-database passthrough lives beside the module endpoints
+	// ($GOPROXY/sumdb/<name>/...) and must be routed before module parsing:
+	// its paths are not module files. No module can collide with the sumdb/
+	// prefix — a first path element without a dot is not a valid module path.
+	if s.serveGoSumDB(w, r, strings.TrimPrefix(p, "/go")) {
 		return true
 	}
 	req, err := parseProxyRequest(strings.TrimPrefix(p, "/go"))
@@ -1342,11 +1352,8 @@ func validateManifestCompleteness(m BundleManifest) error {
 func validateManifestFiles(files []ManifestFile) (map[string]bool, error) {
 	seen := map[string]bool{}
 	for _, f := range files {
-		if err := validateRelPath(f.Path); err != nil {
-			return nil, fmt.Errorf("invalid file path %q: %w", f.Path, err)
-		}
-		if f.SHA256 == "" || len(f.SHA256) != 64 {
-			return nil, fmt.Errorf("invalid sha256 for %s", f.Path)
+		if err := validateManifestFileEntry(f); err != nil {
+			return nil, err
 		}
 		if seen[f.Path] {
 			return nil, fmt.Errorf("duplicate file path %s", f.Path)
@@ -1366,6 +1373,20 @@ func validateManifestFiles(files []ManifestFile) (map[string]bool, error) {
 		}
 	}
 	return seen, nil
+}
+
+// validateManifestFileEntry checks one listed file's path and hash.
+func validateManifestFileEntry(f ManifestFile) error {
+	if err := validateRelPath(f.Path); err != nil {
+		return fmt.Errorf("invalid file path %q: %w", f.Path, err)
+	}
+	if f.SHA256 == "" || len(f.SHA256) != 64 {
+		return fmt.Errorf("invalid sha256 for %s", f.Path)
+	}
+	// The sumdb/ namespace may only hold protocol-shaped checksum-database
+	// files — validated here, on the untrusted side, exactly as strictly as
+	// the low side shapes them at capture time.
+	return validateManifestSumDBPath(f.Path)
 }
 
 // validateManifestModules checks that every module lists the required file
@@ -1396,6 +1417,9 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 	if manifest.Part != nil && manifestStream(manifest) == streamGo {
 		goFiles = allManifestFilePaths(manifest.Files)
 	}
+	// Checksum-database files ride in go bundles without a module record;
+	// they belong under the go/ subtree too, where serveGoSumDB reads them.
+	goFiles = withGoSumDBFilePaths(goFiles, manifest)
 	if err := s.installVerifiedFiles(staging, manifest.Files, goFiles); err != nil {
 		return err
 	}
@@ -1491,13 +1515,15 @@ func installVerifiedFile(staging, base string, f ManifestFile) error {
 // mutableRepoPath reports whether a verified bundle may replace an existing
 // file at this path with different content (copyFileAtomic renames over the
 // old file). Mirrored package artifacts are immutable — a later bundle can
-// never rewrite history. Two subtrees are legitimately mutable: operator
-// uploads, where re-uploading a name replaces it by design, and OSV advisory
-// databases, which are continuously updated snapshots re-delivered at one
-// canonical per-ecosystem path. Both only ever arrive hash-verified inside
-// signed, sequenced bundles.
+// never rewrite history. Three kinds of paths are legitimately mutable:
+// operator uploads, where re-uploading a name replaces it by design; OSV
+// advisory databases, which are continuously updated snapshots re-delivered
+// at one canonical per-ecosystem path; and the Go checksum database's moving
+// parts (its latest tree head, and lookups whose embedded tree note was
+// refreshed). All only ever arrive hash-verified inside signed, sequenced
+// bundles.
 func mutableRepoPath(p string) bool {
-	return strings.HasPrefix(p, "uploads/") || strings.HasPrefix(p, "osv/")
+	return strings.HasPrefix(p, "uploads/") || strings.HasPrefix(p, "osv/") || mutableSumDBPath(p)
 }
 
 // requirePriorFile verifies a delta bundle's claim that an earlier bundle

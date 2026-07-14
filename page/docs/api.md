@@ -711,7 +711,7 @@ Each ecosystem owns a URL prefix. Point clients at the high-side base URL; see t
 
 #### Go (GOPROXY) — prefix `/go`
 
-Client: `GOPROXY=<base>/go,off`, `GOSUMDB=off`. Standard GOPROXY protocol. See [Go modules](ecosystems/go.md).
+Client: `GOPROXY=<base>/go,off` (GOSUMDB stays on — the checksum database is served below). Standard GOPROXY protocol. See [Go modules](ecosystems/go.md).
 
 | URL | Returns |
 |---|---|
@@ -721,8 +721,12 @@ Client: `GOPROXY=<base>/go,off`, `GOSUMDB=off`. Standard GOPROXY protocol. See [
 | `/go/<module>/@v/<version>.mod` | The `go.mod` |
 | `/go/<module>/@v/<version>.zip` | The module zip |
 | `/go/<module>/@v/<version>.ziphash` | The zip hash |
+| `/go/sumdb/<name>/supported` | `200` when checksum-database data for `<name>` is mirrored, else `404` (the client then treats the proxy as not proxying that database) |
+| `/go/sumdb/<name>/latest` | The database's latest mirrored signed tree head |
+| `/go/sumdb/<name>/lookup/<module>@<version>` | The signed lookup record captured for that module |
+| `/go/sumdb/<name>/tile/…` | Merkle-tree tiles (hash proofs) |
 
-Only these extensions are served; anything else → `404`.
+Only these shapes are served; anything else → `404`.
 
 #### Python (PEP 503 simple index) — prefixes `/simple`, `/packages/`
 

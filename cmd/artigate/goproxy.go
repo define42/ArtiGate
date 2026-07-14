@@ -31,14 +31,24 @@ type ProxyRequest struct {
 	RelativePath   string
 }
 
-func parseProxyRequest(urlPath string) (ProxyRequest, error) {
+// cleanProxyPath normalizes a URL path under an ecosystem prefix into a
+// clean, validated repository-relative path.
+func cleanProxyPath(urlPath string) (string, error) {
 	rel := strings.TrimPrefix(urlPath, "/")
 	rel = path.Clean("/" + rel)
 	rel = strings.TrimPrefix(rel, "/")
 	if rel == "." || rel == "" {
-		return ProxyRequest{}, errors.New("empty path")
+		return "", errors.New("empty path")
 	}
 	if err := validateRelPath(rel); err != nil {
+		return "", err
+	}
+	return rel, nil
+}
+
+func parseProxyRequest(urlPath string) (ProxyRequest, error) {
+	rel, err := cleanProxyPath(urlPath)
+	if err != nil {
 		return ProxyRequest{}, err
 	}
 
