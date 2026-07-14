@@ -117,7 +117,9 @@ The dashboard is backed by read-only JSON endpoints under `/ui/api/` (`overview`
 | `/apk` | Alpine repositories (`/apk/<mirror>/<branch>/<repo>/<arch>/…`, plus `/apk/keys/<name>` when index signing is configured) |
 | `/diode` | Bundle ingest (`PUT`/`POST`, only when `ARTIGATE_DIODE_INGEST=on`) |
 | `/ui` | Dashboard (also served at `/`) |
-| `/healthz` | Health check → `ok\n` |
+| `/healthz` | Liveness check → `ok\n` |
+| `/readyz` | Readiness check → `200 ok`, or `503` naming the failing checks (blocked streams, undrained backlog, stalled/failing import passes, exhausted transport quota) |
+| `/metrics` | Prometheus telemetry |
 | `/admin/*` | `POST /admin/import`, `GET /admin/status`, `GET /admin/missing` |
 
 !!! note
@@ -144,7 +146,7 @@ The high side therefore **serves only complete versions** of fully verified cont
 ### Always unauthenticated
 
 !!! warning
-    The high side is **never authenticated**. There is no auth flag or environment variable for it — every route (the dashboard, `/admin/import`, `/admin/status`, `/admin/missing`, `/healthz`, and all ecosystem proxies) is open. The one exception is the optional diode ingest endpoint: enabling it requires an `ARTIGATE_DIODE_TOKEN` bearer token of at least 32 bytes. That token protects the disk from unauthenticated uploads, nothing more. Access control is expected to come from **network placement**: bind it to the trusted/isolated network, or front it with a reverse proxy. TLS (via the shared `ARTIGATE_TLS_*` variables) provides transport encryption but not authentication. See [Security & trust](security.md).
+    The high side is **never authenticated**. There is no auth flag or environment variable for it — every route (the dashboard, `/admin/import`, `/admin/status`, `/admin/missing`, `/healthz`, `/readyz`, `/metrics`, and all ecosystem proxies) is open. The one exception is the optional diode ingest endpoint: enabling it requires an `ARTIGATE_DIODE_TOKEN` bearer token of at least 32 bytes. That token protects the disk from unauthenticated uploads, nothing more. Access control is expected to come from **network placement**: bind it to the trusted/isolated network, or front it with a reverse proxy. TLS (via the shared `ARTIGATE_TLS_*` variables) provides transport encryption but not authentication. See [Security & trust](security.md).
 
 ## Pointing clients here
 

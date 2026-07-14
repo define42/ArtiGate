@@ -79,9 +79,11 @@ func TestMiddlewareUnauthenticated(t *testing.T) {
 		t.Errorf("unauth API: code = %d, want 401", rec.Code)
 	}
 
-	// The health check is always allowed.
-	if rec := serveReq(h, httptest.NewRequest(http.MethodGet, "/healthz", nil)); rec.Body.String() != "NEXT" {
-		t.Errorf("healthz should pass through, got body %q code %d", rec.Body.String(), rec.Code)
+	// The health, readiness, and metrics endpoints are always allowed.
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		if rec := serveReq(h, httptest.NewRequest(http.MethodGet, path, nil)); rec.Body.String() != "NEXT" {
+			t.Errorf("%s should pass through, got body %q code %d", path, rec.Body.String(), rec.Code)
+		}
 	}
 
 	// The login page itself is reachable unauthenticated.

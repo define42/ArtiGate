@@ -122,7 +122,7 @@ Authentication is **optional**, **off by default**, and **low side only**. It is
     - `GET /admin/bundles` — bundle status
     - the dashboard UI and the watches routes
 
-    In production, **either set `ARTIGATE_LOW_AUTH` or place the low side behind strict network controls** (see [Network placement](#network-placement)). `GET /healthz` is always reachable, even when auth is enabled, so health checks keep working.
+    In production, **either set `ARTIGATE_LOW_AUTH` or place the low side behind strict network controls** (see [Network placement](#network-placement)). `GET /healthz`, `GET /readyz`, and `GET /metrics` are always reachable, even when auth is enabled, so health probes and monitoring keep working.
 
 ### `ARTIGATE_LOW_AUTH` — the credential set
 
@@ -180,7 +180,7 @@ Middleware routing:
 
 | Path | Behavior with auth enabled |
 |---|---|
-| `/healthz` | Always open (bypasses auth) |
+| `/healthz`, `/readyz`, `/metrics` | Always open (bypass auth — probes and scrapers cannot log in) |
 | `/login`, `/logout` | Handled by the auth manager |
 | Any other path | Requires a valid session |
 
@@ -204,7 +204,7 @@ Controls the `Secure` attribute of the session cookie. Only meaningful when auth
 
 There is no `ARTIGATE_HIGH_AUTH` and no auth middleware on the high side. Its admin endpoints are open by design:
 
-- `GET /healthz`
+- `GET /healthz`, `GET /readyz`, and `GET /metrics`
 - `POST /admin/import`
 - `GET /admin/status` and `GET /admin/missing`
 
