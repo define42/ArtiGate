@@ -58,7 +58,10 @@ func npmEcosystem() ecosystem {
 		},
 		manifestContent: func(m BundleManifest) bool { return m.Npm != nil && len(m.Npm.Packages) > 0 },
 		validateContent: func(m BundleManifest, seen map[string]bool) error {
-			return validateNpmPackages(m.Npm.Packages, seen)
+			if err := validateNpmPackages(m.Npm.Packages, seen); err != nil {
+				return err
+			}
+			return validateNpmDistTags(m.Npm.DistTags)
 		},
 		contentDesc: "npm packages",
 		publish:     func(s *HighServer, m BundleManifest) error { return s.publishNpm(m.Npm) },
@@ -74,6 +77,14 @@ func npmEcosystem() ecosystem {
 
 type NpmManifest struct {
 	Packages []NpmPackage `json:"packages"`
+	// DistTags carries each mirrored package's upstream dist-tags
+	// (name -> tag -> version) as observed at collect time. The high side
+	// serves a tag only while its target version is actually mirrored, and
+	// always regenerates "latest" as a fallback, so a stale or hostile tag can
+	// never point outside the verified store. Tag movement alone does not
+	// change the mirrored file set, so refreshing tags for an unchanged
+	// package set needs a force collect.
+	DistTags map[string]map[string]string `json:"dist_tags,omitempty"`
 }
 
 type NpmPackage struct {
@@ -122,6 +133,40 @@ func validateNpmName(name string) error {
 func validateNpmVersion(v string) error {
 	if !npmVersionRE.MatchString(v) {
 		return fmt.Errorf("invalid npm version %q", v)
+	}
+	return nil
+}
+
+// npmDistTagRE matches a dist-tag name. npm accepts a looser charset, but
+// tags become URL path segments and JSON keys on the high side, so only the
+// path-safe core is mirrored; the first character excludes ".", "_", and "-"
+// like package name elements.
+var npmDistTagRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+func validateNpmDistTag(tag string) error {
+	if !npmDistTagRE.MatchString(tag) {
+		return fmt.Errorf("invalid npm dist-tag %q", tag)
+	}
+	return nil
+}
+
+// validateNpmDistTags checks a manifest's dist-tag map: every package name,
+// tag name, and target version must be well-formed. Targets are not required
+// to be files of this bundle — a tag may point at a version an earlier bundle
+// delivered; serving filters to versions actually present.
+func validateNpmDistTags(tags map[string]map[string]string) error {
+	for name, m := range tags {
+		if err := validateNpmName(name); err != nil {
+			return fmt.Errorf("dist-tags: %w", err)
+		}
+		for tag, version := range m {
+			if err := validateNpmDistTag(tag); err != nil {
+				return fmt.Errorf("dist-tags for %s: %w", name, err)
+			}
+			if err := validateNpmVersion(version); err != nil {
+				return fmt.Errorf("dist-tag %s of %s: %w", tag, name, err)
+			}
+		}
 	}
 	return nil
 }
@@ -273,21 +318,40 @@ func (s *HighServer) handleNpmPackument(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	names := make([]string, 0, len(versions))
-	for v := range versions {
-		names = append(names, v)
-	}
 	writeJSON(w, map[string]any{
 		"name":      name,
-		"dist-tags": map[string]string{"latest": npmLatestVersion(names)},
+		"dist-tags": s.npmDistTags(name, versions),
 		"versions":  versions,
 	})
 }
 
+// npmDistTags assembles a packument's dist-tags: the mirrored upstream tags
+// filtered to versions actually served, with "latest" regenerated from the
+// present versions whenever the upstream tag is absent or points at a version
+// this mirror does not hold.
+func (s *HighServer) npmDistTags(name string, versions map[string]any) map[string]string {
+	names := make([]string, 0, len(versions))
+	for v := range versions {
+		names = append(names, v)
+	}
+	tags := map[string]string{"latest": npmLatestVersion(names)}
+	for tag, version := range s.readNpmStoredTags(name) {
+		if _, ok := versions[version]; ok {
+			tags[tag] = version
+		}
+	}
+	return tags
+}
+
 func (s *HighServer) handleNpmVersion(w http.ResponseWriter, r *http.Request, name, version string) {
 	if validateNpmVersion(version) != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+		// The registry API also answers GET /<name>/<tag>; resolve a mirrored
+		// dist-tag whose target version is served, and 404 anything else.
+		version = s.npmResolveTag(name, version)
+		if version == "" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 	}
 	st, err := s.readNpmStoredManifest(name, version)
 	if err != nil {
@@ -295,6 +359,22 @@ func (s *HighServer) handleNpmVersion(w http.ResponseWriter, r *http.Request, na
 		return
 	}
 	writeJSON(w, npmVersionObject(st, name, version, npmBaseURL(r)))
+}
+
+// npmResolveTag maps a stored dist-tag to its target version, or "" when the
+// tag is unknown or its target is not served.
+func (s *HighServer) npmResolveTag(name, tag string) string {
+	if validateNpmDistTag(tag) != nil {
+		return ""
+	}
+	version := s.readNpmStoredTags(name)[tag]
+	if version == "" {
+		return ""
+	}
+	if _, err := s.readNpmStoredManifest(name, version); err != nil {
+		return ""
+	}
+	return version
 }
 
 func (s *HighServer) handleNpmTarball(w http.ResponseWriter, r *http.Request, name, file string) {
@@ -442,7 +522,55 @@ func (s *HighServer) publishNpm(m *NpmManifest) error {
 			log.Printf("npm publish %s@%s: %v", p.Name, p.Version, err)
 		}
 	}
+	for name, tags := range m.DistTags {
+		if err := s.publishNpmDistTags(name, tags); err != nil {
+			log.Printf("npm publish dist-tags %s: %v", name, err)
+		}
+	}
 	return nil
+}
+
+// npmStoredTags is the per-package dist-tag snapshot stored beside the
+// version metadata. Its "_tags" stem can never collide with a version file:
+// versions always start with a digit.
+type npmStoredTags struct {
+	Tags map[string]string `json:"tags"`
+}
+
+// publishNpmDistTags stores one package's upstream dist-tag snapshot. Each
+// bundle carrying the package replaces the whole snapshot — tags are upstream
+// state, not accumulated history. Serving re-filters against the versions
+// actually present, so a tag naming an absent version is stored but inert.
+func (s *HighServer) publishNpmDistTags(name string, tags map[string]string) error {
+	if err := validateNpmName(name); err != nil {
+		return err
+	}
+	if err := validateNpmDistTags(map[string]map[string]string{name: tags}); err != nil {
+		return err
+	}
+	out := filepath.Join(s.npmMetadataDir(), filepath.FromSlash(name), "_tags.json")
+	if !safeJoin(s.npmMetadataDir(), out) {
+		return fmt.Errorf("unsafe dist-tags path for %s", name)
+	}
+	return writeJSONAtomic(out, npmStoredTags{Tags: tags}, 0o644)
+}
+
+// readNpmStoredTags loads one package's stored dist-tag snapshot; a missing
+// or unreadable snapshot is simply no extra tags.
+func (s *HighServer) readNpmStoredTags(name string) map[string]string {
+	p := filepath.Join(s.npmMetadataDir(), filepath.FromSlash(name), "_tags.json")
+	if !safeJoin(s.npmMetadataDir(), p) {
+		return nil
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	var st npmStoredTags
+	if json.Unmarshal(b, &st) != nil {
+		return nil
+	}
+	return st.Tags
 }
 
 func (s *HighServer) publishNpmPackage(p NpmPackage) error {
@@ -776,13 +904,14 @@ func (s *LowServer) CollectNpm(ctx context.Context, req NpmCollectRequest) (Expo
 	if len(pkgs) == 0 {
 		return ExportResult{}, fmt.Errorf("no npm packages could be fetched: %s", summarizeFailures(failed))
 	}
+	tags := fetchNpmDistTags(ctx, entries)
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 
 	// exportIfNew peeks/commits the sequence around the write (so a failed
 	// collection never burns a number) and skips entirely when every tarball was
 	// already forwarded.
 	res, err := s.exportIfNew(ctx, streamNpm, stageRoot, files, req.Force, func(seq int64) (ExportResult, error) {
-		return s.writeNpmBundle(ctx, seq, stageRoot, files, pkgs)
+		return s.writeNpmBundle(ctx, seq, stageRoot, files, pkgs, tags)
 	})
 	if err != nil {
 		return ExportResult{}, err
@@ -973,6 +1102,105 @@ func npmLockEntryFor(name string, p npmLockPackage) (npmLockEntry, *FailedModule
 }
 
 // -----------------------------------------------------------------------------
+// Dist-tag collection
+// -----------------------------------------------------------------------------
+
+// npmMaxPackumentBytes caps one abbreviated packument fetched for dist-tags.
+const npmMaxPackumentBytes = 32 << 20
+
+// npmAbbreviatedType is the registry media type for the abbreviated
+// (install-oriented) packument, a fraction of the full document.
+const npmAbbreviatedType = "application/vnd.npm.install-v1+json"
+
+// npmRegistryBaseFor derives the registry base URL that served a resolved
+// tarball ("https://host[/prefix]/<name>/-/<file>" -> "https://host[/prefix]"),
+// so dist-tags are always asked of the registry the packages actually came
+// from — including path-prefixed private registries.
+func npmRegistryBaseFor(name, resolved string) string {
+	i := strings.Index(resolved, "/"+name+"/-/")
+	if i <= 0 {
+		return ""
+	}
+	return resolved[:i]
+}
+
+// fetchNpmDistTags fetches each mirrored package's upstream dist-tags. Tags
+// are polish, not payload: any failure skips that package's tags with a
+// progress note and never fails the collect. Invalid tag names or versions
+// are dropped here so the signed manifest only ever carries records the high
+// side's strict validation accepts.
+func fetchNpmDistTags(ctx context.Context, entries []npmLockEntry) map[string]map[string]string {
+	bases := map[string]string{}
+	for _, e := range entries {
+		if _, ok := bases[e.Name]; !ok {
+			bases[e.Name] = npmRegistryBaseFor(e.Name, e.Resolved)
+		}
+	}
+	emitProgress(ctx, "Fetching dist-tags for %d package(s)…", len(bases))
+	out := map[string]map[string]string{}
+	for name, base := range bases {
+		if base == "" {
+			continue
+		}
+		tags, err := npmFetchPackumentTags(ctx, base, name)
+		if err != nil {
+			emitProgress(ctx, "  ✗ dist-tags %s: %s", name, err)
+			continue
+		}
+		if cleaned := cleanNpmDistTags(tags); len(cleaned) > 0 {
+			out[name] = cleaned
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// npmFetchPackumentTags reads one package's dist-tags from its registry's
+// abbreviated packument.
+func npmFetchPackumentTags(ctx context.Context, base, name string) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/"+url.PathEscape(name), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", npmAbbreviatedType)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, npmMaxPackumentBytes))
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		DistTags map[string]string `json:"dist-tags"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, fmt.Errorf("parse packument: %w", err)
+	}
+	return doc.DistTags, nil
+}
+
+// cleanNpmDistTags keeps only the well-formed tag entries of an upstream
+// dist-tag map.
+func cleanNpmDistTags(tags map[string]string) map[string]string {
+	out := map[string]string{}
+	for tag, version := range tags {
+		if validateNpmDistTag(tag) == nil && validateNpmVersion(version) == nil {
+			out[tag] = version
+		}
+	}
+	return out
+}
+
+// -----------------------------------------------------------------------------
 // Tarball download with SRI verification
 // -----------------------------------------------------------------------------
 
@@ -1115,7 +1343,7 @@ func (v *sriVerifier) verify() error {
 // Bundle writing
 // -----------------------------------------------------------------------------
 
-func (s *LowServer) writeNpmBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, pkgs []NpmPackage) (ExportResult, error) {
+func (s *LowServer) writeNpmBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, pkgs []NpmPackage, tags map[string]map[string]string) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	sort.Slice(pkgs, func(i, j int) bool {
 		if pkgs[i].Name == pkgs[j].Name {
@@ -1133,7 +1361,7 @@ func (s *LowServer) writeNpmBundle(ctx context.Context, seq int64, stageRoot str
 		Generator:        hostnameOrDefault(),
 		BundleID:         id,
 		Ecosystems:       []string{"npm"},
-		Npm:              &NpmManifest{Packages: pkgs},
+		Npm:              &NpmManifest{Packages: pkgs, DistTags: tags},
 		Files:            files,
 	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
