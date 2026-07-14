@@ -1208,8 +1208,13 @@ func TestGitTreeAndDetail(t *testing.T) {
 	}
 	packBase := "pack-" + f.trailer()
 	if fields["Commit"] != f.commitSHA() || fields["Ref"] != "refs/heads/main" ||
-		fields["Repository"] != "/git/fix.git" || !strings.Contains(fields["Clone"], "/git/fix.git") {
+		fields["Repository"] != "/git/fix.git" {
 		t.Errorf("detail fields = %+v", fields)
+	}
+	// The clone URL is host-relative (the dashboard prepends this server's
+	// origin client-side to render a full "git clone <url>" command).
+	if d.CloneURL != "git/fix.git" {
+		t.Errorf("detail clone_url = %q, want git/fix.git", d.CloneURL)
 	}
 	if fields["Pack SHA-256"] != gitTestSHA256(f.pack) || fields["Pack size"] == "" {
 		t.Errorf("pack fields = %+v", fields)

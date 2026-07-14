@@ -477,6 +477,12 @@ type UIDetail struct {
 	Fields   []UIDetailField `json:"fields"`
 	GoMod    string          `json:"go_mod,omitempty"`
 	CopyRef  string          `json:"copy_ref,omitempty"`
+	// CloneURL, when set (git mirrors), is a host-relative repository path
+	// ("git/<name>.git"); the dashboard prepends its own origin — scheme and
+	// host known only client-side, honoring any reverse proxy — and renders a
+	// copyable "git clone <origin>/git/<name>.git" command, so the operator
+	// gets a full URL rather than a root-relative path.
+	CloneURL string `json:"clone_url,omitempty"`
 	// Downloads are the artifact files behind the selected leaf, rendered as
 	// direct-download buttons. Empty when the leaf is not a plain file
 	// (container images and full HF repository snapshots are consumed through
