@@ -104,6 +104,9 @@ type HighServer struct {
 	// endpoint reports; notifier posts failure webhooks (nil when unconfigured).
 	metrics  *highMetrics
 	notifier *webhookNotifier
+	// npmAudit memoizes the regenerated npm bulk-audit index (see
+	// osvnpmaudit.go) so audit requests do not re-parse it from disk.
+	npmAudit npmAuditCache
 }
 
 // applyHighEnvConfig fills the environment-driven high-side settings (diode
@@ -1470,10 +1473,7 @@ func installVerifiedFile(staging, base string, f ManifestFile) error {
 		if existing == f.SHA256 {
 			return nil
 		}
-		// Operator-uploaded files are the one mutable subtree: re-uploading a
-		// name legitimately replaces its content (copyFileAtomic renames over
-		// the old file). Every mirrored ecosystem stays immutable.
-		if !strings.HasPrefix(f.Path, "uploads/") {
+		if !mutableRepoPath(f.Path) {
 			return fmt.Errorf("immutable file conflict for %s", f.Path)
 		}
 	}
@@ -1481,6 +1481,18 @@ func installVerifiedFile(staging, base string, f ManifestFile) error {
 		return err
 	}
 	return copyFileAtomic(src, dst, 0o644)
+}
+
+// mutableRepoPath reports whether a verified bundle may replace an existing
+// file at this path with different content (copyFileAtomic renames over the
+// old file). Mirrored package artifacts are immutable — a later bundle can
+// never rewrite history. Two subtrees are legitimately mutable: operator
+// uploads, where re-uploading a name replaces it by design, and OSV advisory
+// databases, which are continuously updated snapshots re-delivered at one
+// canonical per-ecosystem path. Both only ever arrive hash-verified inside
+// signed, sequenced bundles.
+func mutableRepoPath(p string) bool {
+	return strings.HasPrefix(p, "uploads/") || strings.HasPrefix(p, "osv/")
 }
 
 // requirePriorFile verifies a delta bundle's claim that an earlier bundle

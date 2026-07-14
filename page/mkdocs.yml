@@ -73,6 +73,7 @@ nav:
       - Helm charts: ecosystems/helm.md
       - NuGet: ecosystems/nuget.md
       - Alpine (apk): ecosystems/apk.md
+      - OSV advisories: ecosystems/osv.md
   - Security & trust: security.md
   - TLS / HTTPS: tls.md
   - Configuration reference: configuration.md

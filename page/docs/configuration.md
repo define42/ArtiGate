@@ -96,6 +96,7 @@ artigate low \
 | `--crates-index` | `""` (→ `https://index.crates.io`) | Sparse registry index Rust crates are resolved from |
 | `--terraform-registry` | `""` (→ `https://registry.terraform.io`) | Registry Terraform providers/modules are fetched from; use `https://registry.opentofu.org` for OpenTofu |
 | `--nuget-source` | `""` (→ `https://api.nuget.org/v3/index.json`) | NuGet v3 service index packages are resolved from |
+| `--osv-upstream` | `""` (→ `https://osv-vulnerabilities.storage.googleapis.com`) | Base URL OSV vulnerability databases (per-ecosystem `all.zip` archives) are fetched from |
 | `--git` | `git` | git command used to fetch Terraform modules from `git::` sources |
 | `--watch-interval` | `60s` | How often the scheduler checks for due watches; `0` disables scheduled watches |
 
@@ -260,7 +261,7 @@ Validation (all fatal at startup):
 
 The file paths, listen addresses, and behaviour toggles are **flag-only**; TLS and low-side auth are **env-only**. There is deliberately no flag for TLS and no env var for paths/listen addresses.
 
-- **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags (including `--git`), `--hf-endpoint`, `--crates-index`, `--terraform-registry`, `--nuget-source`, `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`, `--apk-key-name`.
+- **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags (including `--git`), `--hf-endpoint`, `--crates-index`, `--terraform-registry`, `--nuget-source`, `--osv-upstream`, `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`, `--apk-key-name`.
 - **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`.
 
 See also: [Deployment](deployment.md) for production topologies, [Security & trust](security.md) for the trust model, and [TLS / HTTPS](tls.md) for the full TLS matrix.

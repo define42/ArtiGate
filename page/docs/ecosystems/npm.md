@@ -267,7 +267,6 @@ The high-side UI shows this exact `.npmrc` under **NPM packages**. Point npm's `
 
 ```ini
 registry=<base>/npm/
-audit=false
 fund=false
 update-notifier=false
 ```
@@ -280,8 +279,8 @@ npm install
 
 The `.npmrc` can be `~/.npmrc`, `/etc/npmrc`, or a per-project `.npmrc`.
 
-!!! tip
-    `audit` is off because the security-advisory endpoint needs the public registry; `fund` and `update-notifier` silence noise. Do **not** mix in another registry — this mirror is the single source of truth, and only registry tarballs are mirrored (no git dependencies).
+!!! tip "npm audit works — once the OSV npm database is mirrored"
+    The mirror answers npm's bulk-audit endpoint from the mirrored [OSV](osv.md) `npm` advisory database. Until that database is imported the endpoint answers **404** (npm reports "audit unavailable" rather than a false all-clear) — add `audit=false` to the `.npmrc` in that case. `fund` and `update-notifier` just silence noise. Do **not** mix in another registry — this mirror is the single source of truth, and only registry tarballs are mirrored (no git dependencies).
 
 ## Limitations
 

@@ -389,6 +389,24 @@ Each `.apk` is verified against the `APKINDEX`-declared size and `Q1` control ch
 
 ---
 
+#### OSV — `POST /admin/osv/collect`
+
+`OsvCollectRequest`. Body limit **1 MiB**. See [OSV advisories](ecosystems/osv.md).
+
+```json
+{
+  "ecosystems": ["npm", "PyPI", "Go", "Alpine:v3.22"]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `ecosystems` | `[]string` | **Required.** OSV ecosystem names exactly as [osv.dev](https://osv.dev) spells them (`npm`, `PyPI`, `crates.io`, `Debian:12`, …); each name's current `all.zip` database is fetched |
+
+The OSV bucket publishes no digests, so downloads are TLS-trusted, then checked to be readable advisory archives before signing; failed ecosystems are skipped and reported in `skipped_modules`. An unchanged database dedups to a no-op export.
+
+---
+
 ### Streaming variant — `?stream=1`
 
 Append `?stream=1` to any `/admin/{eco}/collect` to receive live progress as **NDJSON** (one JSON object per line). This is what the dashboard's "Collect & export" modal uses.
@@ -757,6 +775,7 @@ Client: `npm config set registry <base>/npm/`. See [NPM](ecosystems/npm.md).
 | `/npm/<name>` or `/npm/@scope/pkg` | Packument (full package metadata document) |
 | `/npm/<name>/<version>` or `/npm/@scope/pkg/<version>` | Single version manifest |
 | `/npm/<name>/-/<file>` or `/npm/@scope/pkg/-/<file>` | Tarball (`<file>` must contain no slash) |
+| `POST /npm/-/npm/v1/security/advisories/bulk` | `npm audit` bulk advisories, answered from the mirrored [OSV](ecosystems/osv.md) `npm` database (gzip request bodies supported); **404** until that database is imported, so npm reports audit unavailable rather than a false all-clear |
 
 #### AI models — prefixes `/v2`, `/hf`, `/api/models`, `/<org>/<name>/resolve`
 
@@ -830,6 +849,16 @@ Client `/etc/apk/repositories` line: `<base>/apk/<mirror>/<branch>/<repo>`. See 
 | `/apk/<mirror>/<branch>/<repo>/<arch>/<pkg>-<ver>.apk` | The package |
 | `/apk/keys/<key-name>` | The PEM public key matching `--apk-rsa-key` (only when signing is configured) |
 
+#### OSV advisories — prefix `/osv`
+
+The upstream bucket's own layout, for offline scanners. Ecosystem names may be given verbatim (URL-encoded where needed) or as their storage slug (lowercased, non-`[a-z0-9._-]` characters → `-`: `Alpine:v3.20` ↔ `alpine-v3.20`). See [OSV advisories](ecosystems/osv.md).
+
+| URL | Returns |
+|---|---|
+| `/osv/ecosystems.txt` | Mirrored ecosystem names, one per line (404 while nothing is mirrored) |
+| `/osv/<ecosystem>/all.zip` | The ecosystem's database snapshot (`application/zip`) |
+| `/osv/<ecosystem>/<ID>.json` | One advisory (`GHSA-…`, `CVE-…`, `MAL-…`), streamed straight out of the verified zip |
+
 ---
 
 ### Dashboard JSON — `/ui/api/*`
@@ -846,7 +875,7 @@ Just the import status; the package trees are fetched lazily.
 
 #### `GET /ui/api/tree?eco=<eco>&path=<path>`
 
-`eco` ∈ `go` (default), `python`, `maven`, `apt`, `rpm`, `containers`, `npm`, `hf`, `crates`, `terraform`, `helm`, `nuget`, `apk`. `path` is the parent node path (empty for root); children are returned one level at a time.
+`eco` ∈ `go` (default), `python`, `maven`, `apt`, `rpm`, `containers`, `npm`, `hf`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `osv`. `path` is the parent node path (empty for root); children are returned one level at a time.
 
 ```json
 { "nodes": [

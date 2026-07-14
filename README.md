@@ -7,9 +7,11 @@ ArtiGate is a dependency mirror for **one-way data-diode networks**. It mirrors
 Go modules, Python (PyPI) wheels, Java (Maven) artifacts, NPM packages, Rust
 crates, Terraform/OpenTofu providers and modules, Helm charts, NuGet packages,
 APT (`.deb`), RPM (`.rpm`), and Alpine (`.apk`) repositories, container images
-(Docker/OCI, linux/amd64), and AI models from Hugging Face (GGUF for Ollama,
-plus full safetensors repositories) from the internet into an air-gapped
-network, and serves them there in each ecosystem's native format.
+(Docker/OCI, linux/amd64), AI models from Hugging Face (GGUF for Ollama, plus
+full safetensors repositories), and OSV vulnerability-advisory databases from
+the internet into an air-gapped network, and serves them there in each
+ecosystem's native format — so the air-gapped side can not only build against
+mirrored dependencies but also audit them.
 
 One binary, two modes:
 
@@ -17,14 +19,17 @@ One binary, two modes:
   (a `go.mod` or module list, a Python requirements list, Maven coordinates, a
   `package.json` or NPM package list, a crate/provider/chart/NuGet list, an APT
   source, a `.repo`, an Alpine repositories file, a list of container images,
-  or a list of Hugging Face model references); it fetches the artifacts from
-  upstream and writes **signed, numbered bundle files**.
+  a list of Hugging Face model references, or a list of OSV ecosystem names);
+  it fetches the artifacts from upstream and writes **signed, numbered bundle
+  files**.
 - **`high`** — runs air-gapped. It imports the bundles (in order, verifying every
   signature and hash) and serves them as a GOPROXY, a PyPI index, a Maven 2
-  repository, an NPM registry, a cargo sparse registry, a Terraform/OpenTofu
+  repository, an NPM registry (including `npm audit`, answered from the
+  mirrored OSV data), a cargo sparse registry, a Terraform/OpenTofu
   provider+module registry, Helm repositories, a NuGet v3 feed, APT/RPM/Alpine
-  repositories, a read-only OCI container registry, and an Ollama-compatible
-  model registry with a Hugging Face Hub download API.
+  repositories, a read-only OCI container registry, an Ollama-compatible
+  model registry with a Hugging Face Hub download API, and an OSV advisory
+  feed for offline vulnerability scanners.
 
 ```
   spec ──▶ [ low ] ──▶ signed bundles ──▶ ((diode)) ──▶ [ high ] ──▶ clients
@@ -266,6 +271,19 @@ For APT, RPM, and Alpine, a **"Newest version only"** checkbox (on by default)
 mirrors just the latest version of each package; untick it to mirror every
 version.
 
+- **OSV** — vulnerability-advisory databases from [osv.dev](https://osv.dev):
+  OSV ecosystem names, one per line, exactly as osv.dev spells them (`npm`,
+  `PyPI`, `Go`, `crates.io`, `Maven`, `NuGet`, `Alpine:v3.22`, `Debian:12`,
+  …). Each name's current `all.zip` advisory database is fetched and
+  re-exported as a snapshot; the high side serves the verified zips in the
+  upstream bucket's layout under `/osv/…` (plus single advisories by id,
+  streamed straight out of the zip) for offline scanners such as osv-scanner.
+  Advisory data is the one deliberately *mutable* mirrored subtree: each
+  import replaces the previous snapshot at the same path, and an unchanged
+  database dedups to a no-op, so a daily schedule keeps the air-gapped side's
+  advisory picture current at near-zero diode cost. Mirroring the `npm`
+  database additionally regenerates an advisory index that makes **`npm
+  audit` work against the mirror** (see the NPM client note below).
 - **Uploads** — arbitrary files, no ecosystem behind them: pick a folder name
   and one or more files (`POST /admin/uploads/collect`, multipart form data).
   The high side serves them at `/uploads/<folder>/<name>`, lists them on its
@@ -470,8 +488,9 @@ index-url = https://artigate-high.local/simple/
 ```ini
 # NPM — ~/.npmrc (or /etc/npmrc)
 registry=https://artigate-high.local/npm/
-audit=false
 fund=false
+# npm audit works once the OSV "npm" database is mirrored (see below);
+# until then add audit=false, because the advisory endpoint answers 404.
 ```
 
 ```text
@@ -538,6 +557,16 @@ apk update   # add --allow-untrusted instead when the index is served unsigned
 # Containers — the pull name embeds the upstream registry
 docker pull artigate-high.local/docker.io/library/alpine:3.20
 docker pull artigate-high.local/ghcr.io/org/app:v1
+```
+
+```bash
+# OSV advisories — the upstream bucket's layout, for offline scanners
+curl -fsSL https://artigate-high.local/osv/ecosystems.txt
+curl -fL -o npm-all.zip https://artigate-high.local/osv/npm/all.zip
+curl -fsSL https://artigate-high.local/osv/npm/GHSA-xxxx-xxxx-xxxx.json
+# osv-scanner: place each all.zip at <cache>/osv-scanner/<ecosystem>/all.zip
+# and run with --offline. npm audit needs no setup at all — with the "npm"
+# database mirrored, the registry above answers it.
 ```
 
 ```bash
@@ -796,8 +825,10 @@ edge-triggered (one notification per gap; the gap then ages via
   are skipped (and reported). Resolution needs npm 7 or newer on the low side
   (lockfile v2+). The high side regenerates all packument metadata from each
   tarball's own embedded `package.json`; `dist-tags` carries only `latest`
-  (the highest mirrored release). Set `audit=false` in clients — the advisory
-  endpoint needs the public registry.
+  (the highest mirrored release). `npm audit` works once the OSV `npm`
+  database is mirrored (npm 7+, the bulk-advisory protocol); without it the
+  advisory endpoint answers 404, so set `audit=false` — yarn classic's older
+  `audits` protocol is not served either way.
 - **APT/RPM**: mirror the newest version of each package by default; untick
   "Newest version only" to mirror every version. RPM collects default to
   x86_64 + noarch packages. RPM `.zck`-only indexes aren't supported (use
@@ -833,6 +864,17 @@ edge-triggered (one notification per gap; the gap then ages via
   the high-side pull name). `--container-registry host=baseURL` on the low side
   redirects a registry's API to a private mirror/proxy. The high-side registry
   is read-only (no push).
+- **OSV**: databases are TLS-trusted at collect time (the OSV bucket
+  publishes no digests for its zips) and hash-locked into the signed bundle
+  from there. Advisory *contents* are served verbatim from the verified zip;
+  the npm audit index maps GitHub-Advisory severities onto npm's words and
+  renders OSV version events as npm ranges — a record it cannot render
+  exactly is reported as affecting all versions rather than silently
+  narrowed, and withdrawn advisories are dropped from audit results (the raw
+  records stay downloadable). Audit responses carry no CVSS block (OSV
+  publishes only vectors, not scores). Unlike every other stream, a
+  re-collected database *replaces* the previous snapshot — advisory feeds are
+  updates, not immutable artifacts.
 - **AI Models**: GGUF references use Hugging Face's Ollama-compatible endpoint
   (the repos `ollama run hf.co/…` accepts; sharded/split GGUFs are not
   supported upstream); tags are quantization names resolved at collect time,
@@ -855,8 +897,9 @@ Beyond the offline unit suite (`go test ./...`), an opt-in end-to-end suite
 builds the real binary, starts a low+high pair wired over the HTTP diode
 transport, collects **every stream from its real upstream** (PyPI,
 proxy.golang.org, Maven Central, npmjs, cli.github.com, Docker Hub,
-huggingface.co), and validates each with its real client tool — pip, `go`,
-`mvn`+`java`, npm+node, `apt-get`+`dpkg-deb`, `dnf`+`rpm`, `docker`,
+huggingface.co, osv.dev), and validates each with its real client tool — pip,
+`go`, `mvn`+`java`, npm+node (including a real `npm audit` against the
+mirrored OSV data), `apt-get`+`dpkg-deb`, `dnf`+`rpm`, `docker`,
 huggingface_hub's CLI, and `curl`:
 
 ```bash
