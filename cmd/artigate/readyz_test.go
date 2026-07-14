@@ -172,6 +172,83 @@ func TestLowReadyzDiodeFailureClearedBySpool(t *testing.T) {
 	}
 }
 
+// A restart loses the in-memory failure records, but with a push diode
+// configured the export dir is the retry spool: whatever is still staged never
+// transferred. restoreDiodeTransferBacklog re-marks those bundles at startup
+// so /readyz keeps failing across the restart until a re-transmit succeeds,
+// instead of reporting ready until the bundle is re-exported and fails again.
+func TestLowReadyzDiodeBacklogRestoredAfterRestart(t *testing.T) {
+	ls, _ := newAptLowServer(t)
+	id := bundleIDFor(streamGo, 3)
+	stageFakeOutboundBundle(t, ls.cfg.ExportDir, id)
+	// Stray and incomplete spool entries must not be inferred as stuck bundles.
+	writeFile(t, filepath.Join(ls.cfg.ExportDir, "notes.txt"), []byte("x"))
+	incomplete := bundleIDFor(streamNpm, 9)
+	writeFile(t, filepath.Join(ls.cfg.ExportDir, incomplete+".manifest.json"), []byte("x"))
+
+	diode := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+	}))
+	defer diode.Close()
+	ls.cfg.DiodeURL = diode.URL
+
+	// The freshly constructed server stands in for the restarted process: its
+	// failure map is empty even though the staged bundle is still spooled.
+	ls.restoreDiodeTransferBacklog()
+
+	code, body := getReady(t, ls, "/readyz")
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "[-] diode-transfer") ||
+		!strings.Contains(body, id) || !strings.Contains(body, diodeRestartFailureDetail) {
+		t.Errorf("restored backlog: GET /readyz = %d\n%s", code, body)
+	}
+	if strings.Contains(body, incomplete) {
+		t.Errorf("incomplete bundle inferred as stuck:\n%s", body)
+	}
+
+	// A successful re-transmit of the restored bundle recovers readiness.
+	res := ExportResult{BundleID: id}
+	ls.uploadBundleIfConfigured(context.Background(), &res)
+	if res.DiodeError != "" {
+		t.Fatalf("re-transmit failed: %s", res.DiodeError)
+	}
+	if code, body := getReady(t, ls, "/readyz"); code != http.StatusOK {
+		t.Errorf("after successful re-transmit: GET /readyz = %d\n%s", code, body)
+	}
+}
+
+// The UDP pitcher is a push transport too: its retry spool is restored the
+// same way the HTTP uploader's is.
+func TestLowReadyzDiodeBacklogRestoredForPitcher(t *testing.T) {
+	ls, _ := newAptLowServer(t)
+	id := bundleIDFor(streamGo, 2)
+	stageFakeOutboundBundle(t, ls.cfg.ExportDir, id)
+	ls.pitcher = &diodePitcher{}
+	defer func() { ls.pitcher = nil }() // Close would close the stub's nil socket
+
+	ls.restoreDiodeTransferBacklog()
+	if failures := ls.metrics.diodeFailures(); failures[id] != diodeRestartFailureDetail {
+		t.Errorf("pitcher restore did not mark %s; failures = %v", id, failures)
+	}
+	if code, _ := getReady(t, ls, "/readyz"); code != http.StatusServiceUnavailable {
+		t.Errorf("pitcher restore: GET /readyz = %d, want 503", code)
+	}
+}
+
+// With no push transport configured the export dir is the folder-diode outbox:
+// staged bundles are waiting to be carried across, not stuck, so startup must
+// not mark them failed.
+func TestLowReadyzNoDiodeBacklogRestoreForFolderDiode(t *testing.T) {
+	ls, _ := newAptLowServer(t)
+	stageFakeOutboundBundle(t, ls.cfg.ExportDir, bundleIDFor(streamGo, 1))
+	ls.restoreDiodeTransferBacklog()
+	if failures := ls.metrics.diodeFailures(); len(failures) != 0 {
+		t.Errorf("folder-diode restore recorded failures: %v", failures)
+	}
+	if code, body := getReady(t, ls, "/readyz"); code != http.StatusOK {
+		t.Errorf("folder diode with staged bundle: GET /readyz = %d\n%s", code, body)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // High-side checks
 // -----------------------------------------------------------------------------

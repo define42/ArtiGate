@@ -501,6 +501,10 @@ func runLow(args []string) {
 	defer func() { _ = ls.Close() }()
 
 	attachPitcher(ls, pitcherCfg)
+	// After the pitcher attaches (so both push transports count): re-mark
+	// bundles still staged from before the restart, whose in-memory failure
+	// records died with the old process.
+	ls.restoreDiodeTransferBacklog()
 
 	serveLow(cfg, ls)
 }
