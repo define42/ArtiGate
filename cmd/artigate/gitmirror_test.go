@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -21,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 )
 
 // -----------------------------------------------------------------------------
@@ -1225,5 +1227,23 @@ func TestGitTreeAndDetail(t *testing.T) {
 		if _, err := hs.gitDetail(spec); err == nil {
 			t.Errorf("detail %q should fail", spec)
 		}
+	}
+}
+
+// TestGitTypeNameAndReadCapped covers the object-type table (including the
+// unknown fallback) and the capped pack reader's error propagation.
+func TestGitTypeNameAndReadCapped(t *testing.T) {
+	for code, want := range map[int]string{
+		gitObjCommit: "commit", gitObjTree: "tree", gitObjBlob: "blob", gitObjTag: "tag", 5: "", 0: "",
+	} {
+		if got := gitTypeName(code); got != want {
+			t.Errorf("gitTypeName(%d) = %q, want %q", code, got, want)
+		}
+	}
+	if b, err := gitReadCapped(strings.NewReader("pack bytes")); err != nil || string(b) != "pack bytes" {
+		t.Errorf("gitReadCapped = %q, %v", b, err)
+	}
+	if _, err := gitReadCapped(iotest.ErrReader(errors.New("boom"))); err == nil {
+		t.Error("reader error not propagated")
 	}
 }

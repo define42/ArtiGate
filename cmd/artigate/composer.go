@@ -405,9 +405,9 @@ func composerFieldsVersion(f [4]int) string {
 }
 
 // composerCaretMatches implements "^X[.Y[.Z]]": at least the given version
-// and below the next major — below 0.(Y+1) for a 0.Y base, the caret's
-// compatibility unit for pre-1.0 ranges (pragmatic subset of Composer's
-// rule).
+// and below the next release of the leftmost non-zero field, semver's caret
+// rule: below (X+1).0.0 normally, below 0.(Y+1).0 for a 0.Y base, and below
+// 0.0.(Z+1) for a 0.0.Z base — Composer locks ^0.0.Z to its exact patch line.
 func composerCaretMatches(spec, vnorm string) (bool, error) {
 	spec = strings.TrimPrefix(spec, "v")
 	fields, n, err := composerBoundFields(spec)
@@ -420,6 +420,9 @@ func composerCaretMatches(spec, vnorm string) (bool, error) {
 	upper := [4]int{fields[0] + 1, 0, 0, 0}
 	if fields[0] == 0 && n >= 2 {
 		upper = [4]int{0, fields[1] + 1, 0, 0}
+		if fields[1] == 0 && n >= 3 {
+			upper = [4]int{0, 0, fields[2] + 1, 0}
+		}
 	}
 	return composerCompareVersions(vnorm, composerFieldsVersion(upper)) < 0, nil
 }

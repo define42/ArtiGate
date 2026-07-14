@@ -941,3 +941,98 @@ func TestPythonSDistServing(t *testing.T) {
 		t.Errorf("sdist download: status %d, %d bytes (want %d)", code, len(got), len(body))
 	}
 }
+
+// pyTestSdistZip builds the (rare) zip form of a source distribution with an
+// embedded PKG-INFO.
+func pyTestSdistZip(t *testing.T, name, version, requiresPython string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create(name + "-" + version + "/PKG-INFO")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := fmt.Sprintf("Metadata-Version: 2.1\nName: %s\nVersion: %s\nRequires-Python: %s\n\n", name, version, requiresPython)
+	if _, err := w.Write([]byte(info)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestSdistRequiresPythonForms covers both archive forms and the unreadable
+// fallbacks of the Requires-Python extraction.
+func TestSdistRequiresPythonForms(t *testing.T) {
+	dir := t.TempDir()
+	tarball := filepath.Join(dir, "a-1.0.tar.gz")
+	writeFile(t, tarball, pyTestSdistTarGz(t, "a", "1.0", ">=3.9"))
+	if got := sdistRequiresPython(tarball); got != ">=3.9" {
+		t.Errorf("tar.gz Requires-Python = %q", got)
+	}
+	zipped := filepath.Join(dir, "b-2.0.zip")
+	writeFile(t, zipped, pyTestSdistZip(t, "b", "2.0", ">=3.10"))
+	if got := sdistRequiresPython(zipped); got != ">=3.10" {
+		t.Errorf("zip Requires-Python = %q", got)
+	}
+	if got := requiresPythonFor(zipped); got != ">=3.10" {
+		t.Errorf("requiresPythonFor(zip) = %q", got)
+	}
+	// Unreadable, wrong-extension, and absent files all degrade to "".
+	writeFile(t, filepath.Join(dir, "junk.tar.gz"), []byte("not a tarball"))
+	if got := sdistRequiresPython(filepath.Join(dir, "junk.tar.gz")); got != "" {
+		t.Errorf("corrupt tarball Requires-Python = %q", got)
+	}
+	writeFile(t, filepath.Join(dir, "junk.zip"), []byte("not a zip"))
+	if got := sdistRequiresPython(filepath.Join(dir, "junk.zip")); got != "" {
+		t.Errorf("corrupt zip Requires-Python = %q", got)
+	}
+	if got := sdistRequiresPython(filepath.Join(dir, "other.rar")); got != "" {
+		t.Errorf("unknown extension Requires-Python = %q", got)
+	}
+	if got := sdistRequiresPython(filepath.Join(dir, "missing.tar.gz")); got != "" {
+		t.Errorf("missing file Requires-Python = %q", got)
+	}
+}
+
+// TestVersionFromSdistAndMerge covers the project-grouping helpers the sdist
+// path uses: version recovery from a filename and file merging into an
+// existing project entry.
+func TestVersionFromSdistAndMerge(t *testing.T) {
+	if got := versionFromSdist("purepkg-1.2.3.tar.gz", ""); got != "1.2.3" {
+		t.Errorf("versionFromSdist(filename) = %q", got)
+	}
+	if got := versionFromSdist("purepkg-1.2.3.tar.gz", "9.9"); got != "9.9" {
+		t.Errorf("versionFromSdist(pinned) = %q", got)
+	}
+	projects := []PythonProject{{Name: "a", NormalizedName: "a", Version: "1.0", Files: []PythonFile{{Filename: "a-1.0-py3-none-any.whl"}}}}
+	projects = appendPythonFile(projects, "a", "1.0", PythonFile{Filename: "a-1.0.tar.gz"})
+	if len(projects) != 1 || len(projects[0].Files) != 2 {
+		t.Fatalf("sdist did not merge into the existing project: %+v", projects)
+	}
+	projects = appendPythonFile(projects, "b", "2.0", PythonFile{Filename: "b-2.0.tar.gz"})
+	if len(projects) != 2 {
+		t.Fatalf("new project not appended: %+v", projects)
+	}
+}
+
+// TestPythonSDistLatestVersion resolves an unpinned sdist through the
+// versionless JSON API route.
+func TestPythonSDistLatestVersion(t *testing.T) {
+	body := pyTestSdistTarGz(t, "purepkg", "2.5.0", "")
+	api := fakePyJSONAPI(t, "purepkg", "2.5.0", body, false)
+	ls, _ := newPyLowServer(t)
+	ls.cfg.PyPIJSON = api.URL
+	res, err := ls.CollectPython(context.Background(), PythonCollectRequest{SDists: []string{"purepkg"}})
+	if err != nil || res.ExportedModules != 1 {
+		t.Fatalf("CollectPython = %+v, %v", res, err)
+	}
+	b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, res.BundleID+".manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"purepkg-2.5.0.tar.gz"`) {
+		t.Errorf("manifest missing the resolved latest sdist: %s", b)
+	}
+}

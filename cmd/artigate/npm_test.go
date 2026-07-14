@@ -900,3 +900,52 @@ func TestNpmDistTagsImportRejection(t *testing.T) {
 		t.Fatal("malformed dist-tag version accepted at import")
 	}
 }
+
+// TestNpmPublishDistTagsHardening covers the stored-snapshot writer's gates:
+// bad package name, malformed tags, and a traversal-shaped name.
+func TestNpmPublishDistTagsHardening(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	if err := hs.publishNpmDistTags("../etc", map[string]string{"latest": "1.0.0"}); err == nil {
+		t.Error("traversal package name accepted")
+	}
+	if err := hs.publishNpmDistTags("lodash", map[string]string{"bad tag": "1.0.0"}); err == nil {
+		t.Error("malformed tag accepted")
+	}
+	if err := hs.publishNpmDistTags("lodash", map[string]string{"latest": "not-a-version"}); err == nil {
+		t.Error("malformed tag version accepted")
+	}
+	// A valid snapshot round-trips through the reader.
+	if err := hs.publishNpmDistTags("@scope/pkg", map[string]string{"latest": "1.0.0"}); err != nil {
+		t.Fatalf("valid snapshot rejected: %v", err)
+	}
+	got := hs.readNpmStoredTags("@scope/pkg")
+	if got["latest"] != "1.0.0" {
+		t.Errorf("stored tags = %+v", got)
+	}
+	if hs.readNpmStoredTags("never-published") != nil {
+		t.Error("missing snapshot did not read as no tags")
+	}
+	if hs.readNpmStoredTags("../escape") != nil {
+		t.Error("traversal read did not fail closed")
+	}
+}
+
+// TestNpmResolveTagGates covers the tag-route resolver's rejection branches.
+func TestNpmResolveTagGates(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	if got := hs.npmResolveTag("lodash", ".bad"); got != "" {
+		t.Errorf("invalid tag resolved to %q", got)
+	}
+	if got := hs.npmResolveTag("lodash", "latest"); got != "" {
+		t.Errorf("unknown package tag resolved to %q", got)
+	}
+	// A stored tag whose target version has no served manifest stays dead.
+	if err := hs.publishNpmDistTags("lodash", map[string]string{"beta": "9.9.9"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := hs.npmResolveTag("lodash", "beta"); got != "" {
+		t.Errorf("tag with absent target resolved to %q", got)
+	}
+}

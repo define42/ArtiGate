@@ -43,7 +43,8 @@ jobs:
       - name: Install client tools (dnf, rpm, huggingface_hub CLI, terraform, R, ansible, micromamba)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends dnf rpm r-base-core
+          # ruby-bundler: the runner image ships ruby but no bundler binary.
+          sudo apt-get install -y --no-install-recommends dnf rpm r-base-core ruby-bundler
           if command -v pipx >/dev/null 2>&1; then
             pipx install huggingface_hub
             pipx install ansible-core
@@ -102,7 +103,7 @@ jobs:
           curl -fsS -o /dev/null "https://open-vsx.org/api/usernamehw/errorlens"
           curl -fsSL -o /dev/null "https://galaxy.ansible.com/api/"
           curl -fsSI -o /dev/null "https://cloud.r-project.org/src/contrib/PACKAGES.gz"
-          curl -fsSI -o /dev/null "https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack"
+          curl -fsS -o /dev/null "https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack"
 
       - name: Run end-to-end suite
         env:

@@ -318,27 +318,39 @@ func TestCRANLowToHighPipeline(t *testing.T) {
 }
 
 // TestCRANPinnedArchiveVersion pins a version the index has superseded: the
-// tarball comes from the mirror's Archive tree.
+// tarball comes from the mirror's Archive tree, and the archived release's
+// own DESCRIPTION — not the index's record of the current release — supplies
+// the dependency closure (old pkgA needs pkgOld, which today's pkgA dropped).
 func TestCRANPinnedArchiveVersion(t *testing.T) {
-	current := cranTestTarGz(t, "pkgA", "2.0", nil)
-	old := cranTestTarGz(t, "pkgA", "1.0", nil)
+	current := cranTestTarGz(t, "pkgA", "2.0", map[string]string{"Imports": "pkgNew"})
+	old := cranTestTarGz(t, "pkgA", "1.0", map[string]string{"Imports": "pkgOld, stats"})
+	pkgOld := cranTestTarGz(t, "pkgOld", "0.5", nil)
 	repo := fakeCRANRepo(t, []cranTestEntry{
-		{name: "pkgA", version: "2.0", body: current, archived: map[string][]byte{"1.0": old}},
+		{name: "pkgA", version: "2.0", deps: map[string]string{"Imports": "pkgNew"}, body: current, archived: map[string][]byte{"1.0": old}},
+		{name: "pkgOld", version: "0.5", body: pkgOld},
 	})
 	ls, _ := newCRANLowServer(t, repo.URL)
 	res, err := ls.CollectCRAN(context.Background(), CRANCollectRequest{Packages: []string{"pkgA@1.0"}})
 	if err != nil {
 		t.Fatalf("CollectCRAN: %v", err)
 	}
-	if res.ExportedModules != 1 {
-		t.Fatalf("expected the archived release only, got %+v", res)
+	// The archived pkgA plus its own dependency pkgOld — and NOT the current
+	// release's pkgNew (absent from the fake index, it would have been a
+	// skipped module if queued).
+	if res.ExportedModules != 2 || len(res.SkippedModules) != 0 {
+		t.Fatalf("expected the archived release plus its own dependency, got %+v", res)
 	}
 	b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, res.BundleID+".manifest.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"pkgA"`) || !strings.Contains(string(b), `"1.0"`) {
-		t.Errorf("manifest does not record pkgA 1.0: %s", b)
+	for _, want := range []string{`"pkgA"`, `"1.0"`, `"pkgOld"`, `"0.5"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("manifest missing %s: %s", want, b)
+		}
+	}
+	if strings.Contains(string(b), "pkgA_2.0") {
+		t.Errorf("pinned collect also mirrored the current release: %s", b)
 	}
 }
 
@@ -441,5 +453,108 @@ func TestCRANIndexNewestOnly(t *testing.T) {
 	recs := parseDCFRecords(b)
 	if len(recs) != 1 || recs[0]["Version"] != "1.2" {
 		t.Fatalf("PACKAGES = %+v, want only 1.2", recs)
+	}
+}
+
+// TestCRANHandleCollect drives the admin endpoint wrapper: a valid JSON body
+// reaches the collector (which then fails on the unreachable mirror), a
+// malformed body is rejected before any network traffic, and an empty body
+// falls through to request validation.
+func TestCRANHandleCollect(t *testing.T) {
+	ls, _ := newCRANLowServer(t, "http://127.0.0.1:1")
+	req := httptest.NewRequest(http.MethodPost, "/admin/cran/collect", strings.NewReader(`{"packages":["praise"]}`))
+	if _, err := ls.HandleCRANCollect(context.Background(), req); err == nil {
+		t.Fatal("collect against an unreachable mirror succeeded")
+	}
+	req = httptest.NewRequest(http.MethodPost, "/admin/cran/collect", strings.NewReader(`{not json`))
+	if _, err := ls.HandleCRANCollect(context.Background(), req); err == nil || !strings.Contains(err.Error(), "parse cran collect request") {
+		t.Fatalf("malformed body error = %v", err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/admin/cran/collect", strings.NewReader(""))
+	if _, err := ls.HandleCRANCollect(context.Background(), req); err == nil || !strings.Contains(err.Error(), "no r packages") {
+		t.Fatalf("empty body error = %v", err)
+	}
+}
+
+// TestCRANRequestValidation covers the request validator's rejections.
+func TestCRANRequestValidation(t *testing.T) {
+	if err := validateCRANRequest(CRANCollectRequest{}); err == nil {
+		t.Error("empty request accepted")
+	}
+	if err := validateCRANRequest(CRANCollectRequest{Packages: []string{"ok", "bad_name"}}); err == nil {
+		t.Error("invalid spec accepted")
+	}
+	if err := validateCRANRequest(CRANCollectRequest{Packages: []string{"jsonlite@1.8.8"}}); err != nil {
+		t.Errorf("valid request rejected: %v", err)
+	}
+}
+
+// TestCRANStoredMetadataHardening covers readCRANStored's rejection branches:
+// unparsable JSON, a forged filename, a bad embedded identity, and a stem
+// that escapes the metadata tree.
+func TestCRANStoredMetadataHardening(t *testing.T) {
+	_, priv := newTestKeys(t)
+	hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+	metaDir := hs.cranMetadataDir()
+	if err := os.MkdirAll(metaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(metaDir, "pkgA_1.0.json"), []byte("{not json"))
+	if _, err := hs.readCRANStored("pkgA_1.0"); err == nil {
+		t.Error("unparsable stored metadata accepted")
+	}
+	writeFile(t, filepath.Join(metaDir, "pkgB_1.0.json"), []byte(`{"filename":"../../evil.tar.gz","fields":{"Package":"pkgB","Version":"1.0"}}`))
+	if _, err := hs.readCRANStored("pkgB_1.0"); err == nil {
+		t.Error("forged stored filename accepted")
+	}
+	writeFile(t, filepath.Join(metaDir, "pkgC_1.0.json"), []byte(`{"filename":"pkgC_1.0.tar.gz","fields":{"Package":"1bad","Version":"1.0"}}`))
+	if _, err := hs.readCRANStored("pkgC_1.0"); err == nil {
+		t.Error("invalid embedded identity accepted")
+	}
+	if _, err := hs.readCRANStored("../escape"); err == nil {
+		t.Error("stem traversal accepted")
+	}
+	// Valid metadata whose tarball is absent is not servable either.
+	writeFile(t, filepath.Join(metaDir, "pkgD_1.0.json"), []byte(`{"filename":"pkgD_1.0.tar.gz","fields":{"Package":"pkgD","Version":"1.0"}}`))
+	if _, err := hs.readCRANStored("pkgD_1.0"); err == nil {
+		t.Error("metadata without its tarball accepted")
+	}
+}
+
+// TestCRANPublishPathHardening covers publishCRANPackage's identity and path
+// gates ahead of any archive parsing.
+func TestCRANPublishPathHardening(t *testing.T) {
+	_, priv := newTestKeys(t)
+	hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+	for name, p := range map[string]CRANPackage{
+		"bad name":     {Name: "1bad", Version: "1.0", Filename: "x", Path: "cran/src/contrib/x"},
+		"bad version":  {Name: "pkgA", Version: "v1", Filename: "x", Path: "cran/src/contrib/x"},
+		"outside tree": {Name: "pkgA", Version: "1.0", Filename: "pkgA_1.0.tar.gz", Path: "python/packages/pkgA_1.0.tar.gz"},
+		"missing file": {Name: "pkgA", Version: "1.0", Filename: "pkgA_1.0.tar.gz", Path: "cran/src/contrib/pkgA_1.0.tar.gz"},
+	} {
+		if err := hs.publishCRANPackage(p); err == nil {
+			t.Errorf("%s: expected error, got nil", name)
+		}
+	}
+}
+
+// TestCRANServablePathTable pins the served-tree gate.
+func TestCRANServablePathTable(t *testing.T) {
+	for rel, want := range map[string]string{
+		"src/contrib/PACKAGES":                       "PACKAGES",
+		"src/contrib/PACKAGES.gz":                    "PACKAGES.gz",
+		"src/contrib/pkgA_1.0.tar.gz":                "pkgA_1.0.tar.gz",
+		"src/contrib/Archive/pkgA/pkgA_1.0.tar.gz":   "pkgA_1.0.tar.gz",
+		"src/contrib/PACKAGES.rds":                   "",
+		"src/contrib/Archive/1bad/pkgA_1.0.tar.gz":   "",
+		"src/contrib/Archive/pkgA/other_1.0.tar.gz2": "",
+		"metadata/pkgA_1.0.json":                     "",
+		"src/contrib":                                "",
+		"src/contrib/pkgA-1.0.tar.gz":                "",
+	} {
+		got, ok := cranServableFile(rel)
+		if (want == "") == ok || got != want {
+			t.Errorf("cranServableFile(%q) = %q, %v; want %q", rel, got, ok, want)
+		}
 	}
 }

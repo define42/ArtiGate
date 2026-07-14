@@ -802,8 +802,9 @@ type cranDownloader struct {
 
 // run resolves and downloads the requested specs and their dependency
 // closure. Requested packages may pin a version (fetched from the Archive
-// when superseded); dependencies always resolve to the index's current
-// version, like a fresh install.packages does.
+// when superseded, with the dependency names read from that release's own
+// DESCRIPTION); dependencies always resolve to the index's current version,
+// like a fresh install.packages does.
 func (d *cranDownloader) run(ctx context.Context, specs []string) {
 	d.done = map[string]bool{}
 	queue := make([]string, 0, len(specs))
@@ -813,8 +814,7 @@ func (d *cranDownloader) run(ctx context.Context, specs []string) {
 			queue = append(queue, name)
 			continue
 		}
-		emitProgress(ctx, "→ %s@%s (archived release)", name, version)
-		d.fetchOne(ctx, name, version, "")
+		queue = append(queue, d.fetchArchivedPin(ctx, name, version)...)
 	}
 	for len(queue) > 0 && len(d.done) < cranMaxResolved {
 		name := queue[0]
@@ -833,6 +833,30 @@ func (d *cranDownloader) run(ctx context.Context, specs []string) {
 			queue = append(queue, entry.Deps...)
 		}
 	}
+}
+
+// fetchArchivedPin downloads one superseded pinned release and returns the
+// dependency names to queue, read from the downloaded tarball's own
+// DESCRIPTION — the index only describes the current release, so the archive
+// itself is the authority on what the old release needs. The pinned name is
+// marked done so the closure never adds the current release on top of it.
+func (d *cranDownloader) fetchArchivedPin(ctx context.Context, name, version string) []string {
+	emitProgress(ctx, "→ %s@%s (archived release)", name, version)
+	if !d.fetchOne(ctx, name, version, "") {
+		return nil
+	}
+	d.done[name] = true
+	abs := filepath.Join(d.stageRoot, filepath.FromSlash(cranFileRel(cranFilename(name, version))))
+	desc, err := extractCRANDescription(abs, name)
+	if err != nil {
+		emitProgress(ctx, "  ! %s@%s: cannot read dependencies from the archived release: %s", name, version, err)
+		return nil
+	}
+	var deps []string
+	for _, field := range []string{"Depends", "Imports", "LinkingTo"} {
+		deps = append(deps, cranDepNames(desc[field])...)
+	}
+	return deps
 }
 
 // fetchOne downloads one release into the staging tree, trying the current

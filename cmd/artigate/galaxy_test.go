@@ -1043,3 +1043,22 @@ func TestGalaxyPublishCrossChecks(t *testing.T) {
 		t.Errorf("non-galaxy path error = %v", err)
 	}
 }
+
+// TestGalaxyVersionLessFallbacks pins the ordering used for served version
+// lists, including the fallbacks for unparsable versions.
+func TestGalaxyVersionLessFallbacks(t *testing.T) {
+	for name, tt := range map[string]struct {
+		a, b string
+		less bool
+	}{
+		"semver order":            {"1.2.3", "1.10.0", true},
+		"prerelease before final": {"2.0.0-rc.1", "2.0.0", true},
+		"build metadata ignored":  {"1.0.0+a", "1.0.0+b", false},
+		"unparsable sorts first":  {"weird", "1.0.0", true},
+		"both unparsable lexical": {"aaa", "bbb", true},
+	} {
+		if got := galaxyVersionLess(tt.a, tt.b); got != tt.less {
+			t.Errorf("%s: galaxyVersionLess(%q, %q) = %v, want %v", name, tt.a, tt.b, got, tt.less)
+		}
+	}
+}

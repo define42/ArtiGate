@@ -1017,3 +1017,30 @@ func TestCondaCollectShaTamper(t *testing.T) {
 		t.Fatal("a tampered sole package should fail the collect")
 	}
 }
+
+// TestCondaCandidateOrdering pins the tie-breaking rules the greedy resolver
+// selects by: version, then build number, then subdir (platform-specific
+// beats noarch on ties), then filename (.conda beats .tar.bz2).
+func TestCondaCandidateOrdering(t *testing.T) {
+	mk := func(version string, buildNumber int64, subdir, filename string) condaCandidate {
+		return condaCandidate{
+			entry:    condaRepodataEntry{Name: "pkg", Version: version, Build: "0", BuildNumber: buildNumber},
+			subdir:   subdir,
+			filename: filename,
+		}
+	}
+	for name, tt := range map[string]struct {
+		a, b condaCandidate
+		less bool
+	}{
+		"older version":       {mk("1.0", 5, "noarch", "a"), mk("1.1", 0, "noarch", "a"), true},
+		"lower build number":  {mk("1.0", 1, "noarch", "a"), mk("1.0", 2, "noarch", "a"), true},
+		"noarch under linux":  {mk("1.0", 1, "noarch", "a"), mk("1.0", 1, "linux-64", "a"), true},
+		"tar.bz2 under conda": {mk("1.0", 1, "noarch", "pkg-1.0-0.tar.bz2"), mk("1.0", 1, "noarch", "pkg-1.0-0.conda"), true},
+		"equal is not less":   {mk("1.0", 1, "noarch", "a"), mk("1.0", 1, "noarch", "a"), false},
+	} {
+		if got := condaCandidateLess(tt.a, tt.b); got != tt.less {
+			t.Errorf("%s: condaCandidateLess = %v, want %v", name, got, tt.less)
+		}
+	}
+}

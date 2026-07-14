@@ -306,6 +306,10 @@ func TestComposerConstraintMatches(t *testing.T) {
 		{"^0.3", "0.3.9.0", true},
 		{"^0.3", "0.4.0.0", false},
 		{"^0", "0.9.0.0", true},
+		// Composer locks ^0.0.Z to its exact patch line.
+		{"^0.0.3", "0.0.3.0", true},
+		{"^0.0.3", "0.0.9.0", false},
+		{"^0.0.3", "0.0.2.0", false},
 		{"^v1.2", "1.3.0.0", true},
 		{"^2.0-beta1", "2.0.0.0", true},
 		{"~1.2", "1.9.0.0", true},
@@ -1030,5 +1034,24 @@ func TestComposerEcosystemDescriptor(t *testing.T) {
 	}
 	if cfg.ComposerRepoURL != "https://mirror.example" {
 		t.Errorf("composer-repo flag not wired: %q", cfg.ComposerRepoURL)
+	}
+}
+
+// TestComposerCheckIdentityTable pins the metadata-identity cross-check the
+// collector and validator share.
+func TestComposerCheckIdentityTable(t *testing.T) {
+	good := map[string]any{"name": "acme/lib", "version": "1.2.3", "version_normalized": "1.2.3.0"}
+	if err := composerCheckIdentity("acme/lib", good); err != nil {
+		t.Fatalf("valid identity rejected: %v", err)
+	}
+	for name, obj := range map[string]map[string]any{
+		"wrong name":     {"name": "acme/other", "version": "1.2.3", "version_normalized": "1.2.3.0"},
+		"missing name":   {"version": "1.2.3", "version_normalized": "1.2.3.0"},
+		"bad version":    {"name": "acme/lib", "version": "../x", "version_normalized": "1.2.3.0"},
+		"bad normalized": {"name": "acme/lib", "version": "1.2.3", "version_normalized": "not/safe"},
+	} {
+		if err := composerCheckIdentity("acme/lib", obj); err == nil {
+			t.Errorf("%s: expected error, got nil", name)
+		}
 	}
 }
