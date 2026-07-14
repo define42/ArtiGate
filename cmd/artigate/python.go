@@ -5,9 +5,18 @@ package main
 // used for Go modules. The high side imports those wheels and serves them
 // through the PyPI Simple Repository API — PEP 503 HTML and PEP 691 JSON,
 // selected by content negotiation.
+//
+// Packages that publish no wheel can be mirrored as source distributions by
+// explicitly listing them in a collect's "sdists". Those are fetched straight
+// from the index's JSON API and verified against its declared SHA-256 — pip
+// never touches an sdist here, so no package-controlled build hook ever runs
+// in the process that holds the signing key. Clients build the sdist locally,
+// exactly as they would against PyPI itself.
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,6 +48,7 @@ func pythonEcosystem() ecosystem {
 		watchCollect: watchAdapter((*LowServer).CollectPython),
 		flags: func(fs *flag.FlagSet, cfg *LowConfig) {
 			fs.StringVar(&cfg.PipBinary, "python", "python3", "python interpreter used for pip download of Python packages")
+			fs.StringVar(&cfg.PyPIJSON, "pypi-json", "", "JSON API base sdists are resolved from when a collect opts in (default "+defaultPyPIJSON+")")
 		},
 		manifestContent: func(m BundleManifest) bool { return m.Python != nil && len(m.Python.Projects) > 0 },
 		validateContent: func(m BundleManifest, seen map[string]bool) error {
@@ -147,6 +157,81 @@ func wheelRequiresPython(path string) string {
 func isWheelMetadataPath(name string) bool {
 	dir, file, ok := strings.Cut(name, "/")
 	return ok && file == "METADATA" && strings.HasSuffix(dir, ".dist-info")
+}
+
+// sdistRequiresPython returns the Requires-Python specifier from a source
+// distribution's embedded PKG-INFO ("<name>-<version>/PKG-INFO"), or "" when
+// absent or unreadable. Like wheelRequiresPython, reading the artifact itself
+// keeps every served attribute derived from verified bytes.
+func sdistRequiresPython(p string) string {
+	if strings.HasSuffix(p, ".zip") {
+		return sdistZipRequiresPython(p)
+	}
+	if !strings.HasSuffix(p, ".tar.gz") && !strings.HasSuffix(p, ".tgz") {
+		return ""
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return ""
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			return ""
+		}
+		parts := strings.Split(path.Clean(strings.TrimPrefix(hdr.Name, "./")), "/")
+		if hdr.Typeflag != tar.TypeReg || len(parts) != 2 || parts[1] != "PKG-INFO" {
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(tr, maxWheelMetadataBytes))
+		if err != nil {
+			return ""
+		}
+		return metadataRequiresPython(data)
+	}
+}
+
+// sdistZipRequiresPython handles the (rare) zip form of a source
+// distribution.
+func sdistZipRequiresPython(p string) string {
+	zr, err := zip.OpenReader(p)
+	if err != nil {
+		return ""
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		dir, file, ok := strings.Cut(f.Name, "/")
+		if !ok || dir == "" || file != "PKG-INFO" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return ""
+		}
+		data, err := io.ReadAll(io.LimitReader(rc, maxWheelMetadataBytes))
+		_ = rc.Close()
+		if err != nil {
+			return ""
+		}
+		return metadataRequiresPython(data)
+	}
+	return ""
+}
+
+// requiresPythonFor reads the Requires-Python attribute from whatever
+// distribution form the file is.
+func requiresPythonFor(abs string) string {
+	if strings.HasSuffix(abs, ".whl") {
+		return wheelRequiresPython(abs)
+	}
+	return sdistRequiresPython(abs)
 }
 
 // metadataRequiresPython scans the RFC 822-style header block of a core
@@ -310,6 +395,12 @@ func (s *HighServer) scanPyFiles() ([]pyFileEntry, error) {
 		}
 		if project, version, ok := parseWheelFilename(e.Name()); ok {
 			out = append(out, pyFileEntry{filename: e.Name(), project: project, version: version})
+			continue
+		}
+		// Source distributions sit beside the wheels for projects mirrored
+		// through the sdist opt-in.
+		if project, version, ok := parseSdistFilename(e.Name()); ok && version != "" {
+			out = append(out, pyFileEntry{filename: e.Name(), project: project, version: version})
 		}
 	}
 	return out, nil
@@ -398,7 +489,7 @@ func (s *HighServer) pyProjectFiles(project string) ([]pyProjectFile, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, pyProjectFile{filename: f.filename, sha256: sum, requiresPython: wheelRequiresPython(abs)})
+		out = append(out, pyProjectFile{filename: f.filename, sha256: sum, requiresPython: requiresPythonFor(abs)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].filename < out[j].filename })
 	return out, nil
@@ -510,10 +601,37 @@ type PythonTarget struct {
 type PythonCollectRequest struct {
 	Requirements []string      `json:"requirements"`
 	Target       *PythonTarget `json:"target,omitempty"`
+	// SDists opts specific packages into source-distribution mirroring, for
+	// projects that publish no wheel: "name" (current release) or
+	// "name==1.2.3". Each is resolved through the index's JSON API and
+	// verified against the API-declared SHA-256 — never through pip, so no
+	// package build hook runs on the low side. Sdists are fetched exactly as
+	// named; their build dependencies are only mirrored if they resolve as
+	// wheels via Requirements or are listed here themselves.
+	SDists []string `json:"sdists,omitempty"`
 	// Force disables export dedup for this collect: every wheel is packed even
 	// when already forwarded, producing a full self-contained bundle (for
 	// disaster recovery or rebuilding a high side from scratch).
 	Force bool `json:"force,omitempty"`
+}
+
+// defaultPyPIJSON is the JSON API base sdists are resolved from when no
+// override is configured.
+const defaultPyPIJSON = "https://pypi.org/pypi"
+
+// pySDistSpecRE matches an sdist opt-in spec: a package name, optionally
+// pinned with "==". Names follow PEP 508; versions are PEP 440ish and always
+// start with a digit (an epoch's "!" stays inside the token).
+var pySDistSpecRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?(==[0-9][0-9A-Za-z.!+]{0,63})?$`)
+
+// parsePySDistSpec splits "name" or "name==version", normalizing the name.
+func parsePySDistSpec(spec string) (name, version string, err error) {
+	spec = strings.TrimSpace(spec)
+	if !pySDistSpecRE.MatchString(spec) {
+		return "", "", fmt.Errorf("invalid sdist spec %q (use name or name==version)", spec)
+	}
+	name, version, _ = strings.Cut(spec, "==")
+	return normalizePyName(name), version, nil
 }
 
 // validatePipArg rejects a user-supplied pip argument that pip would otherwise
@@ -548,10 +666,15 @@ func validatePipArg(kind, val string) error {
 }
 
 // validatePythonRequest validates every caller-supplied string that becomes a
-// pip argument (requirements and target selectors).
+// pip argument (requirements and target selectors) and every sdist spec.
 func validatePythonRequest(req PythonCollectRequest) error {
 	for _, r := range req.Requirements {
 		if err := validatePipArg("requirement", r); err != nil {
+			return err
+		}
+	}
+	for _, s := range req.SDists {
+		if _, _, err := parsePySDistSpec(s); err != nil {
 			return err
 		}
 	}
@@ -643,10 +766,11 @@ func (s *LowServer) HandlePythonCollect(ctx context.Context, r *http.Request) (E
 	return s.CollectPython(ctx, req)
 }
 
-// CollectPython downloads the requested wheels with pip and writes them into a
+// CollectPython downloads the requested wheels with pip (and any explicitly
+// opted-in sdists straight from the index's JSON API) and writes them into a
 // signed bundle on the shared ArtiGate sequence stream.
 func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest) (ExportResult, error) {
-	if len(req.Requirements) == 0 {
+	if len(req.Requirements) == 0 && len(req.SDists) == 0 {
 		return ExportResult{}, errors.New("no python requirements provided")
 	}
 	if err := validatePythonRequest(req); err != nil {
@@ -673,19 +797,22 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 		return ExportResult{}, err
 	}
 
-	emitProgress(ctx, "Running pip download for %d requirement(s)…", len(req.Requirements))
-	if _, err := s.runPip(ctx, pipDownloadArgs(dest, req)...); err != nil {
-		return ExportResult{}, err
+	if len(req.Requirements) > 0 {
+		emitProgress(ctx, "Running pip download for %d requirement(s)…", len(req.Requirements))
+		if _, err := s.runPip(ctx, pipDownloadArgs(dest, req)...); err != nil {
+			return ExportResult{}, err
+		}
 	}
 
 	files, projects, skipped, err := collectPythonDist(dest)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	emitProgress(ctx, "Packing %d wheel file(s) into a signed bundle…", len(files))
+	files, projects, skipped = s.collectPythonSDists(ctx, dest, req.SDists, files, projects, skipped)
+	emitProgress(ctx, "Packing %d distribution file(s) into a signed bundle…", len(files))
 	if len(files) == 0 {
 		if len(skipped) > 0 {
-			return ExportResult{}, fmt.Errorf("no wheels to mirror; %d package(s) publish only a source distribution: %s",
+			return ExportResult{}, fmt.Errorf("no distributions to mirror; %d package(s) could not be fetched: %s",
 				len(skipped), summarizeFailures(skipped))
 		}
 		return ExportResult{}, errors.New("pip download produced no wheels")
@@ -704,6 +831,156 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 	// ecosystems report their unfetchable items.
 	res.SkippedModules = append(res.SkippedModules, skipped...)
 	return res, nil
+}
+
+// -----------------------------------------------------------------------------
+// Low side: sdist opt-in (index JSON API, no pip, no build hooks)
+// -----------------------------------------------------------------------------
+
+// pyMaxJSONAPIBytes caps one JSON API release document held in memory.
+const pyMaxJSONAPIBytes = 32 << 20
+
+// pypiRelease is the subset of an index JSON API release document ArtiGate
+// reads to fetch an sdist.
+type pypiRelease struct {
+	Info struct {
+		Name           string `json:"name"`
+		Version        string `json:"version"`
+		RequiresPython string `json:"requires_python"`
+	} `json:"info"`
+	Urls []struct {
+		Filename    string            `json:"filename"`
+		PackageType string            `json:"packagetype"`
+		URL         string            `json:"url"`
+		Digests     map[string]string `json:"digests"`
+	} `json:"urls"`
+}
+
+// pypiJSONBase resolves the configured JSON API base URL.
+func (s *LowServer) pypiJSONBase() string {
+	base := strings.TrimSuffix(strings.TrimSpace(s.cfg.PyPIJSON), "/")
+	if base == "" {
+		return defaultPyPIJSON
+	}
+	return base
+}
+
+// collectPythonSDists fetches every opted-in sdist and folds it into the
+// collected distribution set. Each failure skips that sdist and is reported;
+// the wheels already collected are never at stake.
+func (s *LowServer) collectPythonSDists(ctx context.Context, dest string, specs []string,
+	files []ManifestFile, projects []PythonProject, skipped []FailedModule,
+) ([]ManifestFile, []PythonProject, []FailedModule) {
+	for i, spec := range specs {
+		name, version, _ := parsePySDistSpec(spec)
+		emitProgress(ctx, "→ sdist [%d/%d] %s%s", i+1, len(specs), name, orDefault(version, " (current)"))
+		mf, pf, err := s.downloadPythonSDist(ctx, dest, name, version)
+		if err != nil {
+			emitProgress(ctx, "  ✗ %s: %s", spec, err)
+			skipped = append(skipped, FailedModule{Module: name, Version: orDefault(version, "current"), Error: err.Error()})
+			continue
+		}
+		files = append(files, mf)
+		projects = appendPythonFile(projects, name, versionFromSdist(pf.Filename, version), pf)
+	}
+	return files, projects, skipped
+}
+
+// versionFromSdist recovers the release version for the project grouping:
+// the pinned version when given, else the version parsed from the filename.
+func versionFromSdist(filename, pinned string) string {
+	if pinned != "" {
+		return pinned
+	}
+	_, v, _ := parseSdistFilename(filename)
+	return v
+}
+
+// appendPythonFile records one distribution file under its project+version,
+// merging with an existing entry (a project can carry wheels and an sdist in
+// one bundle).
+func appendPythonFile(projects []PythonProject, name, version string, f PythonFile) []PythonProject {
+	for i := range projects {
+		if projects[i].NormalizedName == name && projects[i].Version == version {
+			projects[i].Files = append(projects[i].Files, f)
+			return projects
+		}
+	}
+	return append(projects, PythonProject{Name: name, NormalizedName: name, Version: version, Files: []PythonFile{f}})
+}
+
+// downloadPythonSDist resolves one sdist through the index JSON API and
+// downloads it, verifying the API-declared SHA-256. pip is deliberately not
+// involved: downloading an sdist with pip runs the package's own metadata
+// build hooks, and no package-controlled code may run in the process that
+// holds the signing key.
+func (s *LowServer) downloadPythonSDist(ctx context.Context, dest, name, version string) (ManifestFile, PythonFile, error) {
+	apiURL := s.pypiJSONBase() + "/" + url.PathEscape(name) + "/json"
+	if version != "" {
+		apiURL = s.pypiJSONBase() + "/" + url.PathEscape(name) + "/" + url.PathEscape(version) + "/json"
+	}
+	b, err := httpGetBytes(ctx, apiURL, pyMaxJSONAPIBytes)
+	if err != nil {
+		return ManifestFile{}, PythonFile{}, err
+	}
+	var rel pypiRelease
+	if err := json.Unmarshal(b, &rel); err != nil {
+		return ManifestFile{}, PythonFile{}, fmt.Errorf("parse JSON API response: %w", err)
+	}
+	filename, dlURL, sha, err := selectPySDist(rel, name)
+	if err != nil {
+		return ManifestFile{}, PythonFile{}, err
+	}
+	abs := filepath.Join(dest, filename)
+	sum, size, err := downloadVerifiedFile(ctx, dlURL, abs, 0, "sha256", sha)
+	if err != nil {
+		return ManifestFile{}, PythonFile{}, err
+	}
+	relPath := path.Join("python", "packages", filename)
+	pf := PythonFile{Filename: filename, Path: relPath, SHA256: sum, RequiresPython: sdistRequiresPython(abs)}
+	return ManifestFile{Path: relPath, SHA256: sum, Size: size}, pf, nil
+}
+
+// selectPySDist picks the release's source distribution: the .tar.gz form
+// when both exist, requiring an API-declared sha256 and a safe filename that
+// names this project.
+func selectPySDist(rel pypiRelease, name string) (filename, dlURL, sha string, err error) {
+	best := -1
+	for i, u := range rel.Urls {
+		if u.PackageType != "sdist" {
+			continue
+		}
+		if best < 0 || strings.HasSuffix(u.Filename, ".tar.gz") && !strings.HasSuffix(rel.Urls[best].Filename, ".tar.gz") {
+			best = i
+		}
+	}
+	if best < 0 {
+		return "", "", "", errors.New("release publishes no source distribution")
+	}
+	u := rel.Urls[best]
+	if err := validatePySDistFilename(u.Filename, name); err != nil {
+		return "", "", "", err
+	}
+	if parsed, perr := url.Parse(u.URL); perr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", "", "", fmt.Errorf("sdist URL %q is not http(s)", u.URL)
+	}
+	if !regexp.MustCompile(`^[0-9a-fA-F]{64}$`).MatchString(u.Digests["sha256"]) {
+		return "", "", "", errors.New("index declares no sha256 for the sdist (an unverifiable file is never mirrored)")
+	}
+	return u.Filename, u.URL, u.Digests["sha256"], nil
+}
+
+// validatePySDistFilename checks an index-declared sdist filename is a plain,
+// path-safe archive name belonging to the requested project.
+func validatePySDistFilename(filename, name string) error {
+	if filename == "" || strings.ContainsAny(filename, "/\\") || filename[0] == '.' || filename[0] == '-' {
+		return fmt.Errorf("unsafe sdist filename %q", filename)
+	}
+	project, _, ok := parseSdistFilename(filename)
+	if !ok || project != name {
+		return fmt.Errorf("sdist filename %q does not name project %s", filename, name)
+	}
+	return nil
 }
 
 // parseSdistFilename does a best-effort split of a source-distribution filename

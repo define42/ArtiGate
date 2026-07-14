@@ -1,12 +1,17 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -733,5 +738,206 @@ func TestCollectPythonDistRequiresPython(t *testing.T) {
 	}
 	if got := projects[0].Files[0].RequiresPython; got != ">=3.10" {
 		t.Errorf("manifest RequiresPython = %q, want %q", got, ">=3.10")
+	}
+}
+
+// -----------------------------------------------------------------------------
+// SDist opt-in: spec parsing, JSON API resolution, collection, serving
+// -----------------------------------------------------------------------------
+
+func TestPySDistSpecParse(t *testing.T) {
+	for spec, want := range map[string][2]string{
+		"requests":            {"requests", ""},
+		"My_Package==1.2.3":   {"my-package", "1.2.3"},
+		"pkg==2!1.0":          {"pkg", "2!1.0"},
+		"some.pkg==0.9.1.el7": {"some-pkg", "0.9.1.el7"},
+	} {
+		name, version, err := parsePySDistSpec(spec)
+		if err != nil || name != want[0] || version != want[1] {
+			t.Errorf("parsePySDistSpec(%q) = %q, %q, %v; want %q, %q", spec, name, version, err, want[0], want[1])
+		}
+	}
+	for _, spec := range []string{"", "-flag", "pkg==", "pkg==v1", "pkg>=1.0", "a/b", "pkg==1.0 --index-url=x", "pkg @ http://x"} {
+		if _, _, err := parsePySDistSpec(spec); err == nil {
+			t.Errorf("parsePySDistSpec(%q) = nil error, want rejection", spec)
+		}
+	}
+}
+
+// pyTestSdistTarGz builds a source distribution containing
+// "<name>-<version>/PKG-INFO" with the given Requires-Python.
+func pyTestSdistTarGz(t *testing.T, name, version, requiresPython string) []byte {
+	t.Helper()
+	info := fmt.Sprintf("Metadata-Version: 2.1\nName: %s\nVersion: %s\n", name, version)
+	if requiresPython != "" {
+		info += "Requires-Python: " + requiresPython + "\n"
+	}
+	info += "\nBody text.\n"
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, f := range []struct{ name, body string }{
+		{name + "-" + version + "/PKG-INFO", info},
+		{name + "-" + version + "/setup.py", "raise SystemExit('never runs on the low side')\n"},
+	} {
+		hdr := &tar.Header{Name: f.name, Mode: 0o644, Size: int64(len(f.body)), Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(f.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// fakePyJSONAPI serves the index JSON API for one package plus its sdist
+// bytes; a tampered flag corrupts the declared digest.
+func fakePyJSONAPI(t *testing.T, name, version string, body []byte, tampered bool) *httptest.Server {
+	t.Helper()
+	filename := name + "-" + version + ".tar.gz"
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+	if tampered {
+		digest = strings.Repeat("0", 64)
+	}
+	mux := http.NewServeMux()
+	var srv *httptest.Server
+	release := func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{
+			"info": map[string]any{"name": name, "version": version},
+			"urls": []map[string]any{
+				{"filename": name + "-" + version + ".zip", "packagetype": "sdist", "url": srv.URL + "/files/ignored.zip", "digests": map[string]string{"sha256": digest}},
+				{"filename": filename, "packagetype": "sdist", "url": srv.URL + "/files/" + filename, "digests": map[string]string{"sha256": digest}},
+				{"filename": name + "-" + version + "-py3-none-any.whl", "packagetype": "bdist_wheel", "url": srv.URL + "/files/unused.whl", "digests": map[string]string{"sha256": digest}},
+			},
+		})
+	}
+	mux.HandleFunc("/"+name+"/json", release)
+	mux.HandleFunc("/"+name+"/"+version+"/json", release)
+	mux.HandleFunc("/files/"+filename, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
+	srv = httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestPythonSDistCollect mirrors an sdist-only package through the JSON API
+// (no pip involved: the request carries no requirements, so the fake pip
+// would fail loudly if invoked), verifies the API digest, reads
+// Requires-Python from the artifact's own PKG-INFO, and reports a missing
+// package as skipped without failing the batch.
+func TestPythonSDistCollect(t *testing.T) {
+	body := pyTestSdistTarGz(t, "purepkg", "1.0.0", ">=3.9")
+	api := fakePyJSONAPI(t, "purepkg", "1.0.0", body, false)
+
+	ls, _ := newPyLowServer(t)
+	ls.cfg.PyPIJSON = api.URL
+	res, err := ls.CollectPython(context.Background(), PythonCollectRequest{
+		SDists: []string{"purepkg==1.0.0", "ghost==9.9"},
+	})
+	if err != nil {
+		t.Fatalf("CollectPython: %v", err)
+	}
+	if res.ExportedModules != 1 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if len(res.SkippedModules) != 1 || res.SkippedModules[0].Module != "ghost" {
+		t.Fatalf("skipped = %+v, want ghost", res.SkippedModules)
+	}
+
+	b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, res.BundleID+".manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m BundleManifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Python == nil || len(m.Python.Projects) != 1 {
+		t.Fatalf("manifest projects = %+v", m.Python)
+	}
+	p := m.Python.Projects[0]
+	if p.NormalizedName != "purepkg" || p.Version != "1.0.0" || len(p.Files) != 1 {
+		t.Fatalf("project = %+v", p)
+	}
+	f := p.Files[0]
+	if f.Filename != "purepkg-1.0.0.tar.gz" || f.RequiresPython != ">=3.9" {
+		t.Errorf("sdist file record = %+v (Requires-Python must come from PKG-INFO)", f)
+	}
+}
+
+// TestPythonSDistTamper proves an API-declared digest that does not match the
+// served bytes fails that sdist (and a sole tampered sdist fails the
+// collect).
+func TestPythonSDistTamper(t *testing.T) {
+	body := pyTestSdistTarGz(t, "purepkg", "1.0.0", "")
+	api := fakePyJSONAPI(t, "purepkg", "1.0.0", body, true)
+	ls, _ := newPyLowServer(t)
+	ls.cfg.PyPIJSON = api.URL
+	if _, err := ls.CollectPython(context.Background(), PythonCollectRequest{SDists: []string{"purepkg"}}); err == nil {
+		t.Fatal("tampered sdist digest did not fail the collect")
+	}
+}
+
+func TestSelectPySDist(t *testing.T) {
+	var rel pypiRelease
+	rel.Urls = []struct {
+		Filename    string            `json:"filename"`
+		PackageType string            `json:"packagetype"`
+		URL         string            `json:"url"`
+		Digests     map[string]string `json:"digests"`
+	}{
+		{Filename: "purepkg-1.0.0.zip", PackageType: "sdist", URL: "https://x/z.zip", Digests: map[string]string{"sha256": strings.Repeat("a", 64)}},
+		{Filename: "purepkg-1.0.0.tar.gz", PackageType: "sdist", URL: "https://x/t.tgz", Digests: map[string]string{"sha256": strings.Repeat("b", 64)}},
+	}
+	filename, _, sha, err := selectPySDist(rel, "purepkg")
+	if err != nil || filename != "purepkg-1.0.0.tar.gz" || sha != strings.Repeat("b", 64) {
+		t.Fatalf("selectPySDist = %q, %q, %v; want the tar.gz form", filename, sha, err)
+	}
+	rel.Urls[1].Digests = map[string]string{}
+	rel.Urls = rel.Urls[1:]
+	if _, _, _, err := selectPySDist(rel, "purepkg"); err == nil {
+		t.Error("sdist without a sha256 accepted")
+	}
+	rel.Urls[0].Digests = map[string]string{"sha256": strings.Repeat("b", 64)}
+	rel.Urls[0].Filename = "../../evil.tar.gz"
+	if _, _, _, err := selectPySDist(rel, "purepkg"); err == nil {
+		t.Error("unsafe sdist filename accepted")
+	}
+	rel.Urls[0].Filename = "otherpkg-1.0.0.tar.gz"
+	if _, _, _, err := selectPySDist(rel, "purepkg"); err == nil {
+		t.Error("sdist naming another project accepted")
+	}
+}
+
+// TestPythonSDistServing places an sdist beside the wheels and asserts the
+// Simple API lists it with the requires-python read from its PKG-INFO.
+func TestPythonSDistServing(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	body := pyTestSdistTarGz(t, "purepkg", "1.0.0", ">=3.8")
+	if err := os.MkdirAll(hs.pythonDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(hs.pythonDir(), "purepkg-1.0.0.tar.gz"), body)
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	code, page := httpGet(t, srv.URL+"/simple/purepkg/")
+	if code != http.StatusOK {
+		t.Fatalf("project page status %d", code)
+	}
+	if !strings.Contains(page, "purepkg-1.0.0.tar.gz") || !strings.Contains(page, `data-requires-python="&gt;=3.8"`) {
+		t.Errorf("project page missing the sdist or its requires-python:\n%s", page)
+	}
+	if code, got := httpGet(t, srv.URL+"/packages/purepkg-1.0.0.tar.gz"); code != http.StatusOK || got != string(body) {
+		t.Errorf("sdist download: status %d, %d bytes (want %d)", code, len(got), len(body))
 	}
 }
