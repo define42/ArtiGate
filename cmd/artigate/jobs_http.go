@@ -188,6 +188,9 @@ func (s *LowServer) enqueueCollect(w http.ResponseWriter, r *http.Request, strea
 		}
 		j.Label = manualCollectLabel(stream, body)
 	}
+	if wantsDryRunCollect(r) {
+		j.Label += " (dry run)"
+	}
 	if _, err := s.jobs.enqueue(parent, j); err != nil {
 		http.Error(w, err.Error(), jobEnqueueStatus(err))
 		return nil, false

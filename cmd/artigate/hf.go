@@ -443,7 +443,8 @@ func hfManifestMediaType(contentType, bodyType string) string {
 // (shared between variants) are skipped, and a blob whose digest this stream
 // has already forwarded is not downloaded at all — it becomes a prior manifest
 // reference (blobs are content-addressed, so the descriptor supplies
-// everything the manifest entry needs).
+// everything the manifest entry needs). A dry run accounts for new blobs from
+// the descriptor the same way, skipping their downloads too.
 func (c *hfClient) downloadHFBlob(ctx context.Context, ref hfRef, desc ociDescriptor, stageRoot string, staged map[string]bool) (ManifestFile, error) {
 	if !containerDigestRE.MatchString(desc.Digest) {
 		return ManifestFile{}, fmt.Errorf("%s: unsupported blob digest %q (only sha256 is supported)", ref, desc.Digest)
@@ -460,6 +461,11 @@ func (c *hfClient) downloadHFBlob(ctx context.Context, ref hfRef, desc ociDescri
 		emitProgress(ctx, "    ≡ blob %s already forwarded (download skipped)", shortDigest(desc.Digest))
 		staged[rel] = true
 		mf.Prior = true
+		return mf, nil
+	}
+	if skipDownloadForDryRun(ctx, mf.SHA256, desc.Size) {
+		emitProgress(ctx, "    ~ blob %s (%s)", shortDigest(desc.Digest), formatBytes(desc.Size))
+		staged[rel] = true
 		return mf, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, hfBlobDownloadTimeout)
@@ -572,8 +578,9 @@ func (c *hfClient) downloadHFRepoFile(ctx context.Context, ref hfRepoRef, commit
 // downloadHFRepoLFSFile streams an LFS-backed file straight to its blob path,
 // verifying the upstream SHA-256 and size. The Hub API declares LFS files'
 // SHA-256 up front, so one this stream has already forwarded is not downloaded
-// at all — it becomes a prior manifest reference. (Non-LFS files carry no
-// upstream hash and are always fetched.)
+// at all — it becomes a prior manifest reference — and a dry run skips new
+// LFS downloads the same way. (Non-LFS files carry no upstream hash and are
+// always fetched.)
 func (c *hfClient) downloadHFRepoLFSFile(ctx context.Context, ref hfRepoRef, meta hfRepoFileMeta, rawURL, stageRoot string, staged map[string]bool) (HFRepoFile, ManifestFile, error) {
 	rel := hfBlobRel("sha256:" + meta.LFS)
 	rf := HFRepoFile{Path: meta.Path, SHA256: meta.LFS, Size: meta.Size}
@@ -585,6 +592,11 @@ func (c *hfClient) downloadHFRepoLFSFile(ctx context.Context, ref hfRepoRef, met
 		emitProgress(ctx, "    ≡ %s already forwarded (download skipped)", meta.Path)
 		staged[rel] = true
 		mf.Prior = true
+		return rf, mf, nil
+	}
+	if skipDownloadForDryRun(ctx, meta.LFS, meta.Size) {
+		emitProgress(ctx, "    ~ %s (%s)", meta.Path, formatBytes(meta.Size))
+		staged[rel] = true
 		return rf, mf, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, hfBlobDownloadTimeout)
