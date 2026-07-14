@@ -65,17 +65,9 @@ type UITreeNode struct {
 // window so that lazily expanding many nodes does not re-walk the repository on
 // every request.
 type treeCache struct {
-	mu         sync.Mutex
-	expiry     time.Time
-	mods       []UIModule
-	python     []UIProject
-	maven      []UIModule
-	apt        []UIModule
-	rpm        []UIModule
-	containers []UIModule
-	npm        []UIModule
-	hf         []UIModule
-	uploads    []UploadedFolder
+	mu     sync.Mutex
+	expiry time.Time
+	lists  ecoLists
 }
 
 func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
@@ -177,8 +169,10 @@ func (s *HighServer) handleUIRepos(w http.ResponseWriter, r *http.Request) {
 		repos, err = s.containerRepoList()
 	case "hf":
 		repos, err = s.hfRepoList()
+	case "apk":
+		repos, err = s.apkRepoList()
 	default:
-		http.Error(w, "repos are only available for apt, rpm, containers, and hf", http.StatusBadRequest)
+		http.Error(w, "repos are only available for apt, rpm, containers, hf, and apk", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
@@ -201,34 +195,35 @@ func (s *HighServer) handleUITree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var nodes []UITreeNode
-	switch eco {
-	case "python":
-		nodes = pythonTreeChildren(lists.python, path)
-	case "maven":
-		// Maven coordinates and APT mirror/package keys form slash-separated path
-		// trees just like Go module paths, so the same segment-tree builder applies.
-		nodes = goTreeChildren(lists.maven, path)
-	case "apt":
-		nodes = goTreeChildren(lists.apt, path)
-	case "rpm":
-		nodes = goTreeChildren(lists.rpm, path)
-	case "containers":
-		nodes = goTreeChildren(lists.containers, path)
-	case "hf":
-		// Model names are "<org>/<name>", so the segment-tree builder groups
-		// them by organization, with the variant tags as version leaves.
-		nodes = goTreeChildren(lists.hf, path)
-	case "npm":
-		// npm names are flat (a scope is part of the name, not a directory), so
-		// the two-level package -> versions tree applies.
-		nodes = npmTreeChildren(lists.npm, path)
-	case "uploads":
-		nodes = uploadsTreeChildren(lists.uploads, path)
-	default:
-		nodes = goTreeChildren(lists.mods, path)
+	writeJSON(w, map[string][]UITreeNode{"nodes": ecoTreeChildren(lists, eco, path)})
+}
+
+// ecoTreeChildren picks the tree builder an ecosystem's names call for:
+// slash-separated names (Go modules, Maven coordinates, mirror/package keys,
+// terraform addresses) use the segment tree; flat names (npm — a scope is part
+// of the name — crates, nuget) use the two-level package tree.
+func ecoTreeChildren(lists ecoLists, eco, path string) []UITreeNode {
+	segmentTrees := map[string][]UIModule{
+		"maven": lists.maven, "apt": lists.apt, "rpm": lists.rpm,
+		"containers": lists.containers, "hf": lists.hf, "terraform": lists.terraform,
+		"helm": lists.helm, "apk": lists.apk,
 	}
-	writeJSON(w, map[string][]UITreeNode{"nodes": nodes})
+	flatTrees := map[string][]UIModule{
+		"npm": lists.npm, "crates": lists.crates, "nuget": lists.nuget,
+	}
+	if eco == "python" {
+		return pythonTreeChildren(lists.python, path)
+	}
+	if eco == "uploads" {
+		return uploadsTreeChildren(lists.uploads, path)
+	}
+	if mods, ok := segmentTrees[eco]; ok {
+		return goTreeChildren(mods, path)
+	}
+	if pkgs, ok := flatTrees[eco]; ok {
+		return npmTreeChildren(pkgs, path)
+	}
+	return goTreeChildren(lists.mods, path)
 }
 
 // ecoLists holds the mirrored inventory for each ecosystem's dashboard tree.
@@ -241,6 +236,11 @@ type ecoLists struct {
 	containers []UIModule
 	npm        []UIModule
 	hf         []UIModule
+	crates     []UIModule
+	terraform  []UIModule
+	helm       []UIModule
+	nuget      []UIModule
+	apk        []UIModule
 	uploads    []UploadedFolder
 }
 
@@ -250,47 +250,49 @@ func (s *HighServer) cachedLists() (ecoLists, error) {
 	s.tree.mu.Lock()
 	defer s.tree.mu.Unlock()
 	if time.Now().Before(s.tree.expiry) {
-		return ecoLists{mods: s.tree.mods, python: s.tree.python, maven: s.tree.maven, apt: s.tree.apt, rpm: s.tree.rpm, containers: s.tree.containers, npm: s.tree.npm, hf: s.tree.hf, uploads: s.tree.uploads}, nil
+		return s.tree.lists, nil
 	}
-	mods, err := s.listGoModules()
+	fresh, err := s.scanEcoLists()
 	if err != nil {
 		return ecoLists{}, err
 	}
-	python, err := s.listPythonProjects()
-	if err != nil {
-		return ecoLists{}, err
-	}
-	maven, err := s.listMavenArtifacts()
-	if err != nil {
-		return ecoLists{}, err
-	}
-	apt, err := s.listAptMirrors()
-	if err != nil {
-		return ecoLists{}, err
-	}
-	rpm, err := s.listRpmMirrors()
-	if err != nil {
-		return ecoLists{}, err
-	}
-	containers, err := s.listContainerRepos()
-	if err != nil {
-		return ecoLists{}, err
-	}
-	npm, err := s.listNpmPackages()
-	if err != nil {
-		return ecoLists{}, err
-	}
-	hf, err := s.listHFModels()
-	if err != nil {
-		return ecoLists{}, err
-	}
-	uploads, err := s.listUploadedFolders()
-	if err != nil {
-		return ecoLists{}, err
-	}
-	s.tree.mods, s.tree.python, s.tree.maven, s.tree.apt, s.tree.rpm, s.tree.containers, s.tree.npm, s.tree.hf, s.tree.uploads = mods, python, maven, apt, rpm, containers, npm, hf, uploads
+	s.tree.lists = fresh
 	s.tree.expiry = time.Now().Add(3 * time.Second)
-	return ecoLists{mods: mods, python: python, maven: maven, apt: apt, rpm: rpm, containers: containers, npm: npm, hf: hf, uploads: uploads}, nil
+	return fresh, nil
+}
+
+// scanEcoLists walks every ecosystem's repository tree once.
+func (s *HighServer) scanEcoLists() (ecoLists, error) {
+	var out ecoLists
+	var err error
+	if out.python, err = s.listPythonProjects(); err != nil {
+		return ecoLists{}, err
+	}
+	if out.uploads, err = s.listUploadedFolders(); err != nil {
+		return ecoLists{}, err
+	}
+	for _, scan := range []struct {
+		dst  *[]UIModule
+		list func() ([]UIModule, error)
+	}{
+		{&out.mods, s.listGoModules},
+		{&out.maven, s.listMavenArtifacts},
+		{&out.apt, s.listAptMirrors},
+		{&out.rpm, s.listRpmMirrors},
+		{&out.containers, s.listContainerRepos},
+		{&out.npm, s.listNpmPackages},
+		{&out.hf, s.listHFModels},
+		{&out.crates, s.listCratesPackages},
+		{&out.terraform, s.listTerraformItems},
+		{&out.helm, s.listHelmCharts},
+		{&out.nuget, s.listNugetPackages},
+		{&out.apk, s.listApkPackages},
+	} {
+		if *scan.dst, err = scan.list(); err != nil {
+			return ecoLists{}, err
+		}
+	}
+	return out, nil
 }
 
 // goTreeChildren returns the immediate children of prefix in the Go module path
@@ -528,31 +530,18 @@ type UIImageLayer struct {
 // handleUIDetail returns details for a selected leaf. path is "module@version"
 // for Go and a wheel filename for Python.
 func (s *HighServer) handleUIDetail(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Query().Get("path")
-	var (
-		detail UIDetail
-		err    error
-	)
-	switch r.URL.Query().Get("eco") {
-	case "python":
-		detail, err = s.pythonDetail(path)
-	case "maven":
-		detail, err = s.mavenDetail(path)
-	case "apt":
-		detail, err = s.aptDetail(path)
-	case "rpm":
-		detail, err = s.rpmDetail(path)
-	case "containers":
-		detail, err = s.containerDetail(path)
-	case "npm":
-		detail, err = s.npmDetail(path)
-	case "hf":
-		detail, err = s.hfDetail(path)
-	case "uploads":
-		detail, err = s.uploadsDetail(path)
-	default:
-		detail, err = s.goDetail(path)
+	details := map[string]func(string) (UIDetail, error){
+		"python": s.pythonDetail, "maven": s.mavenDetail, "apt": s.aptDetail,
+		"rpm": s.rpmDetail, "containers": s.containerDetail, "npm": s.npmDetail,
+		"hf": s.hfDetail, "crates": s.cratesDetail, "terraform": s.terraformDetail,
+		"helm": s.helmDetail, "nuget": s.nugetDetail, "apk": s.apkDetail,
+		"uploads": s.uploadsDetail,
 	}
+	describe, ok := details[r.URL.Query().Get("eco")]
+	if !ok {
+		describe = s.goDetail
+	}
+	detail, err := describe(r.URL.Query().Get("path"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return

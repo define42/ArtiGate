@@ -13,6 +13,11 @@ const VIEW_TITLES = {
     rpm: "RPM packages",
     containers: "Container images",
     hf: "AI models (Hugging Face)",
+    crates: "Rust crates",
+    terraform: "Terraform providers & modules",
+    helm: "Helm charts",
+    nuget: "NuGet packages",
+    apk: "Alpine packages",
     uploads: "Uploaded files",
 };
 let currentView = "overview";
@@ -55,6 +60,11 @@ const STREAM_LABELS = {
     rpm: "RPM",
     containers: "Containers",
     hf: "AI Models",
+    crates: "Crates",
+    terraform: "Terraform",
+    helm: "Helm",
+    nuget: "NuGet",
+    apk: "Alpine",
     uploads: "Uploads",
 };
 function streamLabel(name) {
@@ -896,6 +906,112 @@ function hfGuideSection(repos) {
         note: notes.join(" "),
     };
 }
+function cratesGuideSection(base) {
+    return {
+        heading: "Rust crates",
+        body: "Use this mirror as cargo's registry via a sparse index. Replacing " +
+            "crates.io with source replacement keeps Cargo.toml files unchanged.",
+        blocks: [
+            {
+                label: "~/.cargo/config.toml",
+                code: `[source.crates-io]\nreplace-with = "artigate"\n\n[source.artigate]\n` +
+                    `registry = "sparse+${base}/crates/index/"\n\n[registries.artigate]\n` +
+                    `index = "sparse+${base}/crates/index/"`,
+            },
+            { label: "Build", code: "cargo build --locked" },
+        ],
+        note: "Only crates mirrored here resolve. Dev-dependencies are not followed by " +
+            "the low side's resolver — mirror them explicitly if a build needs them.",
+    };
+}
+function terraformGuideSection(base) {
+    const host = window.location.host;
+    return {
+        heading: "Terraform / OpenTofu",
+        body: "This mirror speaks the provider and module registry protocols. Use " +
+            "this host as the registry part of source addresses, or mirror " +
+            "registry.terraform.io wholesale via provider_installation.",
+        blocks: [
+            {
+                label: "~/.terraformrc  (network_mirror needs HTTPS)",
+                code: `provider_installation {\n  network_mirror {\n    url = "${base}/terraform/v1/providers/"\n  }\n}`,
+            },
+            {
+                label: "Or address providers/modules explicitly",
+                code: `terraform {\n  required_providers {\n    aws = { source = "${host}/hashicorp/aws" }\n  }\n}\n\n` +
+                    `module "vpc" {\n  source  = "${host}/terraform-aws-modules/vpc/aws"\n  version = "~> 5.0"\n}`,
+            },
+        ],
+        note: "Provider zips verify against the mirrored upstream SHA256SUMS and its " +
+            "GPG signature, so terraform's own trust chain still applies.",
+    };
+}
+function helmGuideSection(base) {
+    return {
+        heading: "Helm charts",
+        body: "Each mirrored upstream repo is served as a classic Helm repository " +
+            "under its mirror name (see the tree's top-level folders).",
+        blocks: [
+            {
+                label: "Add the repo",
+                code: `helm repo add <mirror> ${base}/helm/<mirror>\nhelm repo update`,
+            },
+            { label: "Install", code: "helm install my-release <mirror>/<chart> --version <version>" },
+        ],
+        note: "index.yaml is regenerated on the high side from each chart's own " +
+            "Chart.yaml, and chart digests are recomputed from the verified archives.",
+    };
+}
+function nugetGuideSection(base) {
+    return {
+        heading: "NuGet packages",
+        body: "Use this mirror as the only NuGet package source (a standard v3 feed).",
+        blocks: [
+            {
+                label: "nuget.config (next to the solution, or ~/.nuget/NuGet/NuGet.Config)",
+                code: `<configuration>\n  <packageSources>\n    <clear />\n    ` +
+                    `<add key="artigate" value="${base}/nuget/v3/index.json" protocolVersion="3" />\n` +
+                    `  </packageSources>\n</configuration>`,
+            },
+            { label: "Restore", code: "dotnet restore" },
+        ],
+        note: "<clear /> removes nuget.org so this mirror is the single source of " +
+            "truth. Package metadata is regenerated from each package's own .nuspec.",
+    };
+}
+// apkGuideSection shows /etc/apk/repositories lines for each mirrored Alpine
+// mirror, built from the live repo list so they are copy-paste ready.
+function apkGuideSection(repos) {
+    const base = serverBase();
+    const lines = [];
+    for (const r of repos.slice(0, 4)) {
+        for (const s of r.suites ?? []) {
+            for (const comp of s.components ?? []) {
+                lines.push(`${base}/apk/${r.name}/${s.name}/${comp}`);
+            }
+        }
+    }
+    const example = lines.length ? lines.join("\n") : `${base}/apk/<mirror>/<branch>/<repo>`;
+    const signed = repos.some((r) => r.signed);
+    const blocks = [{ label: "/etc/apk/repositories", code: example }];
+    if (signed) {
+        blocks.push({
+            label: "Install the mirror's signing key (once)",
+            code: `wget -O /etc/apk/keys/artigate.rsa.pub ${base}/apk/keys/artigate.rsa.pub\napk update`,
+        });
+    }
+    else {
+        blocks.push({ label: "Update (unsigned index)", code: "apk update --allow-untrusted\napk add --allow-untrusted <package>" });
+    }
+    return {
+        heading: "Alpine packages",
+        body: "Point apk at the mirrored branches/repositories.",
+        blocks,
+        note: signed
+            ? "The high side re-signs APKINDEX with its own RSA key; install the public key once and apk verifies every update."
+            : "The regenerated APKINDEX is unsigned (no --apk-rsa-key configured), so apk needs --allow-untrusted. Content was still hash-verified end-to-end when its signed bundle was imported.",
+    };
+}
 // openGuide shows the whole-ecosystem setup for Go/Python/Maven/containers
 // (one config for the mirror). APT/RPM set up per repository instead, via
 // openRepoGuide.
@@ -906,10 +1022,10 @@ function openGuide() {
     byId("guideTitle").textContent = `Set up ${VIEW_TITLES[currentView]}`;
     body.textContent = "";
     body.appendChild(guideIntro(currentView, base));
-    if (currentView === "containers" || currentView === "hf") {
+    if (currentView === "containers" || currentView === "hf" || currentView === "apk") {
         // Built from the live repo list so the pull commands are copy-paste ready.
         const view = currentView;
-        const section = (repos) => view === "hf" ? hfGuideSection(repos) : containersGuideSection(repos);
+        const section = (repos) => view === "hf" ? hfGuideSection(repos) : view === "apk" ? apkGuideSection(repos) : containersGuideSection(repos);
         const loading = document.createElement("p");
         loading.className = "empty";
         loading.textContent = "Loading…";
@@ -931,7 +1047,15 @@ function openGuide() {
                 ? mavenGuideSection(base)
                 : currentView === "npm"
                     ? npmGuideSection(base)
-                    : goGuideSection(base);
+                    : currentView === "crates"
+                        ? cratesGuideSection(base)
+                        : currentView === "terraform"
+                            ? terraformGuideSection(base)
+                            : currentView === "helm"
+                                ? helmGuideSection(base)
+                                : currentView === "nuget"
+                                    ? nugetGuideSection(base)
+                                    : goGuideSection(base);
         renderGuideSections(body, [section]);
     }
     if (!dialog.open) {

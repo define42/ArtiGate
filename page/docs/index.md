@@ -1,6 +1,6 @@
 # ArtiGate
 
-ArtiGate is a dependency mirror for **one-way data-diode / air-gapped networks**. It fetches Go modules, Python (PyPI) wheels, Java (Maven) artifacts, NPM packages, APT (`.deb`) and RPM (`.rpm`) repositories, container images, and AI models from Hugging Face from the internet, carries them across a diode as signed numbered bundles, and serves them on the isolated side in each ecosystem's native format.
+ArtiGate is a dependency mirror for **one-way data-diode / air-gapped networks**. It fetches Go modules, Python (PyPI) wheels, Java (Maven) artifacts, NPM packages, Rust crates, Terraform/OpenTofu providers and modules, Helm charts, NuGet packages, APT (`.deb`), RPM (`.rpm`), and Alpine (`.apk`) repositories, container images, and AI models from Hugging Face from the internet, carries them across a diode as signed numbered bundles, and serves them on the isolated side in each ecosystem's native format.
 
 !!! note "One binary, two modes"
     A single `artigate` executable runs as either the internet-side exporter (`artigate low`) or the air-gapped read-only mirror (`artigate high`). The low side **delegates fetching** to the host's own `go`/`git`, `pip`, `mvn`, `npm`, and `gpgv` tools. The high side **never invokes them and never touches the network** — it only imports, verifies, and serves what already crossed the diode.
@@ -12,13 +12,13 @@ ArtiGate is a dependency mirror for **one-way data-diode / air-gapped networks**
          fetch + sign        carry across          verify + serve
 ```
 
-1. **Low side** — from its web dashboard you give it a spec (a `go.mod` or module list, a Python requirements list, Maven coordinates, a `package.json` or NPM package list, an APT source stanza, a `.repo`, a list of container images, or Hugging Face model references). It fetches the closure from upstream and writes a **signed, numbered bundle** — three files per bundle: `<id>.tar.gz`, `<id>.manifest.json`, and `<id>.manifest.json.sig` — into the export directory.
+1. **Low side** — from its web dashboard you give it a spec (a `go.mod` or module list, a Python requirements list, Maven coordinates, a `package.json` or NPM package list, a crate/provider/chart/NuGet list, an APT source stanza, a `.repo`, an Alpine repositories file, a list of container images, or Hugging Face model references). It fetches the closure from upstream and writes a **signed, numbered bundle** — three files per bundle: `<id>.tar.gz`, `<id>.manifest.json`, and `<id>.manifest.json.sig` — into the export directory.
 2. **Diode** — a one-way transfer carries those three files into the high side's landing directory: something moves the files (ArtiGate never performs that move itself), or the optional **HTTP diode transport** does — the low side uploads each bundle to an HTTP endpoint (`ARTIGATE_DIODE_URL`) and the high side ingests uploads at `/diode/` (`ARTIGATE_DIODE_INGEST=on`) — or the [built-in UDP diode](data-diode.md) drives a one-way fiber directly.
-3. **High side** — it imports each stream's bundles strictly in sequence, verifies the Ed25519 signature and every file's SHA-256 hash, installs artifacts immutably, and **regenerates** all repository metadata from the artifacts actually present. It then serves clients as a GOPROXY, a PyPI index, a Maven 2 repository, an NPM registry, APT/RPM repositories, a read-only OCI registry, and an Ollama-compatible model registry plus the Hub download API for AI models.
+3. **High side** — it imports each stream's bundles strictly in sequence, verifies the Ed25519 signature and every file's SHA-256 hash, installs artifacts immutably, and **regenerates** all repository metadata from the artifacts actually present. It then serves clients as a GOPROXY, a PyPI index, a Maven 2 repository, an NPM registry, a cargo sparse registry, a Terraform/OpenTofu provider+module registry, Helm repositories, a NuGet v3 feed, APT/RPM/Alpine repositories, a read-only OCI registry, and an Ollama-compatible model registry plus the Hub download API for AI models.
 
 Each ecosystem is an independently numbered **stream**, so a stalled or missing bundle in one stream never blocks the others.
 
-## The eight ecosystems
+## The thirteen ecosystems
 
 | Ecosystem | Low side mirrors | High side serves as | Client prefix |
 |---|---|---|---|
@@ -30,6 +30,11 @@ Each ecosystem is an independently numbered **stream**, so a stalled or missing 
 | **RPM (RHEL/Fedora)** | a yum/dnf `.repo` stanza with a concrete `baseurl`; **x86_64 + noarch** packages by default | RPM repository | `/rpm/<mirror>` |
 | **Container images (OCI)** | image refs (`alpine:3.20`, `ghcr.io/org/app:v1`), optional tag version constraints; **linux/amd64 only** | read-only OCI registry (Docker Registry v2) | `/v2/` |
 | **AI models (Hugging Face)** | GGUF variants (`hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0`) and full repository snapshots (`openai/gpt-oss-20b`) pinned to a commit | Ollama-compatible registry + Hub download API (`HF_ENDPOINT`) | `/v2/`, `/hf/`, `/api/models/` |
+| **Rust crates** | crate specs (`serde@1.0.203`, or bare for the newest release); the transitive graph resolved against the sparse index, every `.crate` verified against the index checksum | cargo sparse registry | `/crates/` |
+| **Terraform / OpenTofu** | provider addresses per platform (`linux_amd64` by default) and registry modules; zips verified against the registry checksum, the upstream `SHA256SUMS`/`.sig`/signing keys mirrored too | Terraform provider + module registry protocols | `/.well-known/terraform.json`, `/terraform/` |
+| **Helm charts** | a classic chart repo URL plus chart specs (`nginx@21.1.0`); archives verified against the index digest when declared | Helm (`index.yaml`) repository per mirror | `/helm/<mirror>` |
+| **NuGet** | package specs (`Newtonsoft.Json@13.0.3`); nuspec dependencies resolved like NuGet restore (lowest applicable version) | NuGet v3 feed | `/nuget/` |
+| **Alpine (apk)** | a mirror base + branches/repos/arches (defaults `main`, `x86_64`), or a pasted `/etc/apk/repositories` file; **newest-only by default** | Alpine repository (regenerated `APKINDEX.tar.gz`, optionally RSA-signed) | `/apk/<mirror>` |
 
 See [Ecosystems](ecosystems/index.md) for the per-ecosystem detail pages.
 
@@ -50,6 +55,6 @@ See [Ecosystems](ecosystems/index.md) for the per-ecosystem detail pages.
 - [Architecture](architecture.md) — the deep model: streams, bundle format, signing, delta bundles, and the import loop.
 - [Low side](low-side.md) — operating the exporter: collecting, scheduling, and re-export.
 - [High side](high-side.md) — operating the mirror: importing, status, and serving clients.
-- [Ecosystems](ecosystems/index.md) — the eight ecosystems and their client setup.
+- [Ecosystems](ecosystems/index.md) — the thirteen ecosystems and their client setup.
 - [Configuration reference](configuration.md) — every flag and environment variable.
 - [Security & trust](security.md) — the trust story and hardening guidance.

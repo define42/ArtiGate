@@ -37,7 +37,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install client tools (dnf, rpm, huggingface_hub CLI)
+      - name: Install client tools (dnf, rpm, huggingface_hub CLI, terraform)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends dnf rpm
@@ -45,6 +45,13 @@ jobs:
             pipx install huggingface_hub
           else
             python3 -m pip install --user --break-system-packages huggingface_hub
+          fi
+          # The ubuntu-24.04 image dropped the HashiCorp tools; install a
+          # pinned terraform when neither it nor tofu is present.
+          if ! command -v terraform >/dev/null 2>&1 && ! command -v tofu >/dev/null 2>&1; then
+            curl -fsSL -o /tmp/terraform.zip \
+              "https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip"
+            sudo unzip -o /tmp/terraform.zip -d /usr/local/bin terraform
           fi
 
       - name: Preflight tool and upstream checks
@@ -60,14 +67,32 @@ jobs:
           rpm --version
           curl --version | head -1
           hf version || huggingface-cli version
+          cargo --version
+          (terraform -version || tofu -version) | head -1
+          helm version --short
+          dotnet --version
           # Fail fast if the suite's default GGUF reference has rotted
           # upstream (keep in sync with defaultGGUF in e2e/hf_test.go).
           curl -fsSI -o /dev/null "https://huggingface.co/v2/bartowski/SmolLM2-135M-Instruct-GGUF/manifests/Q4_K_M"
+          # ...and that the new streams' upstreams answer at all (keep in
+          # sync with the pins in e2e/{crates,terraform,helm,nuget,apk}_test.go).
+          curl -fsS -o /dev/null "https://index.crates.io/config.json"
+          curl -fsS -o /dev/null "https://registry.terraform.io/.well-known/terraform.json"
+          curl -fsSI -o /dev/null "https://charts.jetstack.io/index.yaml"
+          curl -fsS -o /dev/null "https://api.nuget.org/v3/index.json"
+          curl -fsSI -o /dev/null "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/x86_64/APKINDEX.tar.gz"
 
       - name: Run end-to-end suite
         env:
           ARTIGATE_E2E_REQUIRE_ALL: "1"
           ARTIGATE_E2E_WORKDIR: ${{ runner.temp }}/artigate-e2e
+          # Optional: a Hugging Face access token (read scope) authenticates
+          # the HF collects. Anonymous LFS downloads from shared runner IPs
+          # get intermittently rate-limited (HTTP 403 on public models),
+          # which flakes TestHFRepo/TestHFGGUF; the harness passes this
+          # through to the low server, and an unset secret keeps today's
+          # anonymous behavior.
+          ARTIGATE_HF_TOKEN: ${{ secrets.ARTIGATE_HF_TOKEN }}
         run: go test -tags e2e -v -count=1 -timeout 25m ./e2e
 
       - name: Upload server logs

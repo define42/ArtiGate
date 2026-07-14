@@ -36,7 +36,7 @@ On startup the server creates `<root>`, `<export-dir>`, and the Go module cache 
 | `--watch-interval` | `60s` | How often the scheduler checks for due watches; `0` disables scheduled pulls |
 
 !!! note
-    `--watch-interval` is a Go duration, so `30s`, `5m`, `2h` all work. The full set of flags — including the Go private-module knobs (`--goprivate`, `--gonoproxy`, `--gonosumdb`, `--govcs`, `--gosumdb`), `--go`, and `--npm-registry` — is in the [configuration reference](configuration.md).
+    `--watch-interval` is a Go duration, so `30s`, `5m`, `2h` all work. The full set of flags — including the Go private-module knobs (`--goprivate`, `--gonoproxy`, `--gonosumdb`, `--govcs`, `--gosumdb`), `--go`, `--npm-registry`, and the upstream overrides `--crates-index`, `--terraform-registry`, `--nuget-source` (plus `--git` for Terraform `git::` module sources) — is in the [configuration reference](configuration.md).
 
 !!! warning "Unauthenticated by default"
     When `ARTIGATE_LOW_AUTH` is unset, the dashboard **and** every mutating `/admin/*` endpoint are open. Bind the low side to localhost or a trusted network, or set `ARTIGATE_LOW_AUTH` to require a form login. See [Security &amp; trust](security.md); for HTTPS see [TLS / HTTPS](tls.md).
@@ -51,7 +51,7 @@ Point a browser at the listen address (`/`, `/ui`, or `/ui/`) for a single self-
 | One page per ecosystem | A collect form for that ecosystem, a live progress modal, an inline result box, and a "schedule the above" row |
 | **Status** | The bundle ledger: next sequence per stream and every exported sequence with its archive/outbound state |
 
-There is one ecosystem page per stream: **Go**, **Python**, **Maven**, **npm**, **APT**, **RPM**, **Containers**, and **AI Models**. Each page's collect form maps directly to the matching `/admin/<stream>/collect` endpoint. See [Ecosystems](ecosystems/index.md) for the payload each one accepts.
+There is one ecosystem page per stream: **Go**, **Python**, **Maven**, **npm**, **APT**, **RPM**, **Containers**, **AI Models**, **Crates**, **Terraform**, **Helm**, **NuGet**, and **Alpine**. Each page's collect form maps directly to the matching `/admin/<stream>/collect` endpoint. See [Ecosystems](ecosystems/index.md) for the payload each one accepts.
 
 If `ARTIGATE_LOW_AUTH` is configured, a **Log out** button appears (it POSTs to `/logout`), and any `401` from an expired session redirects the whole UI to `/login`.
 
@@ -197,7 +197,8 @@ The low side deliberately **delegates fetching to the tools already installed on
 | npm | `npm` |
 | APT | `gpgv` (to verify the upstream `Release` against a supplied keyring) |
 | RPM | `gpgv` (optional, for repo signature verification), `xz` (for `.xz`-compressed indexes) |
-| Containers, AI models | none — fetched over HTTP with the Go standard library |
+| Terraform | `git` (only for modules with `git::` sources; `--git` selects the binary) |
+| Containers, AI models, crates, Helm, NuGet, Alpine | none — fetched over HTTP with the Go standard library |
 
 Because fetching runs as native tooling, upstream credentials and proxy settings come from the host environment. In particular:
 

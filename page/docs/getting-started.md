@@ -149,7 +149,7 @@ curl -b /tmp/artigate.cookies -XPOST localhost:8080/admin/python/collect \
   -d '{"requirements":["requests"]}'
 ```
 
-See [Ecosystems](ecosystems/index.md) for every collector's payload — Go, Python, Maven, npm, APT, RPM, containers, and AI models.
+See [Ecosystems](ecosystems/index.md) for every collector's payload — Go, Python, Maven, npm, APT, RPM, containers, AI models, Rust crates, Terraform/OpenTofu, Helm, NuGet, and Alpine.
 
 !!! note "Nothing new? Nothing sent."
     If every file in a collect was already exported on that stream, the low side reports `"skipped": true` with `"no new content since the last export"` and consumes **no** sequence number. If only *some* files are new, it writes a **delta bundle** carrying just those (the response's `prior_files` counts the rest) — a re-pull of a slowly-changing upstream ships only the churn across the diode. Add `"force": true` to any collect body to bypass this and produce a full, self-contained bundle. See [Low side](low-side.md).
@@ -187,7 +187,7 @@ export GOSUMDB=off
 go get rsc.io/quote@latest
 ```
 
-The high side serves **only** complete, verified versions that it has actually imported; anything not mirrored simply isn't found (the `,off` keeps the client from falling through to upstream). See [Go modules](ecosystems/go.md) for `go env`/CI setup, and the other [ecosystem pages](ecosystems/index.md) for the equivalent APT, RPM, PyPI, npm, Maven, OCI, and AI model client configuration.
+The high side serves **only** complete, verified versions that it has actually imported; anything not mirrored simply isn't found (the `,off` keeps the client from falling through to upstream). See [Go modules](ecosystems/go.md) for `go env`/CI setup, and the other [ecosystem pages](ecosystems/index.md) for the equivalent APT, RPM, PyPI, npm, Maven, OCI, AI model, cargo, Terraform, Helm, NuGet, and Alpine client configuration.
 
 ## Generating signing keys manually
 

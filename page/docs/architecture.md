@@ -32,7 +32,8 @@ One binary, four subcommands (`keygen`, `low`, `high`, plus `hashpw` for low-sid
   │                          install immutably │ (isolated)    │
   │                          regenerate indexes│               │
   │                                            ▼               │
-  │  serve  /go /simple /maven /apt /rpm /v2 /npm /hf /api    │
+  │  serve  /go /simple /maven /apt /rpm /v2 /npm /hf /api     │
+  │         /crates /terraform /helm /nuget /apk               │
   └────────────────────────────────────────────────────────────┘
 ```
 
@@ -56,10 +57,15 @@ const (
     streamContainers = "containers"
     streamNpm        = "npm"
     streamHF         = "hf"
+    streamCrates     = "crates"
+    streamTerraform  = "terraform"
+    streamHelm       = "helm"
+    streamNuget      = "nuget"
+    streamApk        = "apk"
 )
 ```
 
-`knownStreams()` returns all eight; they appear in status even before anything has been exported. The `go` stream deliberately keeps the pre-multi-stream numbering for backward compatibility.
+`knownStreams()` returns all thirteen; they appear in status even before anything has been exported. The `go` stream deliberately keeps the pre-multi-stream numbering for backward compatibility.
 
 | Concern | Low side | High side |
 |---|---|---|
@@ -102,6 +108,11 @@ type BundleManifest struct {
     Containers       *ContainerManifest `json:"containers,omitempty"`
     Npm              *NpmManifest       `json:"npm,omitempty"`
     HuggingFace      *HFManifest        `json:"huggingface,omitempty"`
+    Crates           *CratesManifest    `json:"crates,omitempty"`
+    Terraform        *TerraformManifest `json:"terraform,omitempty"`
+    Helm             *HelmManifest      `json:"helm,omitempty"`
+    Nuget            *NugetManifest     `json:"nuget,omitempty"`
+    Apk              *ApkManifest       `json:"apk,omitempty"`
     Files            []ManifestFile     `json:"files"`               // flat authoritative file set
 }
 ```
@@ -137,6 +148,11 @@ Each sub-manifest wraps a slice and carries **raw upstream metadata for high-sid
 | RPM | `Rpm.Mirrors` | per-package repodata inputs |
 | Maven | `Maven.Artifacts` | coordinates + files |
 | Containers | `Containers.Repos` | registry/repository, manifest+config+layer digests |
+| Crates | `Crates.Crates` | the verbatim sparse-index **line** per release — its `cksum` must equal the artifact's SHA-256, re-checked at import |
+| Terraform | `Terraform.Providers` / `Terraform.Modules` | per-platform zips plus the upstream verification chain (`SHA256SUMS`, `.sig`, signing keys) |
+| Helm | `Helm.Repos` | mirror name/URL + chart records — served metadata is re-extracted from each archive's `Chart.yaml` |
+| NuGet | `Nuget.Packages` | identity + hash only — served metadata is re-extracted from each package's `.nuspec` |
+| apk | `Apk.Mirrors` | the raw `APKINDEX` **stanza** string per `.apk`, per branch/repo/arch |
 
 ### Deterministic archive
 
@@ -296,6 +312,11 @@ This is the heart of ArtiGate. The high side treats **the artifacts themselves a
 | npm | The served packument from each tarball's own embedded `package.json` — never a transferred packument. `integrity` is **recomputed** from the artifact; the manifest's value is kept only for audit. |
 | Containers | Per-repo `_index.json` merged from the manifests/blobs present; blobs served only if the requesting repo's own index references them. |
 | Go | Listings are computed by scanning the `@v` directory for complete versions; `chooseLatest` is derived from the present `.info` files. There is no transferred "latest" the high side trusts. |
+| Crates | Every sparse-index file from the manifest-carried index lines whose `cksum` equals the verified artifact's SHA-256, gated on the `.crate` being present. |
+| Terraform | Provider version lists and download descriptors from the stored per-version metadata, after cross-checking each zip against the mirrored `SHA256SUMS`; only platforms whose zip is present are listed. |
+| Helm | `index.yaml` per mirror from each chart's own embedded `Chart.yaml`, with the `digest` recomputed from the artifact. |
+| NuGet | The v3 feed (versions, registration, search) from each package's own embedded `.nuspec` — never a transferred metadata file. |
+| apk | `APKINDEX.tar.gz` per branch/repo/arch from the accumulated stanzas of the `.apk` files present; optionally signed with `--apk-rsa-key`. |
 
 !!! note "Why this matters"
     Even a maliciously crafted bundle can only ever cause the high side to serve exactly the bytes whose SHA-256 the signed manifest committed to — and those bytes had to pass the archive hash check on the way in. The index a client browses is a *local derivation* of verified content, so a forged index in a bundle is simply ignored. See [Security &amp; trust](security.md) for the full argument.
@@ -324,4 +345,4 @@ The shard key is `containerBlobShardHex(hex)` — the first 3 hex characters of 
 - [Scheduling (watches)](scheduling.md) — recurring collects on a stored spec.
 - [Built-in UDP diode](data-diode.md) — the pitcher/catcher transport.
 - [Security &amp; trust](security.md) — the full trust argument and hardening.
-- [Ecosystems](ecosystems/index.md) — the eight streams and their per-ecosystem details.
+- [Ecosystems](ecosystems/index.md) — the thirteen streams and their per-ecosystem details.

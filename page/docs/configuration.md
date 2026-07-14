@@ -93,6 +93,10 @@ artigate low \
 | `--npm-registry` | `""` | Registry URL npm resolves against (passed as `--registry`; empty uses npm's own config) |
 | `--container-registry` | `""` | Comma-separated `host=baseURL` registry overrides (e.g. `docker.io=https://mirror.example.com`) |
 | `--hf-endpoint` | `""` (→ `https://huggingface.co`) | Hugging Face endpoint AI models are fetched from (a private Hub mirror, or a test server) |
+| `--crates-index` | `""` (→ `https://index.crates.io`) | Sparse registry index Rust crates are resolved from |
+| `--terraform-registry` | `""` (→ `https://registry.terraform.io`) | Registry Terraform providers/modules are fetched from; use `https://registry.opentofu.org` for OpenTofu |
+| `--nuget-source` | `""` (→ `https://api.nuget.org/v3/index.json`) | NuGet v3 service index packages are resolved from |
+| `--git` | `git` | git command used to fetch Terraform modules from `git::` sources |
 | `--watch-interval` | `60s` | How often the scheduler checks for due watches; `0` disables scheduled watches |
 
 !!! note
@@ -102,7 +106,7 @@ artigate low \
 
 ### Routes
 
-- `POST /admin/{go,python,maven,apt,rpm,containers,npm,hf}/collect` (add `?stream=1` for streamed progress; every body accepts `"force": true` to bypass export dedup)
+- `POST /admin/{go,python,maven,apt,rpm,containers,npm,hf,crates,terraform,helm,nuget,apk}/collect` (add `?stream=1` for streamed progress; every body accepts `"force": true` to bypass export dedup)
 - `POST /admin/reexport?stream=go&sequences=42,45-47` (`stream` defaults to `go`; also accepts a JSON body `{"stream":"go","sequences":"42,45-47"}`)
 - `GET /admin/bundles`
 - `GET /admin/watches`, `POST /admin/watches`, `POST /admin/watches/{update,run,enable,disable,delete}` — the [watch scheduler](scheduling.md)
@@ -136,6 +140,8 @@ artigate high \
 | `--import-interval` | `10s` | Bundle import scan interval; `0` disables background import |
 | `--apt-gpg-key` | `""` | GPG key id used to sign regenerated APT repositories (InRelease); unset serves them unsigned |
 | `--rpm-gpg-key` | `""` | GPG key id used to sign regenerated RPM repositories (repomd.xml.asc); unset serves them unsigned |
+| `--apk-rsa-key` | `""` | PEM RSA private key path used to sign regenerated Alpine APKINDEX files; unset serves them unsigned |
+| `--apk-key-name` | `artigate.rsa.pub` | Filename Alpine clients install the APK signing public key under (`/etc/apk/keys/<name>`) |
 
 !!! note
     An empty `--quarantine` resolves to `<root>/quarantine` inside `NewHighServer`. `--import-interval` is a `time.Duration`; `0` disables the background importer but manual `POST /admin/import` still works.
@@ -250,7 +256,7 @@ Validation (all fatal at startup):
 
 The file paths, listen addresses, and behaviour toggles are **flag-only**; TLS and low-side auth are **env-only**. There is deliberately no flag for TLS and no env var for paths/listen addresses.
 
-- **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags, `--hf-endpoint`, `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`.
+- **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags (including `--git`), `--hf-endpoint`, `--crates-index`, `--terraform-registry`, `--nuget-source`, `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`, `--apk-key-name`.
 - **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`.
 
 See also: [Deployment](deployment.md) for production topologies, [Security & trust](security.md) for the trust model, and [TLS / HTTPS](tls.md) for the full TLS matrix.

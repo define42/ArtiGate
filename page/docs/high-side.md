@@ -30,6 +30,8 @@ artigate high \
 | `--import-interval` | `10s` | bundle import scan interval; `0` disables the background importer |
 | `--apt-gpg-key` | `""` | GPG key id used to sign regenerated APT repositories (`InRelease`); unset serves them unsigned |
 | `--rpm-gpg-key` | `""` | GPG key id used to sign regenerated RPM repositories (`repomd.xml.asc`); unset serves them unsigned |
+| `--apk-rsa-key` | `""` | PEM RSA private key path used to sign regenerated Alpine `APKINDEX` files; unset serves them unsigned |
+| `--apk-key-name` | `artigate.rsa.pub` | filename Alpine clients install the APK signing public key under (`/etc/apk/keys/<name>`) |
 
 `--import-interval` and `--quarantine` are the two that most often surprise operators: an empty `--quarantine` resolves to `<root>/quarantine` (the resolved value is printed in the startup log), and `--import-interval 0` disables the background import goroutine entirely — imports then happen only when you `POST /admin/import`.
 
@@ -108,6 +110,11 @@ The dashboard is backed by read-only JSON endpoints under `/ui/api/` (`overview`
 | `/rpm` | RPM (RHEL/Fedora) repositories |
 | `/v2` | Container images (OCI / Docker Registry v2 API) — also answers Ollama pulls for mirrored GGUF models |
 | `/hf`, `/api/models`, `/<org>/<repo>/resolve/…` | AI models: raw GGUF downloads and the Hugging Face Hub download API |
+| `/crates` | Rust crates (cargo sparse registry: `/crates/index/…` + `/crates/dl/…`) |
+| `/.well-known/terraform.json`, `/terraform` | Terraform / OpenTofu provider and module registry protocols plus the artifact files |
+| `/helm` | Helm chart repositories (`/helm/<mirror>/index.yaml` + chart archives) |
+| `/nuget` | NuGet v3 feed (service index at `/nuget/v3/index.json`, flat container, registration, search) |
+| `/apk` | Alpine repositories (`/apk/<mirror>/<branch>/<repo>/<arch>/…`, plus `/apk/keys/<name>` when index signing is configured) |
 | `/diode` | Bundle ingest (`PUT`/`POST`, only when `ARTIGATE_DIODE_INGEST=on`) |
 | `/ui` | Dashboard (also served at `/`) |
 | `/healthz` | Health check → `ok\n` |
@@ -126,8 +133,13 @@ The high side treats the **verified artifacts themselves** as the only source of
 - **RPM** repodata is rebuilt from the installed packages; `repomd.xml.asc` is signed only if `--rpm-gpg-key` is set.
 - **npm** metadata is regenerated from each tarball's own embedded `package.json`.
 - **Go** listings are computed by scanning the on-disk `@v` directory and filtering to **complete** versions — a version is served only once its `.complete` marker plus `.info`, `.mod`, and `.zip` are all present, so half-installed versions are never visible.
+- **Crates** sparse-index files are regenerated from the manifest-carried index lines whose `cksum` equals the verified artifact's SHA-256, listing only releases whose `.crate` is present.
+- **Terraform** provider metadata is rebuilt after cross-checking every zip against the mirrored `SHA256SUMS` — the document terraform verifies the GPG signature of — and lists only platforms whose zip is present.
+- **Helm** `index.yaml` is regenerated per mirror from each chart's own embedded `Chart.yaml`, with digests recomputed from the artifacts.
+- **NuGet** feed metadata (versions, registration, search) is regenerated from each package's own embedded `.nuspec`.
+- **Alpine** `APKINDEX.tar.gz` is regenerated per branch/repo/arch from the accumulated stanzas of the `.apk` files present; signed only if `--apk-rsa-key` is set.
 
-The high side therefore **serves only complete versions** of fully verified content. Optional repo signing (`--apt-gpg-key`, `--rpm-gpg-key`) lets you re-sign the regenerated APT/RPM metadata with a key clients on the trusted network already trust; leaving them unset serves those repositories unsigned.
+The high side therefore **serves only complete versions** of fully verified content. Optional repo signing (`--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`) lets you re-sign the regenerated APT/RPM/Alpine metadata with a key clients on the trusted network already trust; leaving them unset serves those repositories unsigned.
 
 ### Always unauthenticated
 
@@ -148,5 +160,10 @@ Once the high side is serving, configure clients against its base URL. Each ecos
 | RPM | `baseurl=<base>/rpm/<mirror>` — see [RPM (RHEL/Fedora)](ecosystems/rpm.md) |
 | Containers | `docker pull <host>/<registry>/<repository>:<tag>` — see [Container images (OCI)](ecosystems/containers.md) |
 | AI models | `ollama pull <host>/<org>/<model>:<tag>`, raw GGUF under `/hf/`, or `HF_ENDPOINT=<base>` — see [AI models (Hugging Face)](ecosystems/ai-models.md) |
+| Rust crates | `~/.cargo/config.toml` source replacement with `registry = "sparse+<base>/crates/index/"` — see [Rust crates](ecosystems/crates.md) |
+| Terraform / OpenTofu | `~/.terraformrc` `network_mirror` (`<base>/terraform/v1/providers/`, HTTPS required) or host-prefixed source addresses — see [Terraform / OpenTofu](ecosystems/terraform.md) |
+| Helm | `helm repo add artigate <base>/helm/<mirror>` — see [Helm charts](ecosystems/helm.md) |
+| NuGet | `nuget.config` source `<base>/nuget/v3/index.json` with `<clear />` — see [NuGet](ecosystems/nuget.md) |
+| Alpine (apk) | `/etc/apk/repositories` line `<base>/apk/<mirror>/<branch>/<repo>`, key from `/apk/keys/<name>` — see [Alpine (apk)](ecosystems/apk.md) |
 
-For the overview of all eight ecosystems see [Ecosystems](ecosystems/index.md). For production hardening and layout see [Deployment](deployment.md).
+For the overview of all thirteen ecosystems see [Ecosystems](ecosystems/index.md). For production hardening and layout see [Deployment](deployment.md).

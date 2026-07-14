@@ -14,15 +14,16 @@ Because it re-runs the real collect every time, a watch inherits all of that col
 - [Export dedup](architecture.md#export-deduplication-and-delta-bundles) still applies: if every resolved file was already forwarded on that stream, no bundle is produced and no sequence number is consumed — the watch just records a "skipped" run. If only some files are new, the run emits a **delta bundle** carrying just the churn (the watch message counts the already-forwarded files).
 - Per-unit fetch failures are collected as skipped units, not fatal, so one broken reference never blocks the batch.
 
-A watch can target any of the eight known streams:
+A watch can target any of the thirteen known streams:
 
 ```text
 go   python   maven   apt   rpm   containers   npm   hf
+crates   terraform   helm   nuget   apk
 ```
 
 ## Adding a schedule from an ecosystem page
 
-Every ecosystem page — [Go](ecosystems/go.md), [Python](ecosystems/python.md), [Maven](ecosystems/maven.md), [NPM](ecosystems/npm.md), [APT](ecosystems/apt.md), [RPM](ecosystems/rpm.md), [Containers](ecosystems/containers.md), and [AI models](ecosystems/ai-models.md) — has a **"Schedule the above"** row beneath its collect form. Fill in the collect form as you would for a one-off export, then:
+Every ecosystem page — [Go](ecosystems/go.md), [Python](ecosystems/python.md), [Maven](ecosystems/maven.md), [NPM](ecosystems/npm.md), [APT](ecosystems/apt.md), [RPM](ecosystems/rpm.md), [Containers](ecosystems/containers.md), [AI models](ecosystems/ai-models.md), [Rust crates](ecosystems/crates.md), [Terraform / OpenTofu](ecosystems/terraform.md), [Helm charts](ecosystems/helm.md), [NuGet](ecosystems/nuget.md), and [Alpine (apk)](ecosystems/apk.md) — has a **"Schedule the above"** row beneath its collect form. Fill in the collect form as you would for a one-off export, then:
 
 1. Enter a number in the **every** field.
 2. Choose **hours** or **days** (days is the default).
@@ -79,6 +80,8 @@ The stored spec is replayed literally, but the *upstream resolution* happens fre
 | Pinned digest (e.g. `ghcr.io/org/app@sha256:…`) | Always the same content; dedup decides whether a new bundle is emitted |
 | Go `module@latest` or `resolve_deps: true` | The module graph is re-resolved each run, so newly published versions are pulled |
 | Hugging Face branch (e.g. `openai/gpt-oss-20b@main`) | Re-resolved to the branch's current commit; a moved branch adds the new snapshot |
+| Bare crate / provider / chart / NuGet spec (e.g. `serde`, `hashicorp/aws`, `nginx`, `Serilog`) | Re-resolved to the newest release **at that run**, so the schedule tracks new versions through the diode automatically |
+| Alpine branch/repo selection (e.g. `v3.22/main`) | The `APKINDEX` is re-fetched and its (newest-only by default) packages re-mirrored — note the index declares no whole-file hash, so unchanged `.apk`s are re-**downloaded** on the low side and deduped at export |
 | Pinned version (e.g. `requests==2.32.3`) | Same content each run; only dedup decides whether anything is sent |
 
 For containers specifically, every run re-parses the image refs and re-mirrors them. Only `linux/amd64` is mirrored; per-image fetch failures are collected as skipped units (surfaced in the watch message as "N skipped") rather than aborting the batch. See [Container images](ecosystems/containers.md) for details.

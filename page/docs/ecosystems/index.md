@@ -1,18 +1,18 @@
 # Ecosystems
 
-ArtiGate mirrors **eight** artifact ecosystems across a one-way data diode. Each is a self-contained stream with the same lifecycle — the low side *collects* upstream artifacts, packs them into a signed *bundle*, the diode carries it, and the high side *imports* and *serves* it — but the input format and the client protocol differ per ecosystem. This page is the hub; each row links to its full page.
+ArtiGate mirrors **thirteen** artifact ecosystems across a one-way data diode. Each is a self-contained stream with the same lifecycle — the low side *collects* upstream artifacts, packs them into a signed *bundle*, the diode carries it, and the high side *imports* and *serves* it — but the input format and the client protocol differ per ecosystem. This page is the hub; each row links to its full page.
 
 ## The common flow
 
 Every ecosystem follows the same **collect → bundle → import → serve** path described in [Architecture](../architecture.md):
 
-1. **Collect** — an operator (or a [watch](../scheduling.md)) sends `POST /admin/{ecosystem}/collect` to the [low side](../low-side.md). Go, Python, Maven, and NPM shell out to their *native* CLI (`go`, `pip`, `mvn`, `npm`); APT, RPM, containers, and AI models are fetched directly over the ecosystem's own HTTP protocol (deb822 index + `.deb` files, repodata + `.rpm` files, the OCI/Docker registry API, and the Hugging Face Hub's Ollama-compatible and file APIs respectively).
+1. **Collect** — an operator (or a [watch](../scheduling.md)) sends `POST /admin/{ecosystem}/collect` to the [low side](../low-side.md). Go, Python, Maven, and NPM shell out to their *native* CLI (`go`, `pip`, `mvn`, `npm`); APT, RPM, containers, AI models, crates, Terraform, Helm, NuGet, and Alpine are fetched directly over the ecosystem's own HTTP protocol (deb822 index + `.deb` files, repodata + `.rpm` files, the OCI/Docker registry API, the Hugging Face Hub's Ollama-compatible and file APIs, the cargo sparse index, the Terraform registry protocols — plus the `git` tool for `git::` module sources — Helm's `index.yaml`, the NuGet v3 flat container, and `APKINDEX` + `.apk` files respectively).
 2. **Bundle** — the fetched files are packed into a signed three-file bundle (`<bundleID>.tar.gz`, `.manifest.json`, `.manifest.json.sig`) and written to the export directory. Each ecosystem is an independently-numbered [stream](../architecture.md), so a slow container mirror never blocks a Python collect.
 3. **Import** — the [high side](../high-side.md) verifies the Ed25519 signature and every SHA-256 hash, installs the artifacts immutably, and imports strictly in sequence order per stream.
 4. **Serve** — the high side **regenerates** all repository metadata from the artifacts actually present (it never trusts a transferred index) and serves clients under a per-ecosystem base path.
 
 !!! note "One manifest, one stream per ecosystem"
-    All eight streams share the same [bundle format](../architecture.md). The manifest `type` field is always the legacy string `"go-module-bundle"` regardless of ecosystem — the real ecosystem is carried by the `stream` field (`go`, `python`, `maven`, `npm`, `apt`, `rpm`, `containers`, `hf`) and the populated sub-manifest.
+    All thirteen streams share the same [bundle format](../architecture.md). The manifest `type` field is always the legacy string `"go-module-bundle"` regardless of ecosystem — the real ecosystem is carried by the `stream` field (`go`, `python`, `maven`, `npm`, `apt`, `rpm`, `containers`, `hf`, `crates`, `terraform`, `helm`, `nuget`, `apk`) and the populated sub-manifest.
 
 ## Comparison
 
@@ -26,11 +26,16 @@ Every ecosystem follows the same **collect → bundle → import → serve** pat
 | [RPM (RHEL/Fedora)](rpm.md) | A `.repo` file, or explicit `name`/`base_url` (e.g. `packages.microsoft.com`) | yum/dnf repository | `/rpm/` | `dnf` / `yum` |
 | [Container images (OCI)](containers.md) | Docker-style image refs (`alpine:3.20`, `ghcr.io/org/app@sha256:…`) | OCI / Docker registry (v2) | `/v2/` | `docker` / `podman` |
 | [AI models (Hugging Face)](ai-models.md) | GGUF variant refs (`hf.co/org/model-GGUF:Q4_0`) and full repositories (`openai/gpt-oss-20b[@rev]`) | Ollama-compatible registry + Hub download API | `/v2/`, `/hf/`, `/api/models/` | `ollama`, `vllm` / `hf` via `HF_ENDPOINT` |
+| [Rust crates](crates.md) | Crate specs (`serde@1.0.203`, or bare for the newest release) | cargo sparse registry | `/crates/` | `cargo` |
+| [Terraform / OpenTofu](terraform.md) | Provider addresses (`hashicorp/aws@5.50.0`) and module addresses (`terraform-aws-modules/vpc/aws`), with a `platforms` list | Terraform provider + module registry protocols | `/.well-known/terraform.json`, `/terraform/` | `terraform` / `tofu` |
+| [Helm charts](helm.md) | A chart repository URL plus chart specs (`nginx@21.1.0`) | Classic Helm (`index.yaml`) repository per mirror | `/helm/<mirror>` | `helm` |
+| [NuGet](nuget.md) | Package specs (`Newtonsoft.Json@13.0.3`, or bare for the newest stable) | NuGet v3 feed (service index, flat container, registration, search) | `/nuget/` | `dotnet` / `nuget` |
+| [Alpine (apk)](apk.md) | A mirror base + branches/repositories/architectures, or a pasted `/etc/apk/repositories` file | Alpine repository (regenerated `APKINDEX.tar.gz`) | `/apk/<mirror>` | `apk` |
 
 !!! tip "Client base paths are stable"
     The high side claims each URL space separately (`serveGo`, `servePython`, …); anything outside these prefixes returns `404`. Point clients at `<high-base>/go`, pip at the `<high-base>/simple` index, and so on.
 
-## The eight ecosystems
+## The thirteen ecosystems
 
 ### Go modules → [go.md](go.md)
 
@@ -64,6 +69,26 @@ The richest ecosystem: collect takes docker-style image references (`alpine:3.20
 
 Two forms on one `hf` stream. **GGUF variants** are addressed container-style (`hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0` — the tag is a quantization, resolved by the Hub itself) and served back over the same registry protocol Ollama uses, so `ollama pull <high-host>/<org>/<model>:<tag>` works air-gapped; the raw GGUF also downloads from `/hf/…` for llama.cpp. **Full repository snapshots** (`openai/gpt-oss-20b`, for safetensors releases) are pinned to a commit, LFS-verified, and served over the Hub API's download subset — point `HF_ENDPOINT` at the mirror and `vllm serve`, transformers, and `hf download` work unchanged. Gated models authenticate with `ARTIGATE_HF_TOKEN` on the low side.
 
+### Rust crates → [crates.md](crates.md)
+
+Collect takes crate specs (`serde@1.0.203`, or bare for the newest release) and resolves the **transitive dependency graph** — normal and build dependencies, never dev, optional only when asked — against the sparse index (`https://index.crates.io` by default; `--crates-index` overrides), verifying every `.crate` against the index checksum. Each release's verbatim index line travels inside the signed manifest, and the high side serves a **cargo sparse registry** regenerated from those verified records under `/crates/`; clients use a `~/.cargo/config.toml` source replacement.
+
+### Terraform / OpenTofu → [terraform.md](terraform.md)
+
+Collect takes provider addresses (`hashicorp/aws@5.50.0`, mirrored for each requested platform — `linux_amd64` by default) and/or registry modules. Provider zips are verified against the registry-declared checksum and mirrored **with the upstream `SHA256SUMS`, its GPG signature, and the registry-served signing keys**, so terraform's own verification chain works unchanged against the mirror; modules are mirrored from https archives, or from `git::` sources fetched with `git` and repacked as deterministic archives. `--terraform-registry` or the request's `registry` field points at `https://registry.opentofu.org` to mirror OpenTofu. The high side serves the provider and module registry protocols under `/.well-known/terraform.json` + `/terraform/`.
+
+### Helm charts → [helm.md](helm.md)
+
+Collect takes a classic chart repository URL plus chart specs (`nginx@21.1.0`, or bare for the newest version), verifying archives against the repository index digest when the index declares one. Each upstream repo becomes its own mirror under `/helm/<mirror>`, its `index.yaml` **regenerated from every chart's own embedded `Chart.yaml`** with recomputed digests; clients `helm repo add` the mirror. OCI-hosted charts are out of scope — mirror those as container images.
+
+### NuGet → [nuget.md](nuget.md)
+
+Collect takes package specs (`Newtonsoft.Json@13.0.3`, or a bare `Serilog` for the newest stable) and resolves nuspec dependencies the way NuGet restore does — **lowest applicable version per range**, across all target-framework groups — against the v3 source (`https://api.nuget.org/v3/index.json` by default; `--nuget-source` overrides). The flat container publishes no digests, so downloads are TLS-trusted and validated against the embedded nuspec. The high side serves a **v3 feed** (service index, flat container, registration, search) under `/nuget/`, all metadata regenerated from each package's own `.nuspec`; clients use a `nuget.config` with `<clear />`.
+
+### Alpine (apk) → [apk.md](apk.md)
+
+Collect takes a mirror base plus branches/repositories/architectures (defaults: `main`, `x86_64`) or a pasted `/etc/apk/repositories` file, and is **newest-only by default** like APT/RPM. Every `.apk` is verified against the `APKINDEX`-declared size and `Q1` control checksum; the verbatim stanzas travel inside the signed manifest and the high side regenerates `APKINDEX.tar.gz` under `/apk/<mirror>`, gated on the packages present — optionally RSA-signed with `--apk-rsa-key` so stock `apk` clients skip `--allow-untrusted`.
+
 ## Cross-cutting notes
 
 Each ecosystem trades completeness for airgap-friendliness in a different way. Know these before you build a mirror:
@@ -71,9 +96,12 @@ Each ecosystem trades completeness for airgap-friendliness in a different way. K
 | Ecosystem | Scope rule |
 |---|---|
 | Go, NPM | **Full graph** — the transitive dependency closure is mirrored |
+| Crates, NuGet | **Full graph per their resolvers** — crates follow normal + build dependencies (never dev; optional only with `include_optional`, highest matching version, no feature unification); NuGet picks the **lowest applicable version** per range across all target frameworks, like restore |
 | Python | **Wheels only** — no sdists, so the high side never compiles |
 | Maven | **Release only** — `-SNAPSHOT` artifacts are not mirrored |
-| APT, RPM | **Newest-only by default** — one version per package unless `newest_only: false` |
+| APT, RPM, Alpine | **Newest-only by default** — one version per package unless `newest_only: false` |
+| Terraform | **Named providers for the selected platforms + named modules** — `platforms` defaults to `linux_amd64`; module dependencies are not auto-resolved |
+| Helm | **Exactly the charts you name** — chart dependencies are not auto-resolved |
 | AI models | **Exactly what you name** — one variant per reference; a repository snapshot is every file at one pinned commit (minus `repo_exclude`) |
 
 !!! warning "Content dedup is per stream"

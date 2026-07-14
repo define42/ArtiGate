@@ -578,7 +578,7 @@ func manualCollectLabel(stream string, body []byte) string {
 
 // labelFromLists summarizes the first string-list field present in the spec.
 func labelFromLists(stream string, spec map[string]json.RawMessage) string {
-	for _, key := range []string{"modules", "requirements", "coordinates", "packages", "images", "models", "repos"} {
+	for _, key := range []string{"modules", "requirements", "coordinates", "packages", "images", "models", "repos", "crates", "charts", "providers", "branches"} {
 		raw, ok := spec[key]
 		if !ok {
 			continue
