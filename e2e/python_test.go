@@ -82,8 +82,12 @@ func TestPythonSDist(t *testing.T) {
 	venv := filepath.Join(tmp, "venv")
 	run(t, tmp, nil, python, "-m", "venv", venv)
 	pipEnv := []string{"PIP_DISABLE_PIP_VERSION_CHECK=1", "PIP_NO_INPUT=1"}
+	// A real air-gapped client builds sdists with its own preinstalled build
+	// tooling; model that by seeding setuptools from the public index and
+	// building without isolation — the mirror only has to serve the sdist.
+	run(t, tmp, pipEnv, filepath.Join(venv, "bin", "pip"), "install", "--no-cache-dir", "setuptools")
 	run(t, tmp, pipEnv, filepath.Join(venv, "bin", "pip"), "install",
-		"--no-cache-dir", "--no-deps",
+		"--no-cache-dir", "--no-deps", "--no-build-isolation",
 		"--index-url", stack.HighURL+"/simple/",
 		"termcolor=="+termcolorSdistVersion)
 	out := runStdout(t, tmp, nil, filepath.Join(venv, "bin", "python"), "-c",
