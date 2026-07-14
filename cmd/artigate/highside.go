@@ -107,6 +107,11 @@ type HighServer struct {
 	// npmAudit memoizes the regenerated npm bulk-audit index (see
 	// osvnpmaudit.go) so audit requests do not re-parse it from disk.
 	npmAudit npmAuditCache
+	// derivedBlocks tracks osv derived-state files (stored metadata, the npm
+	// audit index) whose stale bytes a failed publish could not get off the
+	// disk; the osv read paths treat a blocked path as absent (see
+	// suppressStaleDerived in osv.go).
+	derivedBlocks derivedBlockSet
 }
 
 // applyHighEnvConfig fills the environment-driven high-side settings (diode

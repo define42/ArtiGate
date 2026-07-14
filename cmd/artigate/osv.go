@@ -35,6 +35,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -353,7 +354,8 @@ type osvStoredDB struct {
 // replaced the snapshot on disk, so pressing on would commit the sequence
 // (never to be retried) while the previous import's metadata — worst of all
 // the npm audit index — kept describing bytes that are no longer installed.
-// The stale derived state is dropped before returning, so while the bundle
+// The stale derived state is suppressed before returning (removed, emptied,
+// or blocked in memory — see suppressStaleDerived), so while the bundle
 // retries (an operational error: it stays in landing and /readyz's
 // import-pipeline check reports the failing pass) the audit endpoint
 // answers 404 ("audit unavailable"), never stale advisories. The content
@@ -377,7 +379,8 @@ func (s *HighServer) publishOsv(m *OsvManifest) error {
 // installed zip (advisory count, hash, size) and, for the npm database,
 // rebuilds the npm bulk-audit index (osvnpmaudit.go). On failure every
 // piece of derived state that predates the just-installed snapshot is
-// removed, so nothing ever describes a snapshot other than the one on disk.
+// suppressed, so nothing ever describes a snapshot other than the one on
+// disk.
 func (s *HighServer) publishOsvDatabase(db OsvDatabase) error {
 	if err := validateOsvEcosystemName(db.Ecosystem); err != nil {
 		return err
@@ -388,19 +391,16 @@ func (s *HighServer) publishOsvDatabase(db OsvDatabase) error {
 	}
 	if err := s.regenerateOsvMeta(db.Ecosystem, abs); err != nil {
 		// The metadata on disk (if any) still describes the previous
-		// snapshot; drop it — and npm's audit index with it — rather than
-		// serve descriptions of bytes that are no longer installed.
-		s.dropOsvMeta(db.Ecosystem)
-		s.dropNpmAuditIndex(db.Ecosystem)
-		return err
+		// snapshot; suppress it — and npm's audit index with it — rather
+		// than serve descriptions of bytes that are no longer installed.
+		return errors.Join(err, s.dropOsvMeta(db.Ecosystem), s.dropNpmAuditIndex(db.Ecosystem))
 	}
 	if db.Ecosystem == osvNpmEcosystem {
 		if err := s.rebuildNpmAuditIndex(abs); err != nil {
 			// The meta regenerated above is fresh and correct; only the
-			// audit index still describes the previous snapshot. Absent, the
-			// bulk route 404s until a retry rebuilds it (fail closed).
-			s.dropNpmAuditIndex(db.Ecosystem)
-			return err
+			// audit index still describes the previous snapshot. Suppressed,
+			// the bulk route 404s until a retry rebuilds it (fail closed).
+			return errors.Join(err, s.dropNpmAuditIndex(db.Ecosystem))
 		}
 	}
 	return nil
@@ -426,34 +426,90 @@ func (s *HighServer) regenerateOsvMeta(name, abs string) error {
 	if !safeJoin(s.osvMetaDir(), out) {
 		return fmt.Errorf("unsafe metadata path for %s", name)
 	}
-	return writeJSONAtomic(out, st, 0o644)
+	if err := writeJSONAtomic(out, st, 0o644); err != nil {
+		return err
+	}
+	// The write replaced whatever bytes a past failed drop may have blocked;
+	// the path describes the installed snapshot again.
+	s.derivedBlocks.allow(out)
+	return nil
 }
 
-// dropOsvMeta removes one ecosystem's stored metadata, delisting it from
+// dropOsvMeta suppresses one ecosystem's stored metadata, delisting it from
 // ecosystems.txt and the dashboard until a publish succeeds again.
-func (s *HighServer) dropOsvMeta(name string) {
+func (s *HighServer) dropOsvMeta(name string) error {
 	p := filepath.Join(s.osvMetaDir(), osvSlug(name)+".json")
-	if safeJoin(s.osvMetaDir(), p) {
-		removeStaleDerived(p)
+	if !safeJoin(s.osvMetaDir(), p) {
+		return nil // regenerateOsvMeta can never have written outside the tree
 	}
+	return s.suppressStaleDerived(p)
 }
 
-// dropNpmAuditIndex removes the npm bulk-audit index (a no-op for other
-// ecosystems' databases). The serving cache re-stats the file per request,
-// so removal alone flips the bulk route to 404.
-func (s *HighServer) dropNpmAuditIndex(name string) {
-	if name == osvNpmEcosystem {
-		removeStaleDerived(s.osvNpmAuditIndexPath())
+// dropNpmAuditIndex suppresses the npm bulk-audit index (a no-op for other
+// ecosystems' databases), flipping the bulk route to 404 until a publish
+// rebuilds it.
+func (s *HighServer) dropNpmAuditIndex(name string) error {
+	if name != osvNpmEcosystem {
+		return nil
 	}
+	return s.suppressStaleDerived(s.osvNpmAuditIndexPath())
 }
 
-// removeStaleDerived deletes one regenerated-state file; a file already
-// absent is fine, anything else is only loggable (the publish error that
-// triggered the drop is already failing the import).
-func removeStaleDerived(p string) {
-	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
-		log.Printf("osv: removing stale derived state %s: %v", p, err)
+// suppressStaleDerived makes one regenerated-state file unservable after a
+// failed publish: removed when possible; truncated in place when the
+// directory refuses the unlink (an unwritable directory — the usual reason
+// the regeneration itself just failed — still lets the owner empty the
+// file, and an empty file is unparsable, so this fails closed across
+// restarts too); and failing even that, blocked in memory so the read paths
+// treat the path as absent until a publish rewrites it. Only that last
+// resort is an error: a purely in-memory block does not survive a restart,
+// which an operator must hear about on top of the publish failure already
+// failing the import.
+func (s *HighServer) suppressStaleDerived(p string) error {
+	rmErr := os.Remove(p)
+	if rmErr == nil || errors.Is(rmErr, os.ErrNotExist) {
+		s.derivedBlocks.allow(p)
+		return nil
 	}
+	if err := os.Truncate(p, 0); err == nil {
+		s.derivedBlocks.allow(p)
+		log.Printf("osv: emptied stale derived state %s in place (unremovable: %v)", p, rmErr)
+		return nil
+	}
+	s.derivedBlocks.block(p)
+	return fmt.Errorf("stale derived state %s can be neither removed nor emptied, suppressing it in memory until a publish regenerates it: %w", p, rmErr)
+}
+
+// derivedBlockSet tracks derived-state files a failed publish could neither
+// remove nor empty (a fully read-only tree): the osv read paths treat a
+// blocked path as absent, so stale bytes that refuse to leave the disk are
+// still never served. A path is unblocked the moment it is removed,
+// emptied, or rewritten.
+type derivedBlockSet struct {
+	mu    sync.Mutex
+	paths map[string]struct{}
+}
+
+func (b *derivedBlockSet) block(p string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.paths == nil {
+		b.paths = map[string]struct{}{}
+	}
+	b.paths[p] = struct{}{}
+}
+
+func (b *derivedBlockSet) allow(p string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.paths, p)
+}
+
+func (b *derivedBlockSet) blocked(p string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.paths[p]
+	return ok
 }
 
 // readOsvStored loads one ecosystem's regenerated metadata by slug and
@@ -463,6 +519,9 @@ func (s *HighServer) readOsvStored(slug string) (osvStoredDB, error) {
 	p := filepath.Join(s.osvMetaDir(), slug+".json")
 	if !safeJoin(s.osvMetaDir(), p) {
 		return osvStoredDB{}, errors.New("unsafe path")
+	}
+	if s.derivedBlocks.blocked(p) {
+		return osvStoredDB{}, errors.New("stale metadata suppressed after a failed publish")
 	}
 	b, err := os.ReadFile(p)
 	if err != nil {

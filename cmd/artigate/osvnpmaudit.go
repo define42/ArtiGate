@@ -375,6 +375,9 @@ func (s *HighServer) rebuildNpmAuditIndex(zipPath string) error {
 	if err := writeJSONAtomic(s.osvNpmAuditIndexPath(), idx, 0o644); err != nil {
 		return err
 	}
+	// The write replaced whatever bytes a past failed drop may have blocked;
+	// the index describes the installed snapshot again.
+	s.derivedBlocks.allow(s.osvNpmAuditIndexPath())
 	log.Printf("osv: regenerated the npm audit index from %d advisories (%d package(s) affected)", parsed, len(packages))
 	return nil
 }
@@ -454,6 +457,13 @@ type npmAuditCache struct {
 func (s *HighServer) npmAuditPackages() (map[string][]npmAuditAdvisory, bool) {
 	s.npmAudit.mu.Lock()
 	defer s.npmAudit.mu.Unlock()
+	if s.derivedBlocks.blocked(s.osvNpmAuditIndexPath()) {
+		// A failed publish could neither remove nor empty the index; its
+		// bytes describe a previous snapshot, so neither they nor the memo
+		// built from them may answer (see suppressStaleDerived).
+		s.npmAudit.packages = nil
+		return nil, false
+	}
 	fi, err := os.Stat(s.osvNpmAuditIndexPath())
 	if err != nil {
 		s.npmAudit.packages = nil
