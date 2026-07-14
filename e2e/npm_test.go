@@ -21,6 +21,14 @@ func TestNpm(t *testing.T) {
 	res := stack.Collect(t, "npm", map[string]any{"packages": []string{"left-pad@1.3.0"}})
 	stack.WaitImported(t, "npm", res.Sequence)
 
+	// The packument's dist-tags come from the mirrored upstream snapshot,
+	// filtered to versions actually served: left-pad's real latest is 1.3.0
+	// (its final release), so the tag must resolve on the mirror too.
+	code, body := httpGet(t, stack.HighURL+"/npm/left-pad")
+	if code != 200 || !strings.Contains(string(body), `"latest": "1.3.0"`) {
+		t.Fatalf("packument dist-tags = %d %s", code, body)
+	}
+
 	tmp := t.TempDir()
 	proj := filepath.Join(tmp, "proj")
 	writeFile(t, filepath.Join(proj, "package.json"), `{"name":"e2e-consumer","version":"1.0.0","private":true}`)
