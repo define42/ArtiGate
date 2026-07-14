@@ -57,7 +57,7 @@ type cov3AErrReader struct{}
 func (cov3AErrReader) Read([]byte) (int, error) { return 0, errCov3ABoom }
 
 // -----------------------------------------------------------------------------
-// main.go: atomic write / hash helpers under filesystem faults
+// archive.go: atomic write / hash helpers under filesystem faults
 // -----------------------------------------------------------------------------
 
 func TestCov3A_CopyFileAtomicFaults(t *testing.T) {
@@ -164,7 +164,7 @@ func TestCov3A_CreateTarGzAndAddFileFaults(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// main.go: writeBundleArtifacts guard rails
+// lowside.go: writeBundleArtifacts guard rails
 // -----------------------------------------------------------------------------
 
 func TestCov3A_WriteBundleArtifactsFaults(t *testing.T) {
@@ -196,7 +196,7 @@ func TestCov3A_WriteBundleArtifactsFaults(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// main.go: loadVerifiedManifest error branches
+// highside.go: loadVerifiedManifest error branches
 // -----------------------------------------------------------------------------
 
 func TestCov3A_LoadVerifiedManifestErrors(t *testing.T) {
@@ -272,7 +272,7 @@ func TestCov3A_LoadVerifiedManifestErrors(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// main.go: install path error branches
+// highside.go: install path error branches
 // -----------------------------------------------------------------------------
 
 func TestCov3A_InstallVerifiedBundleUnsafePath(t *testing.T) {
@@ -330,7 +330,7 @@ func TestCov3A_InstallVerifiedFileBranches(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// main.go: extractTarEntry filesystem faults
+// archive.go: extractTarEntry filesystem faults
 // -----------------------------------------------------------------------------
 
 func TestCov3A_ExtractTarEntryFaults(t *testing.T) {
@@ -369,7 +369,7 @@ func TestCov3A_ExtractTarEntryFaults(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// main.go: metadata hashing / key reading limits
+// highside.go, main.go: metadata hashing / key reading limits
 // -----------------------------------------------------------------------------
 
 func TestCov3A_HashFileLimitSHA512(t *testing.T) {
@@ -397,7 +397,7 @@ func TestCov3A_ReadPrivateKeyErrors(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// main.go: parseGoModDownload edge cases
+// lowside.go: parseGoModDownload edge cases
 // -----------------------------------------------------------------------------
 
 func TestCov3A_ParseGoModDownload(t *testing.T) {
@@ -418,7 +418,7 @@ func TestCov3A_ParseGoModDownload(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// main.go: goLatest / fetchVersion error branches (fake `go`)
+// lowside.go: goLatest / fetchVersion error branches (fake `go`)
 // -----------------------------------------------------------------------------
 
 const cov3AGoLatestScript = `#!/usr/bin/env bash
@@ -490,7 +490,7 @@ func TestCov3A_FetchVersionErrors(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// main.go: high-side serving / status error branches
+// highside.go: serving / status error branches
 // -----------------------------------------------------------------------------
 
 func TestCov3A_HandleHighVersionFileZiphash(t *testing.T) {
