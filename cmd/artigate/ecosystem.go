@@ -91,6 +91,7 @@ func ecosystems() []ecosystem {
 		rubygemsEcosystem(),
 		composerEcosystem(),
 		vsxEcosystem(),
+		galaxyEcosystem(),
 		cranEcosystem(),
 		osvEcosystem(),
 		uploadsEcosystem(),

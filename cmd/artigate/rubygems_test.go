@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/md5" //nolint:gosec // recomputes the compact-index /versions MD5 fingerprint independently of the code under test
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"io"
 	"net/http"
@@ -15,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // -----------------------------------------------------------------------------
@@ -454,7 +458,7 @@ func (f *fakeGemUpstream) line(t *testing.T, name, token string) string {
 // rubygemsTestSetup stands up the fake upstream (mylib with a prerelease,
 // platform variants, and a small dependency chain ending in a
 // prerelease-only gem) plus a low server resolving against it.
-func rubygemsTestSetup(t *testing.T) (*fakeGemUpstream, *LowServer) {
+func rubygemsTestSetup(t *testing.T) (*fakeGemUpstream, *LowServer, ed25519.PrivateKey) {
 	t.Helper()
 	reg := newFakeGemUpstream(t)
 	reg.add("mylib", "0.9.0", "")
@@ -473,37 +477,25 @@ func rubygemsTestSetup(t *testing.T) (*fakeGemUpstream, *LowServer) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ls.Close() })
-	return reg, ls
+	return reg, ls, priv
 }
 
-// rubygemsInstallBundle runs a collected bundle through the import-side
-// hooks: it re-validates the manifest exactly like the importer does, places
-// the artifacts at their manifest paths, and publishes the records. (The
-// signature/extract half of the pipeline is shared machinery covered by the
-// other streams' import tests; the rubygems stream is dispatched through it
-// once the ecosystem is registered.)
-func rubygemsInstallBundle(t *testing.T, ls *LowServer, hs *HighServer, bundleID string) *RubyGemsManifest {
+// rubygemsImportBundle transfers one exported bundle to the high side and
+// imports it through the real pipeline — signature check, per-file hash
+// verification, manifest validation, and the publish hooks.
+func rubygemsImportBundle(t *testing.T, ls *LowServer, hs *HighServer, bundleID string) *RubyGemsManifest {
 	t.Helper()
+	transferAptBundle(t, ls, hs, bundleID)
+	res, err := hs.ImportNext()
+	if err != nil {
+		t.Fatalf("ImportNext: %v", err)
+	}
+	if !res.Imported || len(res.ImportedBundles) != 1 || res.ImportedBundles[0] != bundleID {
+		t.Fatalf("unexpected import result: %+v", res)
+	}
 	m := readBundleManifest(t, ls, bundleID)
 	if m.RubyGems == nil {
 		t.Fatalf("bundle %s carries no rubygems content", bundleID)
-	}
-	seen := map[string]bool{}
-	for _, f := range m.Files {
-		seen[f.Path] = true
-	}
-	if err := validateRubyGems(m.RubyGems.Gems, seen, m.Files); err != nil {
-		t.Fatalf("collected manifest fails import validation: %v", err)
-	}
-	for _, g := range m.RubyGems.Gems {
-		abs := filepath.Join(hs.downloadDir, filepath.FromSlash(g.Path))
-		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		writeFile(t, abs, gemTestPayload(g.Name, gemVersionFull(g.Version, g.Platform)))
-	}
-	if err := hs.publishRubyGems(m.RubyGems); err != nil {
-		t.Fatalf("publishRubyGems: %v", err)
 	}
 	return m.RubyGems
 }
@@ -601,7 +593,7 @@ func rubygemsAssertBundleManifest(t *testing.T, reg *fakeGemUpstream, ls *LowSer
 // bundle, import-side validation and publish, and the regenerated compact
 // index the high side serves.
 func TestRubyGemsLowToHighPipeline(t *testing.T) {
-	reg, ls := rubygemsTestSetup(t)
+	reg, ls, priv := rubygemsTestSetup(t)
 	ctx := context.Background()
 
 	res, err := ls.CollectRubyGems(ctx, RubyGemsCollectRequest{
@@ -634,10 +626,12 @@ func TestRubyGemsLowToHighPipeline(t *testing.T) {
 	}
 	rubygemsAssertBundleManifest(t, reg, ls, res.BundleID)
 
-	pub, _ := newTestKeys(t)
-	hs := newTestHighServer(t, pub)
-	rubygemsInstallBundle(t, ls, hs, res.BundleID)
-	srv := rubygemsTestServer(t, hs)
+	// Transfer the signed bundle and import it through the real pipeline,
+	// then read the served repository through the registry's dispatch.
+	hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+	rubygemsImportBundle(t, ls, hs, res.BundleID)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
 
 	// /info/mylib carries the verbatim upstream lines under the "---"
 	// header, the pure-ruby release before its platform variant.
@@ -677,7 +671,7 @@ func TestRubyGemsLowToHighPipeline(t *testing.T) {
 	if res2.BundleID != "rubygems-bundle-000002" || res2.ExportedModules != 1 {
 		t.Fatalf("second collect result: %+v", res2)
 	}
-	gems2 := rubygemsInstallBundle(t, ls, hs, res2.BundleID)
+	gems2 := rubygemsImportBundle(t, ls, hs, res2.BundleID)
 	code, body = httpGet(t, srv.URL+"/rubygems/info/mylib")
 	wantInfo = "---\n" + reg.line(t, "mylib", "0.9.0") + "\n" + reg.line(t, "mylib", "1.0.0") + "\n" +
 		reg.line(t, "mylib", "1.0.0-x86_64-linux") + "\n"
@@ -736,7 +730,7 @@ func TestRubyGemsLowToHighPipeline(t *testing.T) {
 // pins fail hard, a checksum-tampering upstream is caught, and malformed
 // requests are rejected before touching the network.
 func TestRubyGemsCollectFailures(t *testing.T) {
-	reg, ls := rubygemsTestSetup(t)
+	reg, ls, _ := rubygemsTestSetup(t)
 	ctx := context.Background()
 
 	// A dependency whose /info file the upstream does not know is reported
@@ -787,7 +781,7 @@ func TestRubyGemsCollectFailures(t *testing.T) {
 // TestRubyGemsHandleCollectAdmin drives the admin JSON handler directly and
 // confirms the empty/malformed request rejections.
 func TestRubyGemsHandleCollectAdmin(t *testing.T) {
-	_, ls := rubygemsTestSetup(t)
+	_, ls, _ := rubygemsTestSetup(t)
 	req := httptest.NewRequest(http.MethodPost, "/admin/rubygems/collect",
 		strings.NewReader(`{"gems":["mylib"],"no_deps":true}`))
 	res, err := ls.HandleRubyGemsCollect(context.Background(), req)
@@ -943,6 +937,90 @@ func TestRubyGemsServeHardening(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("DELETE gem = %d, want 405", resp.StatusCode)
+	}
+}
+
+// rubygemsWriteSignedBundle assembles a signed rubygems bundle in landing
+// from raw payloads (keyed by repository-relative path) and the given gem
+// records, reusing the production tar/sign helpers. Records are taken
+// verbatim so tests can craft inconsistent manifests.
+func rubygemsWriteSignedBundle(t *testing.T, landing string, priv ed25519.PrivateKey, seq int64, records []GemVersion, payloads map[string][]byte) {
+	t.Helper()
+	src := t.TempDir()
+	var files []ManifestFile
+	for rel, content := range payloads {
+		abs := filepath.Join(src, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, abs, content)
+		mf, err := hashManifestFile(abs, rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, mf)
+	}
+	bundleID := bundleIDFor(streamRubyGems, seq)
+	manifest := BundleManifest{
+		Type:             manifestType,
+		Stream:           streamRubyGems,
+		Sequence:         seq,
+		PreviousSequence: seq - 1,
+		Created:          time.Unix(0, 0).UTC(),
+		Generator:        "test",
+		BundleID:         bundleID,
+		Ecosystems:       []string{"rubygems"},
+		RubyGems:         &RubyGemsManifest{Gems: records},
+		Files:            files,
+	}
+	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := ed25519.Sign(priv, manifestBytes)
+	if err := os.MkdirAll(landing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := createTarGzAtomic(context.Background(), filepath.Join(landing, bundleID+".tar.gz"), src, files); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(landing, bundleID+".manifest.json"), manifestBytes)
+	writeFile(t, filepath.Join(landing, bundleID+".manifest.json.sig"),
+		[]byte(base64.StdEncoding.EncodeToString(sig)+"\n"))
+}
+
+// TestRubyGemsImportRejectsTamperedRecord proves the import-side validator
+// is wired in: a signed bundle whose info line checksum is self-consistent
+// with the record's SHA256 claim but disagrees with the byte-verified
+// artifact the bundle delivers is rejected as a whole, and nothing from it
+// is served — the high side never serves an info line whose checksum cannot
+// verify against its artifact.
+func TestRubyGemsImportRejectsTamperedRecord(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	payload := gemTestPayload("mylib", "1.0.0") // the delivered, byte-verified artifact
+	wrong := aptSHA256([]byte("not the delivered bytes"))
+	rel := gemFileRel("mylib-1.0.0.gem")
+	rec := GemVersion{
+		Name: "mylib", Version: "1.0.0", Filename: "mylib-1.0.0.gem", Path: rel,
+		SHA256: wrong, InfoLine: "1.0.0 |checksum:" + wrong + ",ruby:>= 2.0",
+	}
+	rubygemsWriteSignedBundle(t, hs.cfg.Landing, priv, 1, []GemVersion{rec}, map[string][]byte{rel: payload})
+
+	res, err := hs.ImportNext()
+	if err != nil {
+		t.Fatalf("ImportNext: %v", err)
+	}
+	if res.Imported || len(res.RejectedBundles) != 1 || res.RejectedBundles[0] != "rubygems-bundle-000001" {
+		t.Fatalf("import result = %+v, want the bundle rejected", res)
+	}
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	for _, p := range []string{"/rubygems/info/mylib", "/rubygems/gems/mylib-1.0.0.gem"} {
+		if code, _ := httpGet(t, srv.URL+p); code == http.StatusOK {
+			t.Errorf("rejected bundle's content must not be served: %s", p)
+		}
 	}
 }
 

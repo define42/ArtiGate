@@ -1,16 +1,13 @@
 package main
 
 import (
-	"archive/tar"
 	"archive/zip"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -140,11 +137,9 @@ func newVSXLowServer(t *testing.T, registryURL string) (*LowServer, ed25519.Priv
 	return ls, priv
 }
 
-// vsxExtractBundle unpacks a collected bundle's archive into the high side's
-// repository root and returns its manifest, standing in for the importer's
-// verify-and-extract step (registry wiring is centralized, so the vsx hooks
-// are exercised directly).
-func vsxExtractBundle(t *testing.T, ls *LowServer, hs *HighServer, bundleID string) BundleManifest {
+// vsxBundleFromExport reads a collected bundle's manifest back from the
+// export directory (the ExportResult does not carry the record details).
+func vsxBundleFromExport(t *testing.T, ls *LowServer, bundleID string) BundleManifest {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, bundleID+".manifest.json"))
 	if err != nil {
@@ -157,53 +152,7 @@ func vsxExtractBundle(t *testing.T, ls *LowServer, hs *HighServer, bundleID stri
 	if m.VSX == nil || len(m.VSX.Extensions) == 0 {
 		t.Fatalf("manifest carries no vsx extensions: %s", b)
 	}
-	f, err := os.Open(filepath.Join(ls.cfg.ExportDir, bundleID+".tar.gz"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if hdr.Typeflag != tar.TypeReg {
-			continue
-		}
-		if err := validateRelPath(hdr.Name); err != nil {
-			t.Fatalf("bundle member %q: %v", hdr.Name, err)
-		}
-		data, err := io.ReadAll(tr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		abs := filepath.Join(hs.downloadDir, filepath.FromSlash(hdr.Name))
-		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		writeFile(t, abs, data)
-	}
 	return m
-}
-
-// vsxServe mounts the vsx serving hook on its own test server.
-func vsxServe(t *testing.T, hs *HighServer) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !hs.serveVSX(w, r) {
-			http.Error(w, "unclaimed", http.StatusNotFound)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
 }
 
 func vsxPostQuery(t *testing.T, base, body string) (int, string) {
@@ -460,10 +409,10 @@ func vsxPipelineRegistry(t *testing.T, alphaV1, alphaV2, betaV, gammaV []byte) *
 }
 
 // TestVSXCollectPipeline mirrors a pinned extension with its dependency and
-// pack closure from a fake Open VSX registry, regenerates the high-side
-// metadata from the archives, and drives the gallery protocol: exact-id and
-// free-text queries, asset and direct downloads, pagination, method gates,
-// and artifact-presence gating.
+// pack closure from a fake Open VSX registry, transfers the signed bundle,
+// imports it, and drives the gallery protocol: exact-id and free-text
+// queries, asset and direct downloads, pagination, method gates, and
+// artifact-presence gating.
 func TestVSXCollectPipeline(t *testing.T) {
 	alphaV1 := vsxTestVSIX(t, vsxTestPackageJSON("alpha", "main", "1.0.0",
 		`"extensionDependencies":["beta.dep"],"extensionPack":["gamma.pack"]`))
@@ -486,16 +435,18 @@ func TestVSXCollectPipeline(t *testing.T) {
 		t.Fatalf("expected missing.gone in SkippedModules, got %+v", res.SkippedModules)
 	}
 
+	vsxAssertManifest(t, vsxBundleFromExport(t, ls, res.BundleID), alphaV1)
+
 	pub := priv.Public().(ed25519.PublicKey)
 	hs := newTestHighServer(t, pub)
-	m := vsxExtractBundle(t, ls, hs, res.BundleID)
-	vsxAssertManifest(t, m, alphaV1)
-	if err := hs.publishVSX(m.VSX); err != nil {
-		t.Fatalf("publishVSX: %v", err)
+	transferAptBundle(t, ls, hs, res.BundleID)
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("import: %v", err)
 	}
 	vsxAssertStoredMetadata(t, hs)
 
-	srv := vsxServe(t, hs)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
 	vsxAssertExactQuery(t, srv.URL, alphaV1)
 	vsxAssertSearchAndPagination(t, srv.URL)
 	vsxAssertDownloads(t, srv.URL, alphaV1, betaV)
@@ -766,7 +717,7 @@ func TestVSXCollectLatestNoDepsAndDedupe(t *testing.T) {
 	if res.ExportedModules != 1 || len(res.SkippedModules) != 0 {
 		t.Fatalf("unexpected latest collect result: %+v", res)
 	}
-	m := vsxManifestFromExport(t, ls, res.BundleID)
+	m := vsxBundleFromExport(t, ls, res.BundleID).VSX
 	if len(m.Extensions) != 1 || m.Extensions[0].Version != "2.0.0" {
 		t.Errorf("latest resolution picked %+v, want 2.0.0", m.Extensions)
 	}
@@ -782,27 +733,10 @@ func TestVSXCollectLatestNoDepsAndDedupe(t *testing.T) {
 	if res.ExportedModules != 1 {
 		t.Fatalf("dedupe exported %d, want 1", res.ExportedModules)
 	}
-	m = vsxManifestFromExport(t, ls2, res.BundleID)
+	m = vsxBundleFromExport(t, ls2, res.BundleID).VSX
 	if len(m.Extensions) != 1 || m.Extensions[0].Version != "2.1.0" {
 		t.Errorf("dedupe kept %+v, want the first-selected 2.1.0", m.Extensions)
 	}
-}
-
-// vsxManifestFromExport reads the exported bundle's vsx manifest.
-func vsxManifestFromExport(t *testing.T, ls *LowServer, bundleID string) *VSXManifest {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, bundleID+".manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var m BundleManifest
-	if err := json.Unmarshal(b, &m); err != nil {
-		t.Fatal(err)
-	}
-	if m.VSX == nil {
-		t.Fatalf("manifest carries no vsx content: %s", b)
-	}
-	return m.VSX
 }
 
 // TestVSXCollectDigestTamper proves a registry whose published sha256 does
@@ -865,7 +799,8 @@ func TestVSXPublishRejections(t *testing.T) {
 		t.Fatalf("publish must log-and-skip bad archives, not fail: %v", err)
 	}
 
-	srv := vsxServe(t, hs)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
 	_, body := vsxPostQuery(t, srv.URL, `{}`)
 	exts, total := vsxDecodeQuery(t, body)
 	if total != 1 || len(exts) != 1 || exts[0].Publisher.PublisherName != "okcase" {
@@ -924,9 +859,25 @@ func TestVSXTreeAndDetail(t *testing.T) {
 		t.Fatalf("tree leaves = %+v", leaves)
 	}
 
-	d, err := vsxEcosystem().detail(hs, "alpha.main@1.0.0")
-	if err != nil {
-		t.Fatalf("detail: %v", err)
+	// The same tree and detail answer over the dashboard API.
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	if code, body := httpGet(t, srv.URL+"/ui/api/tree?eco=vsx&path="); code != http.StatusOK || !strings.Contains(body, `"alpha.main"`) {
+		t.Errorf("vsx tree root: status %d body %q", code, body)
+	}
+	if code, body := httpGet(t, srv.URL+"/ui/api/tree?eco=vsx&path=alpha.main"); code != http.StatusOK || !strings.Contains(body, `"alpha.main@2.0.0"`) {
+		t.Errorf("vsx tree versions: status %d body %q", code, body)
+	}
+	if code, _ := httpGet(t, srv.URL+"/ui/api/detail?eco=vsx&path=alpha.main@9.9.9"); code != http.StatusNotFound {
+		t.Errorf("missing version detail should 404, got %d", code)
+	}
+	code, body := httpGet(t, srv.URL+"/ui/api/detail?eco=vsx&path=alpha.main@1.0.0")
+	if code != http.StatusOK {
+		t.Fatalf("vsx detail status %d body %q", code, body)
+	}
+	var d UIDetail
+	if err := json.Unmarshal([]byte(body), &d); err != nil {
+		t.Fatal(err)
 	}
 	if d.Title != "alpha.main" || d.Subtitle != "1.0.0" {
 		t.Errorf("detail title/subtitle = %q/%q", d.Title, d.Subtitle)
@@ -960,21 +911,50 @@ func TestVSXTreeAndDetail(t *testing.T) {
 // Collect request parsing
 // -----------------------------------------------------------------------------
 
-func TestVSXHandleCollectRequests(t *testing.T) {
-	ls, _ := newVSXLowServer(t, "http://127.0.0.1:0")
+// TestVSXCollectAdmin drives the low-side POST /admin/vsx/collect endpoint
+// end to end and pins the request-parsing rejections.
+func TestVSXCollectAdmin(t *testing.T) {
+	v := vsxTestVSIX(t, vsxTestPackageJSON("alpha", "main", "1.0.0", ""))
+	reg := fakeVSXRegistry(t, []vsxTestExt{{publisher: "alpha", name: "main", version: "1.0.0", latest: true, vsix: v}})
+	ls, _ := newVSXLowServer(t, reg.URL)
+	srv := httptest.NewServer(ls)
+	defer srv.Close()
 
+	resp, err := http.Post(srv.URL+"/admin/vsx/collect", "application/json", //nolint:noctx // test request
+		strings.NewReader(`{"extensions":["alpha.main"],"no_deps":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("collect status %d, want 200: %s", resp.StatusCode, b)
+	}
+	var res ExportResult
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if res.BundleID != "vsx-bundle-000001" || res.ExportedModules != 1 {
+		t.Errorf("unexpected collect result: %+v", res)
+	}
+
+	for _, body := range []string{`{}`, `not json`, `{"extensions":["nodot"]}`} {
+		bad, err := http.Post(srv.URL+"/admin/vsx/collect", "application/json", strings.NewReader(body)) //nolint:noctx // test request
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = bad.Body.Close()
+		if bad.StatusCode != http.StatusBadRequest {
+			t.Errorf("collect body %q status %d, want 400", body, bad.StatusCode)
+		}
+	}
+
+	// The parse-layer rejections carry actionable messages.
 	r := httptest.NewRequest(http.MethodPost, "/admin/vsx/collect", strings.NewReader("not json"))
 	if _, err := ls.HandleVSXCollect(context.Background(), r); err == nil ||
 		!strings.Contains(err.Error(), "parse vsx collect request") {
 		t.Errorf("malformed body error = %v", err)
 	}
-
-	r = httptest.NewRequest(http.MethodPost, "/admin/vsx/collect", strings.NewReader(``))
-	if _, err := ls.HandleVSXCollect(context.Background(), r); err == nil ||
-		!strings.Contains(err.Error(), "no extensions") {
-		t.Errorf("empty request error = %v", err)
-	}
-
 	r = httptest.NewRequest(http.MethodPost, "/admin/vsx/collect", strings.NewReader(`{"extensions":["nodot"]}`))
 	if _, err := ls.HandleVSXCollect(context.Background(), r); err == nil ||
 		!strings.Contains(err.Error(), "publisher.name") {

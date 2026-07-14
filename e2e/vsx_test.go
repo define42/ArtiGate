@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
