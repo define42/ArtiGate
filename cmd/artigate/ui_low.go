@@ -55,11 +55,24 @@ const lowUIHTML = `<!DOCTYPE html>
   body { font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }
   header { padding: 1rem 1.5rem; background: #161a22; border-bottom: 1px solid #2a2f3a; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   header h1 { font-size: 1.25rem; margin: 0; }
-  nav { display: flex; gap: .4rem; flex-wrap: wrap; }
-  nav button { background: #2a2f3a; color: #c7cedb; border: 1px solid #3a4150; border-radius: 6px; padding: .4rem .9rem; cursor: pointer; font: inherit; }
-  nav button.active { background: #1f6f43; color: #eafff2; border-color: #2b8f59; }
   header .refresh { margin-left: auto; background: #2a2f3a; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .4rem .8rem; cursor: pointer; font: inherit; }
-  main { padding: 1.5rem; max-width: 960px; }
+  .shell { display: flex; align-items: stretch; }
+  .sidebar { flex: 0 0 11.5rem; background: #12151c; border-right: 1px solid #2a2f3a; }
+  .sidebar nav { position: sticky; top: 0; max-height: 100dvh; overflow-y: auto; box-sizing: border-box; display: flex; flex-direction: column; gap: .2rem; padding: .9rem .7rem 1.1rem; }
+  .sidebar nav button { background: transparent; color: #c7cedb; border: 1px solid transparent; border-radius: 6px; padding: .42rem .7rem; cursor: pointer; font: inherit; text-align: left; white-space: nowrap; }
+  .sidebar nav button:hover { background: #222835; }
+  .sidebar nav button.active { background: #1f6f43; color: #eafff2; border-color: #2b8f59; }
+  .sidebar .nav-label { color: #8b93a5; font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; margin: .85rem 0 .15rem; padding: 0 .7rem; }
+  .sidebar nav hr { border: none; border-top: 1px solid #2a2f3a; margin: .55rem .4rem; align-self: stretch; width: auto; }
+  main { flex: 1 1 auto; min-width: 0; padding: 1.5rem; max-width: 960px; }
+  @media (max-width: 760px) {
+    .shell { flex-direction: column; }
+    .sidebar { flex: none; border-right: none; border-bottom: 1px solid #2a2f3a; }
+    .sidebar nav { position: static; max-height: none; flex-direction: row; flex-wrap: wrap; gap: .35rem; padding: .8rem 1rem; }
+    .sidebar nav button { text-align: center; }
+    .sidebar .nav-label { flex-basis: 100%; margin: .35rem 0 0; padding: 0; }
+    .sidebar nav hr { display: none; }
+  }
   .card { background: #161a22; border: 1px solid #2a2f3a; border-radius: 8px; padding: 1.1rem 1.25rem; margin-bottom: 1.5rem; }
   .card h2 { font-size: 1rem; margin: 0 0 .75rem; }
   .hint { color: #8b93a5; font-size: .85rem; margin: .1rem 0 .8rem; }
@@ -145,8 +158,14 @@ const lowUIHTML = `<!DOCTYPE html>
 <body>
 <header>
   <h1>ArtiGate <span style="color:#8b93a5;font-weight:400">low-side exporter</span></h1>
-  <nav>
+  <button type="button" class="refresh" onclick="loadStatus();loadAllWatches();loadJobs()">Refresh</button>
+  {{LOGOUT}}
+</header>
+<div class="shell">
+<aside class="sidebar">
+  <nav aria-label="Mirrored streams">
     <button type="button" data-view="overview" class="active" onclick="setView('overview')">Overview</button>
+    <span class="nav-label">Streams</span>
     <button type="button" data-view="go" onclick="setView('go')">Go</button>
     <button type="button" data-view="python" onclick="setView('python')">Python</button>
     <button type="button" data-view="maven" onclick="setView('maven')">Maven</button>
@@ -169,11 +188,10 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="git" onclick="setView('git')">Git</button>
     <button type="button" data-view="osv" onclick="setView('osv')">OSV</button>
     <button type="button" data-view="uploads" onclick="setView('uploads')">Uploads</button>
+    <hr>
     <button type="button" data-view="status" onclick="setView('status')">Status</button>
   </nav>
-  <button type="button" class="refresh" onclick="loadStatus();loadAllWatches();loadJobs()">Refresh</button>
-  {{LOGOUT}}
-</header>
+</aside>
 <main>
   <section class="view" id="view-overview">
   <div class="card">
@@ -861,6 +879,7 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   </section>
 </main>
+</div>
 <dialog id="collectModal" class="cmodal" aria-label="Collect progress">
   <div class="cmodal-head"><span class="cmodal-spin" id="cmSpin" aria-hidden="true"></span><h3 id="cmTitle">Collecting</h3></div>
   <pre class="cmodal-log" id="cmLog" aria-live="polite"></pre>
