@@ -161,16 +161,47 @@ func TestGoEnvMergesCredentialedHosts(t *testing.T) {
 	}
 	defer cleanup()
 	got := envMap(ls.goEnv(withGoAuth(context.Background(), st)))
-	// The credentialed host joins the configured GOPRIVATE and also lands in
-	// GONOSUMDB/GONOPROXY (which had no configured value).
+	// The credentialed host joins the configured GOPRIVATE, and GONOSUMDB /
+	// GONOPROXY — which default to GOPRIVATE while unset — keep that coverage:
+	// they must NOT collapse to only the auth host, or corp.example/* modules
+	// would leak to the public proxy/sumdb during the collect.
 	if got["GOPRIVATE"] != "corp.example/*,gitlab.example.com" {
 		t.Errorf("merged GOPRIVATE = %q", got["GOPRIVATE"])
 	}
-	if got["GONOSUMDB"] != "gitlab.example.com" || got["GONOPROXY"] != "gitlab.example.com" {
-		t.Errorf("GONOSUMDB/GONOPROXY = %q / %q", got["GONOSUMDB"], got["GONOPROXY"])
+	if got["GONOSUMDB"] != "corp.example/*,gitlab.example.com" || got["GONOPROXY"] != "corp.example/*,gitlab.example.com" {
+		t.Errorf("GONOSUMDB/GONOPROXY = %q / %q, want corp.example/* preserved", got["GONOSUMDB"], got["GONOPROXY"])
 	}
 	if got["NETRC"] == "" || got["GIT_CONFIG_COUNT"] != "1" {
 		t.Errorf("auth env not merged: NETRC=%q GIT_CONFIG_COUNT=%q", got["NETRC"], got["GIT_CONFIG_COUNT"])
+	}
+}
+
+// TestGoNoVarValue pins the GONOSUMDB/GONOPROXY defaulting rule directly: both
+// variables default to GOPRIVATE while unset, so a credentialed collect must
+// preserve that base rather than replace it with only the auth hosts.
+func TestGoNoVarValue(t *testing.T) {
+	hosts := []string{"gitlab.example.com"}
+	for _, tt := range []struct {
+		name                string
+		configured, private string
+		hosts               []string
+		want                string
+	}{
+		// No credentialed collect: the configured value is exported verbatim
+		// (empty when unset, so the subprocess applies its own GOPRIVATE default).
+		{"no-auth unset", "", "corp.example/*", nil, ""},
+		{"no-auth set", "foo/*", "corp.example/*", nil, "foo/*"},
+		// Credentialed: unset falls back to GOPRIVATE before appending hosts;
+		// an explicit value is preserved alongside them.
+		{"auth unset falls back to GOPRIVATE", "", "corp.example/*", hosts, "corp.example/*,gitlab.example.com"},
+		{"auth keeps explicit value", "foo/*", "corp.example/*", hosts, "foo/*,gitlab.example.com"},
+		{"auth no GOPRIVATE either", "", "", hosts, "gitlab.example.com"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := goNoVarValue(tt.configured, tt.private, tt.hosts); got != tt.want {
+				t.Errorf("goNoVarValue(%q,%q,%v) = %q, want %q", tt.configured, tt.private, tt.hosts, got, tt.want)
+			}
+		})
 	}
 }
 

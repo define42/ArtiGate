@@ -198,3 +198,25 @@ func mergePatterns(configured string, hosts []string) string {
 	parts = append(parts, hosts...)
 	return strings.Join(parts, ",")
 }
+
+// effectiveGoNoVar returns the base pattern list for GONOSUMDB or GONOPROXY:
+// the configured value, or GOPRIVATE (which both default to) when it is unset.
+func effectiveGoNoVar(configured, private string) string {
+	if configured != "" {
+		return configured
+	}
+	return private
+}
+
+// goNoVarValue returns the value the go subprocess should receive for GONOSUMDB
+// or GONOPROXY. Outside a credentialed collect (no hosts) it returns the
+// configured value verbatim — empty when unset — so the subprocess applies the
+// go command's own default (GOPRIVATE). For a credentialed collect it appends
+// the auth hosts to the effective base, so augmenting the variable never
+// silently drops GOPRIVATE's coverage for the run.
+func goNoVarValue(configured, private string, hosts []string) string {
+	if len(hosts) == 0 {
+		return configured
+	}
+	return mergePatterns(effectiveGoNoVar(configured, private), hosts)
+}

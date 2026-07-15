@@ -582,14 +582,17 @@ func (s *LowServer) goEnv(ctx context.Context) []string {
 	}
 	// A credentialed collect's hosts join the configured private patterns so
 	// they skip the public proxy and checksum database (see goauth.go).
+	// GONOSUMDB and GONOPROXY default to GOPRIVATE while unset, so goNoVarValue
+	// appends the auth hosts to that effective base — otherwise augmenting them
+	// during a credentialed collect would drop GOPRIVATE's coverage for the run.
 	hosts := goAuthHostPatterns(ctx)
 	if v := mergePatterns(s.cfg.GOPRIVATE, hosts); v != "" {
 		set("GOPRIVATE", v)
 	}
-	if v := mergePatterns(s.cfg.GONOSUMDB, hosts); v != "" {
+	if v := goNoVarValue(s.cfg.GONOSUMDB, s.cfg.GOPRIVATE, hosts); v != "" {
 		set("GONOSUMDB", v)
 	}
-	if v := mergePatterns(s.cfg.GONOPROXY, hosts); v != "" {
+	if v := goNoVarValue(s.cfg.GONOPROXY, s.cfg.GOPRIVATE, hosts); v != "" {
 		set("GONOPROXY", v)
 	}
 	// Do not prompt for passwords in daemon mode. Configure git/ssh credentials ahead of time.

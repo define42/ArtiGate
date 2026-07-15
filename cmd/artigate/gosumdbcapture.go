@@ -302,11 +302,10 @@ func probeSumDBSupported(ctx context.Context, hc *http.Client, base string) bool
 // modules fetched with an injected login are skipped instead of surfacing as
 // lookup failures.
 func (s *LowServer) sumdbSkipPatterns(ctx context.Context) string {
-	hosts := goAuthHostPatterns(ctx)
-	if s.cfg.GONOSUMDB != "" {
-		return mergePatterns(s.cfg.GONOSUMDB, hosts)
-	}
-	return mergePatterns(s.cfg.GOPRIVATE, hosts)
+	// The in-process sumdb client applies no defaulting of its own, so this
+	// resolves the effective base (GONOSUMDB, or GOPRIVATE when unset) itself
+	// before appending a credentialed collect's hosts — mirroring goEnv.
+	return mergePatterns(effectiveGoNoVar(s.cfg.GONOSUMDB, s.cfg.GOPRIVATE), goAuthHostPatterns(ctx))
 }
 
 // requestRecordsOf lists the module@version records of successfully fetched
