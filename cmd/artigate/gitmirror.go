@@ -1380,7 +1380,6 @@ func (s *HighServer) gitDetail(spec string) (UIDetail, error) {
 		{Label: "Repository", Value: "/git/" + name + ".git", Mono: true},
 		{Label: "Ref", Value: ref.Name, Mono: true},
 		{Label: "Commit", Value: ref.SHA1, Mono: true},
-		{Label: "Clone", Value: "git clone /git/" + name + ".git", Mono: true},
 	}
 	abs := filepath.Join(s.gitDir(), name, "objects", "pack", packBase+".pack")
 	if fi, err := os.Stat(abs); err == nil {
@@ -1390,7 +1389,13 @@ func (s *HighServer) gitDetail(spec string) (UIDetail, error) {
 		fields = append(fields, UIDetailField{Label: "Pack SHA-256", Value: sum, Mono: true})
 	}
 	downloads := []UIDownload{{Label: packBase + ".pack", URL: packURL}}
-	return UIDetail{Title: name, Subtitle: gitShortRef(ref.Name), Fields: fields, Downloads: downloads}, nil
+	return UIDetail{
+		Title:     name,
+		Subtitle:  gitShortRef(ref.Name),
+		Fields:    fields,
+		CloneURL:  "git/" + name + ".git",
+		Downloads: downloads,
+	}, nil
 }
 
 // -----------------------------------------------------------------------------

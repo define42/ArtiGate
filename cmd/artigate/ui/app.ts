@@ -67,6 +67,10 @@ interface Detail {
   // Host-relative pull reference; the panel prepends this host and renders a
   // prominent click-to-copy button (containers only).
   copy_ref?: string;
+  // Host-relative git repository path ("git/<name>.git"); the panel prepends
+  // this server's origin and renders a copyable "git clone <url>" command with
+  // the full domain (git mirrors only).
+  clone_url?: string;
   // Direct-download buttons for the artifact's files (empty for leaves that
   // are not plain files, like container images).
   downloads?: DownloadLink[];
@@ -347,6 +351,13 @@ function renderDetail(detail: Detail): void {
     dl.appendChild(dd);
   }
   panel.appendChild(dl);
+
+  // A git mirror's full, host-qualified clone command as a copyable code block.
+  // The server sends only the host-relative path; the origin (scheme and host)
+  // is known only client-side, so any reverse proxy is honored.
+  if (detail.clone_url) {
+    panel.appendChild(codeBlock({ label: "Clone", code: `git clone ${serverBase()}/${detail.clone_url}` }));
+  }
 
   const downloads = detail.downloads ?? [];
   if (downloads.length > 0) {
