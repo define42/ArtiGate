@@ -604,6 +604,12 @@ func TestGoSumDBServePathQualifiedName(t *testing.T) {
 	if code, _ := httpGet(t, srv.URL+"/go/sumdb/sums.example.com/other/supported"); code != http.StatusNotFound {
 		t.Fatalf("supported for an unmirrored path-qualified name should be 404")
 	}
+	// The bare host directory exists only as the container of dev/ — probing
+	// it as a database in its own right must not claim support, or the client
+	// would stop falling back and every later lookup here would 404.
+	if code, _ := httpGet(t, srv.URL+"/go/sumdb/sums.example.com/supported"); code != http.StatusNotFound {
+		t.Fatalf("supported for the bare parent of a path-qualified name should be 404")
+	}
 }
 
 func TestGoSumDBServeRejectsTraversal(t *testing.T) {

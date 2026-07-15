@@ -254,9 +254,14 @@ func (s *HighServer) serveGoSumDB(w http.ResponseWriter, r *http.Request, urlPat
 // 200 tells the go command to send all checksum-database requests here. It
 // claims support only for a database this mirror actually holds data for —
 // on a 404 the client falls back to asking the database directly, exactly as
-// it would against a proxy without sumdb passthrough.
+// it would against a proxy without sumdb passthrough. Holding data means the
+// database's own staged "latest" head is present (every capture ships one):
+// a directory alone proves nothing, since mirroring only a path-qualified
+// database such as host/dev leaves a bare host/ directory behind as its
+// container. "latest" is a reserved endpoint word no name segment may use,
+// so the file can only belong to exactly this database.
 func (s *HighServer) answerSumDBSupported(w http.ResponseWriter, name string) {
-	if !dirExists(filepath.Join(s.goModuleDir(), "sumdb", filepath.FromSlash(name))) {
+	if !fileExists(filepath.Join(s.goModuleDir(), "sumdb", filepath.FromSlash(name), "latest")) {
 		http.Error(w, "no checksum-database data mirrored for "+name, http.StatusNotFound)
 		return
 	}
