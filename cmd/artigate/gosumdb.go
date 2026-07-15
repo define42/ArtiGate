@@ -56,12 +56,14 @@ type sumdbRef struct {
 // parseSumDBPath parses a checksum-database path relative to the sumdb/
 // namespace ("<name>/latest", "<name>/lookup/<mod>@<ver>",
 // "<name>/tile/8/0/x001/234[.p/5]", "<name>/supported"), enforcing the exact
-// shapes the protocol defines. Both sides use it: the low side to decide what
-// may be listed in a bundle, the high side to validate manifests at import
-// and URLs at serve time — the untrusted import side applies the same rules
-// the low side does at collect time.
+// shapes the protocol defines. The database name may itself be path-qualified
+// (the go command accepts sumdb names in host[/path] form), so the name spans
+// every segment up to the endpoint word. Both sides use it: the low side to
+// decide what may be listed in a bundle, the high side to validate manifests at
+// import and URLs at serve time — the untrusted import side applies the same
+// rules the low side does at collect time.
 func parseSumDBPath(rel string) (sumdbRef, error) {
-	name, rest, ok := strings.Cut(rel, "/")
+	name, endpoint, ok := splitSumDBEndpoint(rel)
 	if !ok {
 		return sumdbRef{}, fmt.Errorf("incomplete sumdb path %q", rel)
 	}
@@ -70,18 +72,18 @@ func parseSumDBPath(rel string) (sumdbRef, error) {
 	}
 	ref := sumdbRef{Name: name}
 	switch {
-	case rest == "latest":
+	case endpoint == "latest":
 		ref.Kind = sumdbPathLatest
-	case rest == "supported":
+	case endpoint == "supported":
 		ref.Kind = sumdbPathSupported
-	case strings.HasPrefix(rest, "lookup/"):
+	case strings.HasPrefix(endpoint, "lookup/"):
 		ref.Kind = sumdbPathLookup
-		if err := validateSumDBLookup(strings.TrimPrefix(rest, "lookup/")); err != nil {
+		if err := validateSumDBLookup(strings.TrimPrefix(endpoint, "lookup/")); err != nil {
 			return sumdbRef{}, err
 		}
-	case strings.HasPrefix(rest, "tile/"):
+	case strings.HasPrefix(endpoint, "tile/"):
 		ref.Kind = sumdbPathTile
-		if _, err := tlog.ParseTilePath(rest); err != nil {
+		if _, err := tlog.ParseTilePath(endpoint); err != nil {
 			return sumdbRef{}, err
 		}
 	default:
@@ -90,22 +92,69 @@ func parseSumDBPath(rel string) (sumdbRef, error) {
 	return ref, nil
 }
 
-// validateSumDBName checks a checksum database name (a hostname, e.g.
-// "sum.golang.org") that becomes both a URL segment and a directory under the
-// go/ subtree: one lowercase hostname-shaped segment, nothing that could be a
-// dot-file or path game.
+// splitSumDBEndpoint separates a sumdb path into its database name and the
+// endpoint tail. The name may be path-qualified (host[/path]), so the split is
+// the first path segment that opens an endpoint — "latest", "supported",
+// "lookup", or "tile". Those four words are reserved: because the wire path is
+// sumdb/<name>/<endpoint>, a name that used one as a segment could not be told
+// apart from an endpoint, so validateSumDBName rejects them in a name. Returns
+// ok=false when no endpoint word is present or one leads with no name before it.
+func splitSumDBEndpoint(rel string) (name, endpoint string, ok bool) {
+	pos := 0
+	for _, seg := range strings.Split(rel, "/") {
+		if isSumDBEndpointWord(seg) {
+			if pos == 0 {
+				return "", "", false
+			}
+			return rel[:pos-1], rel[pos:], true
+		}
+		pos += len(seg) + 1
+	}
+	return "", "", false
+}
+
+// isSumDBEndpointWord reports whether seg is a reserved endpoint-opening word.
+func isSumDBEndpointWord(seg string) bool {
+	switch seg {
+	case "latest", "supported", "lookup", "tile":
+		return true
+	default:
+		return false
+	}
+}
+
+// validateSumDBName checks a checksum database name that becomes both a URL
+// prefix and a directory path under the go/ subtree. A name is one or more
+// slash-separated segments (a hostname, optionally path-qualified, e.g.
+// "sum.golang.org" or "sums.example.com/dev"); every segment must be a
+// lowercase hostname-shaped token, so nothing can be a dot-file, a "."/".."
+// traversal, an empty (leading-, trailing-, or double-slash) segment, or a
+// reserved endpoint word.
 func validateSumDBName(name string) error {
-	if name == "" || len(name) > 253 || name[0] == '.' || name[0] == '-' {
+	if name == "" || len(name) > 253 {
 		return fmt.Errorf("invalid sumdb name %q", name)
 	}
-	if strings.Contains(name, "..") {
-		return fmt.Errorf("invalid sumdb name %q", name)
+	for _, seg := range strings.Split(name, "/") {
+		if err := validateSumDBNameSegment(seg); err != nil {
+			return fmt.Errorf("invalid sumdb name %q: %w", name, err)
+		}
 	}
-	for _, r := range name {
+	return nil
+}
+
+// validateSumDBNameSegment enforces the per-segment rules of a database name.
+func validateSumDBNameSegment(seg string) error {
+	if seg == "" || seg[0] == '.' || seg[0] == '-' || isSumDBEndpointWord(seg) {
+		return fmt.Errorf("bad name segment %q", seg)
+	}
+	if strings.Contains(seg, "..") {
+		return fmt.Errorf("bad name segment %q", seg)
+	}
+	for _, r := range seg {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '-':
 		default:
-			return fmt.Errorf("invalid sumdb name %q", name)
+			return fmt.Errorf("bad name segment %q", seg)
 		}
 	}
 	return nil
@@ -207,7 +256,7 @@ func (s *HighServer) serveGoSumDB(w http.ResponseWriter, r *http.Request, urlPat
 // on a 404 the client falls back to asking the database directly, exactly as
 // it would against a proxy without sumdb passthrough.
 func (s *HighServer) answerSumDBSupported(w http.ResponseWriter, name string) {
-	if !dirExists(filepath.Join(s.goModuleDir(), "sumdb", name)) {
+	if !dirExists(filepath.Join(s.goModuleDir(), "sumdb", filepath.FromSlash(name))) {
 		http.Error(w, "no checksum-database data mirrored for "+name, http.StatusNotFound)
 		return
 	}
