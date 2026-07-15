@@ -108,9 +108,13 @@ the export directory (three files per bundle: `.tar.gz`, `.manifest.json`,
 `.manifest.json.sig`).
 
 Fetching uses the host's normal tools and credentials (`go`/`git`, `pip`, `mvn`,
-`npm`, `gpgv`). For private Go modules, configure the service user's Git/SSH
-before starting. `--gotoolchain` (default `auto`) lets `go` download a newer
-toolchain when a module requires one. The [configuration
+`npm`, `gpgv`). Private Go modules can authenticate with a one-time login on the
+collect (the Go page's *Private module host login* fields / the `auth` field) or
+a standing `host=user:password` entry in `ARTIGATE_UPSTREAM_AUTH` — ArtiGate
+injects it into `go`/`git` for that collect and adds the host to `GOPRIVATE`;
+alternatively, configure the service user's Git/SSH before starting.
+`--gotoolchain` (default `auto`) lets `go` download a newer toolchain when a
+module requires one. The [configuration
 reference](https://define42.github.io/ArtiGate/configuration/) lists every flag
 and environment variable.
 
@@ -345,7 +349,9 @@ a one-shot login on the collect (each page's *Private … login* fields / the
 collects use. URLs embedding `user:pass@` are rejected (they previously
 "worked" via Go's automatic Basic auth while leaking the secret into the
 signed manifest that crosses the diode — move such logins into the auth field
-or the environment variable).
+or the environment variable). Private **Go module hosts** use the same
+`ARTIGATE_UPSTREAM_AUTH` / `auth`-field login, injected into the `go`/`git`
+subprocesses for that collect (see the Go bullet above).
 
 - **OSV** — vulnerability-advisory databases from [osv.dev](https://osv.dev):
   OSV ecosystem names, one per line, exactly as osv.dev spells them (`npm`,
