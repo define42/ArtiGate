@@ -260,6 +260,119 @@ func TestGoTreeChildren(t *testing.T) {
 	}
 }
 
+func getSearch(t *testing.T, base, q string) []UISearchGroup {
+	t.Helper()
+	code, body := httpGet(t, base+"/ui/api/search?q="+url.QueryEscape(q))
+	if code != http.StatusOK {
+		t.Fatalf("search(%q) status = %d", q, code)
+	}
+	var resp UISearchResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("decode search: %v", err)
+	}
+	return resp.Groups
+}
+
+// TestHighServerUISearch covers the cross-ecosystem search endpoint: hits are
+// grouped per ecosystem, matched case-insensitively, capped with a full total,
+// and each hit's path plugs straight back into the lazy tree.
+func TestHighServerUISearch(t *testing.T) {
+	srv := mixedHighServer(t)
+
+	groups := getSearch(t, srv.URL, "bar")
+	if len(groups) != 1 || groups[0].Eco != "go" || groups[0].Label != "Go modules" {
+		t.Fatalf("search(bar) groups = %+v, want one go group", groups)
+	}
+	if groups[0].Total != 1 || len(groups[0].Nodes) != 1 {
+		t.Fatalf("go group = %+v", groups[0])
+	}
+	hit := groups[0].Nodes[0]
+	if hit.Label != "github.com/foo/bar" || hit.Path != "github.com/foo/bar" ||
+		hit.Kind != "module" || !hit.Expandable || hit.Count != 1 {
+		t.Errorf("hit = %+v", hit)
+	}
+	// The hit's path is a live tree node: expanding it yields the version leaf.
+	if vers := getTree(t, srv.URL, "go", hit.Path); treeLabels(vers) != "v1.0.0" {
+		t.Errorf("expanding the hit = %+v, want the v1.0.0 leaf", vers)
+	}
+
+	// Case-insensitive and cross-ecosystem: REQUESTS finds the Python project.
+	groups = getSearch(t, srv.URL, "REQUESTS")
+	if len(groups) != 1 || groups[0].Eco != "python" || groups[0].Nodes[0].Label != "requests" {
+		t.Fatalf("search(REQUESTS) groups = %+v, want the requests project", groups)
+	}
+
+	// "foo" matches both mirrored modules; the total counts them all.
+	groups = getSearch(t, srv.URL, "foo")
+	if len(groups) != 1 || groups[0].Total != 2 || len(groups[0].Nodes) != 2 {
+		t.Fatalf("search(foo) groups = %+v, want 2 go hits", groups)
+	}
+
+	// No match and blank queries return no groups (never the whole inventory).
+	for _, q := range []string{"nosuchpackage", "", "   "} {
+		if groups := getSearch(t, srv.URL, q); len(groups) != 0 {
+			t.Errorf("search(%q) groups = %+v, want none", q, groups)
+		}
+	}
+}
+
+// TestHighServerUISearchRejects covers the endpoint's input guards: an
+// over-long query and a write method.
+func TestHighServerUISearchRejects(t *testing.T) {
+	srv := mixedHighServer(t)
+
+	if code, _ := httpGet(t, srv.URL+"/ui/api/search?q="+strings.Repeat("a", maxUISearchQueryLen+1)); code != http.StatusBadRequest {
+		t.Errorf("overlong query status = %d, want 400", code)
+	}
+	resp, err := http.Post(srv.URL+"/ui/api/search?q=x", "text/plain", nil) //nolint:noctx // test request
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("POST search status = %d, want 405", resp.StatusCode)
+	}
+}
+
+// TestUITreeSearch pins each tree shape's search behavior: what is matched,
+// the node a hit renders as, and the cap-with-total accounting.
+func TestUITreeSearch(t *testing.T) {
+	mods := segmentTree{
+		{Module: "github.com/foo/bar", Versions: []string{"v1.0.0"}},
+		{Module: "github.com/foo/baz", Versions: []string{"v2.0.0", "v2.1.0"}},
+	}
+	nodes, total := mods.search("BAZ", 10)
+	if total != 1 || len(nodes) != 1 || nodes[0].Path != "github.com/foo/baz" ||
+		nodes[0].Kind != "module" || !nodes[0].Expandable || nodes[0].Count != 2 {
+		t.Errorf("segment search = %+v (total %d)", nodes, total)
+	}
+
+	// The cap bounds the returned nodes; the total still counts every match.
+	if nodes, total := mods.search("foo", 1); total != 2 || len(nodes) != 1 {
+		t.Errorf("capped search = %d nodes (total %d), want 1 node of 2", len(nodes), total)
+	}
+
+	flat := flatTree{{Module: "@scope/pkg", Versions: []string{"1.0.0"}}}
+	if nodes, total := flat.search("scope", 10); total != 1 || len(nodes) != 1 || nodes[0].Kind != "module" {
+		t.Errorf("flat search = %+v (total %d)", nodes, total)
+	}
+
+	py := pythonTree{{Project: "requests", Files: []UIPyFile{{Filename: "requests-2.32.4-py3-none-any.whl"}}}}
+	if nodes, total := py.search("req", 10); total != 1 || nodes[0].Kind != "project" || nodes[0].Count != 1 {
+		t.Errorf("python search = %+v (total %d)", nodes, total)
+	}
+
+	up := uploadsTree{{Folder: "docs", Files: []UploadedFile{{Name: "report.pdf"}, {Name: "notes.txt"}}}}
+	if nodes, total := up.search("docs", 10); total != 1 || nodes[0].Kind != "project" || !nodes[0].Expandable {
+		t.Errorf("uploads folder search = %+v (total %d)", nodes, total)
+	}
+	// A file hit is a selectable leaf whose label carries its folder.
+	if nodes, total := up.search("report", 10); total != 1 || nodes[0].Kind != "file" ||
+		nodes[0].Path != "docs/report.pdf" || nodes[0].Label != "docs/report.pdf" {
+		t.Errorf("uploads file search = %+v (total %d)", nodes, total)
+	}
+}
+
 // TestHighServerUIReposApt checks the per-repo data the "Set me up" guide uses:
 // an imported APT mirror is listed with the suites/components/architectures it
 // was mirrored with, so the generated client .sources is exact.
@@ -312,10 +425,12 @@ func TestHighServerUIPage(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("index status = %d", code)
 	}
-	// The page shell has the title, the stream sidebar menu (Go / Python), the
-	// "Set me up" guide toggle and its container, and loads the JS.
+	// The page shell has the title, the header search box, the stream sidebar
+	// menu (Go / Python), the "Set me up" guide toggle and its container, and
+	// loads the JS.
 	for _, want := range []string{
 		"<title>ArtiGate</title>",
+		`id="search"`,
 		`data-view="overview"`,
 		"Import status",
 		`id="view-overview"`,
@@ -367,8 +482,9 @@ func TestHighServerUIAppJS(t *testing.T) {
 	}
 	// The compiled bundle drives the lazy tree fetch, the view switch, the
 	// detail panel with its direct-download buttons, the "Set me up"
-	// client-setup guide, and the uploads delete action.
-	for _, want := range []string{"/ui/api/tree", "/ui/api/detail", "/ui/api/repos", "fetchChildren", "selectLeaf", "renderDetail", "downloadRow", "download-link", "encodePath", "openGuide", "openRepoGuide", "aptGuideSection", "fetchRepos", "showModal", "GOPROXY", "index-url", "uploadActions", "uploadDeleteButton", "/admin/uploads/delete"} {
+	// client-setup guide, the uploads delete action, and the cross-ecosystem
+	// package search.
+	for _, want := range []string{"/ui/api/tree", "/ui/api/detail", "/ui/api/repos", "fetchChildren", "selectLeaf", "renderDetail", "downloadRow", "download-link", "encodePath", "openGuide", "openRepoGuide", "aptGuideSection", "fetchRepos", "showModal", "GOPROXY", "index-url", "uploadActions", "uploadDeleteButton", "/admin/uploads/delete", "/ui/api/search", "runSearch", "scheduleSearch", "renderSearchResults", "searchGroupEl"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("app.js missing %q", want)
 		}

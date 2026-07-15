@@ -2,7 +2,10 @@
 // High-side dashboard. The import status is fetched once; the package trees are
 // loaded lazily, one level at a time, from /ui/api/tree. Expanding a node fetches
 // only that node's immediate children, so nothing large is transferred or
-// rendered up front. The top menu switches between the Go and Python trees.
+// rendered up front. The sidebar switches between the per-ecosystem trees, and
+// the header's search box finds packages across every ecosystem at once
+// (/ui/api/search) — hits are ordinary tree nodes, expanded and selected
+// exactly like nodes browsed to by hand.
 const VIEW_TITLES = {
     overview: "Overview",
     go: "Go modules",
@@ -30,6 +33,10 @@ const VIEW_TITLES = {
 };
 let currentView = "overview";
 let selectedLeaf = null;
+// True while the header search box owns the tree panel; currentView keeps the
+// view the sidebar has selected, so clearing the search restores it.
+let searchActive = false;
+let searchTimer = 0;
 function esc(value) {
     const map = {
         "&": "&amp;",
@@ -154,17 +161,19 @@ function setMessage(container, text) {
     p.textContent = text;
     container.appendChild(p);
 }
-// renderNodes renders a level of the tree. repoEco is set for the APT/RPM
-// views, where the nodes named by repoGuideRef carry their own "Set me up"
-// button.
-function renderNodes(container, nodes, repoEco) {
+// renderNodes renders a level of the tree. eco is the ecosystem the nodes
+// belong to — the current view for browsed trees, the hit's own ecosystem for
+// search results — so lazy expansion and the detail panel query the right one.
+// repoEco is set for the APT/RPM views, where the nodes named by repoGuideRef
+// carry their own "Set me up" button.
+function renderNodes(container, nodes, eco, repoEco) {
     container.textContent = "";
     if (nodes.length === 0) {
         setMessage(container, "empty");
         return;
     }
     for (const node of nodes) {
-        container.appendChild(node.expandable ? expandableNode(node, repoEco) : leafNode(node));
+        container.appendChild(node.expandable ? expandableNode(node, eco, repoEco) : leafNode(node, eco));
     }
 }
 // repoGuideRef returns the openRepoGuide target when a tree node should carry
@@ -179,17 +188,17 @@ function repoGuideRef(eco, node) {
     }
     return depth === 1 ? node.path : null;
 }
-function leafNode(node) {
+function leafNode(node, eco) {
     const div = document.createElement("div");
     div.className = "leaf";
     div.textContent = node.label;
     div.tabIndex = 0;
     div.setAttribute("role", "button");
-    div.addEventListener("click", () => void selectLeaf(div, node));
+    div.addEventListener("click", () => void selectLeaf(div, node, eco));
     div.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter" || ev.key === " ") {
             ev.preventDefault();
-            void selectLeaf(div, node);
+            void selectLeaf(div, node, eco);
         }
     });
     return div;
@@ -366,7 +375,7 @@ function downloadRow(links) {
     }
     return row;
 }
-async function selectLeaf(el, node) {
+async function selectLeaf(el, node, eco) {
     if (selectedLeaf) {
         selectedLeaf.classList.remove("selected");
     }
@@ -376,13 +385,13 @@ async function selectLeaf(el, node) {
     setMessage(panel, "loading…");
     hideLayers();
     try {
-        const url = `/ui/api/detail?eco=${encodeURIComponent(currentView)}&path=${encodeURIComponent(node.path)}`;
+        const url = `/ui/api/detail?eco=${encodeURIComponent(eco)}&path=${encodeURIComponent(node.path)}`;
         const resp = await fetch(url, { cache: "no-store" });
         if (!resp.ok) {
             throw new Error(`HTTP ${resp.status}`);
         }
         renderDetail((await resp.json()));
-        if (currentView === "uploads") {
+        if (eco === "uploads") {
             panel.appendChild(uploadActions(node.path));
         }
     }
@@ -433,7 +442,7 @@ function uploadDeleteButton(treePath) {
                 if (!resp.ok) {
                     throw new Error((await resp.text()).trim() || `HTTP ${resp.status}`);
                 }
-                await loadTree(); // re-renders the tree and clears the detail panel
+                await reloadContent(); // re-renders the tree (or search) and clears the detail panel
             }
             catch (err) {
                 btn.disabled = false;
@@ -472,7 +481,7 @@ function repoGuideButton(eco, repoRef) {
     });
     return btn;
 }
-function expandableNode(node, repoEco) {
+function expandableNode(node, eco, repoEco) {
     const details = document.createElement("details");
     const summary = document.createElement("summary");
     summary.textContent = node.label;
@@ -498,8 +507,8 @@ function expandableNode(node, repoEco) {
         }
         loaded = true;
         setMessage(children, "loading…");
-        fetchChildren(currentView, node.path)
-            .then((child) => renderNodes(children, child, repoEco))
+        fetchChildren(eco, node.path)
+            .then((child) => renderNodes(children, child, eco, repoEco))
             .catch((err) => {
             loaded = false; // allow retry on next open
             setMessage(children, `failed to load: ${err.message}`);
@@ -524,16 +533,15 @@ async function loadTree() {
     setMessage(tree, "loading…");
     try {
         const nodes = await fetchChildren(currentView, "");
-        renderNodes(tree, nodes, perRepo ? currentView : undefined);
+        renderNodes(tree, nodes, currentView, perRepo ? currentView : undefined);
     }
     catch (err) {
         setMessage(tree, `Failed to load tree: ${err.message}`);
     }
 }
-function setView(view) {
-    if (view === currentView) {
-        return;
-    }
+// applyView shows a view unconditionally: setView skips the work when the
+// view is already showing, but leaving search must re-render it either way.
+function applyView(view) {
     currentView = view;
     menuButtons().forEach((btn) => {
         btn.classList.toggle("active", btn.dataset["view"] === view);
@@ -549,6 +557,14 @@ function setView(view) {
     else {
         void loadTree();
     }
+}
+function setView(view) {
+    const leavingSearch = searchActive;
+    clearSearchBox(); // also cancels a pending debounce so it can't hijack the new view
+    if (view === currentView && !leavingSearch) {
+        return;
+    }
+    applyView(view);
 }
 async function loadStatus() {
     try {
@@ -567,9 +583,104 @@ async function loadStatus() {
 }
 function refresh() {
     void loadStatus();
-    if (currentView !== "overview") {
+    if (searchActive) {
+        void runSearch(searchBox().value.trim());
+    }
+    else if (currentView !== "overview") {
         void loadTree();
     }
+}
+// reloadContent re-renders whatever owns the tree panel — the search results
+// or the current view's tree — after a mutation (an upload delete).
+function reloadContent() {
+    return searchActive ? runSearch(searchBox().value.trim()) : loadTree();
+}
+// ---------------------------------------------------------------------------
+// Cross-ecosystem package search. Typing in the header box (debounced)
+// replaces the tree panel with matches from every ecosystem at once; the hits
+// are ordinary tree nodes, so expanding one lazily loads its versions and
+// selecting a leaf fills the detail panel — against the hit's own ecosystem,
+// not the sidebar's. Clearing the box (or picking a sidebar view) restores
+// the view the sidebar has selected.
+// ---------------------------------------------------------------------------
+function searchBox() {
+    return byId("search");
+}
+function clearSearchBox() {
+    searchActive = false;
+    window.clearTimeout(searchTimer);
+    searchBox().value = "";
+}
+// scheduleSearch debounces input events so a fast typist triggers one fetch,
+// not one per keystroke.
+function scheduleSearch() {
+    window.clearTimeout(searchTimer);
+    const q = searchBox().value.trim();
+    searchTimer = window.setTimeout(() => void runSearch(q), 250);
+}
+async function runSearch(q) {
+    if (q === "") {
+        if (searchActive) {
+            searchActive = false;
+            applyView(currentView); // restore the sidebar's view
+        }
+        return;
+    }
+    searchActive = true;
+    byId("view-overview").hidden = true;
+    byId("view-tree").hidden = false;
+    byId("guideBtn").hidden = true;
+    byId("treeTitle").textContent = `Search: “${q}”`;
+    clearDetail();
+    const tree = byId("tree");
+    setMessage(tree, "searching…");
+    try {
+        const resp = await fetch(`/ui/api/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+        if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+        }
+        const data = (await resp.json());
+        if (!searchActive || searchBox().value.trim() !== q) {
+            return; // stale response: a newer query or a cleared box owns the panel
+        }
+        renderSearchResults(tree, data);
+    }
+    catch (err) {
+        setMessage(tree, `Search failed: ${err.message}`);
+    }
+}
+function renderSearchResults(container, data) {
+    container.textContent = "";
+    const groups = data.groups ?? [];
+    if (groups.length === 0) {
+        setMessage(container, `No packages match “${data.query}”.`);
+        return;
+    }
+    for (const group of groups) {
+        container.appendChild(searchGroupEl(group));
+    }
+}
+// searchGroupEl renders one ecosystem's matches: a heading with the ecosystem
+// title and match count, then the hits as ordinary tree nodes.
+function searchGroupEl(group) {
+    const el = document.createElement("div");
+    el.className = "search-group";
+    const nodes = group.nodes ?? [];
+    const head = document.createElement("div");
+    head.className = "search-eco";
+    head.textContent = `${group.label} · ${group.total} ${group.total === 1 ? "match" : "matches"}`;
+    el.appendChild(head);
+    const list = document.createElement("div");
+    list.className = "search-list";
+    renderNodes(list, nodes, group.eco);
+    el.appendChild(list);
+    if (group.total > nodes.length) {
+        const more = document.createElement("p");
+        more.className = "empty";
+        more.textContent = `showing the first ${nodes.length} — refine the search to see the rest`;
+        el.appendChild(more);
+    }
+    return el;
 }
 function serverBase() {
     return window.location.origin; // e.g. https://artigate-high.local (no trailing slash)
@@ -1301,6 +1412,15 @@ menuButtons().forEach((btn) => {
     btn.addEventListener("click", () => setView(btn.dataset["view"]));
 });
 byId("refresh").addEventListener("click", refresh);
+searchBox().addEventListener("input", scheduleSearch);
+searchBox().addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && searchBox().value !== "") {
+        ev.preventDefault(); // keep focus; just leave search mode
+        searchBox().value = "";
+        window.clearTimeout(searchTimer);
+        void runSearch(""); // restores the sidebar's view when search was active
+    }
+});
 const guide = guideDialog();
 byId("guideBtn").addEventListener("click", openGuide);
 byId("guideClose").addEventListener("click", () => guide.close());
