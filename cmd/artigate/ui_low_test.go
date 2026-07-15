@@ -115,6 +115,7 @@ func TestLowServerUIPage(t *testing.T) {
 		`id="aptAuthHost"`, `id="aptAuthUser"`, `id="aptAuthPass" type="password"`,
 		`id="rpmAuthHost"`, `id="rpmAuthUser"`, `id="rpmAuthPass" type="password"`,
 		`id="apkAuthUser"`, `id="apkAuthPass" type="password"`,
+		`id="goAuthHost"`, `id="goAuthUser"`, `id="goAuthPass" type="password"`,
 		// The uploads page sends arbitrary files as multipart form data over
 		// XHR, so the modal can show real upload progress.
 		`data-view="uploads"`, "Upload files", `id="upfolder"`, `id="upfiles"`,

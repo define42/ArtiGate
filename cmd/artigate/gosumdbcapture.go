@@ -297,12 +297,16 @@ func probeSumDBSupported(ctx context.Context, hc *http.Client, base string) bool
 }
 
 // sumdbSkipPatterns mirrors the go command's default: GONOSUMDB, defaulting
-// to GOPRIVATE. Matching modules are never looked up in the database.
-func (s *LowServer) sumdbSkipPatterns() string {
+// to GOPRIVATE. Matching modules are never looked up in the database. A
+// credentialed collect's hosts join the patterns (see goauth.go), so private
+// modules fetched with an injected login are skipped instead of surfacing as
+// lookup failures.
+func (s *LowServer) sumdbSkipPatterns(ctx context.Context) string {
+	hosts := goAuthHostPatterns(ctx)
 	if s.cfg.GONOSUMDB != "" {
-		return s.cfg.GONOSUMDB
+		return mergePatterns(s.cfg.GONOSUMDB, hosts)
 	}
-	return s.cfg.GOPRIVATE
+	return mergePatterns(s.cfg.GOPRIVATE, hosts)
 }
 
 // requestRecordsOf lists the module@version records of successfully fetched
@@ -441,7 +445,7 @@ func sumdbLookupRel(modPath, version string) (string, bool) {
 // from upstream and land in the cache only after full verification.
 func (c *sumdbCapture) fetchRecords(records []RequestRecord) {
 	client := sumdb.NewClient(c.ops)
-	client.SetGONOSUMDB(c.srv.sumdbSkipPatterns())
+	client.SetGONOSUMDB(c.srv.sumdbSkipPatterns(c.ctx))
 	for _, rec := range records {
 		if c.ctx.Err() != nil {
 			return
@@ -583,7 +587,7 @@ func (c *sumdbCapture) reverifyCorpus() {
 		return
 	}
 	client := sumdb.NewClient(c.ops)
-	client.SetGONOSUMDB(c.srv.sumdbSkipPatterns())
+	client.SetGONOSUMDB(c.srv.sumdbSkipPatterns(c.ctx))
 	clean := true
 	c.walkLookups(func(modPath, version, rel string) {
 		if _, err := client.Lookup(modPath, version); err != nil {

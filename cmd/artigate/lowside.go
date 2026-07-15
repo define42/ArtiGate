@@ -561,7 +561,7 @@ func respondJSONOrError(w http.ResponseWriter, errStatus int, res any, err error
 	return true
 }
 
-func (s *LowServer) goEnv() []string {
+func (s *LowServer) goEnv(ctx context.Context) []string {
 	env := os.Environ()
 	set := func(k, v string) {
 		env = append(env, k+"="+v)
@@ -580,17 +580,23 @@ func (s *LowServer) goEnv() []string {
 	if s.cfg.GoToolchain != "" {
 		set("GOTOOLCHAIN", s.cfg.GoToolchain)
 	}
-	if s.cfg.GOPRIVATE != "" {
-		set("GOPRIVATE", s.cfg.GOPRIVATE)
+	// A credentialed collect's hosts join the configured private patterns so
+	// they skip the public proxy and checksum database (see goauth.go).
+	hosts := goAuthHostPatterns(ctx)
+	if v := mergePatterns(s.cfg.GOPRIVATE, hosts); v != "" {
+		set("GOPRIVATE", v)
 	}
-	if s.cfg.GONOSUMDB != "" {
-		set("GONOSUMDB", s.cfg.GONOSUMDB)
+	if v := mergePatterns(s.cfg.GONOSUMDB, hosts); v != "" {
+		set("GONOSUMDB", v)
 	}
-	if s.cfg.GONOPROXY != "" {
-		set("GONOPROXY", s.cfg.GONOPROXY)
+	if v := mergePatterns(s.cfg.GONOPROXY, hosts); v != "" {
+		set("GONOPROXY", v)
 	}
 	// Do not prompt for passwords in daemon mode. Configure git/ssh credentials ahead of time.
 	set("GIT_TERMINAL_PROMPT", "0")
+	// The collect's injected login environment: NETRC/GOAUTH for the
+	// toolchain's own requests, GIT_CONFIG_* credential helpers for git.
+	env = append(env, goAuthEnvEntries(ctx)...)
 	return env
 }
 
@@ -604,7 +610,7 @@ func (s *LowServer) runGoDir(ctx context.Context, dir string, args ...string) ([
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, s.cfg.GoBinary, args...)
-	cmd.Env = s.goEnv()
+	cmd.Env = s.goEnv(ctx)
 	cmd.Dir = dir
 	// Keep stdout and stderr separate. Callers parse stdout as JSON (go's
 	// `-json` output), while go writes progress and toolchain-download notices
@@ -821,6 +827,12 @@ type GoCollectRequest struct {
 	ResolveDeps bool     `json:"resolve_deps"`
 	GoMod       string   `json:"go_mod"`
 	GoSum       string   `json:"go_sum"`
+	// Auth optionally authenticates this collect against one private module
+	// host (injected into the go/git subprocesses; see goauth.go). It is used
+	// for this collect only and never stored; standing credentials belong in
+	// ARTIGATE_UPSTREAM_AUTH (watch specs must never carry logins — they are
+	// persisted and echoed in plaintext).
+	Auth *HostCollectAuth `json:"auth,omitempty"`
 	// Force disables export dedup for this collect: everything is downloaded
 	// and packed even when already forwarded, producing a full self-contained
 	// bundle (for disaster recovery or rebuilding a high side from scratch).
@@ -848,6 +860,18 @@ func (s *LowServer) HandleGoCollect(ctx context.Context, r *http.Request) (Expor
 // explicit list (optionally with their transitive graph) or from a project's own
 // go.mod.
 func (s *LowServer) CollectGo(ctx context.Context, req GoCollectRequest) (ExportResult, error) {
+	creds, err := goCollectCredentials(req)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	auth, authCleanup, err := buildGoAuthEnv(s.cfg.Root, creds)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	defer authCleanup()
+	if auth != nil {
+		ctx = withGoAuth(ctx, auth)
+	}
 	// Hold the go stream's lock for the whole allocate->write->commit so a
 	// concurrent go exporter cannot claim the same sequence number between peek
 	// and commit. Other streams export in parallel.

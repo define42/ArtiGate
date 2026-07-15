@@ -133,8 +133,17 @@ artigate low \
   --gonosumdb 'github.com/your-org/*'
 ```
 
+### Authenticating a private module host
+
+Two ways to supply an HTTP(S) login (username + password/token) without preconfiguring the container's git — resolved per host as *request `auth` → `ARTIGATE_UPSTREAM_AUTH` → anonymous*:
+
+- **Per-collect login** — an optional `auth` object on the collect request, also exposed as the *Private module host login* fields on the low-side Go page: `{"host": "gitlab.example.com", "username": "mirror-bot", "password": "<token>"}`. Used for that one collect and never stored. Give `host` explicitly; it may be omitted only when every module in the request shares one host (a `go.mod` upload always needs it, since there is no module list to infer from). The named host is also added to `GOPRIVATE`/`GONOSUMDB`/`GONOPROXY` **for that collect**, so a new private host is self-service — no flag change needed.
+- **Standing credentials** — comma-separated `host=user:password` entries in `ARTIGATE_UPSTREAM_AUTH` on the low side (the key is the VCS host). Re-read on every collect, and the **only** credential source [scheduled watches](../scheduling.md) can use — specs carrying an `auth` key are rejected.
+
+How the login reaches the tools: ArtiGate writes a private `0600` netrc for that collect and points the toolchain's own HTTPS requests at it (`NETRC` + `GOAUTH=netrc`), and installs a host-scoped inline git credential helper via `GIT_CONFIG_*` (git ≥ 2.31) for the `direct` VCS fetch. Both are removed when the collect ends; the login never enters a bundle, the watch store, logs, or the host's own git/netrc config. A password containing whitespace is rejected (the netrc format cannot express it). For SSH-key auth instead, preconfigure `~/.ssh` as before — the login fields are for HTTP(S) tokens.
+
 !!! warning
-    Private modules require preconfigured git/SSH credentials in the low-side container. Because `GIT_TERMINAL_PROMPT=0` is forced, an unauthenticated private fetch fails immediately rather than hanging on a password prompt.
+    Without a login (per-collect or `ARTIGATE_UPSTREAM_AUTH`), private modules require preconfigured git/SSH credentials in the low-side container. Because `GIT_TERMINAL_PROMPT=0` is forced, an unauthenticated private fetch fails immediately rather than hanging on a password prompt.
 
 ## Internals
 
@@ -200,7 +209,7 @@ The high side answers the GOPROXY protocol's sumdb passthrough (`/go/sumdb/<name
 - For every collected `module@version`, the low side captures the database's **signed lookup record** and the **Merkle tiles** proving it — using the same `golang.org/x/mod/sumdb` client the go toolchain embeds, so everything is verified against the database's public key before it is stored.
 - Before each bundle, the whole captured corpus is **re-verified under the database's latest signed tree head**, which also captures consistency proofs between the tree heads of earlier bundles and the current one, and full versions of tiles that were partial when the tree was smaller. Any mix of old and new lookups a client fetches therefore verifies, in any order.
 - The client re-checks all of it against `sum.golang.org`'s own key — the mirror cannot alter a record without the client noticing. The signed-bundle chain remains the transport trust anchor; the sumdb chain is verified end to end on top of it.
-- Modules matching the low side's `GONOSUMDB`/`GOPRIVATE` are never looked up (private modules stay private); clients handle them with their own `GONOSUMDB`/`GOPRIVATE`, as with any proxy.
+- Modules matching the low side's `GONOSUMDB`/`GOPRIVATE` are never looked up (private modules stay private); clients handle them with their own `GONOSUMDB`/`GOPRIVATE`, as with any proxy. A per-collect [login](#authenticating-a-private-module-host)'s host joins those skip patterns for its collect, so credentialed private modules are excluded from the capture too.
 - A capture problem (say, the database is briefly unreachable) never blocks the collect: the modules still export, the gaps are reported in the collect result under `sumdb`, and the next collect heals them.
 
 !!! note "Mirrors built before sumdb capture existed"
