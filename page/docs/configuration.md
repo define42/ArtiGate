@@ -237,6 +237,12 @@ The direct one-way-fiber transport — see [Built-in UDP diode](data-diode.md) f
 |---|---|---|---|
 | `ARTIGATE_CONTAINER_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private container registries (e.g. `ghcr.io=bot:ghp_xxx`); read at collect time, so it rotates without a restart, and the only credential source scheduled watches use — see [Private registries](ecosystems/containers.md#private-registries) |
 
+### Upstream mirrors (git, APT, RPM, Alpine)
+
+| Variable | Side | Default | Meaning |
+|---|---|---|---|
+| `ARTIGATE_UPSTREAM_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins (sent as HTTP Basic) for private git, APT, RPM, and Alpine upstreams; the key is the mirror URL's exact host, `host:port` included (e.g. `apt.example.com=bot:secret,mirror.example.com:8443=robot:token`). Read at collect time, so it rotates without a restart, and the only credential source scheduled watches use |
+
 ### TLS
 
 `ARTIGATE_TLS_MODE` is lowercased and defaults to `unencrypted`. All string values are trimmed; `ARTIGATE_TLS_DOMAINS` is comma-split with empty parts dropped. Full mode-by-mode behaviour is in [TLS / HTTPS](tls.md).
@@ -268,6 +274,6 @@ Validation (all fatal at startup):
 The file paths, listen addresses, and behaviour toggles are **flag-only**; TLS and low-side auth are **env-only**. There is deliberately no flag for TLS and no env var for paths/listen addresses.
 
 - **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags (including `--git`), `--hf-endpoint`, `--crates-index`, `--terraform-registry`, `--nuget-source`, `--osv-upstream`, `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`, `--apk-key-name`.
-- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`, `ARTIGATE_CONTAINER_AUTH`.
+- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`, `ARTIGATE_CONTAINER_AUTH`, `ARTIGATE_UPSTREAM_AUTH`.
 
 See also: [Deployment](deployment.md) for production topologies, [Security & trust](security.md) for the trust model, and [TLS / HTTPS](tls.md) for the full TLS matrix.

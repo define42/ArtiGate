@@ -62,6 +62,15 @@ The derived default name replaces every non-alphanumeric rune with `-` (collapse
 !!! warning "No key means no signature check"
     If `Signed-By` is empty, **no GPG signature is verified at all** — the `Release` is fetched and trusted over TLS only. Supply `Signed-By` (a keyring **file path**, not a fingerprint) whenever you want the upstream signature checked. `gpgv` and the keyring file must exist on the low-side host; verification runs with a 1-minute timeout. Only the keyring's basename is recorded in the bundle.
 
+## Private repositories
+
+Mirrors that demand a login are fetched with HTTP Basic from one of two sources, resolved per host as *request `auth` → `ARTIGATE_UPSTREAM_AUTH` → anonymous*:
+
+- **Per-collect login** — an optional `auth` object on the collect request, also exposed as the *Private repository login* fields on the low-side APT page: `{"host": "apt.example.com", "username": "bot", "password": "secret"}`. It is used for that one collect and never stored. `host` may be omitted when every source in the collect lives on one host; a `source_list` spanning several hosts must name the one the login is for, and a host matching none of the sources is rejected.
+- **Standing credentials** — comma-separated `host=user:password` entries in `ARTIGATE_UPSTREAM_AUTH` on the low side (the key is the mirror URL's exact host, `host:port` included). Re-read on every collect, and the **only** credential source [scheduled watches](../scheduling.md) can use — specs carrying an `auth` key are rejected.
+
+A `URIs:` value embedding `user:pass@` is rejected outright: the URI is recorded in the signed manifest and echoed in progress and error text, so a login there would leak — including across the diode. Credentials never appear in bundles, logs, progress lines, or error messages.
+
 ## What gets mirrored
 
 For each mirror, and for **each of its suites** (`distBase = <uri>/dists/<suite>`):

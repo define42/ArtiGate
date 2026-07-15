@@ -217,12 +217,15 @@ With `ARTIGATE_DIODE_INGEST=on` (off by default), the high side accepts bundle u
 
 ### Upstream credentials on the low side
 
-ArtiGate itself sends two kinds of upstream credentials, both read from the environment at collect time and never persisted:
+ArtiGate itself sends three kinds of upstream credentials, all read from the environment at collect time and never persisted:
 
 - `ARTIGATE_HF_TOKEN` (a Hugging Face access token for gated models) is attached as a Bearer header to Hugging Face requests only.
-- `ARTIGATE_CONTAINER_AUTH` (per-registry `host=user:password` container logins) — plus the equivalent one-shot `auth` field on a container collect request — is sent as HTTP Basic to the token endpoint a registry's `Bearer` challenge names (the `docker login` trust model: the registry chooses its realm, and each login is keyed to a single registry so it can only reach that registry's realm), or directly to a registry that challenges with `Basic`. Watch specs carrying credentials are rejected outright, so logins never land in the plaintext watch store or the dashboard.
+- `ARTIGATE_CONTAINER_AUTH` (per-registry `host=user:password` container logins) — plus the equivalent one-shot `auth` field on a container collect request — is sent as HTTP Basic to the token endpoint a registry's `Bearer` challenge names (the `docker login` trust model: the registry chooses its realm, and each login is keyed to a single registry so it can only reach that registry's realm), or directly to a registry that challenges with `Basic`.
+- `ARTIGATE_UPSTREAM_AUTH` (per-host `host=user:password` logins for git, APT, RPM, and Alpine upstreams) — plus the equivalent one-shot `auth` field on those collect requests — is sent as HTTP Basic to the mirror host it is keyed to, and only that host.
 
-Neither credential is ever forwarded: `net/http` drops the `Authorization` header on the cross-host CDN redirects that blob and model downloads follow, and no credential appears in bundles, manifests, logs, error messages, or the high side.
+Watch specs carrying credentials are rejected outright on every stream, so logins never land in the plaintext watch store or the dashboard. Upstream URLs that embed a `user:password@` are rejected too — the URL is copied into the signed manifest, progress lines, and error text, so a login there would leak, including across the diode.
+
+No credential is ever forwarded: `net/http` drops the `Authorization` header on the cross-host CDN redirects that package, pack, blob, and model downloads follow, and no credential appears in bundles, manifests, logs, error messages, or the high side.
 
 ## Dependency-confusion guidance
 

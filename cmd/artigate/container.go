@@ -488,29 +488,11 @@ type registryCredential struct {
 	Password string
 }
 
-// parseContainerAuthEnv parses ARTIGATE_CONTAINER_AUTH: comma-separated
-// host=user:password entries (the password may contain ':' and '='; a
-// password containing ',' cannot be expressed). Errors identify entries by
-// position, never by content — the value is a secret and must not surface in
-// logs or collect errors.
+// parseContainerAuthEnv parses ARTIGATE_CONTAINER_AUTH (see parseAuthEnv for
+// the syntax and secret-hygiene rules; keys fold through
+// normalizeContainerRegistry so Docker Hub aliases share one entry).
 func parseContainerAuthEnv(spec string) (map[string]registryCredential, error) {
-	out := map[string]registryCredential{}
-	for i, entry := range strings.Split(spec, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		host, login, ok := strings.Cut(entry, "=")
-		if !ok || host == "" || login == "" {
-			return nil, fmt.Errorf("invalid %s entry #%d (need host=user:password)", containerAuthEnv, i+1)
-		}
-		user, pass, ok := strings.Cut(login, ":")
-		if !ok || user == "" || pass == "" {
-			return nil, fmt.Errorf("invalid %s entry #%d for host %q (need host=user:password)", containerAuthEnv, i+1, strings.TrimSpace(host))
-		}
-		out[normalizeContainerRegistry(strings.TrimSpace(host))] = registryCredential{Username: user, Password: pass}
-	}
-	return out, nil
+	return parseAuthEnv(containerAuthEnv, spec, normalizeContainerRegistry)
 }
 
 // containerClient talks to upstream registries for one collect run, caching

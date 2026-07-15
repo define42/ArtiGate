@@ -204,6 +204,7 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 | `architectures` | `[]string` | e.g. `["amd64"]`; applies to every suite |
 | `signed_by` | string | Local keyring path used to verify each suite's Release |
 | `source_list` | string | A deb822 stanza; an alternative to the explicit fields above |
+| `auth` | `*object` | optional one-time HTTP Basic login for a private mirror: `{"host","username","password"}`; `host` may be omitted when every source shares one host. Never stored, rejected inside watch specs — standing credentials go in `ARTIGATE_UPSTREAM_AUTH` |
 | `newest_only` | `*bool` | **Defaults true when absent**; `false` mirrors every version in the index |
 
 ---
@@ -229,6 +230,7 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 | `base_url` | string | Repository base URL |
 | `gpg_key` | string | Local keyring path for `gpgv` (optional) |
 | `repo_file` | string | A full `.repo` file (one or more `[sections]`); an alternative to `name`+`base_url` |
+| `auth` | `*object` | optional one-time HTTP Basic login for a private repo: `{"host","username","password"}`; `host` may be omitted when every section shares one host. Never stored, rejected inside watch specs — standing credentials go in `ARTIGATE_UPSTREAM_AUTH` |
 | `newest_only` | `*bool` | **Defaults true when absent**; keeps only the highest EVR per package |
 | `architectures` | `[]string` | **Defaults to `["x86_64","noarch"]` when absent**; only packages of these architectures are mirrored (applies to every repo in the collect) |
 
@@ -384,9 +386,31 @@ The flat container publishes no digests, so downloads are TLS-trusted and valida
 | `repositories` | `[]string` | **Defaults to `["main"]`** |
 | `architectures` | `[]string` | **Defaults to `["x86_64"]`** |
 | `repositories_file` | string | A pasted `/etc/apk/repositories` file — an alternative to `uri`+`branches`+`repositories`; every line must name the same mirror base |
+| `auth` | `*object` | optional one-time HTTP Basic login for a private mirror: `{"username","password"}` (a collect uses a single mirror, so no host is needed). Never stored, rejected inside watch specs — standing credentials go in `ARTIGATE_UPSTREAM_AUTH` |
 | `newest_only` | `*bool` | **Defaults true when absent**; keeps only each package's highest version |
 
 Each `.apk` is verified against the `APKINDEX`-declared size and `Q1` control checksum; per-package failures are skipped and reported in `skipped_modules`.
+
+---
+
+#### Git — `POST /admin/git/collect`
+
+`GitCollectRequest`. Body limit **1 MiB**.
+
+```json
+{
+  "url": "https://github.com/org/repo.git",
+  "name": "repo",
+  "refs": ["refs/heads/main"]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `url` | string | Upstream clone URL (http(s) smart protocol). A URL embedding `user:pass@` is rejected — use `auth` or `ARTIGATE_UPSTREAM_AUTH` |
+| `name` | string | Mirror name (`git/<name>.git` on the high side); defaults to a slug of the URL |
+| `refs` | `[]string` | Optional full ref names to mirror; default is every branch and tag |
+| `auth` | `*object` | optional one-time HTTP Basic login for a private repository (e.g. a GitHub/GitLab PAT as the password): `{"username","password"}`. Never stored, rejected inside watch specs — standing credentials go in `ARTIGATE_UPSTREAM_AUTH` |
 
 ---
 

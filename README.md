@@ -338,6 +338,15 @@ For APT, RPM, and Alpine, a **"Newest version only"** checkbox (on by default)
 mirrors just the latest version of each package; untick it to mirror every
 version.
 
+Private **git, APT, RPM, and Alpine** upstreams authenticate with HTTP Basic:
+a one-shot login on the collect (each page's *Private … login* fields / the
+`auth` field, never stored) or standing `host=user:password` entries in
+`ARTIGATE_UPSTREAM_AUTH` on the low side — the latter is what scheduled
+collects use. URLs embedding `user:pass@` are rejected (they previously
+"worked" via Go's automatic Basic auth while leaking the secret into the
+signed manifest that crosses the diode — move such logins into the auth field
+or the environment variable).
+
 - **OSV** — vulnerability-advisory databases from [osv.dev](https://osv.dev):
   OSV ecosystem names, one per line, exactly as osv.dev spells them (`npm`,
   `PyPI`, `Go`, `crates.io`, `Maven`, `NuGet`, `Alpine:v3.22`, `Debian:12`,

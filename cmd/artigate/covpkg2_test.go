@@ -219,17 +219,17 @@ func TestCovP2_FetchAptPackagesIndex(t *testing.T) {
 	distBase := up.URL + "/dists/stable"
 
 	// No index advertised in Release checksums.
-	if _, err := ls.fetchAptPackagesIndex(ctx, distBase, "stable", "main", "amd64", map[string]aptChecksum{}); err == nil {
+	if _, err := ls.fetchAptPackagesIndex(ctx, distBase, "stable", "main", "amd64", map[string]aptChecksum{}, nil); err == nil {
 		t.Error("empty checksums should yield a no-index error")
 	}
 	// Advertised but the served body's checksum disagrees.
 	badSum := map[string]aptChecksum{dir + "/Packages.gz": {sha256: strings.Repeat("0", 64), size: int64(len(gz))}}
-	if _, err := ls.fetchAptPackagesIndex(ctx, distBase, "stable", "main", "amd64", badSum); err == nil || !strings.Contains(err.Error(), "index") {
+	if _, err := ls.fetchAptPackagesIndex(ctx, distBase, "stable", "main", "amd64", badSum, nil); err == nil || !strings.Contains(err.Error(), "index") {
 		t.Errorf("checksum mismatch = %v, want an index error", err)
 	}
 	// Advertised gzip path missing on the server (fetch error).
 	miss := map[string]aptChecksum{dir + "/Packages.gz": {sha256: aptSHA256(gz)}}
-	if _, err := ls.fetchAptPackagesIndex(context.Background(), up.URL+"/dists/absent", "stable", "main", "amd64", miss); err == nil {
+	if _, err := ls.fetchAptPackagesIndex(context.Background(), up.URL+"/dists/absent", "stable", "main", "amd64", miss, nil); err == nil {
 		t.Error("a missing index file should surface a fetch error")
 	}
 	// A plain "Packages" whose checksum matches but body is not gzip: gunzip is
@@ -237,13 +237,13 @@ func TestCovP2_FetchAptPackagesIndex(t *testing.T) {
 	// verify the decompress-failure path via a Packages.gz that is not gzip.
 	corrupt := map[string]aptChecksum{dir + "/Packages.gz": {sha256: aptSHA256(notGz), size: int64(len(notGz))}}
 	mux.HandleFunc("/dists/bad/"+dir+"/Packages.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(notGz) })
-	if _, err := ls.fetchAptPackagesIndex(ctx, up.URL+"/dists/bad", "bad", "main", "amd64", corrupt); err == nil || !strings.Contains(err.Error(), "decompress") {
+	if _, err := ls.fetchAptPackagesIndex(ctx, up.URL+"/dists/bad", "bad", "main", "amd64", corrupt, nil); err == nil || !strings.Contains(err.Error(), "decompress") {
 		t.Errorf("non-gzip Packages.gz = %v, want a decompress error", err)
 	}
 
 	// Success from the real gzip.
 	okSum := map[string]aptChecksum{dir + "/Packages.gz": {sha256: aptSHA256(gz), size: int64(len(gz))}}
-	pkgs, err := ls.fetchAptPackagesIndex(ctx, distBase, "stable", "main", "amd64", okSum)
+	pkgs, err := ls.fetchAptPackagesIndex(ctx, distBase, "stable", "main", "amd64", okSum, nil)
 	if err != nil || len(pkgs) != 1 || pkgs[0].Package != "code" {
 		t.Fatalf("fetchAptPackagesIndex = %+v, %v", pkgs, err)
 	}

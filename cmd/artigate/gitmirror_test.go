@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -217,10 +218,23 @@ type fakeGitServer struct {
 	advLines []string // advertisement payloads; the first carries "\x00<caps>"
 	pack     []byte
 	sideband bool
+	// requireAuth, when set, is the exact Authorization value both endpoints
+	// demand; anything else gets a 401 Basic challenge (a private upstream).
+	requireAuth string
 
 	mu      sync.Mutex
 	wants   []string
 	reqCaps string
+}
+
+// authorized enforces the fake's Basic gate, answering 401 when it fails.
+func (f *fakeGitServer) authorized(w http.ResponseWriter, r *http.Request) bool {
+	if f.requireAuth == "" || r.Header.Get("Authorization") == f.requireAuth {
+		return true
+	}
+	w.Header().Set("Www-Authenticate", `Basic realm="git"`)
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+	return false
 }
 
 func (f *fakeGitServer) start() *httptest.Server {
@@ -239,6 +253,9 @@ func (f *fakeGitServer) recorded() (wants []string, caps string) {
 }
 
 func (f *fakeGitServer) handleInfoRefs(w http.ResponseWriter, r *http.Request) {
+	if !f.authorized(w, r) {
+		return
+	}
 	if r.URL.Query().Get("service") != "git-upload-pack" {
 		http.Error(w, "smart protocol only", http.StatusForbidden)
 		return
@@ -253,6 +270,9 @@ func (f *fakeGitServer) handleInfoRefs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fakeGitServer) handleUploadPack(w http.ResponseWriter, r *http.Request) {
+	if !f.authorized(w, r) {
+		return
+	}
 	wants, caps, err := f.parseUploadPackRequest(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -888,6 +908,62 @@ func TestGitCollectRoundTrip(t *testing.T) {
 	}
 	if err := validateGitRepos(m.Git.Repos, seen, m.Files); err != nil {
 		t.Errorf("exported manifest fails import validation: %v", err)
+	}
+}
+
+// TestCollectGitPrivateUpstream exercises the Basic-auth path against an
+// upstream whose smart-HTTP endpoints demand a login.
+func TestCollectGitPrivateUpstream(t *testing.T) {
+	f := newGitTestFixture(t)
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte("bot:hunter2"))
+	fake := &fakeGitServer{t: t, pack: f.pack, requireAuth: auth, advLines: []string{
+		gitTestAdvHead(f.commitSHA(), "multi_ack ofs-delta no-progress symref=HEAD:refs/heads/main"),
+		f.commitSHA() + " refs/heads/main",
+	}}
+	srv := fake.start()
+	ls, _ := newGitLowServer(t)
+	repoURL := srv.URL + "/repo.git"
+	ctx := context.Background()
+
+	// Anonymous fetches fail with guidance naming both supply paths.
+	_, err := ls.CollectGit(ctx, GitCollectRequest{URL: repoURL, Name: "private"})
+	if err == nil || !strings.Contains(err.Error(), upstreamAuthEnv) {
+		t.Fatalf("anonymous fetch error = %v", err)
+	}
+
+	// A wrong login is reported as rejected — and never echoed.
+	_, err = ls.CollectGit(ctx, GitCollectRequest{
+		URL: repoURL, Name: "private", Auth: &HostCollectAuth{Username: "bot", Password: "wrongpass"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "were not accepted") || strings.Contains(err.Error(), "wrongpass") {
+		t.Fatalf("wrong-login error = %v", err)
+	}
+
+	// The per-fetch login succeeds; the exported manifest URL stays clean.
+	res, err := ls.CollectGit(ctx, GitCollectRequest{
+		URL: repoURL, Name: "private", Auth: &HostCollectAuth{Username: "bot", Password: "hunter2"},
+	})
+	if err != nil {
+		t.Fatalf("authenticated fetch: %v", err)
+	}
+	if repo, _ := gitRepoFromExport(t, ls, res.BundleID); repo.URL != repoURL {
+		t.Fatalf("exported URL = %q", repo.URL)
+	}
+
+	// Standing ARTIGATE_UPSTREAM_AUTH credentials work without request auth —
+	// the only credential source scheduled fetches have. The env key is the
+	// URL host (host:port here).
+	t.Setenv(upstreamAuthEnv, strings.TrimPrefix(srv.URL, "http://")+"=bot:hunter2")
+	if _, err := ls.CollectGit(ctx, GitCollectRequest{URL: repoURL, Name: "private", Force: true}); err != nil {
+		t.Fatalf("env-authenticated fetch: %v", err)
+	}
+
+	// A URL that smuggles the login as userinfo is rejected outright, without
+	// echoing it.
+	userinfo := "http://bot:hunter2@" + strings.TrimPrefix(srv.URL, "http://") + "/repo.git"
+	_, err = ls.CollectGit(ctx, GitCollectRequest{URL: userinfo, Name: "private"})
+	if err == nil || !strings.Contains(err.Error(), "must not embed credentials") || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("userinfo URL error = %v", err)
 	}
 }
 

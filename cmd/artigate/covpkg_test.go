@@ -137,7 +137,7 @@ func TestCovPkg_FetchAptReleaseUnsigned(t *testing.T) {
 	defer up.Close()
 
 	ls, _ := newAptLowServer(t)
-	got, err := ls.fetchAptRelease(context.Background(), up.URL+"/dists/stable", "")
+	got, err := ls.fetchAptRelease(context.Background(), up.URL+"/dists/stable", "", nil)
 	if err != nil {
 		t.Fatalf("fetchAptRelease (Release fallback): %v", err)
 	}
@@ -148,7 +148,7 @@ func TestCovPkg_FetchAptReleaseUnsigned(t *testing.T) {
 	// Neither InRelease nor Release present: a fetch error is surfaced.
 	empty := httptest.NewServer(http.NewServeMux())
 	defer empty.Close()
-	if _, err := ls.fetchAptRelease(context.Background(), empty.URL+"/dists/stable", ""); err == nil || !strings.Contains(err.Error(), "fetch InRelease/Release") {
+	if _, err := ls.fetchAptRelease(context.Background(), empty.URL+"/dists/stable", "", nil); err == nil || !strings.Contains(err.Error(), "fetch InRelease/Release") {
 		t.Errorf("fetchAptRelease with no metadata = %v, want fetch error", err)
 	}
 }
@@ -163,7 +163,7 @@ func TestCovPkg_FetchRepomdUnsigned(t *testing.T) {
 	defer up.Close()
 
 	ls, _ := newRpmLowServer(t)
-	got, err := ls.fetchRepomd(context.Background(), up.URL, "")
+	got, err := ls.fetchRepomd(context.Background(), up.URL, "", nil)
 	if err != nil {
 		t.Fatalf("fetchRepomd: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestCovPkg_FetchRepomdUnsigned(t *testing.T) {
 	}
 	empty := httptest.NewServer(http.NewServeMux())
 	defer empty.Close()
-	if _, err := ls.fetchRepomd(context.Background(), empty.URL, ""); err == nil || !strings.Contains(err.Error(), "fetch repomd.xml") {
+	if _, err := ls.fetchRepomd(context.Background(), empty.URL, "", nil); err == nil || !strings.Contains(err.Error(), "fetch repomd.xml") {
 		t.Errorf("fetchRepomd with no repomd = %v, want fetch error", err)
 	}
 }
@@ -326,7 +326,7 @@ func TestCovPkg_GPGVerifyAndSign(t *testing.T) {
 	defer up.Close()
 
 	ls, _ := newAptLowServer(t)
-	got, err := ls.fetchAptRelease(ctx, up.URL+"/dists/stable", keyring)
+	got, err := ls.fetchAptRelease(ctx, up.URL+"/dists/stable", keyring, nil)
 	if err != nil {
 		t.Fatalf("fetchAptRelease (signed InRelease): %v", err)
 	}
@@ -336,7 +336,7 @@ func TestCovPkg_GPGVerifyAndSign(t *testing.T) {
 	// A wrong keyring makes verification fail.
 	empty := filepath.Join(t.TempDir(), "empty.gpg")
 	writeFile(t, empty, nil)
-	if _, err := ls.fetchAptRelease(ctx, up.URL+"/dists/stable", empty); err == nil || !strings.Contains(err.Error(), "verify InRelease") {
+	if _, err := ls.fetchAptRelease(ctx, up.URL+"/dists/stable", empty, nil); err == nil || !strings.Contains(err.Error(), "verify InRelease") {
 		t.Errorf("fetchAptRelease with wrong keyring = %v, want verify error", err)
 	}
 
@@ -347,7 +347,7 @@ func TestCovPkg_GPGVerifyAndSign(t *testing.T) {
 	mux2.HandleFunc("/dists/stable/Release.gpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(relSig) })
 	up2 := httptest.NewServer(mux2)
 	defer up2.Close()
-	if _, err := ls.fetchAptRelease(ctx, up2.URL+"/dists/stable", keyring); err != nil {
+	if _, err := ls.fetchAptRelease(ctx, up2.URL+"/dists/stable", keyring, nil); err != nil {
 		t.Fatalf("fetchAptRelease (detached Release.gpg): %v", err)
 	}
 
@@ -360,7 +360,7 @@ func TestCovPkg_GPGVerifyAndSign(t *testing.T) {
 	up3 := httptest.NewServer(mux3)
 	defer up3.Close()
 	rls, _ := newRpmLowServer(t)
-	if _, err := rls.fetchRepomd(ctx, up3.URL, keyring); err != nil {
+	if _, err := rls.fetchRepomd(ctx, up3.URL, keyring, nil); err != nil {
 		t.Fatalf("fetchRepomd (signed): %v", err)
 	}
 

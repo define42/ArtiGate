@@ -1024,6 +1024,11 @@ type ApkCollectRequest struct {
 	// RepositoriesFile is the pasted content of an /etc/apk/repositories file,
 	// an alternative to URI+Branches+Repositories.
 	RepositoriesFile string `json:"repositories_file,omitempty"`
+	// Auth optionally authenticates this collect against a private mirror. It
+	// is used for this collect only and never stored; standing credentials
+	// belong in ARTIGATE_UPSTREAM_AUTH (watch specs must never carry logins —
+	// they are persisted and echoed in plaintext).
+	Auth *HostCollectAuth `json:"auth,omitempty"`
 	// NewestOnly keeps only each package's highest version (the usual state of
 	// an Alpine index); nil defaults to true.
 	NewestOnly *bool `json:"newest_only,omitempty"`
@@ -1039,6 +1044,9 @@ type apkMirrorPlan struct {
 	uri        string
 	branches   []ApkBranch
 	newestOnly bool
+	// cred is the login for the mirror's host (nil means anonymous), pinned
+	// by CollectApk before the mirror loop runs.
+	cred *registryCredential
 }
 
 // parseApkRepositoriesFile extracts the shared mirror base and the
@@ -1081,6 +1089,9 @@ func splitApkRepoURL(line string) (base, branch, repo string, err error) {
 	if uerr != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return "", "", "", fmt.Errorf("repository %q must be an http(s) URL", line)
 	}
+	if err := checkNoURLUserinfo(u, "apk repository"); err != nil {
+		return "", "", "", err
+	}
 	trimmed := strings.TrimRight(u.Path, "/")
 	segs := strings.Split(trimmed, "/")
 	if len(segs) < 3 {
@@ -1102,8 +1113,14 @@ func resolveApkRequest(req ApkCollectRequest) (apkMirrorPlan, error) {
 	if err := apkPlanSelection(&plan, req, arches); err != nil {
 		return apkMirrorPlan{}, err
 	}
-	if u, err := url.Parse(plan.uri); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+	u, err := url.Parse(plan.uri)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return apkMirrorPlan{}, fmt.Errorf("apk mirror uri %q must be an http(s) URL", plan.uri)
+	}
+	// The URI is recorded in the signed manifest and echoed in progress and
+	// error text, so it must never carry a login.
+	if err := checkNoURLUserinfo(u, "apk mirror uri"); err != nil {
+		return apkMirrorPlan{}, err
 	}
 	plan.name = req.Name
 	if plan.name == "" {
@@ -1187,6 +1204,11 @@ func (s *LowServer) CollectApk(ctx context.Context, req ApkCollectRequest) (Expo
 	if err != nil {
 		return ExportResult{}, err
 	}
+	creds, err := upstreamCollectCredentials([]string{upstreamURLHost(plan.uri)}, req.Auth)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	plan.cred = credentialForHost(creds, upstreamURLHost(plan.uri))
 	// Hold only the apk stream's lock for the whole mirror->write->commit so a
 	// concurrent apk exporter cannot claim the same sequence number between
 	// peek and commit. Other streams export in parallel.
@@ -1205,20 +1227,9 @@ func (s *LowServer) CollectApk(ctx context.Context, req ApkCollectRequest) (Expo
 	defer os.RemoveAll(stageRoot)
 
 	mirror := ApkMirror{Name: plan.name, URI: plan.uri, Branches: plan.branches}
-	var files []ManifestFile
-	var failed []FailedModule
-	for _, b := range plan.branches {
-		for _, repo := range b.Repositories {
-			for _, arch := range b.Architectures {
-				pkgs, mfs, skipped, err := s.mirrorApkRepo(ctx, stageRoot, plan, b.Name, repo, arch)
-				if err != nil {
-					return ExportResult{}, err
-				}
-				mirror.Packages = append(mirror.Packages, pkgs...)
-				files = append(files, mfs...)
-				failed = append(failed, skipped...)
-			}
-		}
+	files, failed, err := s.mirrorApkSelection(ctx, stageRoot, plan, &mirror)
+	if err != nil {
+		return ExportResult{}, decorateUpstreamAuthError(err, creds)
 	}
 	if len(mirror.Packages) == 0 {
 		return ExportResult{}, fmt.Errorf("no apk packages could be fetched: %s", summarizeFailures(failed))
@@ -1235,6 +1246,28 @@ func (s *LowServer) CollectApk(ctx context.Context, req ApkCollectRequest) (Expo
 	return res, nil
 }
 
+// mirrorApkSelection walks every branch/repository/architecture of the plan,
+// appending the mirrored packages to mirror and returning the staged manifest
+// files plus the per-package failures.
+func (s *LowServer) mirrorApkSelection(ctx context.Context, stageRoot string, plan apkMirrorPlan, mirror *ApkMirror) ([]ManifestFile, []FailedModule, error) {
+	var files []ManifestFile
+	var failed []FailedModule
+	for _, b := range plan.branches {
+		for _, repo := range b.Repositories {
+			for _, arch := range b.Architectures {
+				pkgs, mfs, skipped, err := s.mirrorApkRepo(ctx, stageRoot, plan, b.Name, repo, arch)
+				if err != nil {
+					return nil, nil, err
+				}
+				mirror.Packages = append(mirror.Packages, pkgs...)
+				files = append(files, mfs...)
+				failed = append(failed, skipped...)
+			}
+		}
+	}
+	return files, failed, nil
+}
+
 // mirrorApkRepo fetches one branch/repo/arch index and downloads its packages
 // into the staging tree. Per-package failures are collected rather than
 // aborting the batch; an unreachable index fails the collect (a selection
@@ -1242,7 +1275,7 @@ func (s *LowServer) CollectApk(ctx context.Context, req ApkCollectRequest) (Expo
 func (s *LowServer) mirrorApkRepo(ctx context.Context, stageRoot string, plan apkMirrorPlan, branch, repo, arch string) ([]ApkPackage, []ManifestFile, []FailedModule, error) {
 	repoURL := plan.uri + "/" + branch + "/" + repo + "/" + arch
 	emitProgress(ctx, "Fetching %s/APKINDEX.tar.gz…", repoURL)
-	raw, err := httpGetBytes(ctx, repoURL+"/APKINDEX.tar.gz", maxIndexFetchBytes)
+	raw, err := httpGetBytesAuth(ctx, repoURL+"/APKINDEX.tar.gz", maxIndexFetchBytes, plan.cred)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1255,7 +1288,7 @@ func (s *LowServer) mirrorApkRepo(ctx context.Context, stageRoot string, plan ap
 		stanzas = filterNewestApk(stanzas)
 	}
 	emitProgress(ctx, "%s/%s/%s lists %d package(s)", branch, repo, arch, len(stanzas))
-	return s.downloadApkPackages(ctx, stageRoot, plan.name, repoURL, branch, repo, arch, stanzas)
+	return s.downloadApkPackages(ctx, stageRoot, plan, repoURL, branch, repo, arch, stanzas)
 }
 
 // filterNewestApk keeps each package's highest version.
@@ -1281,14 +1314,14 @@ func filterNewestApk(stanzas []apkStanza) []apkStanza {
 }
 
 // downloadApkPackages fetches every stanza's package into the staging tree.
-func (s *LowServer) downloadApkPackages(ctx context.Context, stageRoot, mirror, repoURL, branch, repo, arch string, stanzas []apkStanza) ([]ApkPackage, []ManifestFile, []FailedModule, error) {
+func (s *LowServer) downloadApkPackages(ctx context.Context, stageRoot string, plan apkMirrorPlan, repoURL, branch, repo, arch string, stanzas []apkStanza) ([]ApkPackage, []ManifestFile, []FailedModule, error) {
 	var pkgs []ApkPackage
 	var files []ManifestFile
 	var failed []FailedModule
 	seen := map[string]bool{}
 	for i, st := range stanzas {
 		emitProgress(ctx, "→ [%d/%d] %s-%s (%s)", i+1, len(stanzas), st.Name, st.Version, arch)
-		pkg, mf, err := s.downloadApkPackage(ctx, stageRoot, mirror, repoURL, branch, repo, arch, st)
+		pkg, mf, err := s.downloadApkPackage(ctx, stageRoot, plan, repoURL, branch, repo, arch, st)
 		if err != nil {
 			emitProgress(ctx, "  ✗ %s-%s: %s", st.Name, st.Version, err)
 			failed = append(failed, FailedModule{Module: st.Name, Version: st.Version, Error: err.Error()})
@@ -1306,7 +1339,7 @@ func (s *LowServer) downloadApkPackages(ctx context.Context, stageRoot, mirror, 
 
 // downloadApkPackage fetches one .apk and verifies it against the index
 // stanza: the exact declared size and the C: control checksum.
-func (s *LowServer) downloadApkPackage(ctx context.Context, stageRoot, mirror, repoURL, branch, repo, arch string, st apkStanza) (ApkPackage, ManifestFile, error) {
+func (s *LowServer) downloadApkPackage(ctx context.Context, stageRoot string, plan apkMirrorPlan, repoURL, branch, repo, arch string, st apkStanza) (ApkPackage, ManifestFile, error) {
 	if err := validateApkName(st.Name); err != nil {
 		return ApkPackage{}, ManifestFile{}, err
 	}
@@ -1317,9 +1350,9 @@ func (s *LowServer) downloadApkPackage(ctx context.Context, stageRoot, mirror, r
 		return ApkPackage{}, ManifestFile{}, err
 	}
 	filename := st.Name + "-" + st.Version + ".apk"
-	rel := apkFileRel(mirror, branch, repo, arch, filename)
+	rel := apkFileRel(plan.name, branch, repo, arch, filename)
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
-	sum, size, err := downloadFileSHA256(ctx, repoURL+"/"+filename, abs)
+	sum, size, err := downloadFileSHA256Auth(ctx, repoURL+"/"+filename, abs, plan.cred)
 	if err != nil {
 		return ApkPackage{}, ManifestFile{}, err
 	}

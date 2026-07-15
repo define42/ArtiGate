@@ -315,6 +315,15 @@ func TestCov3D_ValidateWatch(t *testing.T) {
 			t.Errorf("%s: validateWatch should error", name)
 		}
 	}
+	// The credential rejection points at the standing-credential variables,
+	// on every stream (here: git).
+	err := validateWatch(Watch{
+		Stream: streamGit, IntervalSeconds: 3600,
+		Spec: `{"url":"https://github.com/org/private.git","auth":{"username":"u","password":"p"}}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), upstreamAuthEnv) {
+		t.Errorf("credentialed git spec error should name %s, got %v", upstreamAuthEnv, err)
+	}
 }
 
 // TestCov3D_EnqueueWatchErrorRecorded covers the error-recording branch (a

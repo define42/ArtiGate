@@ -206,5 +206,6 @@ Because fetching runs as native tooling, upstream credentials and proxy settings
 - ArtiGate always forces `GIT_TERMINAL_PROMPT=0`, so Git never blocks on an interactive password prompt — configure non-interactive auth (SSH keys or a credential helper) or the fetch fails fast.
 - **Gated Hugging Face models** need `ARTIGATE_HF_TOKEN` set in the low side's environment.
 - **Private container registries** take a one-shot login on the pull (the `auth` field / the Containers page form) or standing `ARTIGATE_CONTAINER_AUTH` entries (`host=user:password`, comma-separated) in the low side's environment; scheduled pulls use only the latter.
+- **Private git, APT, RPM, and Alpine upstreams** work the same way with `ARTIGATE_UPSTREAM_AUTH` (keyed by the mirror URL's exact host, `host:port` included) or the one-shot `auth` field on those collects; URLs embedding `user:pass@` are rejected.
 
 The Go `GO*` environment knobs are only applied when their flags are non-empty. Per-ecosystem fetching details live on the [ecosystems](ecosystems/index.md) pages.
