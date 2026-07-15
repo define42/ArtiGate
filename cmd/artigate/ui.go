@@ -2,10 +2,10 @@ package main
 
 // High-side dashboard UI. A self-contained page (no external assets, so it works
 // air-gapped) served at "/", backed by a JSON overview endpoint. It shows import
-// status — prominently flagging any missing bundles — and a tree of every
-// mirrored Go module and Python project. The front-end is written in TypeScript
-// (ui/app.ts); its compiled output (ui/app.js) is embedded below. Rebuild it
-// with `make ui`.
+// status — prominently flagging any missing bundles — a tree of every mirrored
+// package, and a cross-ecosystem package search (/ui/api/search). The front-end
+// is written in TypeScript (ui/app.ts); its compiled output (ui/app.js) is
+// embedded below. Rebuild it with `make ui`.
 
 import (
 	_ "embed"
@@ -89,33 +89,35 @@ func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = io.WriteString(w, uiAppJS)
+	default:
+		return s.serveUIAPI(w, r)
+	}
+	return true
+}
+
+// serveUIAPI routes the dashboard's read-only JSON endpoints (/ui/api/*). It
+// reports whether it wrote a response for the request.
+func (s *HighServer) serveUIAPI(w http.ResponseWriter, r *http.Request) bool {
+	var handle func(http.ResponseWriter, *http.Request)
+	switch r.URL.Path {
 	case "/ui/api/overview":
-		if !isReadMethod(r) {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return true
-		}
-		s.handleUIOverview(w)
+		handle = func(w http.ResponseWriter, _ *http.Request) { s.handleUIOverview(w) }
 	case "/ui/api/tree":
-		if !isReadMethod(r) {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return true
-		}
-		s.handleUITree(w, r)
+		handle = s.handleUITree
 	case "/ui/api/detail":
-		if !isReadMethod(r) {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return true
-		}
-		s.handleUIDetail(w, r)
+		handle = s.handleUIDetail
 	case "/ui/api/repos":
-		if !isReadMethod(r) {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return true
-		}
-		s.handleUIRepos(w, r)
+		handle = s.handleUIRepos
+	case "/ui/api/search":
+		handle = s.handleUISearch
 	default:
 		return false
 	}
+	if !isReadMethod(r) {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return true
+	}
+	handle(w, r)
 	return true
 }
 
@@ -222,14 +224,20 @@ func ecoTreeChildren(trees map[string]uiTree, eco, path string) []UITreeNode {
 }
 
 // uiTree is one ecosystem's scanned dashboard inventory; it renders the
-// immediate children of a node in the lazily-loaded package tree. The
-// concrete shape is the tree builder the ecosystem's names call for:
-// slash-separated names (Go modules, Maven coordinates, mirror/package keys,
-// terraform addresses) use segmentTree; flat names (npm — a scope is part of
-// the name — crates, nuget) use the two-level flatTree; Python wheels and
-// uploaded folders have trees of their own.
+// immediate children of a node in the lazily-loaded package tree, and searches
+// its package names for the dashboard's cross-ecosystem search. The concrete
+// shape is the tree builder the ecosystem's names call for: slash-separated
+// names (Go modules, Maven coordinates, mirror/package keys, terraform
+// addresses) use segmentTree; flat names (npm — a scope is part of the name —
+// crates, nuget) use the two-level flatTree; Python wheels and uploaded
+// folders have trees of their own.
 type uiTree interface {
 	children(path string) []UITreeNode
+	// search returns the nodes whose package name contains query
+	// (case-insensitively), capped at limit, plus the total match count.
+	// Hits carry their canonical tree path, so the dashboard expands and
+	// selects them exactly like nodes browsed to by hand.
+	search(query string, limit int) ([]UITreeNode, int)
 }
 
 type (
@@ -243,6 +251,71 @@ func (t segmentTree) children(path string) []UITreeNode { return goTreeChildren(
 func (t flatTree) children(path string) []UITreeNode    { return npmTreeChildren(t, path) }
 func (t pythonTree) children(path string) []UITreeNode  { return pythonTreeChildren(t, path) }
 func (t uploadsTree) children(path string) []UITreeNode { return uploadsTreeChildren(t, path) }
+
+func (t segmentTree) search(query string, limit int) ([]UITreeNode, int) {
+	return searchModules(t, query, limit)
+}
+
+func (t flatTree) search(query string, limit int) ([]UITreeNode, int) {
+	return searchModules(t, query, limit)
+}
+
+func (t pythonTree) search(query string, limit int) ([]UITreeNode, int) {
+	h := newSearchHits(query, limit)
+	for _, p := range t {
+		h.add(p.Project, UITreeNode{Label: p.Project, Path: p.Project, Kind: "project", Expandable: true, Count: len(p.Files)})
+	}
+	return h.nodes, h.total
+}
+
+// search on the uploads tree matches folder names and file names; a file hit
+// is a selectable leaf labeled with its folder so same-named files in
+// different folders stay distinguishable.
+func (t uploadsTree) search(query string, limit int) ([]UITreeNode, int) {
+	h := newSearchHits(query, limit)
+	for _, f := range t {
+		h.add(f.Folder, UITreeNode{Label: f.Folder, Path: f.Folder, Kind: "project", Expandable: true, Count: len(f.Files)})
+		for _, file := range f.Files {
+			leaf := f.Folder + "/" + file.Name
+			h.add(file.Name, UITreeNode{Label: leaf, Path: leaf, Kind: "file"})
+		}
+	}
+	return h.nodes, h.total
+}
+
+// searchModules searches both module-shaped trees (segmentTree, flatTree): a
+// hit is the module's own tree node, so expanding it lazily loads its versions.
+func searchModules(mods []UIModule, query string, limit int) ([]UITreeNode, int) {
+	h := newSearchHits(query, limit)
+	for _, m := range mods {
+		h.add(m.Module, UITreeNode{Label: m.Module, Path: m.Module, Kind: "module", Expandable: true, Count: len(m.Versions)})
+	}
+	return h.nodes, h.total
+}
+
+// searchHits accumulates matching tree nodes up to a cap while counting every
+// match, so a search response stays bounded but still reports the full total.
+type searchHits struct {
+	query string // lowercased once; matching lowercases each candidate
+	limit int
+	nodes []UITreeNode
+	total int
+}
+
+func newSearchHits(query string, limit int) *searchHits {
+	return &searchHits{query: strings.ToLower(query), limit: limit}
+}
+
+// add records node as a hit when name contains the query case-insensitively.
+func (h *searchHits) add(name string, node UITreeNode) {
+	if !strings.Contains(strings.ToLower(name), h.query) {
+		return
+	}
+	h.total++
+	if len(h.nodes) < h.limit {
+		h.nodes = append(h.nodes, node)
+	}
+}
 
 // cachedTrees returns the mirrored inventory across ecosystems, memoized for a
 // few seconds so a burst of lazy expand requests reuses one scan.
@@ -273,6 +346,69 @@ func (s *HighServer) scanEcoTrees() (map[string]uiTree, error) {
 		trees[e.stream] = t
 	}
 	return trees, nil
+}
+
+// -----------------------------------------------------------------------------
+// Cross-ecosystem package search
+// -----------------------------------------------------------------------------
+
+const (
+	// maxUISearchQueryLen bounds the untrusted search query; nothing longer
+	// than a real package name is worth scanning the inventory for.
+	maxUISearchQueryLen = 200
+	// uiSearchHitLimit caps how many matching nodes one ecosystem contributes
+	// to a search response; Total still reports the full match count so the
+	// dashboard can say "first N of M".
+	uiSearchHitLimit = 20
+)
+
+// UISearchGroup is one ecosystem's matches in a search response: its first
+// uiSearchHitLimit matching tree nodes plus the total match count.
+type UISearchGroup struct {
+	Eco   string       `json:"eco"`
+	Label string       `json:"label"`
+	Total int          `json:"total"`
+	Nodes []UITreeNode `json:"nodes"`
+}
+
+// UISearchResponse is the body of GET /ui/api/search.
+type UISearchResponse struct {
+	Query  string          `json:"query"`
+	Groups []UISearchGroup `json:"groups"`
+}
+
+// handleUISearch searches every ecosystem's mirrored inventory for package
+// names containing q (case-insensitively), so the dashboard can find a package
+// without knowing its ecosystem. Groups follow registry order — the sidebar's
+// stream order — and an empty query returns no groups rather than everything.
+func (s *HighServer) handleUISearch(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(query) > maxUISearchQueryLen {
+		http.Error(w, "query too long", http.StatusBadRequest)
+		return
+	}
+	resp := UISearchResponse{Query: query, Groups: []UISearchGroup{}}
+	if query == "" {
+		writeJSON(w, resp)
+		return
+	}
+	trees, err := s.cachedTrees()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, e := range ecosystems() {
+		tree, ok := trees[e.stream]
+		if !ok {
+			continue
+		}
+		nodes, total := tree.search(query, uiSearchHitLimit)
+		if total == 0 {
+			continue
+		}
+		resp.Groups = append(resp.Groups, UISearchGroup{Eco: e.stream, Label: e.title, Total: total, Nodes: nodes})
+	}
+	writeJSON(w, resp)
 }
 
 // goTreeChildren returns the immediate children of prefix in the Go module path

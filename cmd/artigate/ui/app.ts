@@ -1,7 +1,10 @@
 // High-side dashboard. The import status is fetched once; the package trees are
 // loaded lazily, one level at a time, from /ui/api/tree. Expanding a node fetches
 // only that node's immediate children, so nothing large is transferred or
-// rendered up front. The top menu switches between the Go and Python trees.
+// rendered up front. The sidebar switches between the per-ecosystem trees, and
+// the header's search box finds packages across every ecosystem at once
+// (/ui/api/search) — hits are ordinary tree nodes, expanded and selected
+// exactly like nodes browsed to by hand.
 
 interface StreamStatus {
   stream: string;
@@ -34,6 +37,22 @@ interface TreeNode {
 
 interface TreeResponse {
   nodes: TreeNode[];
+}
+
+// SearchGroup is one ecosystem's matches from /ui/api/search: the first few
+// matching tree nodes plus the ecosystem's total match count. eco is always a
+// registered stream name — the server derives groups from the ecosystem
+// registry, and the wiring test keeps the View union in step with it.
+interface SearchGroup {
+  eco: View;
+  label: string;
+  total: number;
+  nodes: TreeNode[];
+}
+
+interface SearchResponse {
+  query: string;
+  groups: SearchGroup[];
 }
 
 interface DetailField {
@@ -136,6 +155,10 @@ const VIEW_TITLES: Record<View, string> = {
 
 let currentView: View = "overview";
 let selectedLeaf: HTMLElement | null = null;
+// True while the header search box owns the tree panel; currentView keeps the
+// view the sidebar has selected, so clearing the search restores it.
+let searchActive = false;
+let searchTimer = 0;
 
 function esc(value: unknown): string {
   const map: Record<string, string> = {
@@ -274,17 +297,19 @@ function setMessage(container: HTMLElement, text: string): void {
   container.appendChild(p);
 }
 
-// renderNodes renders a level of the tree. repoEco is set for the APT/RPM
-// views, where the nodes named by repoGuideRef carry their own "Set me up"
-// button.
-function renderNodes(container: HTMLElement, nodes: TreeNode[], repoEco?: RepoEco): void {
+// renderNodes renders a level of the tree. eco is the ecosystem the nodes
+// belong to — the current view for browsed trees, the hit's own ecosystem for
+// search results — so lazy expansion and the detail panel query the right one.
+// repoEco is set for the APT/RPM views, where the nodes named by repoGuideRef
+// carry their own "Set me up" button.
+function renderNodes(container: HTMLElement, nodes: TreeNode[], eco: View, repoEco?: RepoEco): void {
   container.textContent = "";
   if (nodes.length === 0) {
     setMessage(container, "empty");
     return;
   }
   for (const node of nodes) {
-    container.appendChild(node.expandable ? expandableNode(node, repoEco) : leafNode(node));
+    container.appendChild(node.expandable ? expandableNode(node, eco, repoEco) : leafNode(node, eco));
   }
 }
 
@@ -301,17 +326,17 @@ function repoGuideRef(eco: RepoEco, node: TreeNode): string | null {
   return depth === 1 ? node.path : null;
 }
 
-function leafNode(node: TreeNode): HTMLElement {
+function leafNode(node: TreeNode, eco: View): HTMLElement {
   const div = document.createElement("div");
   div.className = "leaf";
   div.textContent = node.label;
   div.tabIndex = 0;
   div.setAttribute("role", "button");
-  div.addEventListener("click", () => void selectLeaf(div, node));
+  div.addEventListener("click", () => void selectLeaf(div, node, eco));
   div.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" || ev.key === " ") {
       ev.preventDefault();
-      void selectLeaf(div, node);
+      void selectLeaf(div, node, eco);
     }
   });
   return div;
@@ -505,7 +530,7 @@ function downloadRow(links: DownloadLink[]): HTMLElement {
   return row;
 }
 
-async function selectLeaf(el: HTMLElement, node: TreeNode): Promise<void> {
+async function selectLeaf(el: HTMLElement, node: TreeNode, eco: View): Promise<void> {
   if (selectedLeaf) {
     selectedLeaf.classList.remove("selected");
   }
@@ -516,13 +541,13 @@ async function selectLeaf(el: HTMLElement, node: TreeNode): Promise<void> {
   setMessage(panel, "loading…");
   hideLayers();
   try {
-    const url = `/ui/api/detail?eco=${encodeURIComponent(currentView)}&path=${encodeURIComponent(node.path)}`;
+    const url = `/ui/api/detail?eco=${encodeURIComponent(eco)}&path=${encodeURIComponent(node.path)}`;
     const resp = await fetch(url, { cache: "no-store" });
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
     }
     renderDetail((await resp.json()) as Detail);
-    if (currentView === "uploads") {
+    if (eco === "uploads") {
       panel.appendChild(uploadActions(node.path));
     }
   } catch (err) {
@@ -575,7 +600,7 @@ function uploadDeleteButton(treePath: string): HTMLButtonElement {
         if (!resp.ok) {
           throw new Error((await resp.text()).trim() || `HTTP ${resp.status}`);
         }
-        await loadTree(); // re-renders the tree and clears the detail panel
+        await reloadContent(); // re-renders the tree (or search) and clears the detail panel
       } catch (err) {
         btn.disabled = false;
         btn.textContent = `Delete failed: ${(err as Error).message}`;
@@ -617,7 +642,7 @@ function repoGuideButton(eco: RepoEco, repoRef: string): HTMLButtonElement {
   return btn;
 }
 
-function expandableNode(node: TreeNode, repoEco?: RepoEco): HTMLElement {
+function expandableNode(node: TreeNode, eco: View, repoEco?: RepoEco): HTMLElement {
   const details = document.createElement("details");
   const summary = document.createElement("summary");
   summary.textContent = node.label;
@@ -646,8 +671,8 @@ function expandableNode(node: TreeNode, repoEco?: RepoEco): HTMLElement {
     }
     loaded = true;
     setMessage(children, "loading…");
-    fetchChildren(currentView, node.path)
-      .then((child) => renderNodes(children, child, repoEco))
+    fetchChildren(eco, node.path)
+      .then((child) => renderNodes(children, child, eco, repoEco))
       .catch((err: unknown) => {
         loaded = false; // allow retry on next open
         setMessage(children, `failed to load: ${(err as Error).message}`);
@@ -675,16 +700,15 @@ async function loadTree(): Promise<void> {
   setMessage(tree, "loading…");
   try {
     const nodes = await fetchChildren(currentView, "");
-    renderNodes(tree, nodes, perRepo ? (currentView as RepoEco) : undefined);
+    renderNodes(tree, nodes, currentView, perRepo ? (currentView as RepoEco) : undefined);
   } catch (err) {
     setMessage(tree, `Failed to load tree: ${(err as Error).message}`);
   }
 }
 
-function setView(view: View): void {
-  if (view === currentView) {
-    return;
-  }
+// applyView shows a view unconditionally: setView skips the work when the
+// view is already showing, but leaving search must re-render it either way.
+function applyView(view: View): void {
   currentView = view;
   menuButtons().forEach((btn) => {
     btn.classList.toggle("active", btn.dataset["view"] === view);
@@ -699,6 +723,15 @@ function setView(view: View): void {
   } else {
     void loadTree();
   }
+}
+
+function setView(view: View): void {
+  const leavingSearch = searchActive;
+  clearSearchBox(); // also cancels a pending debounce so it can't hijack the new view
+  if (view === currentView && !leavingSearch) {
+    return;
+  }
+  applyView(view);
 }
 
 async function loadStatus(): Promise<void> {
@@ -718,9 +751,113 @@ async function loadStatus(): Promise<void> {
 
 function refresh(): void {
   void loadStatus();
-  if (currentView !== "overview") {
+  if (searchActive) {
+    void runSearch(searchBox().value.trim());
+  } else if (currentView !== "overview") {
     void loadTree();
   }
+}
+
+// reloadContent re-renders whatever owns the tree panel — the search results
+// or the current view's tree — after a mutation (an upload delete).
+function reloadContent(): Promise<void> {
+  return searchActive ? runSearch(searchBox().value.trim()) : loadTree();
+}
+
+// ---------------------------------------------------------------------------
+// Cross-ecosystem package search. Typing in the header box (debounced)
+// replaces the tree panel with matches from every ecosystem at once; the hits
+// are ordinary tree nodes, so expanding one lazily loads its versions and
+// selecting a leaf fills the detail panel — against the hit's own ecosystem,
+// not the sidebar's. Clearing the box (or picking a sidebar view) restores
+// the view the sidebar has selected.
+// ---------------------------------------------------------------------------
+
+function searchBox(): HTMLInputElement {
+  return byId("search") as HTMLInputElement;
+}
+
+function clearSearchBox(): void {
+  searchActive = false;
+  window.clearTimeout(searchTimer);
+  searchBox().value = "";
+}
+
+// scheduleSearch debounces input events so a fast typist triggers one fetch,
+// not one per keystroke.
+function scheduleSearch(): void {
+  window.clearTimeout(searchTimer);
+  const q = searchBox().value.trim();
+  searchTimer = window.setTimeout(() => void runSearch(q), 250);
+}
+
+async function runSearch(q: string): Promise<void> {
+  if (q === "") {
+    if (searchActive) {
+      searchActive = false;
+      applyView(currentView); // restore the sidebar's view
+    }
+    return;
+  }
+  searchActive = true;
+  byId("view-overview").hidden = true;
+  byId("view-tree").hidden = false;
+  byId("guideBtn").hidden = true;
+  byId("treeTitle").textContent = `Search: “${q}”`;
+  clearDetail();
+  const tree = byId("tree");
+  setMessage(tree, "searching…");
+  try {
+    const resp = await fetch(`/ui/api/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    const data = (await resp.json()) as SearchResponse;
+    if (!searchActive || searchBox().value.trim() !== q) {
+      return; // stale response: a newer query or a cleared box owns the panel
+    }
+    renderSearchResults(tree, data);
+  } catch (err) {
+    setMessage(tree, `Search failed: ${(err as Error).message}`);
+  }
+}
+
+function renderSearchResults(container: HTMLElement, data: SearchResponse): void {
+  container.textContent = "";
+  const groups = data.groups ?? [];
+  if (groups.length === 0) {
+    setMessage(container, `No packages match “${data.query}”.`);
+    return;
+  }
+  for (const group of groups) {
+    container.appendChild(searchGroupEl(group));
+  }
+}
+
+// searchGroupEl renders one ecosystem's matches: a heading with the ecosystem
+// title and match count, then the hits as ordinary tree nodes.
+function searchGroupEl(group: SearchGroup): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "search-group";
+  const nodes = group.nodes ?? [];
+
+  const head = document.createElement("div");
+  head.className = "search-eco";
+  head.textContent = `${group.label} · ${group.total} ${group.total === 1 ? "match" : "matches"}`;
+  el.appendChild(head);
+
+  const list = document.createElement("div");
+  list.className = "search-list";
+  renderNodes(list, nodes, group.eco);
+  el.appendChild(list);
+
+  if (group.total > nodes.length) {
+    const more = document.createElement("p");
+    more.className = "empty";
+    more.textContent = `showing the first ${nodes.length} — refine the search to see the rest`;
+    el.appendChild(more);
+  }
+  return el;
 }
 
 // ---------------------------------------------------------------------------
@@ -1581,6 +1718,16 @@ menuButtons().forEach((btn) => {
   btn.addEventListener("click", () => setView(btn.dataset["view"] as View));
 });
 byId("refresh").addEventListener("click", refresh);
+
+searchBox().addEventListener("input", scheduleSearch);
+searchBox().addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && searchBox().value !== "") {
+    ev.preventDefault(); // keep focus; just leave search mode
+    searchBox().value = "";
+    window.clearTimeout(searchTimer);
+    void runSearch(""); // restores the sidebar's view when search was active
+  }
+});
 
 const guide = guideDialog();
 byId("guideBtn").addEventListener("click", openGuide);
