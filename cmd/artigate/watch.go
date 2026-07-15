@@ -261,10 +261,17 @@ func validateWatch(w Watch) error {
 		return errors.New("watch spec must be valid JSON")
 	}
 	if watchSpecContainsAuth(w.Spec) {
-		return errors.New("watch specs must not carry credentials (they are stored and shown in plaintext); set the stream's standing-credential variable on the low side instead (" +
-			containerAuthEnv + " for containers, " + upstreamAuthEnv + " for git/apt/rpm/apk)")
+		return watchSpecAuthError()
 	}
 	return nil
+}
+
+// watchSpecAuthError is the refusal shared by validateWatch (create/update)
+// and runWatchCollect (run time, catching rows stored before the guard
+// existed).
+func watchSpecAuthError() error {
+	return errors.New("watch specs must not carry credentials (they are stored and shown in plaintext); set the stream's standing-credential variable on the low side instead (" +
+		containerAuthEnv + " for containers, " + upstreamAuthEnv + " for git/apt/rpm/apk)")
 }
 
 // watchSpecContainsAuth reports whether a spec's top-level object carries an
@@ -436,6 +443,14 @@ func (s *LowServer) runWatchCollect(ctx context.Context, stream, spec string) (E
 	eco, ok := ecosystemFor(stream)
 	if !ok || eco.watchCollect == nil {
 		return ExportResult{}, fmt.Errorf("unknown stream %q", stream)
+	}
+	// validateWatch blocks new specs carrying credentials, but a row stored
+	// before that guard existed (when an "auth" key was just an ignored
+	// unknown field) would now decode into the collector's Auth field — refuse
+	// it here too, so a stored login is never used. The failed run surfaces
+	// the message in the watch's recorded outcome.
+	if watchSpecContainsAuth(spec) {
+		return ExportResult{}, watchSpecAuthError()
 	}
 	return eco.watchCollect(s, ctx, []byte(spec))
 }

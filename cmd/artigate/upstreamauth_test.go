@@ -50,6 +50,9 @@ func TestParseUpstreamAuthEnv(t *testing.T) {
 		{"apt.example.com=aliceonly", "aliceonly"},
 		{"apt.example.com=:hunter2", "hunter2"},
 		{"apt.example.com=alice:", "alice"},
+		// Swapped sides put the credential where the host belongs — the
+		// error must stay position-only.
+		{"alice:hunter2=apt.example.com", "hunter2"},
 	} {
 		_, err := parseUpstreamAuthEnv(tt.entry)
 		if err == nil {

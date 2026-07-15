@@ -128,6 +128,9 @@ func TestParseContainerAuthEnv(t *testing.T) {
 		{"ghcr.io=aliceonly", "aliceonly"},
 		{"ghcr.io=:hunter2", "hunter2"},
 		{"ghcr.io=alice:", "alice"},
+		// Swapped sides put the credential where the host belongs — the
+		// error must stay position-only.
+		{"alice:hunter2=ghcr.io", "hunter2"},
 	} {
 		_, err := parseContainerAuthEnv(tt.entry)
 		if err == nil {

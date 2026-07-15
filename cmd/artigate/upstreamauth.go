@@ -68,7 +68,9 @@ func parseAuthEnv(envName, spec string, normalizeHost func(string) string) (map[
 		}
 		user, pass, ok := strings.Cut(login, ":")
 		if !ok || user == "" || pass == "" {
-			return nil, fmt.Errorf("invalid %s entry #%d for host %q (need host=user:password)", envName, i+1, strings.TrimSpace(host))
+			// Position only, like the error above: with the sides swapped
+			// (user:password=host) the "host" here IS the credential.
+			return nil, fmt.Errorf("invalid %s entry #%d (need host=user:password)", envName, i+1)
 		}
 		out[normalizeHost(strings.TrimSpace(host))] = registryCredential{Username: user, Password: pass}
 	}
