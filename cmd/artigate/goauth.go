@@ -9,7 +9,8 @@ package main
 // git >= 2.31), plus GOPRIVATE/GONOSUMDB/GONOPROXY augmented with the
 // credentialed hosts so they skip the public proxy and checksum database
 // without extra flags. The environment exists only for the collect and is
-// removed when it ends.
+// removed when it ends; scrubGoCollectScratch removes anything a crashed
+// daemon stranded before the next one starts serving.
 
 import (
 	"context"
@@ -20,6 +21,18 @@ import (
 	"sort"
 	"strings"
 )
+
+// goAuthEnv holds standing per-host logins for private Go module hosts as
+// comma-separated host=user:password entries (the key is the VCS host). Like
+// its siblings it is re-read on every collect so rotated credentials apply
+// without a restart, and it is the only credential source scheduled watches
+// can use. It is deliberately separate from the mirror streams'
+// ARTIGATE_UPSTREAM_AUTH: a standing Go credential does more than
+// authenticate — buildGoAuthEnv marks its host module-private
+// (GOPRIVATE/GONOSUMDB/GONOPROXY), which bypasses the public proxy and
+// suppresses sumdb capture, and a git/apt/rpm/apk login on a shared host such
+// as github.com must never flip that host's public module fetches to private.
+const goAuthEnv = "ARTIGATE_GO_AUTH"
 
 // goAuthKey carries a credentialed collect's subprocess environment on the
 // context, so the single goEnv chokepoint picks it up without threading new
@@ -57,13 +70,14 @@ func goAuthEnvEntries(ctx context.Context) []string {
 }
 
 // goCollectCredentials resolves the collect's per-host logins: standing
-// ARTIGATE_UPSTREAM_AUTH entries overlaid with the request's own auth (the
-// request wins for its host). Unlike the mirror streams a Go collect has no
-// upstream URL — the module graph spans the public proxy and any private VCS
-// hosts — so the request login's host comes from auth.host, or is inferred
-// when every requested module names the same host.
+// ARTIGATE_GO_AUTH entries overlaid with the request's own auth (the request
+// wins for its host); the mirror streams' ARTIGATE_UPSTREAM_AUTH is
+// deliberately not consulted (see goAuthEnv). Unlike the mirror streams a Go
+// collect has no upstream URL — the module graph spans the public proxy and
+// any private VCS hosts — so the request login's host comes from auth.host,
+// or is inferred when every requested module names the same host.
 func goCollectCredentials(req GoCollectRequest) (map[string]registryCredential, error) {
-	creds, err := parseUpstreamAuthEnv(os.Getenv(upstreamAuthEnv))
+	creds, err := parseAuthEnv(goAuthEnv, os.Getenv(goAuthEnv), normalizeUpstreamHost)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +187,17 @@ func gitCredentialHelperEnv(i int, host string, cred registryCredential) []strin
 		fmt.Sprintf("ARTIGATE_GO_CRED_%d_USER=%s", i, cred.Username),
 		fmt.Sprintf("ARTIGATE_GO_CRED_%d_PASS=%s", i, cred.Password),
 	}
+}
+
+// scrubGoCollectScratch removes the per-collect scratch directory
+// (<root>/gocollect). Everything under it — the auth-* credential dirs above
+// and tempCollectDir's deps-*/project-* synthetic modules — belongs to exactly
+// one collect and is removed by that collect's deferred cleanup, but a crash
+// or kill strands it, and a stranded auth-* dir keeps a login's netrc on the
+// persistent volume. NewLowServer calls this before serving, when no collect
+// can be running yet, so a secret never outlives the daemon that wrote it.
+func scrubGoCollectScratch(root string) error {
+	return os.RemoveAll(filepath.Join(root, "gocollect"))
 }
 
 // checkNetrcSafe rejects logins the netrc token format cannot express —

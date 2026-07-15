@@ -40,7 +40,7 @@ Every ecosystem follows the same **collect → bundle → import → serve** pat
 
 ### Go modules → [go.md](go.md)
 
-The most faithful "what this project needs to build" mode: send a project's own `go.mod` (optionally with `go.sum`) and ArtiGate mirrors exactly the module graph that project resolves. You can also list module specs directly and set `resolve_deps` to pull the **full transitive graph**. Private module hosts authenticate with a one-time login on the collect or standing `ARTIGATE_UPSTREAM_AUTH` credentials (injected into `go`/`git`). Individually unfetchable modules are skipped into `skipped_modules` rather than aborting the batch. Served as a GOPROXY under `/go/`; clients set `GOPROXY=<base>/go,off` and `GOSUMDB=off`.
+The most faithful "what this project needs to build" mode: send a project's own `go.mod` (optionally with `go.sum`) and ArtiGate mirrors exactly the module graph that project resolves. You can also list module specs directly and set `resolve_deps` to pull the **full transitive graph**. Private module hosts authenticate with a one-time login on the collect or standing `ARTIGATE_GO_AUTH` credentials (injected into `go`/`git`). Individually unfetchable modules are skipped into `skipped_modules` rather than aborting the batch. Served as a GOPROXY under `/go/`; clients set `GOPROXY=<base>/go,off` and `GOSUMDB=off`.
 
 ### Python (PyPI) → [python.md](python.md)
 

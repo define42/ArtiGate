@@ -271,14 +271,14 @@ func validateWatch(w Watch) error {
 // existed).
 func watchSpecAuthError() error {
 	return errors.New("watch specs must not carry credentials (they are stored and shown in plaintext); set the stream's standing-credential variable on the low side instead (" +
-		containerAuthEnv + " for containers, " + upstreamAuthEnv + " for go/git/apt/rpm/apk)")
+		containerAuthEnv + " for containers, " + goAuthEnv + " for go, " + upstreamAuthEnv + " for git/apt/rpm/apk)")
 }
 
 // watchSpecContainsAuth reports whether a spec's top-level object carries an
 // "auth" key. Specs are persisted in plaintext and echoed back to every
 // dashboard session, so a login must never be scheduled — standing
 // credentials belong in the stream's environment variable
-// (ARTIGATE_CONTAINER_AUTH or ARTIGATE_UPSTREAM_AUTH).
+// (ARTIGATE_CONTAINER_AUTH, ARTIGATE_GO_AUTH, or ARTIGATE_UPSTREAM_AUTH).
 func watchSpecContainsAuth(spec string) bool {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(spec), &top); err != nil {

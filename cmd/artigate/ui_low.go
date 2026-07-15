@@ -227,7 +227,7 @@ const lowUIHTML = `<!DOCTYPE html>
           <label>Username<input id="goAuthUser" type="text" autocomplete="off"></label>
           <label>Password or token<input id="goAuthPass" type="password" autocomplete="new-password"></label>
         </div>
-        <p class="hint">Handed to <code>go</code>/<code>git</code> for this collect only &mdash; never stored and never part of a schedule; the host is also added to <code>GOPRIVATE</code> for the run. Standing credentials, which scheduled collects also use, go in <code>ARTIGATE_UPSTREAM_AUTH</code> on the low side (comma-separated <code>host=user:password</code>).</p>
+        <p class="hint">Handed to <code>go</code>/<code>git</code> for this collect only &mdash; never stored and never part of a schedule; the host is also added to <code>GOPRIVATE</code> for the run. Standing credentials, which scheduled collects also use, go in <code>ARTIGATE_GO_AUTH</code> on the low side (comma-separated <code>host=user:password</code>; <code>ARTIGATE_UPSTREAM_AUTH</code> is for the git/APT/RPM/Alpine streams and is not read here).</p>
       </details>
       <label class="pytarget-check"><input id="goForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
@@ -1544,7 +1544,8 @@ function ctrAuth(){
 // <prefix>AuthUser/<prefix>AuthPass plus an optional <prefix>AuthHost on
 // pages whose collect can span mirrors). Null when empty. Like the container
 // login, it rides only on the immediate collect — never into a schedule's
-// spec; scheduled pulls use ARTIGATE_UPSTREAM_AUTH on the low side.
+// spec; scheduled pulls use the stream's standing-credential variable on the
+// low side (ARTIGATE_UPSTREAM_AUTH; ARTIGATE_GO_AUTH for the Go page).
 function hostAuth(prefix){
   const user=document.getElementById(prefix+'AuthUser').value.trim();
   const pass=document.getElementById(prefix+'AuthPass').value;

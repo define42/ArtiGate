@@ -71,10 +71,13 @@ services:
       # Optional standing logins for private container registries
       # (host=user:password, comma-separated); scheduled pulls rely on this.
       ARTIGATE_CONTAINER_AUTH: "${ARTIGATE_CONTAINER_AUTH:-}"
-      # Optional standing logins for private Go module hosts and git/APT/RPM/
-      # Alpine upstreams (host=user:password, comma-separated); scheduled
-      # collects rely on this.
+      # Optional standing logins for private git/APT/RPM/Alpine upstreams
+      # (host=user:password, comma-separated); scheduled collects rely on this.
       ARTIGATE_UPSTREAM_AUTH: "${ARTIGATE_UPSTREAM_AUTH:-}"
+      # Optional standing logins for private Go module hosts (host=user:password,
+      # comma-separated); each host is also treated as GOPRIVATE for its
+      # collect, hence the Go-specific variable.
+      ARTIGATE_GO_AUTH: "${ARTIGATE_GO_AUTH:-}"
     ports:
       - "${ARTIGATE_LOW_BIND:-127.0.0.1}:8080:8080"
     volumes:

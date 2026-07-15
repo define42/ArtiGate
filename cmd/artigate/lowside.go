@@ -386,6 +386,12 @@ func NewLowServer(cfg LowConfig, priv ed25519.PrivateKey) (*LowServer, error) {
 	if err := os.MkdirAll(cfg.Root, 0o755); err != nil {
 		return nil, err
 	}
+	// A crashed collect can strand its scratch — including a netrc holding a
+	// login — under the root; scrub it before serving so no secret persists
+	// across restarts.
+	if err := scrubGoCollectScratch(cfg.Root); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(cfg.ExportDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -833,7 +839,7 @@ type GoCollectRequest struct {
 	// Auth optionally authenticates this collect against one private module
 	// host (injected into the go/git subprocesses; see goauth.go). It is used
 	// for this collect only and never stored; standing credentials belong in
-	// ARTIGATE_UPSTREAM_AUTH (watch specs must never carry logins — they are
+	// ARTIGATE_GO_AUTH (watch specs must never carry logins — they are
 	// persisted and echoed in plaintext).
 	Auth *HostCollectAuth `json:"auth,omitempty"`
 	// Force disables export dedup for this collect: everything is downloaded

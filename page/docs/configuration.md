@@ -241,7 +241,8 @@ The direct one-way-fiber transport — see [Built-in UDP diode](data-diode.md) f
 
 | Variable | Side | Default | Meaning |
 |---|---|---|---|
-| `ARTIGATE_UPSTREAM_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private Go module hosts, git, APT, RPM, and Alpine upstreams; the key is the upstream's exact host, `host:port` included (e.g. `gitlab.example.com=bot:token,apt.example.com=bot:secret`). Sent as HTTP Basic for the mirror streams and injected into the `go`/`git` subprocesses (via a per-collect netrc + git credential helper) for Go. Read at collect time, so it rotates without a restart, and the only credential source scheduled watches use |
+| `ARTIGATE_UPSTREAM_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private git, APT, RPM, and Alpine upstreams; the key is the upstream's exact host, `host:port` included (e.g. `git.example.com=bot:token,apt.example.com=bot:secret`). Sent as HTTP Basic to the mirror host it is keyed to. Read at collect time, so it rotates without a restart, and the only credential source scheduled watches use |
+| `ARTIGATE_GO_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private Go module hosts (the key is the VCS host, e.g. `gitlab.example.com=bot:token`); injected into the `go`/`git` subprocesses via a per-collect netrc + git credential helper, and each host is treated as private (`GOPRIVATE`/`GONOSUMDB`/`GONOPROXY`) for that collect — which is why Go has its own variable instead of sharing `ARTIGATE_UPSTREAM_AUTH`. Same rotation and scheduled-watch role |
 
 ### TLS
 
@@ -274,6 +275,6 @@ Validation (all fatal at startup):
 The file paths, listen addresses, and behaviour toggles are **flag-only**; TLS and low-side auth are **env-only**. There is deliberately no flag for TLS and no env var for paths/listen addresses.
 
 - **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags (including `--git`), `--hf-endpoint`, `--crates-index`, `--terraform-registry`, `--nuget-source`, `--osv-upstream`, `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`, `--apk-key-name`.
-- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`, `ARTIGATE_CONTAINER_AUTH`, `ARTIGATE_UPSTREAM_AUTH`.
+- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`, `ARTIGATE_CONTAINER_AUTH`, `ARTIGATE_GO_AUTH`, `ARTIGATE_UPSTREAM_AUTH`.
 
 See also: [Deployment](deployment.md) for production topologies, [Security & trust](security.md) for the trust model, and [TLS / HTTPS](tls.md) for the full TLS matrix.

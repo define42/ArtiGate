@@ -135,15 +135,15 @@ artigate low \
 
 ### Authenticating a private module host
 
-Two ways to supply an HTTP(S) login (username + password/token) without preconfiguring the container's git — resolved per host as *request `auth` → `ARTIGATE_UPSTREAM_AUTH` → anonymous*:
+Two ways to supply an HTTP(S) login (username + password/token) without preconfiguring the container's git — resolved per host as *request `auth` → `ARTIGATE_GO_AUTH` → anonymous*:
 
 - **Per-collect login** — an optional `auth` object on the collect request, also exposed as the *Private module host login* fields on the low-side Go page: `{"host": "gitlab.example.com", "username": "mirror-bot", "password": "<token>"}`. Used for that one collect and never stored. Give `host` explicitly; it may be omitted only when every module in the request shares one host (a `go.mod` upload always needs it, since there is no module list to infer from). The named host is also added to `GOPRIVATE`/`GONOSUMDB`/`GONOPROXY` **for that collect**, so a new private host is self-service — no flag change needed.
-- **Standing credentials** — comma-separated `host=user:password` entries in `ARTIGATE_UPSTREAM_AUTH` on the low side (the key is the VCS host). Re-read on every collect, and the **only** credential source [scheduled watches](../scheduling.md) can use — specs carrying an `auth` key are rejected.
+- **Standing credentials** — comma-separated `host=user:password` entries in `ARTIGATE_GO_AUTH` on the low side (the key is the VCS host). Re-read on every collect, and the **only** credential source [scheduled watches](../scheduling.md) can use — specs carrying an `auth` key are rejected. This is the Go stream's own variable: a standing Go credential also marks its host private (`GOPRIVATE`/`GONOSUMDB`/`GONOPROXY`) for every collect, so the git/APT/RPM/Alpine logins in `ARTIGATE_UPSTREAM_AUTH` are deliberately **not** read here — a git login for `github.com` must not push public `github.com/...` module fetches off the proxy and checksum database.
 
 How the login reaches the tools: ArtiGate writes a private `0600` netrc for that collect and points the toolchain's own HTTPS requests at it (`NETRC` + `GOAUTH=netrc`), and installs a host-scoped inline git credential helper via `GIT_CONFIG_*` (git ≥ 2.31) for the `direct` VCS fetch. Both are removed when the collect ends; the login never enters a bundle, the watch store, logs, or the host's own git/netrc config. A password containing whitespace is rejected (the netrc format cannot express it). For SSH-key auth instead, preconfigure `~/.ssh` as before — the login fields are for HTTP(S) tokens.
 
 !!! warning
-    Without a login (per-collect or `ARTIGATE_UPSTREAM_AUTH`), private modules require preconfigured git/SSH credentials in the low-side container. Because `GIT_TERMINAL_PROMPT=0` is forced, an unauthenticated private fetch fails immediately rather than hanging on a password prompt.
+    Without a login (per-collect or `ARTIGATE_GO_AUTH`), private modules require preconfigured git/SSH credentials in the low-side container. Because `GIT_TERMINAL_PROMPT=0` is forced, an unauthenticated private fetch fails immediately rather than hanging on a password prompt.
 
 ## Internals
 
