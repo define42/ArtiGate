@@ -237,11 +237,11 @@ The direct one-way-fiber transport — see [Built-in UDP diode](data-diode.md) f
 |---|---|---|---|
 | `ARTIGATE_CONTAINER_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private container registries (e.g. `ghcr.io=bot:ghp_xxx`); read at collect time, so it rotates without a restart, and the only credential source scheduled watches use — see [Private registries](ecosystems/containers.md#private-registries) |
 
-### Upstream mirrors (git, APT, RPM, Alpine)
+### Upstream mirrors (Go, git, APT, RPM, Alpine)
 
 | Variable | Side | Default | Meaning |
 |---|---|---|---|
-| `ARTIGATE_UPSTREAM_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins (sent as HTTP Basic) for private git, APT, RPM, and Alpine upstreams; the key is the mirror URL's exact host, `host:port` included (e.g. `apt.example.com=bot:secret,mirror.example.com:8443=robot:token`). Read at collect time, so it rotates without a restart, and the only credential source scheduled watches use |
+| `ARTIGATE_UPSTREAM_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private Go module hosts, git, APT, RPM, and Alpine upstreams; the key is the upstream's exact host, `host:port` included (e.g. `gitlab.example.com=bot:token,apt.example.com=bot:secret`). Sent as HTTP Basic for the mirror streams and injected into the `go`/`git` subprocesses (via a per-collect netrc + git credential helper) for Go. Read at collect time, so it rotates without a restart, and the only credential source scheduled watches use |
 
 ### TLS
 

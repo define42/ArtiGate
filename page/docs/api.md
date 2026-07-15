@@ -97,6 +97,7 @@ Every collect request additionally accepts one shared field:
 | `resolve_deps` | bool | When true, expands the transitive module graph (`go mod download -json all`) |
 | `go_mod` | string | A project's own go.mod content; **when set, `modules` and `resolve_deps` are ignored** |
 | `go_sum` | string | Optional, paired with `go_mod` |
+| `auth` | `*object` | optional one-time login for a private module host, injected into the `go`/`git` subprocesses: `{"host","username","password"}`. `host` is required unless every listed module shares one host. Never stored, rejected inside watch specs — standing credentials go in `ARTIGATE_UPSTREAM_AUTH` ([details](ecosystems/go.md#authenticating-a-private-module-host)) |
 
 ```http
 POST /admin/go/collect HTTP/1.1

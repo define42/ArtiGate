@@ -220,6 +220,15 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">go.sum <span class="opt">&mdash; optional, with go.mod; pins the exact versions</span>
         <input id="gosum" type="file" accept=".sum,text/plain">
       </label>
+      <details class="pytarget">
+        <summary>Private module host login (optional)</summary>
+        <div class="pytarget-grid">
+          <label>Host <span class="opt">&mdash; e.g. <code>gitlab.example.com</code>; optional when all listed modules share one host</span><input id="goAuthHost" type="text" placeholder="gitlab.example.com" autocomplete="off"></label>
+          <label>Username<input id="goAuthUser" type="text" autocomplete="off"></label>
+          <label>Password or token<input id="goAuthPass" type="password" autocomplete="new-password"></label>
+        </div>
+        <p class="hint">Handed to <code>go</code>/<code>git</code> for this collect only &mdash; never stored and never part of a schedule; the host is also added to <code>GOPRIVATE</code> for the run. Standing credentials, which scheduled collects also use, go in <code>ARTIGATE_UPSTREAM_AUTH</code> on the low side (comma-separated <code>host=user:password</code>).</p>
+      </details>
       <label class="pytarget-check"><input id="goForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="goBtn">Collect &amp; export</button>
@@ -1323,8 +1332,11 @@ async function goSpec(){
 
 async function collectGoMod(ev, dry){
   ev.preventDefault();
+  // goSpec() is shared with scheduleGo, so the login is attached here only —
+  // a schedule's spec must never carry credentials.
   const built=await goSpec();
   if(!built){ showGoResult('err','List at least one module, or upload a go.mod.'); return; }
+  if(!attachHostAuth(built.spec,'go',showGoResult)) return;
   runCollect({dry:dry, btnId:'goBtn', showFn:showGoResult, title:'Collecting Go modules',
     url:'/admin/go/collect', body:applyForce(built.spec,'goForce'), forceId:'goForce', render:d=>{
       const msg=collectedMsg(d,'Collected','module(s)');

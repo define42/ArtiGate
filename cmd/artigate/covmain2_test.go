@@ -227,7 +227,7 @@ func TestCovM2_GoEnvOptionalVars(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = ls.Close() })
 
-	env := ls.goEnv()
+	env := ls.goEnv(context.Background())
 	want := []string{
 		"GOTOOLCHAIN=local",
 		"GOPRIVATE=example.com/private",

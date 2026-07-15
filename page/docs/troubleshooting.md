@@ -224,8 +224,13 @@ filled in.
 
 ### Low side: private Go modules need Git/SSH configured
 
-The low side fetches Go modules with the host's own `go`/`git` and its
-credentials. For private modules, configure the service user's Git/SSH (and set
+The low side fetches Go modules with the host's own `go`/`git`. The simplest way
+to reach a private VCS host is a login on the collect — the Go page's *Private
+module host login* fields, or the `auth` field — or a standing
+`ARTIGATE_UPSTREAM_AUTH=gitlab.example.com=bot:token` entry (which scheduled
+collects also use). ArtiGate injects it into `go`/`git` for that collect and adds
+the host to `GOPRIVATE`/`GONOSUMDB` automatically, so no flags are needed for a
+new host. For SSH-key auth instead, configure the service user's Git/SSH (and set
 `--goprivate github.com/your-org/*` so those paths bypass the public proxy and
 sumdb) **before** starting the low side:
 
@@ -236,10 +241,11 @@ artigate low \
   --goprivate github.com/your-org/*
 ```
 
-If Git/SSH is not set up, those modules fail to fetch. A module that cannot be
-fetched is reported in `skipped_modules` and skipped — one bad version never
-aborts the whole batch. See [Go modules](ecosystems/go.md) and the
-[Configuration reference](configuration.md) for the full flag list.
+Without either, private modules fail to fetch (`GIT_TERMINAL_PROMPT=0` makes the
+fetch fail fast rather than hang). A module that cannot be fetched is reported in
+`skipped_modules` and skipped — one bad version never aborts the whole batch. See
+[Go modules](ecosystems/go.md) and the [Configuration reference](configuration.md)
+for the full flag list.
 
 ### "No new content since the last export" — this is dedup, not an error
 
