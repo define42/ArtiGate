@@ -40,9 +40,11 @@ interface TreeResponse {
 }
 
 // SearchGroup is one ecosystem's matches from /ui/api/search: the first few
-// matching tree nodes plus the ecosystem's total match count.
+// matching tree nodes plus the ecosystem's total match count. eco is always a
+// registered stream name — the server derives groups from the ecosystem
+// registry, and the wiring test keeps the View union in step with it.
 interface SearchGroup {
-  eco: string;
+  eco: View;
   label: string;
   total: number;
   nodes: TreeNode[];
@@ -846,7 +848,7 @@ function searchGroupEl(group: SearchGroup): HTMLElement {
 
   const list = document.createElement("div");
   list.className = "search-list";
-  renderNodes(list, nodes, group.eco as View);
+  renderNodes(list, nodes, group.eco);
   el.appendChild(list);
 
   if (group.total > nodes.length) {
