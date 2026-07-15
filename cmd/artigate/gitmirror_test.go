@@ -966,6 +966,13 @@ func TestGitCollectFailures(t *testing.T) {
 // bundle's payload out like the importer would, and publishes it.
 func gitTestPublishedHigh(t *testing.T) (*HighServer, *gitTestFixture) {
 	t.Helper()
+	return gitTestPublishedHighNamed(t, "fix")
+}
+
+// gitTestPublishedHighNamed is gitTestPublishedHigh with a caller-chosen mirror
+// name, so tests can exercise names carrying URL-reserved characters.
+func gitTestPublishedHighNamed(t *testing.T, name string) (*HighServer, *gitTestFixture) {
+	t.Helper()
 	f := newGitTestFixture(t)
 	fake := &fakeGitServer{t: t, pack: f.pack, sideband: true, advLines: []string{
 		gitTestAdvHead(f.commitSHA(), "side-band-64k no-progress symref=HEAD:refs/heads/main"),
@@ -975,7 +982,7 @@ func gitTestPublishedHigh(t *testing.T) (*HighServer, *gitTestFixture) {
 	}}
 	srv := fake.start()
 	ls, priv := newGitLowServer(t)
-	res, err := ls.CollectGit(context.Background(), GitCollectRequest{URL: srv.URL + "/repo.git", Name: "fix"})
+	res, err := ls.CollectGit(context.Background(), GitCollectRequest{URL: srv.URL + "/repo.git", Name: name})
 	if err != nil {
 		t.Fatalf("CollectGit: %v", err)
 	}
@@ -1232,6 +1239,43 @@ func TestGitTreeAndDetail(t *testing.T) {
 		if _, err := hs.gitDetail(spec); err == nil {
 			t.Errorf("detail %q should fail", spec)
 		}
+	}
+}
+
+// TestGitCloneURLReservedName covers a mirror whose (validly named) directory
+// carries a URL-reserved character. gitDetail exposes the raw, host-relative
+// clone_url; the dashboard must percent-encode the name segment before putting
+// it in the clone command, or git requests a truncated path (a bare "#" is a
+// URL fragment). This locks in that the encoded path the client emits resolves
+// to the served mirror while the unencoded one does not.
+func TestGitCloneURLReservedName(t *testing.T) {
+	const name = "foo#bar"
+	hs, f := gitTestPublishedHighNamed(t, name)
+	srv := gitTestServer(t, hs)
+
+	// The served value is raw (unencoded): exactly the mirror name under /git/.
+	d, err := hs.gitDetail(name + "@main")
+	if err != nil {
+		t.Fatalf("gitDetail: %v", err)
+	}
+	if d.CloneURL != "git/"+name+".git" {
+		t.Fatalf("clone_url = %q, want %q", d.CloneURL, "git/"+name+".git")
+	}
+
+	wantRefs := f.commitSHA() + "\trefs/heads/main\n" +
+		f.deltaBlobSHA() + "\trefs/tags/blobtag\n" +
+		f.commitSHA() + "\trefs/tags/v1\n"
+
+	// The encoded clone path (what the dashboard's encodePath produces, "#" ->
+	// "%23") resolves: git clone <base>/git/foo%23bar.git works.
+	if code, body := httpGet(t, srv.URL+"/git/foo%23bar.git/info/refs"); code != http.StatusOK || body != wantRefs {
+		t.Errorf("encoded info/refs = %d %q, want 200 and %q", code, body, wantRefs)
+	}
+
+	// Unencoded, the raw "#" is parsed as a URL fragment, so the request never
+	// reaches this mirror — the bug the encoding fixes.
+	if code, _ := httpGet(t, srv.URL+"/git/foo#bar.git/info/refs"); code == http.StatusOK {
+		t.Errorf("unencoded '#' path unexpectedly resolved (code %d)", code)
 	}
 }
 

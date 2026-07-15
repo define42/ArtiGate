@@ -354,9 +354,12 @@ function renderDetail(detail: Detail): void {
 
   // A git mirror's full, host-qualified clone command as a copyable code block.
   // The server sends only the host-relative path; the origin (scheme and host)
-  // is known only client-side, so any reverse proxy is honored.
+  // is known only client-side, so any reverse proxy is honored. encodePath
+  // percent-encodes the mirror-name segment — a name may hold URL-reserved
+  // characters ("#", "?", space, "%") that would otherwise break the URL git
+  // requests (fragment, query, shell split) — matching the download links.
   if (detail.clone_url) {
-    panel.appendChild(codeBlock({ label: "Clone", code: `git clone ${serverBase()}/${detail.clone_url}` }));
+    panel.appendChild(codeBlock({ label: "Clone", code: `git clone ${serverBase()}/${encodePath(detail.clone_url)}` }));
   }
 
   const downloads = detail.downloads ?? [];
