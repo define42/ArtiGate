@@ -63,6 +63,18 @@ func TestParseGoSumDBConfig(t *testing.T) {
 		t.Fatalf("custom database: cfg %+v, err %v", cfg, err)
 	}
 
+	// A path-qualified verifier name (host/path form, which the go command
+	// accepts) is preserved intact, and the default URL derives from it.
+	skeyPQ, vkeyPQ, err := note.GenerateKey(rand.Reader, "sums.example.com/dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = skeyPQ
+	cfg, _, err = parseGoSumDBConfig(vkeyPQ)
+	if err != nil || cfg.name != "sums.example.com/dev" || cfg.url != "https://sums.example.com/dev" {
+		t.Fatalf("path-qualified database: cfg %+v, err %v", cfg, err)
+	}
+
 	for _, bad := range []string{
 		"unknown.example.org",       // no key known for it
 		"a b c",                     // too many fields
@@ -83,6 +95,13 @@ func TestSumDBPathValidation(t *testing.T) {
 		"sum.golang.org/tile/8/0/000.p/1",
 		"sum.golang.org/tile/8/1/x001/234",
 		"sum.golang.org/tile/8/2/005",
+		// Path-qualified database names (host[/path] form) keep every segment
+		// before the endpoint word.
+		"sums.example.com/dev/latest",
+		"sums.example.com/dev/lookup/example.com/foo/bar@v1.0.0",
+		"registry.example.org/team/sumdb/tile/8/0/000",
+		// A module path may reuse an endpoint word after the real endpoint.
+		"sum.golang.org/lookup/example.com/tile@v1.0.0",
 	}
 	for _, p := range valid {
 		if _, err := parseSumDBPath(p); err != nil {
@@ -106,6 +125,12 @@ func TestSumDBPathValidation(t *testing.T) {
 		".hidden/latest",                             // dot-prefixed name
 		"sum..golang.org/latest",                     // dot-dot inside name
 		"sum.golang.org/lookup/example.com/a@v1/no",  // slash in version
+		"sums.example.com//latest",                   // empty (double-slash) segment
+		"sums.example.com/../secret/latest",          // traversal in a path-qualified name
+		"sums.example.com/.hidden/latest",            // dot-file segment mid-name
+		"latest",                                     // endpoint word with no database name
+		"lookup/example.com/foo@v1.0.0",              // ditto for a lookup
+		"sums.example.com/dev/tile",                  // endpoint word with no tile path
 	}
 	for _, p := range invalid {
 		if _, err := parseSumDBPath(p); err == nil {
@@ -552,6 +577,32 @@ func TestGoSumDBCaptureGONOSUMDB(t *testing.T) {
 		if strings.Contains(f.Path, "private") && strings.HasPrefix(f.Path, sumdbPathPrefix) {
 			t.Fatalf("private module leaked into sumdb capture: %s", f.Path)
 		}
+	}
+}
+
+// TestGoSumDBServePathQualifiedName checks the high side serves a database
+// whose name is path-qualified (host/path): both the supported probe and a
+// stored file resolve through the multi-segment name.
+func TestGoSumDBServePathQualifiedName(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	dir := filepath.Join(hs.goModuleDir(), "sumdb", "sums.example.com", "dev")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "latest"), []byte("note"))
+	srv := httptest.NewServer(hs)
+	t.Cleanup(srv.Close)
+
+	if code, _ := httpGet(t, srv.URL+"/go/sumdb/sums.example.com/dev/supported"); code != http.StatusOK {
+		t.Fatalf("supported for a path-qualified name should be 200")
+	}
+	if code, body := httpGet(t, srv.URL+"/go/sumdb/sums.example.com/dev/latest"); code != http.StatusOK || body != "note" {
+		t.Fatalf("latest = %d %q, want 200 %q", code, body, "note")
+	}
+	// A database this mirror holds nothing for still 404s the probe.
+	if code, _ := httpGet(t, srv.URL+"/go/sumdb/sums.example.com/other/supported"); code != http.StatusNotFound {
+		t.Fatalf("supported for an unmirrored path-qualified name should be 404")
 	}
 }
 
