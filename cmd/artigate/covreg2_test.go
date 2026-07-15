@@ -228,32 +228,32 @@ func TestCovR2_FetchToken(t *testing.T) {
 	ctx := context.Background()
 
 	// A non-Bearer challenge is rejected by parseBearerChallenge.
-	if _, err := c.fetchToken(ctx, `Basic realm="x"`, "org/app"); err == nil {
+	if _, err := c.fetchToken(ctx, `Basic realm="x"`, "org/app", nil); err == nil {
 		t.Error("Basic challenge should fail")
 	}
 	challenge := func(path string) string {
 		return `Bearer realm="` + srv.URL + path + `",service="svc"`
 	}
 	for _, path := range []string{"/err", "/garbage", "/empty"} {
-		if _, err := c.fetchToken(ctx, challenge(path), "org/app"); err == nil {
+		if _, err := c.fetchToken(ctx, challenge(path), "org/app", nil); err == nil {
 			t.Errorf("token endpoint %s should fail", path)
 		}
 	}
 	// The access_token field is used when token is absent.
-	if tok, err := c.fetchToken(ctx, challenge("/access"), "org/app"); err != nil || tok != "acc" {
+	if tok, err := c.fetchToken(ctx, challenge("/access"), "org/app", nil); err != nil || tok != "acc" {
 		t.Fatalf("access_token fallback = %q, %v", tok, err)
 	}
 	// A challenge without a scope makes fetchToken synthesize a pull scope.
-	if tok, err := c.fetchToken(ctx, `Bearer realm="`+srv.URL+`/tok"`, "org/app"); err != nil || tok != "good" {
+	if tok, err := c.fetchToken(ctx, `Bearer realm="`+srv.URL+`/tok"`, "org/app", nil); err != nil || tok != "good" {
 		t.Fatalf("token = %q, %v", tok, err)
 	}
 }
 
 func TestCovR2_ContainerGetRetry(t *testing.T) {
-	// alwaysUnauthed always answers 401 (even with a token) but points at a
-	// working token endpoint; get exhausts its one retry and reports the final
-	// unauthorized. badChallenge answers 401 with an unsupported scheme, so the
-	// token fetch itself fails.
+	// org/loop always answers 401 (even with a token) but points at a working
+	// token endpoint; get exhausts its one retry and reports the final
+	// unauthorized. org/basic answers 401 with a Basic challenge, which needs a
+	// login that this anonymous client does not have.
 	var srv *httptest.Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, map[string]string{"token": "t"}) })
@@ -275,7 +275,7 @@ func TestCovR2_ContainerGetRetry(t *testing.T) {
 		t.Error("a registry that stays 401 after a token should fail")
 	}
 	if _, err := c.get(context.Background(), imageRef{Registry: "example.com", Repository: "org/basic"}, "manifests/x", ""); err == nil {
-		t.Error("a Basic challenge should fail the token fetch")
+		t.Error("a Basic challenge without a login should fail")
 	}
 }
 

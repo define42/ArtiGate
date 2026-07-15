@@ -77,7 +77,7 @@ const lowUIHTML = `<!DOCTYPE html>
   .card h2 { font-size: 1rem; margin: 0 0 .75rem; }
   .hint { color: #8b93a5; font-size: .85rem; margin: .1rem 0 .8rem; }
   form { display: flex; gap: .6rem; flex-wrap: wrap; }
-  input[type=text] { flex: 1; min-width: 240px; background: #0f1115; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .55rem .7rem; font-family: ui-monospace, monospace; }
+  input[type=text], input[type=password] { flex: 1; min-width: 240px; background: #0f1115; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .55rem .7rem; font-family: ui-monospace, monospace; }
   select.restream { background: #0f1115; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .55rem .7rem; font: inherit; cursor: pointer; }
   button.primary { background: #1f6f43; color: #eafff2; border: 1px solid #2b8f59; border-radius: 6px; padding: .55rem 1.1rem; cursor: pointer; font-weight: 600; }
   .rbox { margin-top: .9rem; padding: .7rem .9rem; border-radius: 6px; display: none; }
@@ -100,7 +100,7 @@ const lowUIHTML = `<!DOCTYPE html>
   .pytarget-check { display: flex; align-items: center; gap: .45rem; font-size: .82rem; color: #c7cedb; margin: .5rem 0 .2rem; }
   .pytarget-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .6rem; margin: .6rem 0 .2rem; }
   .pytarget-grid label { display: flex; flex-direction: column; gap: .25rem; font-size: .8rem; color: #a9b2c3; }
-  .pytarget-grid input[type=text] { min-width: 0; font-size: .8rem; padding: .4rem .55rem; }
+  .pytarget-grid input[type=text], .pytarget-grid input[type=password] { min-width: 0; font-size: .8rem; padding: .4rem .55rem; }
   @media (max-width: 620px) { .pytarget-grid { grid-template-columns: 1fr; } }
   .meta { display: flex; flex-wrap: wrap; gap: 1.25rem; font-size: .9rem; color: #a9b2c3; margin-bottom: 1rem; }
   .meta b { color: #e6e6e6; }
@@ -401,6 +401,15 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">Images <span class="opt">&mdash; one per line; a missing tag means <code>latest</code>; scheduled pulls re-resolve constraints each run</span>
         <textarea id="ctrimages" rows="5" placeholder="alpine:3.20&#10;golang:1.26.x&#10;ghcr.io/org/app:v1" autocomplete="off"></textarea>
       </label>
+      <details class="pytarget">
+        <summary>Private registry login (optional)</summary>
+        <div class="pytarget-grid">
+          <label>Registry <span class="opt">&mdash; optional when all images share one</span><input id="ctrAuthRegistry" type="text" placeholder="ghcr.io" autocomplete="off"></label>
+          <label>Username<input id="ctrAuthUser" type="text" autocomplete="off"></label>
+          <label>Password or token<input id="ctrAuthPass" type="password" autocomplete="new-password"></label>
+        </div>
+        <p class="hint">Used for this pull only &mdash; never stored and never part of a schedule. Standing credentials, which scheduled pulls also use, go in <code>ARTIGATE_CONTAINER_AUTH</code> on the low side (comma-separated <code>host=user:password</code>).</p>
+      </details>
       <label class="pytarget-check"><input id="ctrForce" type="checkbox"> Full bundle &mdash; re-download and re-send even blobs the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="ctrBtn">Collect &amp; export</button>
@@ -1470,12 +1479,31 @@ function ctrImages(){
     .map(s=>s.replace(/\s+#.*$/,'').trim()).filter(l=>l && l.charAt(0)!=='#');
 }
 
+// ctrAuth reads the optional private-registry login. It rides only on the
+// collect request (never into a schedule's spec — schedules use
+// ARTIGATE_CONTAINER_AUTH on the low side). The password is taken verbatim.
+function ctrAuth(){
+  const user=document.getElementById('ctrAuthUser').value.trim();
+  const pass=document.getElementById('ctrAuthPass').value;
+  if(!user && !pass) return null;
+  const auth={username:user, password:pass};
+  const registry=document.getElementById('ctrAuthRegistry').value.trim();
+  if(registry) auth.registry=registry;
+  return auth;
+}
+
 async function collectContainers(ev, dry){
   ev.preventDefault();
   const images=ctrImages();
   if(!images.length){ showCtrResult('err','List at least one image reference.'); return; }
+  const body=applyForce({images:images},'ctrForce');
+  const auth=ctrAuth();
+  if(auth){
+    if(!auth.username || !auth.password){ showCtrResult('err','A registry login needs both username and password.'); return; }
+    body.auth=auth;
+  }
   runCollect({dry:dry, btnId:'ctrBtn', showFn:showCtrResult, title:'Collecting container images',
-    url:'/admin/containers/collect', body:applyForce({images:images},'ctrForce'), forceId:'ctrForce', render:d=>{
+    url:'/admin/containers/collect', body:body, forceId:'ctrForce', render:d=>{
       const msg=collectedMsg(d,'Collected','image(s)');
       const sk=d.skipped_modules||[];
       if(sk.length) return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' unfetchable image(s):', sk, m=>'<code>'+esc(m.module)+':'+esc(m.version)+'</code> &mdash; '+esc(m.error))};

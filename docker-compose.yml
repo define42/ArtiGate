@@ -68,6 +68,9 @@ services:
       # control plane. Compose requires an operator-generated argon2id credential
       # rather than ever starting it unauthenticated.
       ARTIGATE_LOW_AUTH: "${ARTIGATE_LOW_AUTH:?Set ARTIGATE_LOW_AUTH in .env; generate it with ./artigate hashpw --user admin}"
+      # Optional standing logins for private container registries
+      # (host=user:password, comma-separated); scheduled pulls rely on this.
+      ARTIGATE_CONTAINER_AUTH: "${ARTIGATE_CONTAINER_AUTH:-}"
     ports:
       - "${ARTIGATE_LOW_BIND:-127.0.0.1}:8080:8080"
     volumes:

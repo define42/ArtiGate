@@ -260,7 +260,23 @@ func validateWatch(w Watch) error {
 	if !json.Valid([]byte(w.Spec)) {
 		return errors.New("watch spec must be valid JSON")
 	}
+	if watchSpecContainsAuth(w.Spec) {
+		return errors.New("watch specs must not carry credentials (they are stored and shown in plaintext); set " + containerAuthEnv + " on the low side instead")
+	}
 	return nil
+}
+
+// watchSpecContainsAuth reports whether a spec's top-level object carries an
+// "auth" key. Specs are persisted in plaintext and echoed back to every
+// dashboard session, so a login must never be scheduled — standing
+// credentials belong in ARTIGATE_CONTAINER_AUTH.
+func watchSpecContainsAuth(spec string) bool {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(spec), &top); err != nil {
+		return false // not a JSON object; nothing to inspect
+	}
+	_, ok := top["auth"]
+	return ok
 }
 
 func isKnownStream(stream string) bool {

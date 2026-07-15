@@ -245,6 +245,7 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 | Field | Type | Notes |
 |---|---|---|
 | `images` | `[]string` | docker-style refs (tag or `@sha256:` digest) |
+| `auth` | `*object` | optional one-time login for a private registry: `{"registry","username","password"}`; `registry` may be omitted when the pull uses a single registry. Never stored, and rejected inside watch specs — standing credentials go in `ARTIGATE_CONTAINER_AUTH` ([details](ecosystems/containers.md#private-registries)) |
 
 !!! warning "linux/amd64 only"
     Only the `linux/amd64` platform is mirrored. Unfetchable images are skipped and reported in `skipped_modules`.

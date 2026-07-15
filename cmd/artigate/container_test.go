@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -101,6 +102,97 @@ func TestParseContainerRegistryOverrides(t *testing.T) {
 		if _, err := parseContainerRegistryOverrides(bad); err == nil {
 			t.Errorf("override %q should be rejected", bad)
 		}
+	}
+}
+
+func TestParseContainerAuthEnv(t *testing.T) {
+	m, err := parseContainerAuthEnv("ghcr.io=alice:s3cr3t, index.docker.io=bob:tok:en= ,")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m["ghcr.io"] != (registryCredential{Username: "alice", Password: "s3cr3t"}) {
+		t.Fatalf("ghcr.io login = %+v", m["ghcr.io"])
+	}
+	// Docker Hub aliases fold to docker.io; a password may contain ':' and '='.
+	if m["docker.io"] != (registryCredential{Username: "bob", Password: "tok:en="}) {
+		t.Fatalf("docker.io login = %+v", m["docker.io"])
+	}
+	if len(m) != 2 {
+		t.Fatalf("logins = %v", m)
+	}
+	if m, err := parseContainerAuthEnv(""); err != nil || len(m) != 0 {
+		t.Fatalf("empty value = %v, %v", m, err)
+	}
+	for _, tt := range []struct{ entry, secret string }{
+		{"ghcr.io", ""},
+		{"ghcr.io=aliceonly", "aliceonly"},
+		{"ghcr.io=:hunter2", "hunter2"},
+		{"ghcr.io=alice:", "alice"},
+	} {
+		_, err := parseContainerAuthEnv(tt.entry)
+		if err == nil {
+			t.Errorf("entry %q should be rejected", tt.entry)
+			continue
+		}
+		if !strings.Contains(err.Error(), containerAuthEnv) {
+			t.Errorf("error should name the env var: %v", err)
+		}
+		if tt.secret != "" && strings.Contains(err.Error(), tt.secret) {
+			t.Errorf("error must not echo the login: %v", err)
+		}
+	}
+}
+
+func TestContainerCollectCredentials(t *testing.T) {
+	refs := func(specs ...string) []imageRef {
+		t.Helper()
+		parsed, err := parseContainerCollectRefs(specs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed
+	}
+	t.Setenv(containerAuthEnv, "ghcr.io=envuser:envpass")
+
+	// Without request auth the standing env credentials apply (the path
+	// scheduled watches take).
+	creds, err := containerCollectCredentials(refs("ghcr.io/org/app:v1"), nil)
+	if err != nil || creds["ghcr.io"].Username != "envuser" {
+		t.Fatalf("env creds = %v, %v", creds, err)
+	}
+
+	// A request login wins over the env entry; an unnamed registry resolves to
+	// the pull's single registry.
+	creds, err = containerCollectCredentials(refs("ghcr.io/org/app:v1"), &ContainerCollectAuth{Username: "u", Password: "p"})
+	if err != nil || creds["ghcr.io"] != (registryCredential{Username: "u", Password: "p"}) {
+		t.Fatalf("request creds = %v, %v", creds, err)
+	}
+
+	// Naming the registry scopes the login inside a multi-registry pull, and
+	// Docker Hub aliases fold.
+	creds, err = containerCollectCredentials(refs("alpine:3.20", "quay.io/org/app:v1"),
+		&ContainerCollectAuth{Registry: "index.docker.io", Username: "u", Password: "p"})
+	if err != nil || creds["docker.io"].Username != "u" {
+		t.Fatalf("scoped creds = %v, %v", creds, err)
+	}
+
+	if _, err := containerCollectCredentials(refs("alpine:3.20", "quay.io/org/app:v1"),
+		&ContainerCollectAuth{Username: "u", Password: "p"}); err == nil {
+		t.Error("multi-registry pull with an unscoped login should fail")
+	}
+	if _, err := containerCollectCredentials(refs("alpine:3.20"),
+		&ContainerCollectAuth{Registry: "ghcr.io", Username: "u", Password: "p"}); err == nil {
+		t.Error("a login for a registry outside the pull should fail")
+	}
+	if _, err := containerCollectCredentials(refs("alpine:3.20"),
+		&ContainerCollectAuth{Username: "u"}); err == nil {
+		t.Error("a login without a password should fail")
+	}
+
+	// A malformed env value fails the collect, naming the variable.
+	t.Setenv(containerAuthEnv, "garbage")
+	if _, err := containerCollectCredentials(refs("alpine:3.20"), nil); err == nil || !strings.Contains(err.Error(), containerAuthEnv) {
+		t.Errorf("malformed env value should fail naming %s, got %v", containerAuthEnv, err)
 	}
 }
 
@@ -203,13 +295,25 @@ func registerFakeImage(mux *http.ServeMux, repo, tag string, img fakeImage, requ
 // default each repository lists the tags of its registered images.
 func fakeContainerRegistry(t *testing.T, images map[string]fakeImage, extraTags ...map[string][]string) *httptest.Server {
 	t.Helper()
+	return fakeContainerRegistryGated(t, nil, images, extraTags...)
+}
+
+// fakeContainerRegistryGated is fakeContainerRegistry with an optional gate on
+// the token endpoint: when tokenGate is non-nil, /token demands it (e.g. HTTP
+// Basic credentials — the docker login flow of a private registry).
+func fakeContainerRegistryGated(t *testing.T, tokenGate func(*http.Request) bool, images map[string]fakeImage, extraTags ...map[string][]string) *httptest.Server {
+	t.Helper()
 	const token = "fake-pull-token"
 	mux := http.NewServeMux()
 	var srv *httptest.Server
 	requireToken := func(r *http.Request) bool {
 		return r.Header.Get("Authorization") == "Bearer "+token
 	}
-	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		if tokenGate != nil && !tokenGate(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		writeJSON(w, map[string]string{"token": token})
 	})
 	tagsByRepo := map[string][]string{}
@@ -354,6 +458,97 @@ func TestCollectContainersSkipsUnfetchable(t *testing.T) {
 	}
 	if seq := ls.peekSequence(streamContainers); seq != 2 {
 		t.Fatalf("next sequence = %d, want 2", seq)
+	}
+}
+
+// TestCollectContainersPrivateRegistry exercises the docker login flow: the
+// registry's token endpoint demands HTTP Basic credentials before it issues a
+// pull token.
+func TestCollectContainersPrivateRegistry(t *testing.T) {
+	img := makeFakeImage("private-layer")
+	gate := func(r *http.Request) bool {
+		user, pass, ok := r.BasicAuth()
+		return ok && user == "robot" && pass == "s3cr3t"
+	}
+	up := fakeContainerRegistryGated(t, gate, map[string]fakeImage{"org/app:v1": img})
+	ls, _ := newContainerLowServer(t, map[string]string{"registry.example.com": up.URL})
+	ctx := context.Background()
+	image := "registry.example.com/org/app:v1"
+
+	// Anonymous pulls are rejected at the token endpoint.
+	if _, err := ls.CollectContainers(ctx, ContainerCollectRequest{Images: []string{image}}); err == nil {
+		t.Fatal("anonymous pull from a private registry should fail")
+	}
+
+	// A wrong login is reported as rejected — and the error never echoes it.
+	_, err := ls.CollectContainers(ctx, ContainerCollectRequest{
+		Images: []string{image},
+		Auth:   &ContainerCollectAuth{Username: "robot", Password: "wrongpass"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "credentials were not accepted") {
+		t.Fatalf("wrong-login error = %v", err)
+	}
+	if strings.Contains(err.Error(), "wrongpass") {
+		t.Fatalf("error must not echo the password: %v", err)
+	}
+
+	// The per-pull login authenticates the token fetch.
+	res, err := ls.CollectContainers(ctx, ContainerCollectRequest{
+		Images: []string{image},
+		Auth:   &ContainerCollectAuth{Username: "robot", Password: "s3cr3t"},
+	})
+	if err != nil || res.ExportedModules != 1 {
+		t.Fatalf("authenticated collect = %+v, %v", res, err)
+	}
+
+	// Standing ARTIGATE_CONTAINER_AUTH credentials work without request auth —
+	// the only credential source scheduled watches have.
+	t.Setenv(containerAuthEnv, "registry.example.com=robot:s3cr3t")
+	res, err = ls.CollectContainers(ctx, ContainerCollectRequest{Images: []string{image}, Force: true})
+	if err != nil || res.ExportedModules != 1 {
+		t.Fatalf("env-authenticated collect = %+v, %v", res, err)
+	}
+}
+
+// TestContainerBasicChallenge covers registries that skip the token dance and
+// demand HTTP Basic directly on the registry API.
+func TestContainerBasicChallenge(t *testing.T) {
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("bob:hunter2"))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v2/org/app/manifests/x", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != want {
+			w.Header().Set("Www-Authenticate", `Basic realm="registry"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte("{}"))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	ls, _ := newContainerLowServer(t, map[string]string{"example.com": srv.URL})
+	ref := imageRef{Registry: "example.com", Repository: "org/app"}
+
+	c := ls.newContainerClient()
+	c.creds = map[string]registryCredential{"example.com": {Username: "bob", Password: "hunter2"}}
+	resp, err := c.get(context.Background(), ref, "manifests/x", "")
+	if err != nil {
+		t.Fatalf("Basic-authenticated get: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	// A rejected login is reported without echoing the password.
+	c = ls.newContainerClient()
+	c.creds = map[string]registryCredential{"example.com": {Username: "bob", Password: "nope"}}
+	_, err = c.get(context.Background(), ref, "manifests/x", "")
+	if err == nil || !strings.Contains(err.Error(), "were not accepted") || strings.Contains(err.Error(), "nope") {
+		t.Fatalf("wrong Basic login error = %v", err)
+	}
+
+	// Without a login the challenge is answered with guidance instead.
+	c = ls.newContainerClient()
+	_, err = c.get(context.Background(), ref, "manifests/x", "")
+	if err == nil || !strings.Contains(err.Error(), containerAuthEnv) {
+		t.Fatalf("anonymous Basic-challenge error should name %s, got %v", containerAuthEnv, err)
 	}
 }
 

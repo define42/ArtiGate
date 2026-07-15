@@ -305,6 +305,10 @@ func TestCov3D_ValidateWatch(t *testing.T) {
 		"uploads not schedulable": {Stream: streamUploads, Spec: `{}`, IntervalSeconds: 3600},
 		"empty spec":              {Stream: streamPython, Spec: "   ", IntervalSeconds: 3600},
 		"invalid json spec":       {Stream: streamPython, Spec: "{not json", IntervalSeconds: 3600},
+		"spec carrying a login": {
+			Stream: streamContainers, IntervalSeconds: 3600,
+			Spec: `{"images":["ghcr.io/org/app:v1"],"auth":{"username":"u","password":"p"}}`,
+		},
 	}
 	for name, w := range cases {
 		if err := validateWatch(w); err == nil {

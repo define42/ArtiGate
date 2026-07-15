@@ -205,5 +205,6 @@ Because fetching runs as native tooling, upstream credentials and proxy settings
 - **Private Go modules** need Git and SSH configured on the low-side host (working `~/.ssh`, `~/.gitconfig`, credential helpers), plus the matching `--goprivate` / `--gonoproxy` / `--gonosumdb` flags so `go` fetches them directly from the VCS instead of the public proxy and sum database.
 - ArtiGate always forces `GIT_TERMINAL_PROMPT=0`, so Git never blocks on an interactive password prompt — configure non-interactive auth (SSH keys or a credential helper) or the fetch fails fast.
 - **Gated Hugging Face models** need `ARTIGATE_HF_TOKEN` set in the low side's environment.
+- **Private container registries** take a one-shot login on the pull (the `auth` field / the Containers page form) or standing `ARTIGATE_CONTAINER_AUTH` entries (`host=user:password`, comma-separated) in the low side's environment; scheduled pulls use only the latter.
 
 The Go `GO*` environment knobs are only applied when their flags are non-empty. Per-ecosystem fetching details live on the [ecosystems](ecosystems/index.md) pages.

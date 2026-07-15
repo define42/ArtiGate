@@ -64,7 +64,7 @@ Collect takes a `.repo` file or explicit `name`/`base_url` (e.g. `packages.micro
 
 ### Container images (OCI) → [containers.md](containers.md)
 
-The richest ecosystem: collect takes docker-style image references (`alpine:3.20`, a digest pin, or a **version constraint** like `golang:1.26.x` resolved against the upstream tag list at collect time) and mirrors the `linux/amd64` image. The high side reassembles blobs and manifests and serves an OCI/Docker v2 registry under `/v2/`. Tag constraints are parsed with `hashicorp/go-version`.
+The richest ecosystem: collect takes docker-style image references (`alpine:3.20`, a digest pin, or a **version constraint** like `golang:1.26.x` resolved against the upstream tag list at collect time) and mirrors the `linux/amd64` image. Private registries authenticate with a one-time login on the pull or standing `ARTIGATE_CONTAINER_AUTH` credentials. The high side reassembles blobs and manifests and serves an OCI/Docker v2 registry under `/v2/`. Tag constraints are parsed with `hashicorp/go-version`.
 
 ### AI models (Hugging Face) → [ai-models.md](ai-models.md)
 

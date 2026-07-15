@@ -217,7 +217,12 @@ With `ARTIGATE_DIODE_INGEST=on` (off by default), the high side accepts bundle u
 
 ### Upstream credentials on the low side
 
-`ARTIGATE_HF_TOKEN` (a Hugging Face access token for gated models) is the one upstream credential ArtiGate itself sends. It is read from the environment at collect time, attached as a Bearer header to Hugging Face requests only, and never forwarded: `net/http` drops the `Authorization` header on the cross-host CDN redirects that model downloads follow, and the token never appears in bundles, manifests, or the high side.
+ArtiGate itself sends two kinds of upstream credentials, both read from the environment at collect time and never persisted:
+
+- `ARTIGATE_HF_TOKEN` (a Hugging Face access token for gated models) is attached as a Bearer header to Hugging Face requests only.
+- `ARTIGATE_CONTAINER_AUTH` (per-registry `host=user:password` container logins) — plus the equivalent one-shot `auth` field on a container collect request — is sent as HTTP Basic to the token endpoint a registry's `Bearer` challenge names (the `docker login` trust model: the registry chooses its realm, and each login is keyed to a single registry so it can only reach that registry's realm), or directly to a registry that challenges with `Basic`. Watch specs carrying credentials are rejected outright, so logins never land in the plaintext watch store or the dashboard.
+
+Neither credential is ever forwarded: `net/http` drops the `Authorization` header on the cross-host CDN redirects that blob and model downloads follow, and no credential appears in bundles, manifests, logs, error messages, or the high side.
 
 ## Dependency-confusion guidance
 

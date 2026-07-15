@@ -4,8 +4,8 @@ ArtiGate mirrors OCI/Docker container images end to end: the [low side](../low-s
 
 Container work travels on the `containers` stream. Like every ecosystem, that stream has its own sequence counter, export lock, and export-dedup index, so a container collect never blocks or interleaves with Go, Python, Maven, npm, APT, RPM, or AI model work.
 
-!!! warning "linux/amd64 only, anonymous public images only"
-    ArtiGate mirrors the `linux/amd64` platform exclusively — multi-platform indexes are resolved down to the amd64 sub-manifest and nothing else is re-served. All upstream authentication is **anonymous Bearer-token**; only public images from public registries can be mirrored. There is no support for credentialed pulls.
+!!! warning "linux/amd64 only"
+    ArtiGate mirrors the `linux/amd64` platform exclusively — multi-platform indexes are resolved down to the amd64 sub-manifest and nothing else is re-served. Pulls are anonymous by default; private registries authenticate with a per-pull login or standing `ARTIGATE_CONTAINER_AUTH` credentials (see [Private registries](#private-registries)).
 
 ## Low-side inputs
 
@@ -15,7 +15,7 @@ Drive a collect with `POST /admin/containers/collect`. The request body (max 1 M
 { "images": ["alpine:3.20", "ghcr.io/org/app:v1", "golang:1.26.x"], "force": false }
 ```
 
-References are parsed docker-style and de-duplicated before fetching. Each reference may carry a tag, a digest, or a version constraint in the tag slot. `force: true` bypasses the export-dedup index — every blob is downloaded and packed even when already forwarded, producing a full self-contained bundle.
+References are parsed docker-style and de-duplicated before fetching. Each reference may carry a tag, a digest, or a version constraint in the tag slot. `force: true` bypasses the export-dedup index — every blob is downloaded and packed even when already forwarded, producing a full self-contained bundle. An optional `auth` object supplies a one-time login for a private registry (see [Private registries](#private-registries)).
 
 ### Image reference forms
 
@@ -92,9 +92,35 @@ Each base must parse as an `http`/`https` URL; a trailing `/` is trimmed and the
 !!! warning "Non-standard registry ports are unsupported"
     Because the high side serves an image under the name `<registry>/<repository>`, and a port `:` cannot appear in that name, any upstream reference whose registry carries a port is rejected at parse time: `registries on non-standard ports cannot be mirrored (the port cannot appear in the high-side pull name)`. (This concerns the *upstream* registry host — the ArtiGate high-side `host:port` you pull from is entirely separate.)
 
+### Private registries
+
+Registries that demand authentication (GHCR, Harbor, private Docker Hub repositories, htpasswd-protected `registry:2`, …) are pulled with a login from one of two sources, resolved per registry as *request auth → `ARTIGATE_CONTAINER_AUTH` → anonymous*:
+
+**Per-pull login** — an optional `auth` object on the collect request, also exposed as the *Private registry login* fields on the low-side Containers page. It is used for that one collect and never stored:
+
+```json
+{
+  "images": ["ghcr.io/org/private-app:v1"],
+  "auth": { "registry": "ghcr.io", "username": "mirror-bot", "password": "<token>" }
+}
+```
+
+`username` and `password` are both required (a registry token — a GHCR PAT, a Harbor robot secret — goes in `password`, exactly as with `docker login`). `registry` may be omitted when every image in the pull comes from the same registry; a pull spanning several registries must name the one the login is for, and a `registry` matching none of the pull's images is rejected — a login is never presented to a registry you didn't mean it for.
+
+**Standing credentials** — the low-side environment variable `ARTIGATE_CONTAINER_AUTH` holds comma-separated `host=user:password` entries:
+
+```bash
+export ARTIGATE_CONTAINER_AUTH='ghcr.io=mirror-bot:ghp_xxx,harbor.example.com=robot$mirror:secret'
+```
+
+It is re-read on **every collect** (rotate it without a restart), applies to manual pulls without an `auth` field, and is the **only** credential source for [scheduled watches](../scheduling.md) — the server rejects any watch spec carrying an `auth` key, because specs are stored and echoed in plaintext. Hosts fold through the usual normalization (`index.docker.io` → `docker.io`); the password may contain `:` and `=`, but an entry cannot express a password containing `,`.
+
+!!! note "Where the login is sent"
+    On a `Bearer` challenge the login is sent as HTTP Basic **to the token endpoint the registry's challenge names** (the `docker login` flow), never to the registry URL itself; on a `Basic` challenge it is sent to the registry directly. Each login is keyed to one registry, so it can only ever reach that registry's chosen realm. Credentials never appear in bundles, logs, progress lines, or error messages.
+
 ## Internals
 
-**Anonymous Bearer token dance.** The stdlib registry client requests `<apiBase>/v2/<repository>/<path>`. On a `401` it reads `Www-Authenticate`, which must be scheme `Bearer` (otherwise `only anonymous Bearer pulls are supported`), fetches a token from the realm with scope `repository:<repository>:pull`, and retries once. A persistent `401` is a hard error: `unauthorized (only anonymous pulls of public images are supported)`. One token is cached per `<registry>/<repository>` for the whole collect run. The `Authorization` header is set per-request only, so `net/http` drops it on cross-host CDN (S3 blob) redirects, avoiding token leakage.
+**Bearer token dance.** The stdlib registry client requests `<apiBase>/v2/<repository>/<path>`. On a `401` it reads `Www-Authenticate`: a `Bearer` challenge fetches a token from the realm with scope `repository:<repository>:pull` (adding HTTP Basic credentials when the registry has a login configured) and retries once; a `Basic` challenge answers with the configured login directly, or fails with guidance when there is none. A persistent `401` is a hard error — `credentials for <registry> were not accepted` with a login, or `the image may be private; supply a login on the pull (auth field) or set ARTIGATE_CONTAINER_AUTH` without one. One Authorization value is cached per `<registry>/<repository>` for the whole collect run. The `Authorization` header is set per-request only, so `net/http` drops it on cross-host CDN (S3 blob) redirects, avoiding token or login leakage.
 
 **Manifest resolution.** Manifests are requested with an `Accept` header covering Docker and OCI, single-image and index media types. A multi-platform index is unmarshalled and the **first entry with `os == "linux"` and `architecture == "amd64"`** is chosen and re-fetched by digest; attestation entries (`unknown/unknown`) never match. No amd64 manifest is a hard error: `image has no linux/amd64 manifest`. When a manifest is fetched by digest, its recomputed SHA-256 must match or the collect errors with `manifest digest mismatch`.
 
@@ -210,7 +236,8 @@ sudo systemctl restart docker
 ## Limitations
 
 - **`linux/amd64` only** — no other architecture or OS, and no multi-arch manifest list is ever re-served (a single amd64 manifest per image).
-- **Anonymous public images only** — no credentialed or private upstream registries.
+- **One login per pull** — the `auth` field names a single registry; pulls needing different logins for different registries run as separate collects (standing `ARTIGATE_CONTAINER_AUTH` entries cover any number of registries).
+- **Scheduled pulls authenticate only via `ARTIGATE_CONTAINER_AUTH`** — watch specs carrying an `auth` key are rejected, because specs are stored and echoed in plaintext.
 - **`sha256` digests only** — every other algorithm is rejected at parse, verify, and serve time.
 - **Foreign / non-distributable layers are rejected** outright.
 - **Registry ports are unsupported** — a port cannot appear in the high-side pull name, so such references are rejected at parse time.
