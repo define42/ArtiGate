@@ -84,7 +84,7 @@ The stored spec is replayed literally, but the *upstream resolution* happens fre
 | Alpine branch/repo selection (e.g. `v3.22/main`) | The `APKINDEX` is re-fetched and its (newest-only by default) packages re-mirrored — note the index declares no whole-file hash, so unchanged `.apk`s are re-**downloaded** on the low side and deduped at export |
 | Pinned version (e.g. `requests==2.32.3`) | Same content each run; only dedup decides whether anything is sent |
 
-For containers specifically, every run re-parses the image refs and re-mirrors them. Only `linux/amd64` is mirrored; per-image fetch failures are collected as skipped units (surfaced in the watch message as "N skipped") rather than aborting the batch. See [Container images](ecosystems/containers.md) for details.
+For containers specifically, every run re-parses the image refs and re-mirrors them. Only `linux/amd64` is mirrored; per-image fetch failures are collected as skipped units (surfaced in the watch message as "N skipped") rather than aborting the batch. A scheduled pull of a **private** upstream authenticates via the low side's standing-credential variables — `ARTIGATE_CONTAINER_AUTH` for containers, `ARTIGATE_UPSTREAM_AUTH` for git/APT/RPM/Alpine — never via the spec: specs are stored and echoed in plaintext, so any spec carrying an `auth` key is rejected with HTTP 400. See [Container images](ecosystems/containers.md#private-registries) for the container details.
 
 In short: a watch on a moving reference keeps up with the upstream; a watch on a pinned reference is a no-op after its first successful run, cheaply skipped by dedup.
 
@@ -207,7 +207,7 @@ The watch endpoints live under `/admin/` on the low side and are subject to the 
 
 Notes on the request bodies:
 
-- On **create**, `spec` is sent as a raw JSON object (not a string) and stored verbatim; `label` defaults to `stream` when blank; the watch is always created enabled. The body limit is 8 MiB. Validation rejects unknown streams, intervals below 1 minute, and empty or invalid-JSON specs with HTTP 400.
+- On **create**, `spec` is sent as a raw JSON object (not a string) and stored verbatim; `label` defaults to `stream` when blank; the watch is always created enabled. The body limit is 8 MiB. Validation rejects unknown streams, intervals below 1 minute, empty or invalid-JSON specs, and specs carrying an `auth` key (credentials must never be stored — use `ARTIGATE_CONTAINER_AUTH` / `ARTIGATE_UPSTREAM_AUTH`) with HTTP 400. The same `auth` check runs again at **run time**, so a spec stored before this guard existed fails its runs with the same message instead of ever using the stored login — recreate the watch without credentials and put the login in the standing-credential variable.
 - On **update**, only `id` is required (unknown id → HTTP 404): a blank `label`, an omitted or `null` `spec`, and a zero `interval_seconds` each keep the watch's current value, and the merged result is validated like a create. The stream cannot be changed. The body limit is 8 MiB. See [Editing a schedule](#editing-a-schedule) for how the next run is re-spaced.
 - The **run / enable / disable / delete** endpoints all take `{"id":<n>}` (read up to 64 KiB); a missing or non-positive `id` returns HTTP 400, and **run** returns HTTP 404 if no watch has that id.
 

@@ -260,7 +260,32 @@ func validateWatch(w Watch) error {
 	if !json.Valid([]byte(w.Spec)) {
 		return errors.New("watch spec must be valid JSON")
 	}
+	if watchSpecContainsAuth(w.Spec) {
+		return watchSpecAuthError()
+	}
 	return nil
+}
+
+// watchSpecAuthError is the refusal shared by validateWatch (create/update)
+// and runWatchCollect (run time, catching rows stored before the guard
+// existed).
+func watchSpecAuthError() error {
+	return errors.New("watch specs must not carry credentials (they are stored and shown in plaintext); set the stream's standing-credential variable on the low side instead (" +
+		containerAuthEnv + " for containers, " + upstreamAuthEnv + " for git/apt/rpm/apk)")
+}
+
+// watchSpecContainsAuth reports whether a spec's top-level object carries an
+// "auth" key. Specs are persisted in plaintext and echoed back to every
+// dashboard session, so a login must never be scheduled — standing
+// credentials belong in the stream's environment variable
+// (ARTIGATE_CONTAINER_AUTH or ARTIGATE_UPSTREAM_AUTH).
+func watchSpecContainsAuth(spec string) bool {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(spec), &top); err != nil {
+		return false // not a JSON object; nothing to inspect
+	}
+	_, ok := top["auth"]
+	return ok
 }
 
 func isKnownStream(stream string) bool {
@@ -418,6 +443,14 @@ func (s *LowServer) runWatchCollect(ctx context.Context, stream, spec string) (E
 	eco, ok := ecosystemFor(stream)
 	if !ok || eco.watchCollect == nil {
 		return ExportResult{}, fmt.Errorf("unknown stream %q", stream)
+	}
+	// validateWatch blocks new specs carrying credentials, but a row stored
+	// before that guard existed (when an "auth" key was just an ignored
+	// unknown field) would now decode into the collector's Auth field — refuse
+	// it here too, so a stored login is never used. The failed run surfaces
+	// the message in the watch's recorded outcome.
+	if watchSpecContainsAuth(spec) {
+		return ExportResult{}, watchSpecAuthError()
 	}
 	return eco.watchCollect(s, ctx, []byte(spec))
 }

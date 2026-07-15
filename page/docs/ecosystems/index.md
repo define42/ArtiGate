@@ -56,15 +56,15 @@ Collect takes package specs or a `package.json` + `package-lock.json` and pulls 
 
 ### APT (Debian/Ubuntu) → [apt.md](apt.md)
 
-Collect takes a deb822 source stanza (`source_list`) or explicit fields; one stanza's `Suites:` may list several releases (`noble noble-updates noble-security`), which share one mirror and its pool. By default it keeps **newest-only** — the highest version of each package — set `newest_only: false` to mirror every version in the index. The high side regenerates `Release`/`Packages` per suite from the accumulated `.deb` stanzas (never trusting the transferred index) and optionally signs `InRelease` with `--apt-gpg-key`. Served under `/apt/`.
+Collect takes a deb822 source stanza (`source_list`) or explicit fields; one stanza's `Suites:` may list several releases (`noble noble-updates noble-security`), which share one mirror and its pool. By default it keeps **newest-only** — the highest version of each package — set `newest_only: false` to mirror every version in the index. Private mirrors authenticate with a one-time login on the collect or standing `ARTIGATE_UPSTREAM_AUTH` credentials. The high side regenerates `Release`/`Packages` per suite from the accumulated `.deb` stanzas (never trusting the transferred index) and optionally signs `InRelease` with `--apt-gpg-key`. Served under `/apt/`.
 
 ### RPM (RHEL/Fedora) → [rpm.md](rpm.md)
 
-Collect takes a `.repo` file or explicit `name`/`base_url` (e.g. `packages.microsoft.com`). Like APT it is **newest-only** by default (highest EVR per package); set `newest_only: false` for every version. Only **x86_64 + noarch** packages are mirrored unless the `architectures` field lists others, and the mirror is named after its `baseurl`. The high side regenerates repodata and optionally signs `repomd.xml.asc` with `--rpm-gpg-key`. Served under `/rpm/`.
+Collect takes a `.repo` file or explicit `name`/`base_url` (e.g. `packages.microsoft.com`). Like APT it is **newest-only** by default (highest EVR per package); set `newest_only: false` for every version. Only **x86_64 + noarch** packages are mirrored unless the `architectures` field lists others, and the mirror is named after its `baseurl`. Private repos authenticate with a one-time login on the collect or standing `ARTIGATE_UPSTREAM_AUTH` credentials. The high side regenerates repodata and optionally signs `repomd.xml.asc` with `--rpm-gpg-key`. Served under `/rpm/`.
 
 ### Container images (OCI) → [containers.md](containers.md)
 
-The richest ecosystem: collect takes docker-style image references (`alpine:3.20`, a digest pin, or a **version constraint** like `golang:1.26.x` resolved against the upstream tag list at collect time) and mirrors the `linux/amd64` image. The high side reassembles blobs and manifests and serves an OCI/Docker v2 registry under `/v2/`. Tag constraints are parsed with `hashicorp/go-version`.
+The richest ecosystem: collect takes docker-style image references (`alpine:3.20`, a digest pin, or a **version constraint** like `golang:1.26.x` resolved against the upstream tag list at collect time) and mirrors the `linux/amd64` image. Private registries authenticate with a one-time login on the pull or standing `ARTIGATE_CONTAINER_AUTH` credentials. The high side reassembles blobs and manifests and serves an OCI/Docker v2 registry under `/v2/`. Tag constraints are parsed with `hashicorp/go-version`.
 
 ### AI models (Hugging Face) → [ai-models.md](ai-models.md)
 
@@ -88,7 +88,7 @@ Collect takes package specs (`Newtonsoft.Json@13.0.3`, or a bare `Serilog` for t
 
 ### Alpine (apk) → [apk.md](apk.md)
 
-Collect takes a mirror base plus branches/repositories/architectures (defaults: `main`, `x86_64`) or a pasted `/etc/apk/repositories` file, and is **newest-only by default** like APT/RPM. Every `.apk` is verified against the `APKINDEX`-declared size and `Q1` control checksum; the verbatim stanzas travel inside the signed manifest and the high side regenerates `APKINDEX.tar.gz` under `/apk/<mirror>`, gated on the packages present — optionally RSA-signed with `--apk-rsa-key` so stock `apk` clients skip `--allow-untrusted`.
+Collect takes a mirror base plus branches/repositories/architectures (defaults: `main`, `x86_64`) or a pasted `/etc/apk/repositories` file, and is **newest-only by default** like APT/RPM. Private mirrors authenticate with a one-time login on the collect or standing `ARTIGATE_UPSTREAM_AUTH` credentials. Every `.apk` is verified against the `APKINDEX`-declared size and `Q1` control checksum; the verbatim stanzas travel inside the signed manifest and the high side regenerates `APKINDEX.tar.gz` under `/apk/<mirror>`, gated on the packages present — optionally RSA-signed with `--apk-rsa-key` so stock `apk` clients skip `--allow-untrusted`.
 
 ### OSV advisories → [osv.md](osv.md)
 

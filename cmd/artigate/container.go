@@ -4,7 +4,9 @@ package main
 // linux/amd64 only.
 //
 // Low side: resolve each image reference against its upstream registry using
-// the OCI Distribution HTTP API (anonymous Bearer-token auth), pick the
+// the OCI Distribution HTTP API (anonymous Bearer-token auth by default;
+// private registries authenticate via a per-pull login on the collect request
+// or standing per-registry credentials in ARTIGATE_CONTAINER_AUTH), pick the
 // linux/amd64 manifest out of a multi-platform index, download the config and
 // every layer blob (streamed to disk, SHA-256 verified against the manifest's
 // digests), and pack everything into the standard signed ArtiGate bundle.
@@ -22,6 +24,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -53,7 +56,7 @@ func containersEcosystem() ecosystem {
 		collect:      (*LowServer).HandleContainerCollect,
 		watchCollect: watchAdapter((*LowServer).CollectContainers),
 		flags: func(fs *flag.FlagSet, cfg *LowConfig) {
-			fs.StringVar(&cfg.ContainerRegistries, "container-registry", "", "comma-separated host=baseURL overrides for container registries (e.g. docker.io=https://mirror.example.com)")
+			fs.StringVar(&cfg.ContainerRegistries, "container-registry", "", "comma-separated host=baseURL overrides for container registries (e.g. docker.io=https://mirror.example.com); ARTIGATE_CONTAINER_AUTH optionally holds host=user:password logins for private registries")
 		},
 		manifestContent: func(m BundleManifest) bool { return m.Containers != nil && len(m.Containers.Repos) > 0 },
 		validateContent: func(m BundleManifest, seen map[string]bool) error {
@@ -141,6 +144,13 @@ const (
 	containerDefaultRegistry = "docker.io"
 	// Docker Hub's API endpoint differs from its logical registry name.
 	containerDockerHubAPI = "https://registry-1.docker.io"
+
+	// containerAuthEnv holds standing per-registry pull credentials as
+	// comma-separated host=user:password entries. It is read at collect time
+	// (like ARTIGATE_HF_TOKEN) so rotated credentials apply without a restart,
+	// and it is the only credential source scheduled watches can use — watch
+	// specs must never carry logins (they are stored and echoed in plaintext).
+	containerAuthEnv = "ARTIGATE_CONTAINER_AUTH"
 
 	mtDockerManifest = "application/vnd.docker.distribution.manifest.v2+json"
 	mtDockerList     = "application/vnd.docker.distribution.manifest.list.v2+json"
@@ -431,7 +441,8 @@ func pickAmd64Manifest(entries []ociDescriptor) (ociDescriptor, error) {
 }
 
 // -----------------------------------------------------------------------------
-// Low side: registry client (stdlib only, anonymous Bearer-token auth)
+// Low side: registry client (stdlib only; anonymous Bearer-token auth, with
+// optional per-registry credentials for private pulls)
 // -----------------------------------------------------------------------------
 
 // containerAPIBase returns the HTTPS API endpoint for a registry, honoring any
@@ -469,11 +480,31 @@ func parseContainerRegistryOverrides(spec string) (map[string]string, error) {
 	return out, nil
 }
 
+// registryCredential is one registry login, used as HTTP Basic auth on the
+// token endpoint named in a Bearer challenge (the docker login flow) or
+// directly on registries that challenge with Basic.
+type registryCredential struct {
+	Username string
+	Password string
+}
+
+// parseContainerAuthEnv parses ARTIGATE_CONTAINER_AUTH (see parseAuthEnv for
+// the syntax and secret-hygiene rules; keys fold through
+// normalizeContainerRegistry so Docker Hub aliases share one entry).
+func parseContainerAuthEnv(spec string) (map[string]registryCredential, error) {
+	return parseAuthEnv(containerAuthEnv, spec, normalizeContainerRegistry)
+}
+
 // containerClient talks to upstream registries for one collect run, caching
-// one anonymous pull token per repository.
+// one Authorization header value ("Bearer <token>" or "Basic <login>") per
+// repository. Pulls are anonymous unless creds holds a login for the registry.
 type containerClient struct {
-	ls     *LowServer
-	tokens map[string]string // "<registry>/<repository>" -> Bearer token
+	ls    *LowServer
+	auths map[string]string // "<registry>/<repository>" -> Authorization header value
+	// creds maps a registry to the login used when it demands authentication:
+	// the pull's own auth overlaid on any standing ARTIGATE_CONTAINER_AUTH
+	// entries. Nil or a missing key means anonymous.
+	creds map[string]registryCredential
 	// prior reports whether a blob (bundle path + sha256) was already
 	// forwarded on the containers stream, letting the collector skip the
 	// download and emit a prior manifest reference. Nil means never skip.
@@ -481,16 +512,25 @@ type containerClient struct {
 }
 
 func (s *LowServer) newContainerClient() *containerClient {
-	return &containerClient{ls: s, tokens: map[string]string{}}
+	return &containerClient{ls: s, auths: map[string]string{}}
 }
 
-// get performs one registry API request (urlPath is relative to /v2/), doing
-// the Bearer token dance on a 401 and retrying once. The caller must close the
-// returned body.
+// credentialFor returns the login configured for a registry, or nil for
+// anonymous pulls.
+func (c *containerClient) credentialFor(registry string) *registryCredential {
+	if cred, ok := c.creds[registry]; ok {
+		return &cred
+	}
+	return nil
+}
+
+// get performs one registry API request (urlPath is relative to /v2/),
+// answering a 401 challenge (Bearer token dance, or HTTP Basic when a login is
+// configured) and retrying once. The caller must close the returned body.
 func (c *containerClient) get(ctx context.Context, ref imageRef, urlPath, accept string) (*http.Response, error) {
 	full := c.ls.containerAPIBase(ref.Registry) + "/v2/" + ref.Repository + "/" + urlPath
 	key := ref.Registry + "/" + ref.Repository
-	resp, err := c.doContainerGet(ctx, full, accept, c.tokens[key])
+	resp, err := c.doContainerGet(ctx, full, accept, c.auths[key])
 	if err != nil {
 		return nil, err
 	}
@@ -499,23 +539,56 @@ func (c *containerClient) get(ctx context.Context, ref imageRef, urlPath, accept
 	}
 	challenge := resp.Header.Get("Www-Authenticate")
 	_ = resp.Body.Close()
-	token, err := c.fetchToken(ctx, challenge, ref.Repository)
+	authorization, err := c.authorizeChallenge(ctx, challenge, ref)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ref.Registry, err)
 	}
-	c.tokens[key] = token
-	resp, err = c.doContainerGet(ctx, full, accept, token)
+	c.auths[key] = authorization
+	resp, err = c.doContainerGet(ctx, full, accept, authorization)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf("GET %s: unauthorized (only anonymous pulls of public images are supported)", full)
+		return nil, c.unauthorizedPullError(ref.Registry, full)
 	}
 	return resp, nil
 }
 
-func (c *containerClient) doContainerGet(ctx context.Context, rawURL, accept, token string) (*http.Response, error) {
+// authorizeChallenge answers a 401 challenge with a ready-to-cache
+// Authorization header value: a Bearer challenge runs the token dance
+// (authenticated with the registry's login when one is configured), a Basic
+// challenge answers with the login directly.
+func (c *containerClient) authorizeChallenge(ctx context.Context, challenge string, ref imageRef) (string, error) {
+	cred := c.credentialFor(ref.Registry)
+	scheme, _, _ := strings.Cut(strings.TrimSpace(challenge), " ")
+	switch {
+	case strings.EqualFold(scheme, "Bearer"):
+		token, err := c.fetchToken(ctx, challenge, ref.Repository, cred)
+		if err != nil {
+			return "", err
+		}
+		return "Bearer " + token, nil
+	case strings.EqualFold(scheme, "Basic") && cred != nil:
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(cred.Username+":"+cred.Password)), nil
+	case strings.EqualFold(scheme, "Basic"):
+		return "", fmt.Errorf("registry requires a login — supply one on the pull (auth field) or set %s", containerAuthEnv)
+	default:
+		return "", fmt.Errorf("registry requires unsupported authentication %q (Bearer and Basic are supported)", scheme)
+	}
+}
+
+// unauthorizedPullError renders the final 401 after an answered challenge:
+// with a login configured the registry rejected it; anonymously the image
+// needs one.
+func (c *containerClient) unauthorizedPullError(registry, fullURL string) error {
+	if c.credentialFor(registry) != nil {
+		return fmt.Errorf("GET %s: unauthorized — the credentials for %s were not accepted", fullURL, registry)
+	}
+	return fmt.Errorf("GET %s: unauthorized — the image may be private; supply a login on the pull (auth field) or set %s", fullURL, containerAuthEnv)
+}
+
+func (c *containerClient) doContainerGet(ctx context.Context, rawURL, accept, authorization string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
@@ -523,17 +596,20 @@ func (c *containerClient) doContainerGet(ctx context.Context, rawURL, accept, to
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
-	if token != "" {
+	if authorization != "" {
 		// net/http drops Authorization on cross-host redirects, so a CDN
-		// redirect for a blob (S3 etc.) is followed without leaking the token.
-		req.Header.Set("Authorization", "Bearer "+token)
+		// redirect for a blob (S3 etc.) is followed without leaking the token
+		// or login.
+		req.Header.Set("Authorization", authorization)
 	}
 	return http.DefaultClient.Do(req)
 }
 
-// fetchToken obtains an anonymous pull token from the endpoint named in a
-// Bearer WWW-Authenticate challenge.
-func (c *containerClient) fetchToken(ctx context.Context, challenge, repository string) (string, error) {
+// fetchToken obtains a pull token from the endpoint named in a Bearer
+// WWW-Authenticate challenge — anonymously by default, or authenticated with
+// cred (the docker login flow: HTTP Basic against the token endpoint named by
+// the registry, never the registry URL itself).
+func (c *containerClient) fetchToken(ctx context.Context, challenge, repository string, cred *registryCredential) (string, error) {
 	realm, params, err := parseBearerChallenge(challenge)
 	if err != nil {
 		return "", err
@@ -555,6 +631,9 @@ func (c *containerClient) fetchToken(ctx context.Context, challenge, repository 
 	if err != nil {
 		return "", err
 	}
+	if cred != nil {
+		req.SetBasicAuth(cred.Username, cred.Password)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
@@ -565,8 +644,19 @@ func (c *containerClient) fetchToken(ctx context.Context, challenge, repository 
 		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
+		if cred != nil {
+			// Registries with token auth reject bad logins here, not on the
+			// retried registry request.
+			return "", fmt.Errorf("token endpoint %s: HTTP %d — the configured credentials were not accepted", realm, resp.StatusCode)
+		}
 		return "", fmt.Errorf("token endpoint %s: HTTP %d", realm, resp.StatusCode)
 	}
+	return parseTokenResponse(body)
+}
+
+// parseTokenResponse extracts the bearer token from a token endpoint reply,
+// accepting both the "token" and OAuth2-style "access_token" field names.
+func parseTokenResponse(body []byte) (string, error) {
 	var tok struct {
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
@@ -588,7 +678,7 @@ func (c *containerClient) fetchToken(ctx context.Context, challenge, repository 
 func parseBearerChallenge(challenge string) (realm string, params map[string]string, err error) {
 	scheme, rest, _ := strings.Cut(strings.TrimSpace(challenge), " ")
 	if !strings.EqualFold(scheme, "Bearer") {
-		return "", nil, fmt.Errorf("registry requires unsupported authentication %q (only anonymous Bearer pulls are supported)", scheme)
+		return "", nil, fmt.Errorf("expected a Bearer challenge, got %q", scheme)
 	}
 	params = map[string]string{}
 	for _, part := range strings.Split(rest, ",") {
@@ -864,10 +954,24 @@ func writeVerifiedBlob(abs string, r io.Reader, wantSize int64, wantSHA string) 
 // "ghcr.io/org/app@sha256:...". Only linux/amd64 is mirrored.
 type ContainerCollectRequest struct {
 	Images []string `json:"images"`
+	// Auth optionally authenticates this pull against one private registry.
+	// It is used for this collect only and never stored; standing credentials
+	// belong in ARTIGATE_CONTAINER_AUTH (watch specs must never carry logins —
+	// they are persisted and echoed in plaintext).
+	Auth *ContainerCollectAuth `json:"auth,omitempty"`
 	// Force disables export dedup for this collect: every blob is downloaded
 	// and packed even when already forwarded, producing a full self-contained
 	// bundle (for disaster recovery or rebuilding a high side from scratch).
 	Force bool `json:"force,omitempty"`
+}
+
+// ContainerCollectAuth is a pull's registry login.
+type ContainerCollectAuth struct {
+	// Registry names the registry the login is for. It may be left empty when
+	// every image in the pull comes from the same registry.
+	Registry string `json:"registry,omitempty"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 func (s *LowServer) HandleContainerCollect(ctx context.Context, r *http.Request) (ExportResult, error) {
@@ -892,6 +996,10 @@ func (s *LowServer) CollectContainers(ctx context.Context, req ContainerCollectR
 	if err != nil {
 		return ExportResult{}, err
 	}
+	creds, err := containerCollectCredentials(refs, req.Auth)
+	if err != nil {
+		return ExportResult{}, err
+	}
 
 	mu := s.streamLock(streamContainers)
 	mu.Lock()
@@ -908,7 +1016,7 @@ func (s *LowServer) CollectContainers(ctx context.Context, req ContainerCollectR
 	defer os.RemoveAll(stageRoot)
 
 	emitProgress(ctx, "Resolving %d image reference(s) (linux/amd64)…", len(refs))
-	repos, files, failed := s.mirrorContainerImages(ctx, refs, stageRoot, req.Force)
+	repos, files, failed := s.mirrorContainerImages(ctx, refs, stageRoot, req.Force, creds)
 	if len(repos) == 0 {
 		return ExportResult{}, fmt.Errorf("no images could be fetched: %s", summarizeFailures(failed))
 	}
@@ -950,11 +1058,61 @@ func parseContainerCollectRefs(images []string) ([]imageRef, error) {
 	return refs, nil
 }
 
+// containerCollectCredentials resolves the per-registry logins for one
+// collect: any standing ARTIGATE_CONTAINER_AUTH entries, overlaid with the
+// request's own auth (the request wins for its registry). The env var is
+// re-read on every collect so rotated credentials apply without a restart.
+func containerCollectCredentials(refs []imageRef, auth *ContainerCollectAuth) (map[string]registryCredential, error) {
+	creds, err := parseContainerAuthEnv(os.Getenv(containerAuthEnv))
+	if err != nil {
+		return nil, err
+	}
+	if auth == nil {
+		return creds, nil
+	}
+	if auth.Username == "" || auth.Password == "" {
+		return nil, errors.New("auth needs both username and password")
+	}
+	registry, err := requestAuthRegistry(refs, auth.Registry)
+	if err != nil {
+		return nil, err
+	}
+	creds[registry] = registryCredential{Username: auth.Username, Password: auth.Password}
+	return creds, nil
+}
+
+// requestAuthRegistry decides which registry a pull's auth applies to: the
+// named one, which must match an image in the pull (a typo would otherwise
+// silently leave the pull anonymous), or the single registry every image
+// resolves to when left empty — a login is never presented to a registry the
+// user didn't mean it for.
+func requestAuthRegistry(refs []imageRef, registry string) (string, error) {
+	registries := map[string]bool{}
+	for _, ref := range refs {
+		registries[ref.Registry] = true
+	}
+	if registry != "" {
+		norm := normalizeContainerRegistry(registry)
+		if !registries[norm] {
+			return "", fmt.Errorf("auth registry %q matches none of the pull's images", registry)
+		}
+		return norm, nil
+	}
+	if len(registries) > 1 {
+		return "", errors.New("the pull spans multiple registries — set auth.registry to name the one the login is for")
+	}
+	for r := range registries {
+		return r, nil
+	}
+	return "", errors.New("no images provided")
+}
+
 // mirrorContainerImages fetches every requested image into stageRoot, grouping
 // the results by repository. Per-image failures are collected, not fatal.
-func (s *LowServer) mirrorContainerImages(ctx context.Context, refs []imageRef, stageRoot string, force bool) ([]ContainerRepo, []ManifestFile, []FailedModule) {
+func (s *LowServer) mirrorContainerImages(ctx context.Context, refs []imageRef, stageRoot string, force bool, creds map[string]registryCredential) ([]ContainerRepo, []ManifestFile, []FailedModule) {
 	client := s.newContainerClient()
 	client.prior = s.priorFileCheck(streamContainers, force)
+	client.creds = creds
 	byRepo := map[string]*ContainerRepo{}
 	var order []string
 	var files []ManifestFile

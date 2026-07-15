@@ -557,6 +557,11 @@ type RpmCollectRequest struct {
 	BaseURL  string `json:"base_url"`
 	GPGKey   string `json:"gpg_key"` // local keyring path for gpgv (optional)
 	RepoFile string `json:"repo_file"`
+	// Auth optionally authenticates this collect against one private mirror
+	// host. It is used for this collect only and never stored; standing
+	// credentials belong in ARTIGATE_UPSTREAM_AUTH (watch specs must never
+	// carry logins — they are persisted and echoed in plaintext).
+	Auth *HostCollectAuth `json:"auth,omitempty"`
 	// NewestOnly keeps only the highest EVR of each package (default true when
 	// absent); set it false to mirror every version in the index.
 	NewestOnly *bool `json:"newest_only,omitempty"`
@@ -576,6 +581,28 @@ type rpmMirrorConfig struct {
 	Name    string
 	BaseURL string
 	GPGKey  string
+	// cred is the login for the mirror's host (nil means anonymous), pinned
+	// by rpmMirrorCredentials before the mirror loop runs.
+	cred *registryCredential
+}
+
+// rpmMirrorCredentials resolves the collect's per-host logins (request auth
+// over standing ARTIGATE_UPSTREAM_AUTH entries) and pins each mirror's
+// credential on its config. The returned map lets collect errors carry
+// credential guidance.
+func rpmMirrorCredentials(configs []rpmMirrorConfig, auth *HostCollectAuth) (map[string]registryCredential, error) {
+	hosts := make([]string, 0, len(configs))
+	for _, cfg := range configs {
+		hosts = append(hosts, upstreamURLHost(cfg.BaseURL))
+	}
+	creds, err := upstreamCollectCredentials(hosts, auth)
+	if err != nil {
+		return nil, err
+	}
+	for i := range configs {
+		configs[i].cred = credentialForHost(creds, upstreamURLHost(configs[i].BaseURL))
+	}
+	return creds, nil
 }
 
 func (s *LowServer) HandleRpmCollect(ctx context.Context, r *http.Request) (ExportResult, error) {
@@ -595,6 +622,10 @@ func (s *LowServer) HandleRpmCollect(ctx context.Context, r *http.Request) (Expo
 // CollectRpm mirrors one or more upstream RPM repositories into a signed bundle.
 func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (ExportResult, error) {
 	configs, err := resolveRpmMirrors(req)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	creds, err := rpmMirrorCredentials(configs, req.Auth)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -624,7 +655,7 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	for _, cfg := range configs {
 		mirror, mf, err := s.mirrorRpmRepo(ctx, cfg, stageRoot, arches, newest, prior)
 		if err != nil {
-			return ExportResult{}, err
+			return ExportResult{}, decorateUpstreamAuthError(err, creds)
 		}
 		for _, f := range mf {
 			if !seenFile[f.Path] {
@@ -649,13 +680,13 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 // downloadRpmMetadata downloads and verifies every metadata file repomd
 // references, returning the manifest files, the <data> entries, and the primary
 // index's href.
-func (s *LowServer) downloadRpmMetadata(ctx context.Context, base, name string, data []rpmRepomdData, stageRoot string) ([]ManifestFile, []RpmData, string, error) {
+func (s *LowServer) downloadRpmMetadata(ctx context.Context, cfg rpmMirrorConfig, data []rpmRepomdData, stageRoot string) ([]ManifestFile, []RpmData, string, error) {
 	var files []ManifestFile
 	var repodata []RpmData
 	var primaryRel string
 	for _, d := range data {
 		entry := d.toRpmData()
-		mf, err := s.downloadRpmFile(ctx, base, name, entry.Href, entry.ChecksumType, entry.Checksum, entry.Size, stageRoot)
+		mf, err := s.downloadRpmFile(ctx, cfg, entry.Href, entry.ChecksumType, entry.Checksum, entry.Size, stageRoot)
 		if err != nil {
 			return nil, nil, "", fmt.Errorf("metadata %s: %w", entry.Type, err)
 		}
@@ -670,9 +701,10 @@ func (s *LowServer) downloadRpmMetadata(ctx context.Context, base, name string, 
 
 func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stageRoot string, arches []string, newestOnly bool, prior func(path, sha256 string) bool) (RpmMirror, []ManifestFile, error) {
 	base := strings.TrimRight(cfg.BaseURL, "/")
+	cfg.BaseURL = base // normalized for every fetch below (cfg is a local copy)
 
 	emitProgress(ctx, "→ %s: fetching repomd.xml and primary index…", cfg.Name)
-	repomdRaw, err := s.fetchRepomd(ctx, base, cfg.GPGKey)
+	repomdRaw, err := s.fetchRepomd(ctx, base, cfg.GPGKey, cfg.cred)
 	if err != nil {
 		return RpmMirror{}, nil, err
 	}
@@ -682,7 +714,7 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 	}
 
 	mirror := RpmMirror{Name: cfg.Name, BaseURL: base, GPGKey: filepath.Base(cfg.GPGKey)}
-	files, repodata, primaryRel, err := s.downloadRpmMetadata(ctx, base, cfg.Name, md.Data, stageRoot)
+	files, repodata, primaryRel, err := s.downloadRpmMetadata(ctx, cfg, md.Data, stageRoot)
 	if err != nil {
 		return RpmMirror{}, nil, err
 	}
@@ -708,7 +740,7 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 	mirror.Packages = pkgs
 	emitProgress(ctx, "  %s: %d package(s) [%s]", cfg.Name, len(pkgs), strings.Join(arches, " "))
 	for i, pkg := range pkgs {
-		mf, err := s.rpmPackageFile(ctx, base, cfg.Name, pkg, stageRoot, prior, i+1, len(pkgs))
+		mf, err := s.rpmPackageFile(ctx, cfg, pkg, stageRoot, prior, i+1, len(pkgs))
 		if err != nil {
 			return RpmMirror{}, nil, err
 		}
@@ -725,11 +757,11 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 // else is downloaded and verified. The metadata files are always fetched:
 // they are parsed (and possibly rewritten) locally. i/n only feed the
 // progress lines.
-func (s *LowServer) rpmPackageFile(ctx context.Context, base, name string, pkg RpmPackage, stageRoot string, prior func(path, sha256 string) bool, i, n int) (ManifestFile, error) {
+func (s *LowServer) rpmPackageFile(ctx context.Context, cfg rpmMirrorConfig, pkg RpmPackage, stageRoot string, prior func(path, sha256 string) bool, i, n int) (ManifestFile, error) {
 	if err := validateRelPath(pkg.Location); err != nil {
 		return ManifestFile{}, fmt.Errorf("package %s: unsafe location %q: %w", pkg.Name, pkg.Location, err)
 	}
-	rel := rpmFileRel(name, pkg.Location)
+	rel := rpmFileRel(cfg.Name, pkg.Location)
 	if pkg.Size > 0 && prior(rel, pkg.SHA256) {
 		emitProgress(ctx, "    ≡ [%d/%d] %s already forwarded (download skipped)", i, n, path.Base(pkg.Location))
 		return ManifestFile{Path: rel, SHA256: pkg.SHA256, Size: pkg.Size, Prior: true}, nil
@@ -738,7 +770,7 @@ func (s *LowServer) rpmPackageFile(ctx context.Context, base, name string, pkg R
 		emitProgress(ctx, "    ~ [%d/%d] %s (%s)", i, n, path.Base(pkg.Location), formatBytes(pkg.Size))
 		return ManifestFile{Path: rel, SHA256: pkg.SHA256, Size: pkg.Size}, nil
 	}
-	mf, err := s.downloadRpmFile(ctx, base, name, pkg.Location, "sha256", pkg.SHA256, pkg.Size, stageRoot)
+	mf, err := s.downloadRpmFile(ctx, cfg, pkg.Location, "sha256", pkg.SHA256, pkg.Size, stageRoot)
 	if err != nil {
 		return ManifestFile{}, fmt.Errorf("package %s: %w", pkg.Name, err)
 	}
@@ -748,13 +780,13 @@ func (s *LowServer) rpmPackageFile(ctx context.Context, base, name string, pkg R
 
 // fetchRepomd downloads repodata/repomd.xml and verifies repomd.xml.asc against
 // the caller's keyring when one is supplied.
-func (s *LowServer) fetchRepomd(ctx context.Context, base, gpgKey string) ([]byte, error) {
-	repomd, err := httpGetBytes(ctx, base+"/repodata/repomd.xml", maxSignedMetaBytes)
+func (s *LowServer) fetchRepomd(ctx context.Context, base, gpgKey string, cred *registryCredential) ([]byte, error) {
+	repomd, err := httpGetBytesAuth(ctx, base+"/repodata/repomd.xml", maxSignedMetaBytes, cred)
 	if err != nil {
 		return nil, fmt.Errorf("fetch repomd.xml: %w", err)
 	}
 	if gpgKey != "" {
-		sig, err := httpGetBytes(ctx, base+"/repodata/repomd.xml.asc", maxSignedMetaBytes)
+		sig, err := httpGetBytesAuth(ctx, base+"/repodata/repomd.xml.asc", maxSignedMetaBytes, cred)
 		if err != nil {
 			return nil, fmt.Errorf("fetch repomd.xml.asc: %w", err)
 		}
@@ -769,16 +801,16 @@ func (s *LowServer) fetchRepomd(ctx context.Context, base, gpgKey string) ([]byt
 // against the repo-declared checksum as it streams to rpm/<mirror>/<rel> under
 // stageRoot — a multi-GiB .rpm is never buffered in memory. wantSize is the
 // repo-declared byte count (0 when the repo does not declare one).
-func (s *LowServer) downloadRpmFile(ctx context.Context, base, mirror, relHref, checksumType, checksum string, wantSize int64, stageRoot string) (ManifestFile, error) {
+func (s *LowServer) downloadRpmFile(ctx context.Context, cfg rpmMirrorConfig, relHref, checksumType, checksum string, wantSize int64, stageRoot string) (ManifestFile, error) {
 	if err := validateRelPath(relHref); err != nil {
 		return ManifestFile{}, fmt.Errorf("unsafe location %q: %w", relHref, err)
 	}
-	rel := rpmFileRel(mirror, relHref)
+	rel := rpmFileRel(cfg.Name, relHref)
 	if err := validateRelPath(rel); err != nil {
 		return ManifestFile{}, fmt.Errorf("unsafe staging path %q: %w", rel, err)
 	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
-	sum, size, err := downloadVerifiedFile(ctx, base+"/"+relHref, abs, wantSize, checksumType, checksum)
+	sum, size, err := downloadVerifiedFileAuth(ctx, cfg.BaseURL+"/"+relHref, abs, wantSize, checksumType, checksum, cfg.cred)
 	if err != nil {
 		return ManifestFile{}, fmt.Errorf("%s: %w", relHref, err)
 	}
@@ -1038,6 +1070,11 @@ func validateRpmMirrorConfig(cfg rpmMirrorConfig) (rpmMirrorConfig, error) {
 	u, err := url.Parse(cfg.BaseURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return rpmMirrorConfig{}, fmt.Errorf("invalid rpm base_url %q (need http/https)", cfg.BaseURL)
+	}
+	// The base URL is recorded in the signed manifest and echoed in progress
+	// and error text, so it must never carry a login.
+	if err := checkNoURLUserinfo(u, "rpm base_url"); err != nil {
+		return rpmMirrorConfig{}, err
 	}
 	if cfg.Name == "" {
 		cfg.Name = aptMirrorName(cfg.BaseURL)

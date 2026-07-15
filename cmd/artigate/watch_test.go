@@ -490,6 +490,50 @@ func TestLowServerWatchEndpoints(t *testing.T) {
 		`{"stream":"nope","interval_seconds":3600,"spec":{"x":1}}`); bad.Code != http.StatusBadRequest {
 		t.Errorf("unknown-stream create status = %d, want 400", bad.Code)
 	}
+	// A spec carrying a login is rejected: watches are stored and echoed in
+	// plaintext, so credentials must never be scheduled.
+	if bad := doLowReq(t, ls, http.MethodPost, "/admin/watches",
+		`{"stream":"containers","interval_seconds":3600,"spec":{"images":["ghcr.io/org/app:v1"],"auth":{"username":"u","password":"p"}}}`); bad.Code != http.StatusBadRequest {
+		t.Errorf("credentialed-spec create status = %d, want 400", bad.Code)
+	}
+}
+
+// TestWatchLegacyCredentialedSpecRefusedAtRun covers upgraded installs: a row
+// stored before the auth guard existed (when an "auth" key was an ignored
+// unknown field) must be refused at run time — never decoded into the
+// collector's Auth field — and the refusal must land in the watch's recorded
+// outcome.
+func TestWatchLegacyCredentialedSpecRefusedAtRun(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	spec := `{"images":["ghcr.io/org/app:v1"],"auth":{"username":"u","password":"hunter2"}}`
+
+	// The dispatcher refuses the spec outright, on every path (scheduled and
+	// run-now both funnel through runWatchCollect), without echoing the login.
+	_, err := ls.runWatchCollect(context.Background(), "containers", spec)
+	if err == nil || !strings.Contains(err.Error(), "must not carry credentials") {
+		t.Fatalf("credentialed legacy spec error = %v", err)
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("error must not echo the login: %v", err)
+	}
+
+	// The store does not validate (only the HTTP handlers do), simulating the
+	// pre-guard row; a full run records the refusal on the watch.
+	w, err := ls.watches.Create(Watch{Stream: "containers", Label: "legacy", Spec: spec, IntervalSeconds: 3600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, err := ls.enqueueWatch(w); err != nil || id == 0 {
+		t.Fatalf("watch job not enqueued: job %d, %v", id, err)
+	}
+	waitWatchRecorded(t, ls, w.ID)
+	got, err := ls.watches.Get(w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastStatus != "error" || !strings.Contains(got.LastMessage, "must not carry credentials") {
+		t.Fatalf("recorded outcome = %q / %q", got.LastStatus, got.LastMessage)
+	}
 }
 
 // TestLowServerWatchUpdateEndpoint drives POST /admin/watches/update: a full
@@ -560,8 +604,14 @@ func TestLowServerWatchUpdateEndpoint(t *testing.T) {
 		`{"id":`); res.Code != http.StatusBadRequest {
 		t.Errorf("bad-JSON update status = %d, want 400", res.Code)
 	}
+	// A spec carrying a login is rejected on update too — an edit must not be
+	// able to smuggle credentials into the plaintext store.
+	if res := doLowReq(t, ls, http.MethodPost, "/admin/watches/update",
+		`{"id":`+id+`,"spec":{"requirements":["x"],"auth":{"username":"u","password":"p"}}}`); res.Code != http.StatusBadRequest {
+		t.Errorf("credentialed-spec update status = %d, want 400", res.Code)
+	}
 	// The rejected edits changed nothing.
-	if got, _ := ls.watches.Get(created.ID); got.IntervalSeconds != 7200 {
+	if got, _ := ls.watches.Get(created.ID); got.IntervalSeconds != 7200 || got.Spec != `{"requirements":["urllib3"]}` {
 		t.Errorf("rejected updates must not change the watch: %+v", got)
 	}
 }

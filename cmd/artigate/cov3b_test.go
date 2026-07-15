@@ -178,7 +178,7 @@ func TestCov3B_FetchAptReleaseFallback(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	ls, _ := newAptLowServer(t)
-	if _, err := ls.fetchAptRelease(context.Background(), srv.URL+"/dists/stable", "/nonexistent/keyring.gpg"); err == nil ||
+	if _, err := ls.fetchAptRelease(context.Background(), srv.URL+"/dists/stable", "/nonexistent/keyring.gpg", nil); err == nil ||
 		!strings.Contains(err.Error(), "Release.gpg") {
 		t.Errorf("fetchAptRelease = %v, want a Release.gpg fetch error", err)
 	}
@@ -189,7 +189,7 @@ func TestCov3B_FetchAptPackagesIndex(t *testing.T) {
 	ls, _ := newAptLowServer(t)
 
 	// No index referenced in the Release checksums at all.
-	if _, err := ls.fetchAptPackagesIndex(ctx, "http://127.0.0.1:1/dists/stable", "stable", "main", "amd64", map[string]aptChecksum{}); err == nil ||
+	if _, err := ls.fetchAptPackagesIndex(ctx, "http://127.0.0.1:1/dists/stable", "stable", "main", "amd64", map[string]aptChecksum{}, nil); err == nil ||
 		!strings.Contains(err.Error(), "no Packages index") {
 		t.Errorf("empty checksums = %v, want no-index error", err)
 	}
@@ -208,14 +208,14 @@ func TestCov3B_FetchAptPackagesIndex(t *testing.T) {
 
 	// Checksum mismatch against the signed Release.
 	badSums := map[string]aptChecksum{"main/binary-amd64/Packages.gz": {sha256: strings.Repeat("0", 64), size: int64(len(gz))}}
-	if _, err := ls.fetchAptPackagesIndex(ctx, distBase, "stable", "main", "amd64", badSums); err == nil ||
+	if _, err := ls.fetchAptPackagesIndex(ctx, distBase, "stable", "main", "amd64", badSums, nil); err == nil ||
 		!strings.Contains(err.Error(), "index") {
 		t.Errorf("checksum mismatch = %v, want index error", err)
 	}
 
 	// A .gz index whose bytes are actually plain (not gzip) fails to decompress.
 	plainAsGz := map[string]aptChecksum{"main/binary-amd64/Packages": {sha256: aptSHA256([]byte("plain-served")), size: 12}}
-	if _, err := ls.fetchAptPackagesIndex(ctx, distBase, "stable", "main", "amd64", plainAsGz); err != nil {
+	if _, err := ls.fetchAptPackagesIndex(ctx, distBase, "stable", "main", "amd64", plainAsGz, nil); err != nil {
 		t.Errorf("plain Packages index should parse: %v", err)
 	}
 
@@ -224,7 +224,7 @@ func TestCov3B_FetchAptPackagesIndex(t *testing.T) {
 	mux2 := http.NewServeMux() // serves nothing
 	srv2 := httptest.NewServer(mux2)
 	defer srv2.Close()
-	if _, err := ls.fetchAptPackagesIndex(ctx, srv2.URL+"/dists/stable", "stable", "main", "amd64", miss); err == nil {
+	if _, err := ls.fetchAptPackagesIndex(ctx, srv2.URL+"/dists/stable", "stable", "main", "amd64", miss, nil); err == nil {
 		t.Error("missing index should error")
 	}
 }
@@ -232,7 +232,7 @@ func TestCov3B_FetchAptPackagesIndex(t *testing.T) {
 func TestCov3B_DownloadAptDebUnsafe(t *testing.T) {
 	ls, _ := newAptLowServer(t)
 	pkg := AptPackage{Package: "evil", Filename: "../escape.deb", SHA256: strings.Repeat("a", 64), Size: 1}
-	if _, err := ls.downloadAptDeb(context.Background(), "http://127.0.0.1:1", "mirror", pkg, t.TempDir(), cov3BnoPrior); err == nil ||
+	if _, err := ls.downloadAptDeb(context.Background(), aptMirrorConfig{Name: "mirror", URI: "http://127.0.0.1:1"}, pkg, t.TempDir(), cov3BnoPrior); err == nil ||
 		!strings.Contains(err.Error(), "unsafe") {
 		t.Errorf("downloadAptDeb with traversal Filename = %v, want unsafe error", err)
 	}

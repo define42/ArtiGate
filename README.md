@@ -174,10 +174,13 @@ and environment variable.
   `ghcr.io/org/app:v1`, `registry.access.redhat.com/ubi9/ubi@sha256:…`. Only
   **linux/amd64** is fetched (a multi-platform image is resolved to its amd64
   manifest). Public images from any OCI registry (Docker Hub, GitHub, Red Hat,
-  quay.io, …) work anonymously; each upstream registry keeps its own namespace
-  on the high side, so `docker.io/...` and `ghcr.io/...` content never mixes.
-  Layers are content-addressed, so a base layer shared by several images is
-  bundled and stored once.
+  quay.io, …) work anonymously; private registries take a login from the
+  page's *Private registry login* fields (used for that pull only, never
+  stored) or from `ARTIGATE_CONTAINER_AUTH` on the low side (comma-separated
+  `host=user:password`, also what scheduled pulls use). Each upstream registry
+  keeps its own namespace on the high side, so `docker.io/...` and
+  `ghcr.io/...` content never mixes. Layers are content-addressed, so a base
+  layer shared by several images is bundled and stored once.
 
   The tag position also takes a **version constraint**, resolved against the
   upstream tag list at collect time to the newest matching version:
@@ -334,6 +337,15 @@ and environment variable.
 For APT, RPM, and Alpine, a **"Newest version only"** checkbox (on by default)
 mirrors just the latest version of each package; untick it to mirror every
 version.
+
+Private **git, APT, RPM, and Alpine** upstreams authenticate with HTTP Basic:
+a one-shot login on the collect (each page's *Private … login* fields / the
+`auth` field, never stored) or standing `host=user:password` entries in
+`ARTIGATE_UPSTREAM_AUTH` on the low side — the latter is what scheduled
+collects use. URLs embedding `user:pass@` are rejected (they previously
+"worked" via Go's automatic Basic auth while leaking the secret into the
+signed manifest that crosses the diode — move such logins into the auth field
+or the environment variable).
 
 - **OSV** — vulnerability-advisory databases from [osv.dev](https://osv.dev):
   OSV ecosystem names, one per line, exactly as osv.dev spells them (`npm`,
@@ -958,11 +970,15 @@ edge-triggered (one notification per gap; the gap then ages via
 - **Signing the served repos** is optional (`--apt-gpg-key`/`--rpm-gpg-key` for
   APT/RPM, `--apk-rsa-key` for Alpine); otherwise those repositories are
   published unsigned.
-- **Containers**: linux/amd64 only, anonymous pulls of public images only, and
-  registries on non-standard ports can't be mirrored (the port can't appear in
-  the high-side pull name). `--container-registry host=baseURL` on the low side
-  redirects a registry's API to a private mirror/proxy. The high-side registry
-  is read-only (no push).
+- **Containers**: linux/amd64 only, and registries on non-standard ports can't
+  be mirrored (the port can't appear in the high-side pull name). Pulls are
+  anonymous by default; private registries take a per-pull login (the `auth`
+  field / the Containers page form, used once and never stored) or standing
+  per-registry credentials in `ARTIGATE_CONTAINER_AUTH`
+  (`host=user:password`, comma-separated) — scheduled pulls use only the
+  latter. `--container-registry host=baseURL` on the low side redirects a
+  registry's API to a private mirror/proxy. The high-side registry is
+  read-only (no push).
 - **OSV**: databases are TLS-trusted at collect time (the OSV bucket
   publishes no digests for its zips) and hash-locked into the signed bundle
   from there. Advisory *contents* are served verbatim from the verified zip;

@@ -77,7 +77,7 @@ const lowUIHTML = `<!DOCTYPE html>
   .card h2 { font-size: 1rem; margin: 0 0 .75rem; }
   .hint { color: #8b93a5; font-size: .85rem; margin: .1rem 0 .8rem; }
   form { display: flex; gap: .6rem; flex-wrap: wrap; }
-  input[type=text] { flex: 1; min-width: 240px; background: #0f1115; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .55rem .7rem; font-family: ui-monospace, monospace; }
+  input[type=text], input[type=password] { flex: 1; min-width: 240px; background: #0f1115; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .55rem .7rem; font-family: ui-monospace, monospace; }
   select.restream { background: #0f1115; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .55rem .7rem; font: inherit; cursor: pointer; }
   button.primary { background: #1f6f43; color: #eafff2; border: 1px solid #2b8f59; border-radius: 6px; padding: .55rem 1.1rem; cursor: pointer; font-weight: 600; }
   .rbox { margin-top: .9rem; padding: .7rem .9rem; border-radius: 6px; display: none; }
@@ -100,7 +100,7 @@ const lowUIHTML = `<!DOCTYPE html>
   .pytarget-check { display: flex; align-items: center; gap: .45rem; font-size: .82rem; color: #c7cedb; margin: .5rem 0 .2rem; }
   .pytarget-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .6rem; margin: .6rem 0 .2rem; }
   .pytarget-grid label { display: flex; flex-direction: column; gap: .25rem; font-size: .8rem; color: #a9b2c3; }
-  .pytarget-grid input[type=text] { min-width: 0; font-size: .8rem; padding: .4rem .55rem; }
+  .pytarget-grid input[type=text], .pytarget-grid input[type=password] { min-width: 0; font-size: .8rem; padding: .4rem .55rem; }
   @media (max-width: 620px) { .pytarget-grid { grid-template-columns: 1fr; } }
   .meta { display: flex; flex-wrap: wrap; gap: 1.25rem; font-size: .9rem; color: #a9b2c3; margin-bottom: 1rem; }
   .meta b { color: #e6e6e6; }
@@ -346,6 +346,15 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or load a .sources file
         <input id="aptfile" type="file" accept=".sources,.list,text/plain" onchange="loadAptFile()">
       </label>
+      <details class="pytarget">
+        <summary>Private repository login (optional)</summary>
+        <div class="pytarget-grid">
+          <label>Host <span class="opt">&mdash; optional when all sources share one</span><input id="aptAuthHost" type="text" placeholder="apt.example.com" autocomplete="off"></label>
+          <label>Username<input id="aptAuthUser" type="text" autocomplete="off"></label>
+          <label>Password or token<input id="aptAuthPass" type="password" autocomplete="new-password"></label>
+        </div>
+        <p class="hint">Used for this collect only &mdash; never stored and never part of a schedule. Standing credentials, which scheduled pulls also use, go in <code>ARTIGATE_UPSTREAM_AUTH</code> on the low side (comma-separated <code>host=user:password</code>).</p>
+      </details>
       <label class="pytarget-check"><input id="aptnewest" type="checkbox" checked> Newest version of each package only (uncheck to mirror every version)</label>
       <label class="pytarget-check"><input id="aptForce" type="checkbox"> Full bundle &mdash; re-download and re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
@@ -375,6 +384,15 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or load a .repo file
         <input id="rpmfile" type="file" accept=".repo,text/plain" onchange="loadRpmFile()">
       </label>
+      <details class="pytarget">
+        <summary>Private repository login (optional)</summary>
+        <div class="pytarget-grid">
+          <label>Host <span class="opt">&mdash; optional when all repos share one</span><input id="rpmAuthHost" type="text" placeholder="rpm.example.com" autocomplete="off"></label>
+          <label>Username<input id="rpmAuthUser" type="text" autocomplete="off"></label>
+          <label>Password or token<input id="rpmAuthPass" type="password" autocomplete="new-password"></label>
+        </div>
+        <p class="hint">Used for this collect only &mdash; never stored and never part of a schedule. Standing credentials, which scheduled pulls also use, go in <code>ARTIGATE_UPSTREAM_AUTH</code> on the low side (comma-separated <code>host=user:password</code>).</p>
+      </details>
       <label class="pytarget-check"><input id="rpmnewest" type="checkbox" checked> Newest version of each package only (uncheck to mirror every version)</label>
       <label class="pytarget-check"><input id="rpmForce" type="checkbox"> Full bundle &mdash; re-download and re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
@@ -401,6 +419,15 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">Images <span class="opt">&mdash; one per line; a missing tag means <code>latest</code>; scheduled pulls re-resolve constraints each run</span>
         <textarea id="ctrimages" rows="5" placeholder="alpine:3.20&#10;golang:1.26.x&#10;ghcr.io/org/app:v1" autocomplete="off"></textarea>
       </label>
+      <details class="pytarget">
+        <summary>Private registry login (optional)</summary>
+        <div class="pytarget-grid">
+          <label>Registry <span class="opt">&mdash; optional when all images share one</span><input id="ctrAuthRegistry" type="text" placeholder="ghcr.io" autocomplete="off"></label>
+          <label>Username<input id="ctrAuthUser" type="text" autocomplete="off"></label>
+          <label>Password or token<input id="ctrAuthPass" type="password" autocomplete="new-password"></label>
+        </div>
+        <p class="hint">Used for this pull only &mdash; never stored and never part of a schedule. Standing credentials, which scheduled pulls also use, go in <code>ARTIGATE_CONTAINER_AUTH</code> on the low side (comma-separated <code>host=user:password</code>).</p>
+      </details>
       <label class="pytarget-check"><input id="ctrForce" type="checkbox"> Full bundle &mdash; re-download and re-send even blobs the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="ctrBtn">Collect &amp; export</button>
@@ -587,6 +614,14 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or paste an /etc/apk/repositories file <span class="opt">&mdash; overrides the fields above (architectures still apply)</span>
         <textarea id="apkreposfile" rows="2" placeholder="https://dl-cdn.alpinelinux.org/alpine/v3.22/main&#10;https://dl-cdn.alpinelinux.org/alpine/v3.22/community" autocomplete="off"></textarea>
       </label>
+      <details class="pytarget">
+        <summary>Private mirror login (optional)</summary>
+        <div class="pytarget-grid">
+          <label>Username<input id="apkAuthUser" type="text" autocomplete="off"></label>
+          <label>Password or token<input id="apkAuthPass" type="password" autocomplete="new-password"></label>
+        </div>
+        <p class="hint">Used for this collect only &mdash; never stored and never part of a schedule. Standing credentials, which scheduled pulls also use, go in <code>ARTIGATE_UPSTREAM_AUTH</code> on the low side (comma-separated <code>host=user:password</code>).</p>
+      </details>
       <label class="pytarget-check"><input id="apknewest" type="checkbox" checked> Newest version of each package only (uncheck to mirror every version)</label>
       <label class="pytarget-check"><input id="apkForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
@@ -775,6 +810,14 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">Refs <span class="opt">&mdash; optional; one full ref per line to restrict the mirror (refs/heads/main, refs/tags/v1.2.3)</span>
         <textarea id="gitrefs" rows="3" placeholder="refs/heads/main" autocomplete="off"></textarea>
       </label>
+      <details class="pytarget">
+        <summary>Private repository login (optional)</summary>
+        <div class="pytarget-grid">
+          <label>Username<input id="gitAuthUser" type="text" autocomplete="off"></label>
+          <label>Password or token <span class="opt">&mdash; e.g. a GitHub/GitLab PAT</span><input id="gitAuthPass" type="password" autocomplete="new-password"></label>
+        </div>
+        <p class="hint">Used for this fetch only &mdash; never stored and never part of a schedule. Standing credentials, which scheduled fetches also use, go in <code>ARTIGATE_UPSTREAM_AUTH</code> on the low side (comma-separated <code>host=user:password</code>). Do not put <code>user:pass@</code> in the URL &mdash; such URLs are rejected.</p>
+      </details>
       <label class="pytarget-check"><input id="gitForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="gitBtn">Collect &amp; export</button>
@@ -1436,9 +1479,10 @@ async function collectApt(ev, dry){
   ev.preventDefault();
   const src=document.getElementById('aptsrc').value.trim();
   if(!src){ showAptResult('err','Paste a deb822 source stanza.'); return; }
+  const body=applyForce({source_list:src, newest_only:document.getElementById('aptnewest').checked},'aptForce');
+  if(!attachHostAuth(body,'apt',showAptResult)) return;
   runCollect({dry:dry, btnId:'aptBtn', busyLabel:'Mirroring…', showFn:showAptResult, title:'Mirroring APT repository',
-    url:'/admin/apt/collect', forceId:'aptForce',
-    body:applyForce({source_list:src, newest_only:document.getElementById('aptnewest').checked},'aptForce'),
+    url:'/admin/apt/collect', forceId:'aptForce', body:body,
     render:d=>({cls:'ok', msg:collectedMsg(d,'Mirrored','package(s)')})});
 }
 
@@ -1452,9 +1496,10 @@ async function collectRpm(ev, dry){
   ev.preventDefault();
   const repo=document.getElementById('rpmrepo').value.trim();
   if(!repo){ showRpmResult('err','Paste a yum/dnf .repo stanza.'); return; }
+  const body=applyForce({repo_file:repo, newest_only:document.getElementById('rpmnewest').checked},'rpmForce');
+  if(!attachHostAuth(body,'rpm',showRpmResult)) return;
   runCollect({dry:dry, btnId:'rpmBtn', busyLabel:'Mirroring…', showFn:showRpmResult, title:'Mirroring RPM repository',
-    url:'/admin/rpm/collect', forceId:'rpmForce',
-    body:applyForce({repo_file:repo, newest_only:document.getElementById('rpmnewest').checked},'rpmForce'),
+    url:'/admin/rpm/collect', forceId:'rpmForce', body:body,
     render:d=>({cls:'ok', msg:collectedMsg(d,'Mirrored','package(s)')})});
 }
 
@@ -1470,12 +1515,56 @@ function ctrImages(){
     .map(s=>s.replace(/\s+#.*$/,'').trim()).filter(l=>l && l.charAt(0)!=='#');
 }
 
+// ctrAuth reads the optional private-registry login. It rides only on the
+// collect request (never into a schedule's spec — schedules use
+// ARTIGATE_CONTAINER_AUTH on the low side). The password is taken verbatim.
+function ctrAuth(){
+  const user=document.getElementById('ctrAuthUser').value.trim();
+  const pass=document.getElementById('ctrAuthPass').value;
+  if(!user && !pass) return null;
+  const auth={username:user, password:pass};
+  const registry=document.getElementById('ctrAuthRegistry').value.trim();
+  if(registry) auth.registry=registry;
+  return auth;
+}
+
+// hostAuth reads a page's optional private-mirror login (inputs
+// <prefix>AuthUser/<prefix>AuthPass plus an optional <prefix>AuthHost on
+// pages whose collect can span mirrors). Null when empty. Like the container
+// login, it rides only on the immediate collect — never into a schedule's
+// spec; scheduled pulls use ARTIGATE_UPSTREAM_AUTH on the low side.
+function hostAuth(prefix){
+  const user=document.getElementById(prefix+'AuthUser').value.trim();
+  const pass=document.getElementById(prefix+'AuthPass').value;
+  if(!user && !pass) return null;
+  const auth={username:user, password:pass};
+  const hostEl=document.getElementById(prefix+'AuthHost');
+  if(hostEl && hostEl.value.trim()) auth.host=hostEl.value.trim();
+  return auth;
+}
+
+// attachHostAuth adds the page's login to a collect body, reporting an
+// incomplete login through showFn. Returns false when the collect must stop.
+function attachHostAuth(body, prefix, showFn){
+  const auth=hostAuth(prefix);
+  if(!auth) return true;
+  if(!auth.username || !auth.password){ showFn('err','A mirror login needs both username and password.'); return false; }
+  body.auth=auth;
+  return true;
+}
+
 async function collectContainers(ev, dry){
   ev.preventDefault();
   const images=ctrImages();
   if(!images.length){ showCtrResult('err','List at least one image reference.'); return; }
+  const body=applyForce({images:images},'ctrForce');
+  const auth=ctrAuth();
+  if(auth){
+    if(!auth.username || !auth.password){ showCtrResult('err','A registry login needs both username and password.'); return; }
+    body.auth=auth;
+  }
   runCollect({dry:dry, btnId:'ctrBtn', showFn:showCtrResult, title:'Collecting container images',
-    url:'/admin/containers/collect', body:applyForce({images:images},'ctrForce'), forceId:'ctrForce', render:d=>{
+    url:'/admin/containers/collect', body:body, forceId:'ctrForce', render:d=>{
       const msg=collectedMsg(d,'Collected','image(s)');
       const sk=d.skipped_modules||[];
       if(sk.length) return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' unfetchable image(s):', sk, m=>'<code>'+esc(m.module)+':'+esc(m.version)+'</code> &mdash; '+esc(m.error))};
@@ -1697,8 +1786,11 @@ function apkBody(){
 
 async function collectApk(ev, dry){
   ev.preventDefault();
+  // apkBody() is shared with scheduleApk, so the login is attached here only
+  // — a schedule's spec must never carry credentials.
   const body=apkBody();
   if(!body){ showApkResult('err','Give the mirror base URL and at least one branch (or paste a repositories file).'); return; }
+  if(!attachHostAuth(body,'apk',showApkResult)) return;
   runCollect({dry:dry, btnId:'apkBtn', busyLabel:'Mirroring…', showFn:showApkResult, title:'Mirroring Alpine repository',
     url:'/admin/apk/collect', body:applyForce(body,'apkForce'), forceId:'apkForce',
     render:d=>skippedItems(collectedMsg(d,'Mirrored','package(s)'), d)});
@@ -1923,8 +2015,11 @@ function gitBody(){
 
 async function collectGit(ev, dry){
   ev.preventDefault();
+  // gitBody() is shared with scheduleGit, so the login is attached here only
+  // — a schedule's spec must never carry credentials.
   const body=gitBody();
   if(!body){ showGitResult('err','Give the repository URL.'); return; }
+  if(!attachHostAuth(body,'git',showGitResult)) return;
   runCollect({dry:dry, btnId:'gitBtn', showFn:showGitResult, title:'Mirroring git repository',
     url:'/admin/git/collect', body:applyForce(body,'gitForce'), forceId:'gitForce',
     render:d=>skippedItems(collectedMsg(d,'Mirrored','repository(ies)'), d)});

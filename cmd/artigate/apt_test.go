@@ -67,6 +67,68 @@ func fakeAptUpstream(t *testing.T, tamper bool) (*httptest.Server, string) {
 	return srv, deb
 }
 
+// TestCollectAptPrivateUpstream exercises HTTP Basic against a mirror that
+// demands a login on every request (indexes and .debs alike).
+func TestCollectAptPrivateUpstream(t *testing.T) {
+	mux := http.NewServeMux()
+	registerAptRepo(t, mux, "/repos/code", "stable", "code", "1.0.1", false)
+	srv := httptest.NewServer(basicAuthGate(mux, testBasicAuth("bot", "hunter2")))
+	t.Cleanup(srv.Close)
+	ls, _ := newAptLowServer(t)
+	ctx := context.Background()
+	source := "Types: deb\nURIs: " + srv.URL + "/repos/code\nSuites: stable\nComponents: main\nArchitectures: amd64\n"
+
+	// Anonymous mirrors fail with guidance naming both supply paths.
+	_, err := ls.CollectApt(ctx, AptCollectRequest{SourceList: source})
+	if err == nil || !strings.Contains(err.Error(), upstreamAuthEnv) {
+		t.Fatalf("anonymous collect error = %v", err)
+	}
+
+	// A wrong login is reported as rejected — and never echoed.
+	_, err = ls.CollectApt(ctx, AptCollectRequest{SourceList: source, Auth: &HostCollectAuth{Username: "bot", Password: "nope"}})
+	if err == nil || !strings.Contains(err.Error(), "were not accepted") || strings.Contains(err.Error(), "nope") {
+		t.Fatalf("wrong-login error = %v", err)
+	}
+
+	// The per-collect login mirrors the suite.
+	if _, err := ls.CollectApt(ctx, AptCollectRequest{SourceList: source, Auth: &HostCollectAuth{Username: "bot", Password: "hunter2"}}); err != nil {
+		t.Fatalf("authenticated collect: %v", err)
+	}
+
+	// Standing ARTIGATE_UPSTREAM_AUTH credentials work without request auth —
+	// the only credential source scheduled collects have.
+	t.Setenv(upstreamAuthEnv, strings.TrimPrefix(srv.URL, "http://")+"=bot:hunter2")
+	if _, err := ls.CollectApt(ctx, AptCollectRequest{SourceList: source, Force: true}); err != nil {
+		t.Fatalf("env-authenticated collect: %v", err)
+	}
+
+	// A collect spanning two hosts needs auth.host: unscoped logins are
+	// ambiguous, scoped ones apply only to their mirror (the second, open
+	// mirror stays anonymous).
+	open := http.NewServeMux()
+	registerAptRepo(t, open, "/repos/open", "stable", "tool", "2.0", false)
+	openSrv := httptest.NewServer(open)
+	t.Cleanup(openSrv.Close)
+	both := source + "\nTypes: deb\nURIs: " + openSrv.URL + "/repos/open\nSuites: stable\nComponents: main\nArchitectures: amd64\n"
+	if _, err := ls.CollectApt(ctx, AptCollectRequest{SourceList: both, Auth: &HostCollectAuth{Username: "bot", Password: "hunter2"}}); err == nil ||
+		!strings.Contains(err.Error(), "auth.host") {
+		t.Fatalf("unscoped multi-host login error = %v", err)
+	}
+	if _, err := ls.CollectApt(ctx, AptCollectRequest{
+		SourceList: both, Force: true,
+		Auth: &HostCollectAuth{Host: strings.TrimPrefix(srv.URL, "http://"), Username: "bot", Password: "hunter2"},
+	}); err != nil {
+		t.Fatalf("scoped multi-host collect: %v", err)
+	}
+
+	// A URI that smuggles the login as userinfo is rejected without echoing it.
+	bad := strings.Replace(source, "URIs: http://", "URIs: http://bot:hunter2@", 1)
+	if _, err := ls.CollectApt(ctx, AptCollectRequest{SourceList: bad}); err == nil ||
+		!strings.Contains(err.Error(), "must not embed credentials") || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("userinfo URI error = %v", err)
+	}
+}
+
 // transferAptBundle copies one exported bundle (tarball, manifest, signature)
 // from the low server's export dir into the high server's landing dir.
 func transferAptBundle(t *testing.T, ls *LowServer, hs *HighServer, bundleID string) {
@@ -122,7 +184,7 @@ func TestFetchAptPackagesIndexXZAndLZ4(t *testing.T) {
 
 			ls, _ := newAptLowServer(t)
 			sums := map[string]aptChecksum{tt.rel: {sha256: aptSHA256(comp), size: int64(len(comp))}}
-			pkgs, err := ls.fetchAptPackagesIndex(context.Background(), srv.URL+"/dists/stable", "stable", "main", "amd64", sums)
+			pkgs, err := ls.fetchAptPackagesIndex(context.Background(), srv.URL+"/dists/stable", "stable", "main", "amd64", sums, nil)
 			if err != nil || len(pkgs) != 1 || pkgs[0].Package != "ok" {
 				t.Fatalf("fetchAptPackagesIndex via %s = %+v, %v", tt.bin, pkgs, err)
 			}

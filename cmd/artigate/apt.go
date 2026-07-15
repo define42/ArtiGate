@@ -192,6 +192,11 @@ type AptCollectRequest struct {
 	Architectures []string `json:"architectures"`
 	SignedBy      string   `json:"signed_by"`
 	SourceList    string   `json:"source_list"`
+	// Auth optionally authenticates this collect against one private mirror
+	// host. It is used for this collect only and never stored; standing
+	// credentials belong in ARTIGATE_UPSTREAM_AUTH (watch specs must never
+	// carry logins — they are persisted and echoed in plaintext).
+	Auth *HostCollectAuth `json:"auth,omitempty"`
 	// NewestOnly keeps only the highest version of each package (default true
 	// when the field is absent); set it false to mirror every version in the
 	// index.
@@ -213,6 +218,9 @@ type aptMirrorConfig struct {
 	Components    []string
 	Architectures []string
 	SignedBy      string
+	// cred is the login for the mirror's host (nil means anonymous), pinned
+	// by aptMirrorCredentials before the mirror loop runs.
+	cred *registryCredential
 }
 
 func (s *LowServer) HandleAptCollect(ctx context.Context, r *http.Request) (ExportResult, error) {
@@ -232,6 +240,10 @@ func (s *LowServer) HandleAptCollect(ctx context.Context, r *http.Request) (Expo
 // CollectApt mirrors one upstream APT repository into a signed bundle.
 func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (ExportResult, error) {
 	configs, err := resolveAptMirrors(req)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	creds, err := aptMirrorCredentials(configs, req.Auth)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -263,7 +275,7 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 	for _, cfg := range configs {
 		mirror, mf, err := s.mirrorAptRepo(ctx, cfg, stageRoot, newest, prior)
 		if err != nil {
-			return ExportResult{}, err
+			return ExportResult{}, decorateUpstreamAuthError(err, creds)
 		}
 		for _, f := range mf {
 			if !seenFile[f.Path] {
@@ -289,6 +301,7 @@ func (s *LowServer) CollectApt(ctx context.Context, req AptCollectRequest) (Expo
 // archive pool, so seenFile dedupes .debs listed in more than one suite.
 func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stageRoot string, newestOnly bool, prior func(path, sha256 string) bool) (AptMirror, []ManifestFile, error) {
 	base := strings.TrimRight(cfg.URI, "/")
+	cfg.URI = base // normalized for every fetch below (cfg is a local copy)
 	mirror := AptMirror{Name: cfg.Name, URI: base, SignedBy: filepath.Base(cfg.SignedBy)}
 	var files []ManifestFile
 	seenFile := map[string]bool{}
@@ -300,7 +313,7 @@ func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stag
 		distBase := base + "/dists/" + suite
 
 		emitProgress(ctx, "→ %s %s: fetching Release and Packages indexes…", cfg.Name, suite)
-		releaseBytes, err := s.fetchAptRelease(ctx, distBase, cfg.SignedBy)
+		releaseBytes, err := s.fetchAptRelease(ctx, distBase, cfg.SignedBy, cfg.cred)
 		if err != nil {
 			return AptMirror{}, nil, fmt.Errorf("suite %s: %w", suite, err)
 		}
@@ -312,7 +325,7 @@ func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stag
 
 		for _, comp := range cfg.Components {
 			for _, arch := range cfg.Architectures {
-				cf, pkgs, err := s.collectAptIndex(ctx, base, distBase, cfg.Name, suite, comp, arch, checksums, stageRoot, seenFile, newestOnly, prior)
+				cf, pkgs, err := s.collectAptIndex(ctx, cfg, distBase, suite, comp, arch, checksums, stageRoot, seenFile, newestOnly, prior)
 				if err != nil {
 					return AptMirror{}, nil, err
 				}
@@ -327,18 +340,18 @@ func (s *LowServer) mirrorAptRepo(ctx context.Context, cfg aptMirrorConfig, stag
 // collectAptIndex fetches one suite/component/architecture Packages index and
 // downloads every referenced .deb, returning the new manifest files (deduped
 // via seenFile) and the parsed package records.
-func (s *LowServer) collectAptIndex(ctx context.Context, base, distBase, name, suite, comp, arch string, checksums map[string]aptChecksum, stageRoot string, seenFile map[string]bool, newestOnly bool, prior func(path, sha256 string) bool) ([]ManifestFile, []AptPackage, error) {
-	pkgs, err := s.fetchAptPackagesIndex(ctx, distBase, suite, comp, arch, checksums)
+func (s *LowServer) collectAptIndex(ctx context.Context, cfg aptMirrorConfig, distBase, suite, comp, arch string, checksums map[string]aptChecksum, stageRoot string, seenFile map[string]bool, newestOnly bool, prior func(path, sha256 string) bool) ([]ManifestFile, []AptPackage, error) {
+	pkgs, err := s.fetchAptPackagesIndex(ctx, distBase, suite, comp, arch, checksums, cfg.cred)
 	if err != nil {
 		return nil, nil, err
 	}
 	if newestOnly {
 		pkgs = filterNewestApt(pkgs)
 	}
-	emitProgress(ctx, "  %s %s/%s/%s: %d package(s)", name, suite, comp, arch, len(pkgs))
+	emitProgress(ctx, "  %s %s/%s/%s: %d package(s)", cfg.Name, suite, comp, arch, len(pkgs))
 	var files []ManifestFile
 	for _, pkg := range pkgs {
-		mf, err := s.downloadAptDeb(ctx, base, name, pkg, stageRoot, prior)
+		mf, err := s.downloadAptDeb(ctx, cfg, pkg, stageRoot, prior)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -361,8 +374,8 @@ func (s *LowServer) collectAptIndex(ctx context.Context, base, distBase, name, s
 // fetchAptRelease downloads dists/<suite>/InRelease (preferred) or Release and,
 // when a keyring is supplied, verifies the signature with gpg. It returns the
 // Release payload (clearsign markers stripped).
-func (s *LowServer) fetchAptRelease(ctx context.Context, distBase, signedBy string) ([]byte, error) {
-	inrelease, inErr := httpGetBytes(ctx, distBase+"/InRelease", maxSignedMetaBytes)
+func (s *LowServer) fetchAptRelease(ctx context.Context, distBase, signedBy string, cred *registryCredential) ([]byte, error) {
+	inrelease, inErr := httpGetBytesAuth(ctx, distBase+"/InRelease", maxSignedMetaBytes, cred)
 	if inErr == nil {
 		if signedBy != "" {
 			if err := gpgVerifyClearsigned(ctx, inrelease, signedBy); err != nil {
@@ -372,12 +385,12 @@ func (s *LowServer) fetchAptRelease(ctx context.Context, distBase, signedBy stri
 		return stripClearsign(inrelease), nil
 	}
 	// Fall back to detached Release + Release.gpg.
-	release, err := httpGetBytes(ctx, distBase+"/Release", maxSignedMetaBytes)
+	release, err := httpGetBytesAuth(ctx, distBase+"/Release", maxSignedMetaBytes, cred)
 	if err != nil {
 		return nil, fmt.Errorf("fetch InRelease/Release: %w", err)
 	}
 	if signedBy != "" {
-		sig, err := httpGetBytes(ctx, distBase+"/Release.gpg", maxSignedMetaBytes)
+		sig, err := httpGetBytesAuth(ctx, distBase+"/Release.gpg", maxSignedMetaBytes, cred)
 		if err != nil {
 			return nil, fmt.Errorf("fetch Release.gpg: %w", err)
 		}
@@ -390,7 +403,7 @@ func (s *LowServer) fetchAptRelease(ctx context.Context, distBase, signedBy stri
 
 // fetchAptPackagesIndex downloads and verifies the binary Packages index for a
 // suite/component/architecture and parses its stanzas into AptPackage records.
-func (s *LowServer) fetchAptPackagesIndex(ctx context.Context, distBase, suite, comp, arch string, checksums map[string]aptChecksum) ([]AptPackage, error) {
+func (s *LowServer) fetchAptPackagesIndex(ctx context.Context, distBase, suite, comp, arch string, checksums map[string]aptChecksum, cred *registryCredential) ([]AptPackage, error) {
 	dir := comp + "/binary-" + arch
 	// Prefer gzip (stdlib), then xz and lz4 (shelling to the same external
 	// tools the RPM adapter uses), then plain — some archives publish only an
@@ -410,7 +423,7 @@ func (s *LowServer) fetchAptPackagesIndex(ctx context.Context, distBase, suite, 
 		if !ok {
 			continue
 		}
-		raw, err := httpGetBytes(ctx, distBase+"/"+c.rel, maxIndexFetchBytes)
+		raw, err := httpGetBytesAuth(ctx, distBase+"/"+c.rel, maxIndexFetchBytes, cred)
 		if err != nil {
 			return nil, err
 		}
@@ -433,22 +446,22 @@ func (s *LowServer) fetchAptPackagesIndex(ctx context.Context, distBase, suite, 
 // manifest reference (the signed index supplies everything the manifest entry
 // needs) — and a dry run accounts for new .debs from the same declared
 // values, skipping their downloads too.
-func (s *LowServer) downloadAptDeb(ctx context.Context, base, mirror string, pkg AptPackage, stageRoot string, prior func(path, sha256 string) bool) (ManifestFile, error) {
+func (s *LowServer) downloadAptDeb(ctx context.Context, cfg aptMirrorConfig, pkg AptPackage, stageRoot string, prior func(path, sha256 string) bool) (ManifestFile, error) {
 	if err := validateRelPath(pkg.Filename); err != nil {
 		return ManifestFile{}, fmt.Errorf("unsafe package Filename %q: %w", pkg.Filename, err)
 	}
-	if pkg.Size > 0 && prior(aptFileRel(mirror, pkg.Filename), pkg.SHA256) {
-		return ManifestFile{Path: aptFileRel(mirror, pkg.Filename), SHA256: pkg.SHA256, Size: pkg.Size, Prior: true}, nil
+	if pkg.Size > 0 && prior(aptFileRel(cfg.Name, pkg.Filename), pkg.SHA256) {
+		return ManifestFile{Path: aptFileRel(cfg.Name, pkg.Filename), SHA256: pkg.SHA256, Size: pkg.Size, Prior: true}, nil
 	}
 	if skipDownloadForDryRun(ctx, pkg.SHA256, pkg.Size) {
-		return ManifestFile{Path: aptFileRel(mirror, pkg.Filename), SHA256: pkg.SHA256, Size: pkg.Size}, nil
+		return ManifestFile{Path: aptFileRel(cfg.Name, pkg.Filename), SHA256: pkg.SHA256, Size: pkg.Size}, nil
 	}
-	rel := aptFileRel(mirror, pkg.Filename)
+	rel := aptFileRel(cfg.Name, pkg.Filename)
 	if err := validateRelPath(rel); err != nil {
 		return ManifestFile{}, fmt.Errorf("unsafe staging path %q: %w", rel, err)
 	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
-	sum, size, err := downloadVerifiedFile(ctx, base+"/"+pkg.Filename, abs, pkg.Size, "sha256", pkg.SHA256)
+	sum, size, err := downloadVerifiedFileAuth(ctx, cfg.URI+"/"+pkg.Filename, abs, pkg.Size, "sha256", pkg.SHA256, cfg.cred)
 	if err != nil {
 		return ManifestFile{}, fmt.Errorf("%s: %w", pkg.Filename, err)
 	}
@@ -697,19 +710,27 @@ const (
 // small metadata that must be parsed goes through here; package payloads use
 // downloadVerifiedFile, which streams to disk.
 func httpGetBytes(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
+	return httpGetBytesAuth(ctx, rawURL, limit, nil)
+}
+
+// httpGetBytesAuth is httpGetBytes with an optional upstream login (nil means
+// anonymous), attached as HTTP Basic — net/http drops it on cross-host
+// redirects, so a CDN redirect never sees the credential.
+func httpGetBytesAuth(ctx context.Context, rawURL string, limit int64, cred *registryCredential) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
+	setBasicAuth(req, cred)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: HTTP %d", rawURL, resp.StatusCode)
+		return nil, &upstreamHTTPError{Method: http.MethodGet, URL: rawURL, Status: resp.StatusCode}
 	}
 	r := newProgressReader(ctx, resp.Body, dlNameFromURL(rawURL), resp.ContentLength)
 	body, err := io.ReadAll(io.LimitReader(r, limit+1))
@@ -731,6 +752,13 @@ func httpGetBytes(ctx context.Context, rawURL string, limit int64) ([]byte, erro
 // partial file is removed. It returns the file's SHA-256 and size for the
 // bundle manifest.
 func downloadVerifiedFile(ctx context.Context, rawURL, abs string, wantSize int64, checksumType, checksum string) (string, int64, error) {
+	return downloadVerifiedFileAuth(ctx, rawURL, abs, wantSize, checksumType, checksum, nil)
+}
+
+// downloadVerifiedFileAuth is downloadVerifiedFile with an optional upstream
+// login (nil means anonymous), attached as HTTP Basic — net/http drops it on
+// cross-host redirects, so a CDN redirect never sees the credential.
+func downloadVerifiedFileAuth(ctx context.Context, rawURL, abs string, wantSize int64, checksumType, checksum string, cred *registryCredential) (string, int64, error) {
 	verifier, manifestSHA, writers, err := newDownloadHashers(checksumType)
 	if err != nil {
 		return "", 0, err
@@ -742,13 +770,14 @@ func downloadVerifiedFile(ctx context.Context, rawURL, abs string, wantSize int6
 	if err != nil {
 		return "", 0, err
 	}
+	setBasicAuth(req, cred)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("GET %s: HTTP %d", rawURL, resp.StatusCode)
+		return "", 0, &upstreamHTTPError{Method: http.MethodGet, URL: rawURL, Status: resp.StatusCode}
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return "", 0, err
@@ -920,6 +949,25 @@ func runGPGVerify(ctx context.Context, keyring string, data, sig []byte) error {
 // Config resolution + deb822 source parsing
 // -----------------------------------------------------------------------------
 
+// aptMirrorCredentials resolves the collect's per-host logins (request auth
+// over standing ARTIGATE_UPSTREAM_AUTH entries) and pins each mirror's
+// credential on its config. The returned map lets collect errors carry
+// credential guidance.
+func aptMirrorCredentials(configs []aptMirrorConfig, auth *HostCollectAuth) (map[string]registryCredential, error) {
+	hosts := make([]string, 0, len(configs))
+	for _, cfg := range configs {
+		hosts = append(hosts, upstreamURLHost(cfg.URI))
+	}
+	creds, err := upstreamCollectCredentials(hosts, auth)
+	if err != nil {
+		return nil, err
+	}
+	for i := range configs {
+		configs[i].cred = credentialForHost(creds, upstreamURLHost(configs[i].URI))
+	}
+	return creds, nil
+}
+
 // resolveAptMirrors returns the validated set of mirrors to collect. A
 // source_list may contain several deb822 stanzas (several repositories);
 // otherwise the explicit request fields describe a single mirror. Mirror names
@@ -1008,6 +1056,11 @@ func validateAptMirrorConfig(cfg aptMirrorConfig) (aptMirrorConfig, error) {
 	u, err := url.Parse(cfg.URI)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return aptMirrorConfig{}, fmt.Errorf("invalid apt URI %q (need http/https)", cfg.URI)
+	}
+	// The URI is recorded in the signed manifest and echoed in progress and
+	// error text, so it must never carry a login.
+	if err := checkNoURLUserinfo(u, "apt URI"); err != nil {
+		return aptMirrorConfig{}, err
 	}
 	cfg.Suites = dedupeStrings(cfg.Suites)
 	if len(cfg.Suites) == 0 {

@@ -84,6 +84,15 @@ base_url "https://.../$releasever/$basearch/" has unresolved variables
 
 The scheme must be `http` or `https`.
 
+## Private repositories
+
+Repos that demand a login are fetched with HTTP Basic from one of two sources, resolved per host as *request `auth` → `ARTIGATE_UPSTREAM_AUTH` → anonymous*:
+
+- **Per-collect login** — an optional `auth` object on the collect request, also exposed as the *Private repository login* fields on the low-side RPM page: `{"host": "rpm.example.com", "username": "bot", "password": "secret"}`. Used for that one collect and never stored. `host` may be omitted when every `.repo` section lives on one host; a multi-host `.repo` file must name the host the login is for.
+- **Standing credentials** — comma-separated `host=user:password` entries in `ARTIGATE_UPSTREAM_AUTH` on the low side (the key is the baseurl's exact host, `host:port` included). Re-read on every collect, and the **only** credential source [scheduled watches](../scheduling.md) can use — specs carrying an `auth` key are rejected.
+
+A `baseurl` embedding `user:pass@` is rejected outright: the URL is recorded in the signed manifest and echoed in progress and error text, so a login there would leak — including across the diode.
+
 ## Architecture filter (default `x86_64` + `noarch`)
 
 Only packages whose `<arch>` is listed in `architectures` are downloaded and advertised; the default is **`x86_64` plus `noarch`**. `noarch` packages (fonts, configuration, pure-python tools, …) are dependencies of hardware-arch packages, so filtering to `x86_64` alone would leave dnf unable to resolve — override with an explicit list if you really want that, or to add more architectures (`i686`, `aarch64`, …).

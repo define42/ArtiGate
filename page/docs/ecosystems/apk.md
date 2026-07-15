@@ -66,6 +66,15 @@ https://dl-cdn.alpinelinux.org/alpine/v3.22/community
 !!! warning "One mirror base per collect"
     Every line must share the same mirror base — lines naming different mirrors are rejected with `repositories name different mirrors (… and …); collect them separately`. Branch, repository, and architecture tokens must be single path-safe segments.
 
+## Private mirrors
+
+Mirrors that demand a login are fetched with HTTP Basic from one of two sources, resolved as *request `auth` → `ARTIGATE_UPSTREAM_AUTH` → anonymous*:
+
+- **Per-collect login** — an optional `auth` object on the collect request, also exposed as the *Private mirror login* fields on the low-side Alpine page: `{"username": "bot", "password": "secret"}` (a collect uses a single mirror, so no host field is needed). Used for that one collect and never stored.
+- **Standing credentials** — comma-separated `host=user:password` entries in `ARTIGATE_UPSTREAM_AUTH` on the low side (the key is the mirror URL's exact host, `host:port` included). Re-read on every collect, and the **only** credential source [scheduled watches](../scheduling.md) can use — specs carrying an `auth` key are rejected.
+
+A mirror URI embedding `user:pass@` is rejected outright: the URI is recorded in the signed manifest and echoed in progress and error text, so a login there would leak — including across the diode.
+
 ## What gets mirrored and how it is verified
 
 For each **branch × repository × architecture**, ArtiGate fetches `<uri>/<branch>/<repo>/<arch>/APKINDEX.tar.gz`, extracts the `APKINDEX` member (walking straight through a leading signature segment), and parses its stanzas. With `newest_only` (the default) only each package's highest version is kept, compared with apk's own version rules (dotted numerics, trailing letter, `_alpha < _beta < _pre < _rc <` release `< _cvs < _svn < _git < _hg < _p` suffixes, then `-rN`).

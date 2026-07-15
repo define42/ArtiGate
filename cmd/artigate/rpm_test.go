@@ -88,6 +88,58 @@ func newRpmLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
 	return ls, priv
 }
 
+// TestCollectRpmPrivateUpstream exercises HTTP Basic against a repo that
+// demands a login on every request (repomd, metadata, and .rpms alike).
+func TestCollectRpmPrivateUpstream(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRpmRepo(t, mux, "/yumrepos/vscode", "code", "1.0.1", "1", false)
+	srv := httptest.NewServer(basicAuthGate(mux, testBasicAuth("bot", "hunter2")))
+	t.Cleanup(srv.Close)
+	ls, _ := newRpmLowServer(t)
+	ctx := context.Background()
+	base := srv.URL + "/yumrepos/vscode"
+
+	// Anonymous mirrors fail with guidance naming both supply paths.
+	_, err := ls.CollectRpm(ctx, RpmCollectRequest{Name: "vscode", BaseURL: base})
+	if err == nil || !strings.Contains(err.Error(), upstreamAuthEnv) {
+		t.Fatalf("anonymous collect error = %v", err)
+	}
+
+	// A wrong login is reported as rejected — and never echoed.
+	_, err = ls.CollectRpm(ctx, RpmCollectRequest{
+		Name: "vscode", BaseURL: base,
+		Auth: &HostCollectAuth{Username: "bot", Password: "nope"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "were not accepted") || strings.Contains(err.Error(), "nope") {
+		t.Fatalf("wrong-login error = %v", err)
+	}
+
+	// The per-collect login mirrors the repo.
+	if _, err := ls.CollectRpm(ctx, RpmCollectRequest{
+		Name: "vscode", BaseURL: base,
+		Auth: &HostCollectAuth{Username: "bot", Password: "hunter2"},
+	}); err != nil {
+		t.Fatalf("authenticated collect: %v", err)
+	}
+
+	// Standing ARTIGATE_UPSTREAM_AUTH credentials work without request auth —
+	// the only credential source scheduled collects have.
+	t.Setenv(upstreamAuthEnv, strings.TrimPrefix(srv.URL, "http://")+"=bot:hunter2")
+	if _, err := ls.CollectRpm(ctx, RpmCollectRequest{Name: "vscode", BaseURL: base, Force: true}); err != nil {
+		t.Fatalf("env-authenticated collect: %v", err)
+	}
+
+	// A base_url that smuggles the login as userinfo is rejected without
+	// echoing it.
+	_, err = ls.CollectRpm(ctx, RpmCollectRequest{
+		Name:    "vscode",
+		BaseURL: "http://bot:hunter2@" + strings.TrimPrefix(base, "http://"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "must not embed credentials") || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("userinfo base_url error = %v", err)
+	}
+}
+
 func TestRpmVerCmp(t *testing.T) {
 	tests := []struct {
 		a, b string

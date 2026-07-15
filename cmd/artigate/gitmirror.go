@@ -269,20 +269,24 @@ type gitAdvertisement struct {
 	caps map[string]bool // advertised capability tokens
 }
 
-// gitFetchAdvertisement asks the upstream for its ref advertisement.
-func gitFetchAdvertisement(ctx context.Context, repoURL string) (*gitAdvertisement, error) {
+// gitFetchAdvertisement asks the upstream for its ref advertisement,
+// authenticating with cred when the repository has a login configured.
+func gitFetchAdvertisement(ctx context.Context, repoURL string, cred *registryCredential) (*gitAdvertisement, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, repoURL+"/info/refs?service=git-upload-pack", nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", gitUserAgent)
+	// net/http drops Authorization on cross-host redirects, so a redirected
+	// upstream never receives the login.
+	setBasicAuth(req, cred)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s/info/refs: HTTP %d", repoURL, resp.StatusCode)
+		return nil, &upstreamHTTPError{Method: http.MethodGet, URL: repoURL + "/info/refs", Status: resp.StatusCode}
 	}
 	adv, err := parseGitAdvertisement(io.LimitReader(resp.Body, maxIndexFetchBytes))
 	if err != nil {
@@ -474,11 +478,12 @@ func gitUploadPackRequest(wants []string, sideband bool) []byte {
 	return b.Bytes()
 }
 
-// gitFetchPack POSTs the upload-pack request and returns the raw pack.
+// gitFetchPack POSTs the upload-pack request and returns the raw pack,
+// authenticating with cred when the repository has a login configured.
 // sideband must reflect whether the server advertised side-band-64k: only
 // then may the capability be requested, and only then is the response
 // multiplexed.
-func gitFetchPack(ctx context.Context, repoURL string, wants []string, sideband bool) ([]byte, error) {
+func gitFetchPack(ctx context.Context, repoURL string, wants []string, sideband bool, cred *registryCredential) ([]byte, error) {
 	body := gitUploadPackRequest(wants, sideband)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, repoURL+"/git-upload-pack", bytes.NewReader(body))
 	if err != nil {
@@ -487,13 +492,16 @@ func gitFetchPack(ctx context.Context, repoURL string, wants []string, sideband 
 	req.Header.Set("User-Agent", gitUserAgent)
 	req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
 	req.Header.Set("Accept", "application/x-git-upload-pack-result")
+	// net/http drops Authorization on cross-host redirects, so a redirected
+	// upstream never receives the login.
+	setBasicAuth(req, cred)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("POST %s/git-upload-pack: HTTP %d", repoURL, resp.StatusCode)
+		return nil, &upstreamHTTPError{Method: http.MethodPost, URL: repoURL + "/git-upload-pack", Status: resp.StatusCode}
 	}
 	r := newProgressReader(ctx, resp.Body, dlNameFromURL(repoURL)+".pack", resp.ContentLength)
 	return gitReadPackResponse(r, sideband)
@@ -1414,6 +1422,11 @@ type GitCollectRequest struct {
 	// e.g. "refs/heads/main", "refs/tags/v1.2.3"); the default mirrors every
 	// branch and tag.
 	Refs []string `json:"refs,omitempty"`
+	// Auth optionally authenticates this fetch against a private upstream.
+	// It is used for this collect only and never stored; standing credentials
+	// belong in ARTIGATE_UPSTREAM_AUTH (watch specs must never carry logins —
+	// they are persisted and echoed in plaintext).
+	Auth *HostCollectAuth `json:"auth,omitempty"`
 	// Force disables export dedup for this collect: the pack is bundled even
 	// when an identical one was already forwarded (for disaster recovery or
 	// rebuilding a high side from scratch).
@@ -1427,6 +1440,11 @@ func validateGitRequest(req GitCollectRequest) (name, repoURL string, err error)
 	u, err := url.Parse(repoURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return "", "", fmt.Errorf("git repo url %q must be an http(s) URL", req.URL)
+	}
+	// The URL is recorded in the signed manifest and echoed in progress and
+	// error text, so it must never carry a login.
+	if err := checkNoURLUserinfo(u, "git repo url"); err != nil {
+		return "", "", err
 	}
 	for _, ref := range req.Refs {
 		if err := validateGitRefName(ref); err != nil {
@@ -1468,6 +1486,10 @@ func (s *LowServer) CollectGit(ctx context.Context, req GitCollectRequest) (Expo
 	if err != nil {
 		return ExportResult{}, err
 	}
+	creds, err := upstreamCollectCredentials([]string{upstreamURLHost(repoURL)}, req.Auth)
+	if err != nil {
+		return ExportResult{}, err
+	}
 	// Hold only the git stream's lock for the whole fetch->write->commit so a
 	// concurrent git exporter cannot claim the same sequence number between
 	// peek and commit. Other streams export in parallel.
@@ -1485,9 +1507,9 @@ func (s *LowServer) CollectGit(ctx context.Context, req GitCollectRequest) (Expo
 	}
 	defer os.RemoveAll(stageRoot)
 
-	repo, mf, err := gitMirrorToStaging(ctx, stageRoot, name, repoURL, req.Refs)
+	repo, mf, err := gitMirrorToStaging(ctx, stageRoot, name, repoURL, req.Refs, credentialForHost(creds, upstreamURLHost(repoURL)))
 	if err != nil {
-		return ExportResult{}, err
+		return ExportResult{}, decorateUpstreamAuthError(err, creds)
 	}
 	files := []ManifestFile{mf}
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
@@ -1500,11 +1522,11 @@ func (s *LowServer) CollectGit(ctx context.Context, req GitCollectRequest) (Expo
 // leaving the pack in the staging tree and returning the manifest record.
 // The whole exchange shares one deadline like the other ecosystems' large
 // downloads.
-func gitMirrorToStaging(ctx context.Context, stageRoot, name, repoURL string, requested []string) (GitRepoMirror, ManifestFile, error) {
+func gitMirrorToStaging(ctx context.Context, stageRoot, name, repoURL string, requested []string, cred *registryCredential) (GitRepoMirror, ManifestFile, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitFetchTimeout)
 	defer cancel()
 	emitProgress(ctx, "Fetching %s ref advertisement…", repoURL)
-	adv, err := gitFetchAdvertisement(ctx, repoURL)
+	adv, err := gitFetchAdvertisement(ctx, repoURL, cred)
 	if err != nil {
 		return GitRepoMirror{}, ManifestFile{}, err
 	}
@@ -1514,7 +1536,7 @@ func gitMirrorToStaging(ctx context.Context, stageRoot, name, repoURL string, re
 	}
 	wants := gitWantSHAs(refs)
 	emitProgress(ctx, "→ %d ref(s), %d distinct tip(s); fetching pack…", len(refs), len(wants))
-	pack, err := gitFetchPack(ctx, repoURL, wants, adv.caps["side-band-64k"])
+	pack, err := gitFetchPack(ctx, repoURL, wants, adv.caps["side-band-64k"], cred)
 	if err != nil {
 		return GitRepoMirror{}, ManifestFile{}, err
 	}

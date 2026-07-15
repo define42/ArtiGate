@@ -828,19 +828,27 @@ func helmChartURL(repoURL string, entry *helmUpstreamEntry) (string, error) {
 // are capped like every other mirrored file; on any failure the partial file
 // is removed.
 func downloadFileSHA256(ctx context.Context, rawURL, abs string) (string, int64, error) {
+	return downloadFileSHA256Auth(ctx, rawURL, abs, nil)
+}
+
+// downloadFileSHA256Auth is downloadFileSHA256 with an optional upstream
+// login (nil means anonymous), attached as HTTP Basic — net/http drops it on
+// cross-host redirects, so a CDN redirect never sees the credential.
+func downloadFileSHA256Auth(ctx context.Context, rawURL, abs string, cred *registryCredential) (string, int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", 0, err
 	}
+	setBasicAuth(req, cred)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("GET %s: HTTP %d", rawURL, resp.StatusCode)
+		return "", 0, &upstreamHTTPError{Method: http.MethodGet, URL: rawURL, Status: resp.StatusCode}
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return "", 0, err

@@ -117,12 +117,21 @@ type fakeApkMirror struct {
 	srv   *httptest.Server
 	mu    sync.Mutex
 	files map[string][]byte
+	// requireAuth, when set before the first request, is the exact
+	// Authorization value every request must carry; anything else gets a 401
+	// Basic challenge (a private mirror).
+	requireAuth string
 }
 
 func newFakeApkMirror(t *testing.T) *fakeApkMirror {
 	t.Helper()
 	m := &fakeApkMirror{files: map[string][]byte{}}
 	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if m.requireAuth != "" && r.Header.Get("Authorization") != m.requireAuth {
+			w.Header().Set("Www-Authenticate", `Basic realm="mirror"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		m.mu.Lock()
 		b, ok := m.files[r.URL.Path]
 		m.mu.Unlock()
@@ -197,6 +206,54 @@ func (fx *apkTestFixture) collect(t *testing.T, req ApkCollectRequest) ExportRes
 		t.Fatalf("CollectApk: %v", err)
 	}
 	return res
+}
+
+// TestCollectApkPrivateUpstream exercises HTTP Basic against a mirror that
+// demands a login on every request (APKINDEX and packages alike).
+func TestCollectApkPrivateUpstream(t *testing.T) {
+	fx := newApkTestFixture(t)
+	fx.mirror.requireAuth = testBasicAuth("bot", "hunter2")
+	ctx := context.Background()
+	req := ApkCollectRequest{URI: fx.mirror.srv.URL, Branches: []string{"v3.22"}}
+
+	// Anonymous collects fail at the index with guidance naming both supply
+	// paths.
+	_, err := fx.ls.CollectApk(ctx, req)
+	if err == nil || !strings.Contains(err.Error(), upstreamAuthEnv) {
+		t.Fatalf("anonymous collect error = %v", err)
+	}
+
+	// A wrong login is reported as rejected — and never echoed.
+	wrong := req
+	wrong.Auth = &HostCollectAuth{Username: "bot", Password: "nope"}
+	_, err = fx.ls.CollectApk(ctx, wrong)
+	if err == nil || !strings.Contains(err.Error(), "were not accepted") || strings.Contains(err.Error(), "nope") {
+		t.Fatalf("wrong-login error = %v", err)
+	}
+
+	// The per-collect login mirrors the branch.
+	good := req
+	good.Auth = &HostCollectAuth{Username: "bot", Password: "hunter2"}
+	if _, err := fx.ls.CollectApk(ctx, good); err != nil {
+		t.Fatalf("authenticated collect: %v", err)
+	}
+
+	// Standing ARTIGATE_UPSTREAM_AUTH credentials work without request auth —
+	// the only credential source scheduled collects have.
+	t.Setenv(upstreamAuthEnv, strings.TrimPrefix(fx.mirror.srv.URL, "http://")+"=bot:hunter2")
+	force := req
+	force.Force = true
+	if _, err := fx.ls.CollectApk(ctx, force); err != nil {
+		t.Fatalf("env-authenticated collect: %v", err)
+	}
+
+	// A URI that smuggles the login as userinfo is rejected without echoing it.
+	userinfo := req
+	userinfo.URI = "http://bot:hunter2@" + strings.TrimPrefix(fx.mirror.srv.URL, "http://")
+	_, err = fx.ls.CollectApk(ctx, userinfo)
+	if err == nil || !strings.Contains(err.Error(), "must not embed credentials") || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("userinfo URI error = %v", err)
+	}
 }
 
 // apkTestManifest decodes the signed bundle manifest a collect wrote into the

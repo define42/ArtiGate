@@ -102,6 +102,19 @@ func TestLowServerUIPage(t *testing.T) {
 		// force to the immediate collect (never to a schedule).
 		"applyForce", `id="goForce"`, `id="pyForce"`, `id="mvnForce"`, `id="npmForce"`,
 		`id="aptForce"`, `id="rpmForce"`, `id="ctrForce"`, `id="hfForce"`,
+		// The containers page takes an optional private-registry login that
+		// rides only on the immediate collect (never into a schedule's spec);
+		// standing credentials are pointed at ARTIGATE_CONTAINER_AUTH.
+		"Private registry login", `id="ctrAuthRegistry"`, `id="ctrAuthUser"`,
+		`id="ctrAuthPass" type="password"`, "function ctrAuth", "ARTIGATE_CONTAINER_AUTH",
+		// Git, APT, RPM, and Alpine take the same one-shot login through the
+		// shared hostAuth reader; standing credentials are pointed at
+		// ARTIGATE_UPSTREAM_AUTH.
+		"function hostAuth", "function attachHostAuth", "ARTIGATE_UPSTREAM_AUTH",
+		`id="gitAuthUser"`, `id="gitAuthPass" type="password"`,
+		`id="aptAuthHost"`, `id="aptAuthUser"`, `id="aptAuthPass" type="password"`,
+		`id="rpmAuthHost"`, `id="rpmAuthUser"`, `id="rpmAuthPass" type="password"`,
+		`id="apkAuthUser"`, `id="apkAuthPass" type="password"`,
 		// The uploads page sends arbitrary files as multipart form data over
 		// XHR, so the modal can show real upload progress.
 		`data-view="uploads"`, "Upload files", `id="upfolder"`, `id="upfiles"`,
