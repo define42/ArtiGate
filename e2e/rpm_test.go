@@ -52,6 +52,29 @@ func TestRpm(t *testing.T) {
 		t.Fatalf("dnf repoquery returned no package location under %s:\n%s", repoURL, out)
 	}
 
+	// Force the client to parse the regenerated filelists index: --list reads
+	// filelists.xml, not primary.xml, so it exercises the pkgid-keyed index the
+	// high side rewrites alongside a filtered primary (arch filtering drops the
+	// repo's non-x86_64/noarch packages, triggering that rewrite). A filelists
+	// index left inconsistent with primary — a stale packages="N" count or an
+	// orphaned <package> entry — makes dnf fail to parse it or list no files.
+	dnfOpts := []string{
+		"--disablerepo=*",
+		"--repofrompath=artigate," + repoURL,
+		"--setopt=artigate.gpgcheck=0",
+		"--setopt=artigate.repo_gpgcheck=0",
+		"--setopt=reposdir=/dev/null",
+		"--setopt=cachedir=" + filepath.Join(tmp, "cache"),
+		"--setopt=logdir=" + filepath.Join(tmp, "log"),
+		"--setopt=varsdir=" + filepath.Join(tmp, "vars"),
+		"--releasever=e2e",
+		"-y",
+	}
+	files := run(t, tmp, nil, dnf, append(dnfOpts, "repoquery", "--list", "gh")...)
+	if !strings.Contains(files, "/usr/bin/gh") {
+		t.Fatalf("dnf repoquery --list gh (regenerated filelists) does not list /usr/bin/gh:\n%s", files)
+	}
+
 	rpmPath := filepath.Join(tmp, "gh.rpm")
 	run(t, tmp, nil, curl, "-fsS", "-o", rpmPath, location)
 	info := run(t, tmp, nil, rpmBin, "-qpi", "--nosignature", rpmPath)

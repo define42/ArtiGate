@@ -296,6 +296,13 @@ func parseApkIndex(text string) []apkStanza {
 // (a signature segment, when present, is a concatenated leading gzip stream
 // that the multistream reader walks straight through).
 func apkIndexFromArchive(b []byte, limit int64) (string, error) {
+	return apkIndexFromArchiveBounded(b, limit, tarScanMaxDecompressedBytes)
+}
+
+// apkIndexFromArchiveBounded is apkIndexFromArchive with the scan's
+// total-decompression budget as a parameter, so the gzip-bomb bound is
+// regression-testable without a multi-GiB fixture.
+func apkIndexFromArchiveBounded(b []byte, limit, scanBudget int64) (string, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(b))
 	if err != nil {
 		return "", err
@@ -303,7 +310,7 @@ func apkIndexFromArchive(b []byte, limit int64) (string, error) {
 	defer gz.Close()
 	// Bound total decompression: tr.Next() inflates every skipped entry, so a
 	// gzip bomb with APKINDEX last (or absent) would otherwise inflate wholesale.
-	tr := tar.NewReader(io.LimitReader(gz, tarScanMaxDecompressedBytes))
+	tr := tar.NewReader(io.LimitReader(gz, scanBudget))
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {

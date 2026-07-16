@@ -349,6 +349,13 @@ func (s *HighServer) removeSupersededHelmMetadata(mirror, name, version string) 
 // extractChartYAML reads the Chart.yaml embedded in a chart archive (helm
 // requires <chart>/Chart.yaml at depth one) into a JSON-compatible map.
 func extractChartYAML(tgzPath string) (map[string]any, error) {
+	return extractChartYAMLBounded(tgzPath, tarScanMaxDecompressedBytes)
+}
+
+// extractChartYAMLBounded is extractChartYAML with the scan's
+// total-decompression budget as a parameter, so the gzip-bomb bound is
+// regression-testable without a multi-GiB fixture.
+func extractChartYAMLBounded(tgzPath string, scanBudget int64) (map[string]any, error) {
 	f, err := os.Open(tgzPath)
 	if err != nil {
 		return nil, err
@@ -361,7 +368,7 @@ func extractChartYAML(tgzPath string) (map[string]any, error) {
 	defer gz.Close()
 	// Bound total decompression: tr.Next() inflates every skipped entry, so a
 	// gzip bomb with Chart.yaml last (or absent) would otherwise inflate wholesale.
-	tr := tar.NewReader(io.LimitReader(gz, tarScanMaxDecompressedBytes))
+	tr := tar.NewReader(io.LimitReader(gz, scanBudget))
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {

@@ -605,6 +605,13 @@ func (s *HighServer) publishNpmPackage(p NpmPackage) error {
 // any depth-one directory containing a package.json counts; the first match
 // wins.
 func extractNpmPackageJSON(tgzPath string) (json.RawMessage, error) {
+	return extractNpmPackageJSONBounded(tgzPath, tarScanMaxDecompressedBytes)
+}
+
+// extractNpmPackageJSONBounded is extractNpmPackageJSON with the scan's
+// total-decompression budget as a parameter, so the gzip-bomb bound is
+// regression-testable without a multi-GiB fixture.
+func extractNpmPackageJSONBounded(tgzPath string, scanBudget int64) (json.RawMessage, error) {
 	f, err := os.Open(tgzPath)
 	if err != nil {
 		return nil, err
@@ -617,7 +624,7 @@ func extractNpmPackageJSON(tgzPath string) (json.RawMessage, error) {
 	defer gz.Close()
 	// Bound total decompression: tr.Next() inflates every skipped entry, so a
 	// gzip bomb with package.json last (or absent) would otherwise inflate wholesale.
-	tr := tar.NewReader(io.LimitReader(gz, tarScanMaxDecompressedBytes))
+	tr := tar.NewReader(io.LimitReader(gz, scanBudget))
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {

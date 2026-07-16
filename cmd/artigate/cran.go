@@ -395,6 +395,13 @@ func (s *HighServer) publishCRANPackage(p CRANPackage) error {
 // extractCRANDescription reads the DESCRIPTION embedded in a source tarball
 // (R requires <name>/DESCRIPTION at depth one) into its DCF fields.
 func extractCRANDescription(tgzPath, name string) (map[string]string, error) {
+	return extractCRANDescriptionBounded(tgzPath, name, tarScanMaxDecompressedBytes)
+}
+
+// extractCRANDescriptionBounded is extractCRANDescription with the scan's
+// total-decompression budget as a parameter, so the gzip-bomb bound is
+// regression-testable without a multi-GiB fixture.
+func extractCRANDescriptionBounded(tgzPath, name string, scanBudget int64) (map[string]string, error) {
 	f, err := os.Open(tgzPath)
 	if err != nil {
 		return nil, err
@@ -407,7 +414,7 @@ func extractCRANDescription(tgzPath, name string) (map[string]string, error) {
 	defer gz.Close()
 	// Bound total decompression: tr.Next() inflates every skipped entry, so a
 	// gzip bomb with DESCRIPTION last (or absent) would otherwise inflate wholesale.
-	tr := tar.NewReader(io.LimitReader(gz, tarScanMaxDecompressedBytes))
+	tr := tar.NewReader(io.LimitReader(gz, scanBudget))
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
