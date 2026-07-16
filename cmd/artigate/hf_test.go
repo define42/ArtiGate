@@ -1265,3 +1265,29 @@ func TestLowToHighHFSplitRepoPipeline(t *testing.T) {
 	assertHTTPBody(t, srv.URL+"/openai/gpt-oss-120b/resolve/"+up.sha+"/model-00004-of-00004.safetensors",
 		string(up.files["model-00004-of-00004.safetensors"]))
 }
+
+// TestHFManifestServeCapsBlobRead mirrors the container registry's manifest
+// cap on the HF/ollama pull path: a "manifest" blob past
+// maxServedManifestBytes — import checks its size only > 0 — 404s instead of
+// being read whole into memory per unauthenticated request.
+func TestHFManifestServeCapsBlobRead(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	ok := []byte(`{"schemaVersion":2}`)
+	huge := []byte(strings.Repeat("A", maxServedManifestBytes+1))
+	okDigest, hugeDigest := containerSHA(ok), containerSHA(huge)
+	covR2WriteFile(t, hs.hfBlobPath(okDigest), ok)
+	covR2WriteFile(t, hs.hfBlobPath(hugeDigest), huge)
+	if err := hs.mergeHFModel(HFModel{Org: "acme", Name: "Tiny-GGUF", Variants: []HFVariant{
+		{Tag: "OK", Digest: okDigest, MediaType: mtDockerManifest},
+		{Tag: "HUGE", Digest: hugeDigest, MediaType: mtDockerManifest},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	assertHTTPBody(t, srv.URL+"/v2/acme/Tiny-GGUF/manifests/OK", string(ok))
+	assertHTTPStatus(t, srv.URL+"/v2/acme/Tiny-GGUF/manifests/HUGE", http.StatusNotFound)
+	assertHTTPStatus(t, srv.URL+"/v2/acme/Tiny-GGUF/manifests/"+hugeDigest, http.StatusNotFound)
+}

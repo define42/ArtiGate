@@ -1607,6 +1607,15 @@ func (s *HighServer) handleContainerTags(w http.ResponseWriter, name string) {
 	writeJSON(w, map[string]any{"name": name, "tags": tags})
 }
 
+// maxServedManifestBytes bounds a manifest blob read whole into memory to
+// serve the unauthenticated GET /v2/.../manifests/<ref> pull path (container
+// images and HF models share it). Import checks a manifest's size only > 0,
+// so without the cap a crafted multi-GB "manifest" blob would be read whole
+// on every pull request. Real manifests are a few KB and registries reject
+// uploads past 4 MiB, so the cap is pure hardening: an oversize blob 404s as
+// unservable rather than letting requests balloon the high side's memory.
+const maxServedManifestBytes = 4 << 20
+
 // handleContainerManifest serves a manifest by tag or digest. Only manifests
 // recorded in this repository's index are served, so one repository can never
 // expose another's content even though the blob store is shared.
@@ -1621,9 +1630,9 @@ func (s *HighServer) handleContainerManifest(w http.ResponseWriter, r *http.Requ
 		registryError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest not found")
 		return
 	}
-	b, err := os.ReadFile(s.containerBlobPath(img.Digest))
+	b, err := readFileLimit(s.containerBlobPath(img.Digest), maxServedManifestBytes)
 	if err != nil {
-		registryError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest blob missing")
+		registryError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest blob missing or oversized")
 		return
 	}
 	w.Header().Set("Content-Type", img.MediaType)

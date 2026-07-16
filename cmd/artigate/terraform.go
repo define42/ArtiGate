@@ -651,7 +651,7 @@ func (s *HighServer) tfModuleDetail(ns, name, system, version string) (UIDetail,
 	if st, err := os.Stat(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "Archive size", Value: formatBytes(st.Size())})
 	}
-	if sum, err := sha256File(abs); err == nil {
+	if sum, err := s.detailDigests.get(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
 	}
 	downloads := []UIDownload{{Label: "module.tar.gz", URL: "/" + rel}}

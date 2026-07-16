@@ -465,7 +465,7 @@ func (s *HighServer) cratesDetail(spec string) (UIDetail, error) {
 		{Label: "Version", Value: version, Mono: true},
 		{Label: "Archive size", Value: formatBytes(st.Size())},
 	}
-	if sum, err := sha256File(abs); err == nil {
+	if sum, err := s.detailDigests.get(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
 	}
 	dl := "/crates/dl/" + name + "/" + version + "/download"

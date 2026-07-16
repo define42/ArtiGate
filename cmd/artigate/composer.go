@@ -684,19 +684,80 @@ func (s *HighServer) serveComposer(w http.ResponseWriter, r *http.Request) bool 
 // metadata-url tells Composer where the per-package files live, and
 // available-packages stops it probing names the mirror does not carry.
 func (s *HighServer) handleComposerRoot(w http.ResponseWriter) {
-	pkgs, err := s.listComposerPackages()
+	names, err := s.listComposerPackageNames()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	names := make([]string, 0, len(pkgs))
-	for _, p := range pkgs {
-		names = append(names, p.Module)
 	}
 	writeJSON(w, map[string]any{
 		"metadata-url":       "/composer/p2/%package%.json",
 		"available-packages": names,
 	})
+}
+
+// listComposerPackageNames lists the mirrored package names that still have
+// at least one servable release, sorted. It is derived from the directory
+// structure alone — packages.json is the first document every Composer client
+// fetches, so unlike the dashboard tree it must not read every release's
+// stored JSON across the whole mirror per request.
+func (s *HighServer) listComposerPackageNames() ([]string, error) {
+	vendors, err := os.ReadDir(s.composerMetadataDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, v := range vendors {
+		if v.IsDir() {
+			out = s.appendComposerVendorNames(out, v.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// appendComposerVendorNames appends one vendor directory's package names that
+// still have at least one release zip on disk.
+func (s *HighServer) appendComposerVendorNames(out []string, vendor string) []string {
+	projects, err := os.ReadDir(filepath.Join(s.composerMetadataDir(), vendor))
+	if err != nil {
+		return out
+	}
+	for _, p := range projects {
+		name := vendor + "/" + p.Name()
+		if p.IsDir() && validateComposerName(name) == nil && s.composerHasServableRelease(name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// composerHasServableRelease reports whether any of the package's stored
+// releases still has its dist zip on disk — the same gate readComposerStored
+// applies, minus reading any stored JSON. The p2 and detail responses are
+// still rendered through readComposerStored, which re-checks each release.
+func (s *HighServer) composerHasServableRelease(name string) bool {
+	dir := filepath.Join(s.composerMetadataDir(), filepath.FromSlash(name))
+	if !safeJoin(s.composerMetadataDir(), dir) {
+		return false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		vnorm := strings.TrimSuffix(e.Name(), ".json")
+		if e.IsDir() || vnorm == e.Name() || validateComposerVersionNormalized(vnorm) != nil {
+			continue
+		}
+		zip := filepath.Join(s.composerDistDir(), filepath.FromSlash(name), vnorm+".zip")
+		if safeJoin(s.composerDistDir(), zip) && fileExists(zip) {
+			return true
+		}
+	}
+	return false
 }
 
 // handleComposerP2 answers /composer/p2/<vendor>/<project>.json and its ~dev
@@ -1035,7 +1096,7 @@ func (s *HighServer) composerDetailFor(name string, rel composerStoredRelease) U
 	if fi, err := os.Stat(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "Zip size", Value: formatBytes(fi.Size())})
 	}
-	if sum, err := sha256File(abs); err == nil {
+	if sum, err := s.detailDigests.get(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
 	}
 	distPath := "/composer/dist/" + name + "/" + rel.stored.Filename

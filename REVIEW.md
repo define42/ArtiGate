@@ -12,14 +12,15 @@ through it. The real defects are concentrated in the per-ecosystem *collect* and
 *publish* code and in a few unauthenticated high-side endpoints. Every High/Medium from
 the first round (H1–H2, M1–M10) is now **fixed**; a second review round found the M11–M13
 class (unauthenticated per-request work on the public port) — request-cost/DoS, not
-trust-boundary — of which the two most concrete instances (M4b, L2 detail reads) are fixed
-and the rest are recommended follow-ups. The remainder are defense-in-depth (L-series).
+trust-boundary — and that class is now **fixed** too (M4b, L2 detail reads, M11, M12,
+M13). The remainder are defense-in-depth (L-series).
 
 **Status at a glance (this branch):**
-- **Fixed:** H1, H2, M1, M2, M3, M4 (both parts), M5, M6, M7, M8, M9, M10; L2 (the two
-  unauthenticated dashboard config-blob reads).
-- **Open, recommended:** M11 (`/ui/api/detail` re-hash), M12 (nuget-search / composer
-  whole-mirror walks), M13 (container/HF manifest reads), and the L-series defense-in-depth.
+- **Fixed:** H1, H2, M1, M2, M3, M4 (both parts), M5, M6, M7, M8, M9, M10; M11
+  (`/ui/api/detail` digests now memoized), M12 (nuget search paged, composer
+  packages.json derived from directory structure), M13 (container/HF manifest reads
+  capped); L2 (the two unauthenticated dashboard config-blob reads).
+- **Open, recommended:** the L-series defense-in-depth.
 
 ## Validation baseline
 
@@ -329,7 +330,11 @@ hook — `goDetail`, `pythonDetail`, `cratesDetail`, `uploadsDetail`, `nugetDeta
 upload, a multi-GB HF/Go zip) is O(that artifact's bytes) per hit, uncached. `npmDetail`
 (`npm.go:758`) re-hashes even though npm already persists the digest at import.
 **Fix:** serve the digest persisted at publish time (npm/nuget/crates already store one), or a
-`(size, modtime)`-keyed cache like M4(b)'s `pyDigestCache`. **Status: open (recommended).**
+`(size, modtime)`-keyed cache like M4(b)'s `pyDigestCache`.
+**Status: fixed** — a shared `(size, modtime)`-keyed `detailDigestCache` (`ui.go`, field
+`HighServer.detailDigests`) now backs every detail hook's digest field; `pythonDetail` reuses
+the existing `pyDigests` cache so a wheel is hashed at most once across `/simple` and the
+detail panel. Regression test: `TestDetailDigestCacheMemoizesAndInvalidates` (`ui_test.go`).
 
 ### M12 — Two unauthenticated endpoints walk the entire mirror per request
 
@@ -337,20 +342,34 @@ upload, a multi-GB HF/Go zip) is O(that artifact's bytes) per hit, uncached. `np
   empty/absent `q` skips the filter, so it iterates every package id and reads each id's stored
   metadata + all versions, emitting a body ∝ mirror size, with no pagination (`skip`/`take` are
   ignored). **Fix:** require a non-empty `q` (or enforce a `take` cap) and filter ids before load.
+  **Status: fixed** — the protocol's `skip`/`take` window is enforced (default 20, capped at
+  `nugetSearchMaxTake` 100); ids are matched and counted before any stored JSON is read
+  (`nugetHasServableVersion` gates on directory scans + archive stats only, preserving the
+  "removed archive drops out of search" invariant), and full metadata is loaded for the
+  returned window alone. Tests: `TestNugetSearchPaging`, `TestNugetSearchPageCap`.
 - **`composer.go:686`** (`handleComposerRoot` → `listComposerPackages` `composer.go:930`,
   `GET /composer/packages.json` — the first document every Composer client fetches): to emit just
   the name list it reads **every release's** stored JSON across the whole mirror. **Fix:** cache
   the name list (invalidate on import), or derive names from directory structure without reading
-  each release. **Status: open (recommended).**
+  each release.
+  **Status: fixed** — `packages.json` is now served from `listComposerPackageNames`, which
+  derives names from the metadata directory structure plus a dist-zip existence check
+  (`composerHasServableRelease`, first hit wins) and reads no stored JSON; p2/detail responses
+  still go through `readComposerStored`'s full per-release re-check. The zip-gating case is
+  covered at the end of the composer pipeline test.
 
 ### M13 — Unbounded manifest/config reads on the container/HF serve path (OOM)
 
-The dashboard-detail half of this (config blobs) is fixed under **L2** above. Still open: the
+The dashboard-detail half of this (config blobs) is fixed under **L2** above. The other half: the
 registry manifest reads `handleContainerManifest` (`container.go:1624`) and `handleHFManifest`
 (`hf.go:1552`) `os.ReadFile` the manifest blob whole (size checked only `> 0` at import) on the
 unauthenticated `GET /v2/.../manifests/<ref>` pull path. Manifests are tiny in practice, so a cap
 is pure hardening, but it closes the last unauthenticated whole-blob-into-memory read.
-**Fix:** `readFileLimit` these two with a manifest-sized cap. **Status: open (recommended).**
+**Fix:** `readFileLimit` these two with a manifest-sized cap.
+**Status: fixed** — both handlers read through `readFileLimit(..., maxServedManifestBytes)`
+(4 MiB, the conventional registry manifest-upload cap; `container.go`), and an oversize blob
+404s as unservable. Tests: `TestContainerManifestServeCapsBlobRead`,
+`TestHFManifestServeCapsBlobRead`.
 
 ---
 

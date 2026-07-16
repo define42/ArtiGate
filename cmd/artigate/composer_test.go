@@ -745,6 +745,26 @@ func TestComposerLowToHighPipeline(t *testing.T) {
 		t.Errorf("zip gating failed: %s", body)
 	}
 	_ = oldLibZip
+
+	// packages.json applies the same gate: once a package's last zip is gone,
+	// its name drops out of available-packages (the name list is derived from
+	// the directory structure, never from reading each release's stored JSON).
+	if err := os.Remove(filepath.Join(hs.downloadDir, "composer", "dist", "acme", "lib", "1.1.0.0.zip")); err != nil {
+		t.Fatal(err)
+	}
+	code, body = composerServe(t, hs, http.MethodGet, "http://mirror.example/composer/packages.json")
+	if code != http.StatusOK {
+		t.Fatalf("packages.json after zip removal: status %d: %s", code, body)
+	}
+	var root struct {
+		Available []string `json:"available-packages"`
+	}
+	if err := json.Unmarshal([]byte(body), &root); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(root.Available, []string{"acme/app"}) {
+		t.Errorf("available-packages after zip removal = %v, want [acme/app]", root.Available)
+	}
 }
 
 // importComposerBundle verifies a bundle's signature and records, then lands

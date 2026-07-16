@@ -755,7 +755,7 @@ func (s *HighServer) npmDetail(spec string) (UIDetail, error) {
 	if fi, err := os.Stat(tarball); err == nil {
 		fields = append(fields, UIDetailField{Label: "Tarball size", Value: formatBytes(fi.Size())})
 	}
-	if sum, err := sha256File(tarball); err == nil {
+	if sum, err := s.detailDigests.get(tarball); err == nil {
 		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
 	}
 	fields = append(fields,

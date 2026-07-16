@@ -1399,7 +1399,7 @@ func (s *HighServer) gitDetail(spec string) (UIDetail, error) {
 	if fi, err := os.Stat(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "Pack size", Value: formatBytes(fi.Size())})
 	}
-	if sum, err := sha256File(abs); err == nil {
+	if sum, err := s.detailDigests.get(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "Pack SHA-256", Value: sum, Mono: true})
 	}
 	downloads := []UIDownload{{Label: packBase + ".pack", URL: packURL}}
