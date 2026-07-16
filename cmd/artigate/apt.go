@@ -1322,7 +1322,10 @@ func (s *HighServer) publishAptSuite(mirrorRoot string, merged AptMirror, suite 
 			if len(pkgs) == 0 {
 				continue
 			}
-			plain := []byte(strings.Join(pkgs, "\n") + "\n")
+			// deb822 separates stanzas with a blank line; joining with a single
+			// "\n" would merge every package into one record (apt keeps one value
+			// per field), so all but one package would vanish from the index.
+			plain := []byte(strings.Join(pkgs, "\n\n") + "\n")
 			gz, err := gzipBytes(plain)
 			if err != nil {
 				return err

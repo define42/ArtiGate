@@ -59,6 +59,8 @@ per field — so every package but one silently disappears and is uninstallable.
   sibling does it correctly (`apk.go:916` uses `"\n\n"`).
 - **Fix:** join with `"\n\n"`: `strings.Join(pkgs, "\n\n") + "\n"`. Add a 2-package index
   test.
+- **Status: fixed in this branch** (`apt.go:1328`), with a 2-package regression test
+  (`TestCov3B_PublishAptSuiteStanzaSeparator`) that fails on the single-`\n` join.
 
 ### H2 — Unescaped upstream data injected into the high-side-signed `repomd.xml` (XML injection)
 
@@ -89,6 +91,12 @@ config) or an absent key, so low-side signature verification is skipped entirely
 - **Fix:** XML-escape every emitted value (build the document with `encoding/xml`, or escape
   with `xml.EscapeText`), and validate `Type`/`Checksum`/`ChecksumType`/`Timestamp` charset
   on the import side the way the low side is expected to.
+- **Status: fixed in this branch** — all `writeRepomdData` fields now go through
+  `xmlEscape` (`xml.EscapeText`), with a regression test
+  (`TestWriteRepomdDataEscapesHostileFields`) that asserts a hostile upstream `<data>` field
+  cannot break out of the element or forge a second one. (The additional import-side
+  charset validation is left as a follow-up hardening item — escaping already closes the
+  injection.)
 
 ---
 

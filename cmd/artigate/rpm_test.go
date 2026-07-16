@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/xml"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -618,5 +619,46 @@ func TestRunXZOutputCap(t *testing.T) {
 	}
 	if out, err := runXZ(comp, 2<<20, "--decompress", "--stdout"); err != nil || len(out) != 1<<20 {
 		t.Fatalf("runXZ roundtrip = %d bytes, %v", len(out), err)
+	}
+}
+
+// TestWriteRepomdDataEscapesHostileFields is a regression test: repomd <data>
+// fields are copied verbatim from the upstream repomd.xml (which the low side
+// may fetch without verifying a signature, e.g. a remote gpgkey= URL), so a
+// hostile value must not inject markup into the repomd.xml the high side
+// re-signs and serves.
+func TestWriteRepomdDataEscapesHostileFields(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<repomd>\n")
+	writeRepomdData(&b, RpmData{
+		Type:      `primary"></data><data type="evil`,
+		Href:      `repodata/primary.xml.gz"/><injected x="`,
+		Checksum:  `<script>&`,
+		Timestamp: `1<2&3`,
+	})
+	b.WriteString("</repomd>\n")
+	out := b.String()
+
+	// Must be well-formed XML with exactly one <data> element: the injection
+	// must neither break parsing nor forge a second element.
+	var doc struct {
+		Data []struct {
+			Type string `xml:"type,attr"`
+		} `xml:"data"`
+	}
+	if err := xml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("regenerated repomd is not well-formed XML: %v\n%s", err, out)
+	}
+	if len(doc.Data) != 1 {
+		t.Fatalf("repomd has %d <data> elements, want 1 (XML injection):\n%s", len(doc.Data), out)
+	}
+	if doc.Data[0].Type != `primary"></data><data type="evil` {
+		t.Errorf("type attribute did not round-trip: %q", doc.Data[0].Type)
+	}
+	// None of the raw payloads may appear unescaped in the document.
+	for _, raw := range []string{"</data><data", "<injected", "<script>"} {
+		if strings.Contains(out, raw) {
+			t.Errorf("unescaped %q present in regenerated repomd:\n%s", raw, out)
+		}
 	}
 }

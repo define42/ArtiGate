@@ -1194,14 +1194,14 @@ func buildRpmRepomd(mirrorRoot string, entries []RpmData) []byte {
 }
 
 func writeRepomdData(b *strings.Builder, d RpmData) {
-	fmt.Fprintf(b, "  <data type=%q>\n", d.Type)
-	fmt.Fprintf(b, "    <checksum type=%q>%s</checksum>\n", orDefault(d.ChecksumType, "sha256"), d.Checksum)
+	fmt.Fprintf(b, "  <data type=\"%s\">\n", xmlEscape(d.Type))
+	fmt.Fprintf(b, "    <checksum type=\"%s\">%s</checksum>\n", xmlEscape(orDefault(d.ChecksumType, "sha256")), xmlEscape(d.Checksum))
 	if d.OpenChecksum != "" {
-		fmt.Fprintf(b, "    <open-checksum type=%q>%s</open-checksum>\n", orDefault(d.OpenChecksumType, "sha256"), d.OpenChecksum)
+		fmt.Fprintf(b, "    <open-checksum type=\"%s\">%s</open-checksum>\n", xmlEscape(orDefault(d.OpenChecksumType, "sha256")), xmlEscape(d.OpenChecksum))
 	}
-	fmt.Fprintf(b, "    <location href=%q/>\n", d.Href)
+	fmt.Fprintf(b, "    <location href=\"%s\"/>\n", xmlEscape(d.Href))
 	if d.Timestamp != "" {
-		fmt.Fprintf(b, "    <timestamp>%s</timestamp>\n", d.Timestamp)
+		fmt.Fprintf(b, "    <timestamp>%s</timestamp>\n", xmlEscape(d.Timestamp))
 	}
 	if d.Size > 0 {
 		fmt.Fprintf(b, "    <size>%d</size>\n", d.Size)
@@ -1210,6 +1210,19 @@ func writeRepomdData(b *strings.Builder, d RpmData) {
 		fmt.Fprintf(b, "    <open-size>%d</open-size>\n", d.OpenSize)
 	}
 	b.WriteString("  </data>\n")
+}
+
+// xmlEscape renders s safe to embed in XML element text or a double-quoted
+// attribute value. The repomd <data> fields (type, checksum, href, timestamp)
+// come verbatim from the upstream repomd.xml — which the low side may fetch
+// without verifying a signature (a remote gpgkey= URL is not a local keyring,
+// so localKeyringPath skips verification) — so an unescaped '<', '&', or '"' in
+// any of them would inject markup into the repomd.xml the high side re-signs and
+// serves. xml.EscapeText escapes all of those (and control characters).
+func xmlEscape(s string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
 }
 
 func orDefault(v, def string) string {

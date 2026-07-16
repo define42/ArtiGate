@@ -384,6 +384,51 @@ func TestCov3B_PresentAptStanzas(t *testing.T) {
 	}
 }
 
+// TestCov3B_PublishAptSuiteStanzaSeparator is a regression test: a regenerated
+// multi-package Packages index must separate deb822 stanzas with a blank line.
+// Joining them with a single "\n" merges every package into one record (apt
+// keeps one value per field), so all but one package would silently vanish.
+func TestCov3B_PublishAptSuiteStanzaSeparator(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	mirrorRoot := t.TempDir()
+
+	suite := AptSuite{Name: "stable", Components: []string{"main"}, Architectures: []string{"amd64"}}
+	pkgs := []AptPackage{
+		{
+			Package: "alpha", Version: "1.0", Architecture: "amd64", Suite: "stable", Component: "main",
+			Filename: "pool/main/a/alpha_1.0_amd64.deb",
+			Stanza:   "Package: alpha\nVersion: 1.0\nArchitecture: amd64\nFilename: pool/main/a/alpha_1.0_amd64.deb",
+		},
+		{
+			Package: "beta", Version: "2.0", Architecture: "amd64", Suite: "stable", Component: "main",
+			Filename: "pool/main/b/beta_2.0_amd64.deb",
+			Stanza:   "Package: beta\nVersion: 2.0\nArchitecture: amd64\nFilename: pool/main/b/beta_2.0_amd64.deb",
+		},
+	}
+	// presentAptStanzas includes only a package whose .deb is present in the pool.
+	for _, p := range pkgs {
+		covP2Write(t, filepath.Join(mirrorRoot, filepath.FromSlash(p.Filename)), []byte("deb"))
+	}
+
+	if err := hs.publishAptSuite(mirrorRoot, AptMirror{Name: "m", Suites: []AptSuite{suite}, Packages: pkgs}, suite); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(filepath.Join(mirrorRoot, "dists", "stable", "main", "binary-amd64", "Packages"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	// Both packages must survive as distinct blank-line-separated stanzas.
+	if stanzas := strings.Split(strings.TrimSpace(got), "\n\n"); len(stanzas) != 2 {
+		t.Fatalf("Packages parsed into %d stanza(s), want 2 (missing blank-line separator):\n%s", len(stanzas), got)
+	}
+	if !strings.Contains(got, "Package: alpha") || !strings.Contains(got, "Package: beta") {
+		t.Errorf("a package is missing from the regenerated index:\n%s", got)
+	}
+}
+
 func TestCov3B_CollectAptVersionsAndPrune(t *testing.T) {
 	pub, _ := newTestKeys(t)
 	hs := newTestHighServer(t, pub)
