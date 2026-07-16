@@ -100,23 +100,27 @@ func TestValidatePipArgRejectsURLsAndPaths(t *testing.T) {
 	}
 }
 
-// --- Stale UDP temp reaping ------------------------------------------------
+// --- Stale transport temp reaping -------------------------------------------
 
-func TestReapStaleUDPTemps(t *testing.T) {
+func TestReapStaleTransportTemps(t *testing.T) {
 	dir := t.TempDir()
 	staleTemp := filepath.Join(dir, "go-bundle-000001.tar.gz.udp-abc")
 	freshTemp := filepath.Join(dir, "go-bundle-000002.tar.gz.udp-xyz")
 	bundle := filepath.Join(dir, "go-bundle-000003.tar.gz")
+	staleUpload := filepath.Join(dir, "go-bundle-000004.tar.gz.upload-123")
+	freshUpload := filepath.Join(dir, "go-bundle-000005.tar.gz.upload-456")
 	writeAged(t, staleTemp, 72*time.Hour)
 	writeAged(t, freshTemp, 0)
 	writeAged(t, bundle, 72*time.Hour)
+	writeAged(t, staleUpload, 72*time.Hour)
+	writeAged(t, freshUpload, 0)
 
-	n, err := reapStaleUDPTemps(dir, time.Now().Add(-incompleteLandingRetention))
+	n, err := reapStaleTransportTemps(dir, time.Now().Add(-incompleteLandingRetention))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Errorf("reaped %d, want 1", n)
+	if n != 2 {
+		t.Errorf("reaped %d, want 2", n)
 	}
 	if fileExists(staleTemp) {
 		t.Error("stale UDP temp should be reaped")
@@ -125,6 +129,15 @@ func TestReapStaleUDPTemps(t *testing.T) {
 		t.Error("fresh UDP temp must be kept")
 	}
 	if !fileExists(bundle) {
-		t.Error("a normal bundle file must not be touched by the UDP reaper")
+		t.Error("a normal bundle file must not be touched by the temp reaper")
+	}
+	// An orphaned HTTP ingest upload temp would otherwise pin the unverified
+	// storage quota forever: it counts against the quota but carried no known
+	// bundle suffix, so no other reaper matched it.
+	if fileExists(staleUpload) {
+		t.Error("stale HTTP upload temp should be reaped")
+	}
+	if !fileExists(freshUpload) {
+		t.Error("fresh HTTP upload temp must be kept")
 	}
 }

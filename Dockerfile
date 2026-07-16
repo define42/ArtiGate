@@ -23,9 +23,10 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/artigate ./cmd/art
 # The `low` mode shells out to `go` and `git` (Go modules), `pip` (Python
 # wheels), `mvn` (Java/Maven artifacts), `npm` (NPM dependency resolution),
 # `gpgv` (verifying upstream APT/RPM repositories), `xz` (decompressing
-# some RPM indexes), and `zstd` (decompressing conda repodata), so the
-# runtime image ships the Go toolchain, git, python3/pip, Maven + a JDK,
-# nodejs/npm, gnupg, xz, and zstd. APT, RPM, NPM, conda, RubyGems, Composer,
+# some RPM indexes), `lz4` (decompressing APT Packages.lz4 indexes), and
+# `zstd` (decompressing conda repodata), so the runtime image ships the Go
+# toolchain, git, python3/pip, Maven + a JDK, nodejs/npm, gnupg, xz, lz4,
+# and zstd. APT, RPM, NPM, conda, RubyGems, Composer,
 # VS Code extension, Galaxy, CRAN, raw-git, and container content is fetched
 # over HTTP with the Go standard library (git mirroring speaks the smart
 # protocol in pure Go — the git binary here serves only the Go-module VCS
@@ -36,7 +37,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/artigate ./cmd/art
 # -----------------------------------------------------------------------------
 FROM golang:1.26.5-alpine
 
-RUN apk add --no-cache git ca-certificates openssh-client python3 py3-pip maven openjdk17-jre-headless nodejs npm gnupg xz zstd \
+RUN apk add --no-cache git ca-certificates openssh-client python3 py3-pip maven openjdk17-jre-headless nodejs npm gnupg xz lz4 zstd \
     && addgroup -S artigate \
     && adduser -S -G artigate -h /home/artigate artigate
 

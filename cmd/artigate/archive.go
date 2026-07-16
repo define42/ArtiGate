@@ -114,7 +114,15 @@ func createTarGzAtomic(ctx context.Context, dst string, baseDir string, files []
 		total += mf.Size
 	}
 	tracker := newProgressTracker(ctx, "packing "+filepath.Base(dst), total)
-	gz := gzip.NewWriter(f)
+	// BestSpeed, deliberately: bundle payloads are dominated by artifacts that
+	// are already compressed or high-entropy (wheels, crates, layers, jars,
+	// model weights), where the default level burns ~7× the CPU for the same
+	// output size, turning a large bundle's pack step into tens of minutes.
+	// The small metadata files still compress fine at this level.
+	gz, err := gzip.NewWriterLevel(f, gzip.BestSpeed)
+	if err != nil {
+		return err
+	}
 	tw := tar.NewWriter(gz)
 	for _, mf := range files {
 		if err := ctx.Err(); err != nil {
@@ -302,9 +310,19 @@ func extractTarEntry(tr *tar.Reader, hdr *tar.Header, staging string, expected m
 	// stagingWriter tags a write-side (disk) failure so it is retried, not
 	// rejected; a read-side failure from tr means the archive is corrupt.
 	_, copyErr := io.Copy(io.MultiWriter(stagingWriter{w: out}, h), tr)
+	// fsync the staged bytes here so the install step can publish the file
+	// with a bare rename — renaming an unsynced file could surface a
+	// zero-length artifact at its final repository path after a crash.
+	var syncErr error
+	if copyErr == nil {
+		syncErr = out.Sync()
+	}
 	closeErr := out.Close()
 	if copyErr != nil {
 		return copyErr
+	}
+	if syncErr != nil {
+		return &stagingIOError{err: syncErr}
 	}
 	if closeErr != nil {
 		return &stagingIOError{err: closeErr}

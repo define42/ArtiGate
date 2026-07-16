@@ -61,13 +61,27 @@ type UITreeNode struct {
 	Count      int    `json:"count,omitempty"`
 }
 
-// treeCache memoizes the (relatively expensive) filesystem scans for a short
-// window so that lazily expanding many nodes does not re-walk the repository on
-// every request.
+// treeCache memoizes the (expensive, whole-mirror) filesystem scans behind the
+// dashboard tree and search endpoints. The mirror only changes when a bundle
+// imports or an upload is deleted — both invalidate the cache — so the TTL is
+// just a backstop against direct on-disk mutation, not the freshness mechanism;
+// without invalidation a large mirror would be re-walked every few seconds for
+// as long as anyone (unauthenticated) polls the dashboard.
 type treeCache struct {
 	mu     sync.Mutex
 	expiry time.Time
 	trees  map[string]uiTree
+}
+
+// treeCacheTTL bounds how long a scan is reused when nothing invalidated it.
+const treeCacheTTL = time.Minute
+
+// invalidate drops the memoized scan so the next dashboard request sees the
+// repository as just changed by an import or an upload deletion.
+func (c *treeCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.expiry = time.Time{}
 }
 
 func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
@@ -333,7 +347,7 @@ func (s *HighServer) cachedTrees() (map[string]uiTree, error) {
 		return nil, err
 	}
 	s.tree.trees = fresh
-	s.tree.expiry = time.Now().Add(3 * time.Second)
+	s.tree.expiry = time.Now().Add(treeCacheTTL)
 	return fresh, nil
 }
 

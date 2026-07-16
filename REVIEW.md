@@ -1,9 +1,11 @@
 # ArtiGate — full code review
 
-**Scope:** the whole `cmd/artigate` binary (~45k LOC of non-test Go across ~60 files),
-reviewed for correctness, security (the diode trust boundary above all), concurrency,
-and resource safety. Every finding below was verified against the source, not taken on
-faith.
+**Scope:** the whole `cmd/artigate` binary (~45k LOC of non-test Go across ~60 files).
+Rounds 1–2 reviewed correctness, security (the diode trust boundary above all),
+concurrency, and resource safety; round 3 (this branch) reviewed **performance,
+operations, and completeness** — throughput and latency of the diode data path, import
+and serve costs at mirror scale, disk-lifecycle gaps, and docs/test coverage drift.
+Every finding below was verified against the source, not taken on faith.
 
 **Verdict:** the security-critical core — the high-side verify-and-import pipeline, path
 containment, archive extraction, manifest signature/sequence verification, the UDP wire
@@ -13,27 +15,41 @@ through it. The real defects are concentrated in the per-ecosystem *collect* and
 the first round (H1–H2, M1–M10) is now **fixed**; a second review round found the M11–M13
 class (unauthenticated per-request work on the public port) — request-cost/DoS, not
 trust-boundary — and that class is now **fixed** too (M4b, L2 detail reads, M11, M12,
-M13). The remainder are defense-in-depth (L-series).
+M13). The third round found **no new correctness or trust-boundary defects**: everything
+works, and the whole validation suite is green. Its findings are performance and
+operational: redundant full-file I/O on the bundle path (P1–P3, fixed), unbounded
+processed-bundle disk growth and quota-pinning orphans on the high side (O1–O3, fixed),
+and a documented backlog of larger wins (serial collects, import-lock coupling,
+per-import index regeneration, HTTP caching) recorded as P/O recommendations below.
 
 **Status at a glance (this branch):**
-- **Fixed:** H1, H2, M1, M2, M3, M4 (both parts), M5, M6, M7, M8, M9, M10; M11
-  (`/ui/api/detail` digests now memoized), M12 (nuget search paged, composer
-  packages.json derived from directory structure), M13 (container/HF manifest reads
-  capped); L2 (the two unauthenticated dashboard config-blob reads).
-- **Open, recommended:** the L-series defense-in-depth.
+- **Fixed (rounds 1–2):** H1, H2, M1–M10; M11 (`/ui/api/detail` digests memoized),
+  M12 (nuget search paged, composer packages.json derived from directory structure),
+  M13 (container/HF manifest reads capped); L2 (the two unauthenticated dashboard
+  config-blob reads).
+- **Fixed (round 3):** P1 (install now renames instead of re-copying every byte),
+  P2 (bundle packing at `gzip.BestSpeed`, ~7× measured), P3 (bundle archive/replay
+  hardlinks instead of full copies), P4 (dashboard tree cache invalidated on import,
+  TTL 3s→60s), O1 (`landing/imported`+`duplicates` 7-day retention), O2 (orphaned
+  HTTP-ingest `.upload-*` temps reaped — they pinned the unverified quota forever),
+  O3 (startup sweep of crash-stranded import staging), O4 (`lz4` added to the runtime
+  image; retention + `/admin/status` docs corrected).
+- **Open, recommended:** the L-series defense-in-depth and the round-3 P/O/T/D backlog
+  (see "Round 3" below; P5–P7 are the highest-value items).
 
 ## Validation baseline
 
-All green on the current branch (Go 1.26.5):
+All green on the current branch (Go 1.26.5), re-run after the round-3 fixes:
 
 | check | result |
 |-------|--------|
 | `go build ./...` | ✅ |
 | `go vet ./...` (incl. `-tags e2e ./e2e`) | ✅ |
-| `go test -race ./...` | ✅ (~60s) |
+| `go test -race ./...` | ✅ (~50s) |
 | `golangci-lint run` (v2.12.2, `GOTOOLCHAIN=go1.26.5`) | ✅ `0 issues` |
 | `TestEcosystemRegistryWiring` (registry invariant) | ✅ |
 | `govulncheck ./...` | runs in CI (`.github/workflows/govulncheck.yml`); the vuln DB is unreachable from the sandbox |
+| statement coverage | 88.7% (`go test -cover`); zero benchmarks/fuzz targets — see T1 |
 
 ## Method
 
@@ -497,3 +513,305 @@ is pure hardening, but it closes the last unauthenticated whole-blob-into-memory
   npm, nuget, crates, maven, apt, rpm, apk, conda, container, hf, helm, galaxy, cran, vsx,
   terraform, git, osv, uploads) pairs name/digest validation with a `safeJoin`; integrity chains
   (crates `cksum`, npm SRI, container/hf digest regex) are end-to-end.
+
+---
+
+# Round 3 — performance, operations, and completeness
+
+**Method:** core data-path files re-read in full with a performance lens (`diodewire.go`,
+`pitcher.go`, `catcher.go`, `diode.go`, `highside.go`, `archive.go`, `metrics.go`,
+`readyz.go`, `tls.go`, `ui.go`); four parallel review agents covered the diode/import
+pipeline, the high-side serve handlers of all 22 ecosystems, the low-side collect paths and
+background machinery, and the docs/ops/test gap surface. Every agent finding referenced
+below was re-verified against source before inclusion; the gzip claim was measured on this
+machine. Numbering: **P** performance, **O** operations/lifecycle, **T** tests, **D** docs.
+
+## Fixed in this branch
+
+### P1 — Install re-copied (and re-fsynced) every verified byte from staging into the repo
+`installVerifiedFile` published each file with `copyFileAtomic` — a full second read+write of
+the entire bundle content plus one fsync per file, even though staging (`<root>/tmp/<id>`)
+and the repository (`<root>/cache/download`) share a filesystem. A 64 GiB bundle paid
+~128 GiB of disk I/O per import; a thousand-file bundle paid a thousand serial fsyncs — all
+inside the import pass. **Fixed:** extraction fsyncs each verified file once
+(`archive.go`, `extractTarEntry`), and install renames it into place (`moveVerifiedFile`,
+`highside.go`), falling back to the copying path on EXDEV or any rename failure. Idempotent
+re-import, the immutable-conflict check, and operational-vs-invalid error classification are
+unchanged; regression test `TestCov3A_InstallVerifiedFileMovesFromStaging`.
+
+### P2 — Bundle packing gzipped mostly-incompressible payloads at the default level
+`createTarGzAtomic` used `gzip.NewWriter` (level 6) while the split-budget model itself
+documents the content as "already compressed or incompressible" (`lowside.go:1327`).
+Measured here: level 6 = **57 MB/s**, level 1 = **387 MB/s** on incompressible data (one
+core), identical output size; on repetitive JSON level 1 is ~3× faster and still compresses
+~150:1. A 64 GiB HF bundle's pack step drops from ~19 min of CPU to ~3 min. **Fixed:**
+`gzip.NewWriterLevel(f, gzip.BestSpeed)` with the rationale in a comment (`archive.go`).
+
+### P3 — Bundle archive and re-export copied the just-written archive byte-for-byte
+`archiveBundle` and `replayArchivedBundle` did `copyFileAtomic` of all three bundle files —
+another full read+write (and double disk footprint churn) of a potentially multi-GiB archive
+on every export and every re-export. **Fixed:** `linkOrCopyFile` (`lowside.go`) hardlinks
+the immutable signed files (tmp-link + rename, so replay stays idempotent), falling back to
+the copy on EXDEV/no-hardlink filesystems.
+
+### P4 — Dashboard tree cache re-walked the whole mirror every 3 seconds
+`cachedTrees` memoized the full 22-ecosystem inventory scan (per-version stats + reads in
+several ecosystems) for only 3 s, so any unauthenticated dashboard/tree/search poll kept a
+large mirror permanently re-scanning. The mirror only changes on import or upload deletion.
+**Fixed:** both mutation paths call `treeCache.invalidate()` (`highside.go`, `uploads.go`),
+and the TTL is now a 60 s backstop for direct on-disk mutation (`ui.go`); test
+`TestCov4_TreeCacheInvalidation`.
+
+### O1 — `landing/imported/` and `landing/duplicates/` grew forever
+Every imported bundle's three files were moved to `landing/imported` (`highside.go:847`) and
+every replayed duplicate to `landing/duplicates`, and **no reaper ever touched either** —
+the high side retained a compressed second copy of everything ever imported until the
+landing volume filled (the docs said "automatic retention is not yet built"). **Fixed:**
+`reapUnverifiedLocked` now reaps both after `processedLandingRetention` (7 days — the
+authoritative replay copy is the low side's bundle archive); test
+`TestReapProcessedLandingDirs`; docs updated (`deployment.md`, `high-side.md`).
+
+### O2 — Orphaned HTTP-ingest temp files pinned the unverified quota forever
+A kill/OOM mid-`PUT /diode/<file>` stranded `<name>.upload-<rand>` in the landing directory
+(`diode.go:272`). The orphan **counted against the 128 GiB unverified quota** (it is a
+regular file in landing) but matched no reaper: `reapIncompleteLanding` skips names without
+a bundle suffix and the UDP reaper matches only `.udp-`. One 64 GiB orphan permanently ate
+half the quota until an operator hand-deleted it. **Fixed:** the temp reaper is now
+`reapStaleTransportTemps` and also matches `.upload-*` names past the 48 h retention
+(`highside.go`, `isIngestUploadTempName` in `diode.go`); test extended.
+
+### O3 — Crash-stranded import staging survived forever
+`<root>/tmp/<bundleID>` is removed by the importing pass itself; a hard kill mid-import
+stranded the extracted copy (up to a whole bundle's content) with nothing ever looking at it
+again. **Fixed:** `NewHighServer` sweeps `<root>/tmp` at construction — no import can be
+running then, and the directory holds nothing else. (The low-side sibling —
+`<root>/<eco>/staging/collect-*` — is O15 below, recommended.)
+
+### O4 — `lz4` missing from the runtime image; two stale docs claims
+`Packages.lz4` decompression shells out to the `lz4` binary (`apt.go:418`, `lz4Decompress`)
+but the Dockerfile installed only `xz zstd` — an APT repo whose Release lists only `.lz4`
+indexes failed to collect in the shipped image with a confusing exec error. **Fixed:** `lz4`
+added to the image and its toolchain comment. Also corrected: the two "retention is not yet
+built" doc notes (now describing O1's behavior), and `high-side.md`'s claim that
+`GET /admin/status` sorts landing bundles as a side effect — that side effect was removed by
+the M4 fix (`importStatusReadOnly`).
+
+## Recommended — performance (verified, not fixed here)
+
+### P5 — The whole import pass holds `s.mu`; observability blocks behind a running import
+`importPass` (`highside.go:662`) takes `s.mu` for the full multi-stream drain — signature
+verify, full-archive gunzip + per-file SHA-256, install, and every publish hook — and
+`importStatusReadOnly` (`/metrics`, `/readyz`, `/ui/api/overview`, `/admin/status`) takes
+the same lock. During a multi-GiB import, every scrape and readiness probe hangs for
+minutes: Prometheus times out and Kubernetes readiness flaps exactly when the pipeline is
+busiest. It also serializes imports **across** streams — a 64 GiB `hf` bundle stalls a 2 MB
+`go` bundle — the one place the per-stream-independence design doesn't hold. Artifact
+serving is unaffected (no lock). *Fix direction:* split the pass into a narrow-lock state
+phase and an unlocked extract phase (staging is per-bundle already), or serve a cached
+status snapshot; note `checkImportBacklog`'s no-flap reasoning (`readyz.go:231`) leans on
+"the draining pass holds the status lock" — any decoupling must keep an equivalent
+guarantee (e.g. an `importRunning`/pass-start flag consulted by the backlog check). P1
+(fixed) already removes the largest chunk of time under the lock.
+
+### P6 — Several publish hooks regenerate the whole ecosystem per bundle, and once per bundle in a backlog drain
+`drainStreamLocked` runs `installVerifiedBundle` → publish per bundle, so N queued bundles
+cost N full regenerations (O(N × mirror) instead of O(mirror)). The heavy hooks, per import:
+**CRAN** re-reads and re-MD5s *every* newest tarball (`writeCRANIndexRecord` → `md5File`,
+`cran.go:505–532`) — O(mirror bytes); **RubyGems** re-reads every gem's JSON, stats every
+version, and rewrites+fsyncs every `/info/<gem>` file even when unchanged
+(`rubygems.go:713–806`) — the unconditional rewrite also bumps mtimes, breaking
+`http.ServeFile` 304s and Bundler's incremental compact-index Range updates; **APT** re-reads
+and rewrites the full mirror `index.json` and regenerates + GPG-signs every suite
+(`apt.go:1226–1455`); **APK** same shape (`apk.go:807–915`). *Fix direction:* store the CRAN
+MD5 in the stored-package record at publish; regenerate only gems/suites named in the
+bundle and skip byte-identical writes; defer publish to the end of a drain (dedup by
+ecosystem) — taking care that a mid-drain failure still publishes for the bundles already
+installed, and that a crash between state-commit and a deferred publish can't leave a stale
+index (publish-before-commit per batch, or a persisted dirty-ecosystems note).
+
+### P7 — Every collect downloads strictly serially, and re-downloads what it already has
+Two compounding findings across all 20+ collectors:
+- **No parallelism anywhere** — not one goroutine on the collect side; npm tarballs
+  (`npm.go:1223`), HF files (`hf.go:963`), container layers (`container.go:1226`), conda
+  (`conda.go:1398`), crates, apt, rpm, … all download one-at-a-time. A 200-package conda
+  closure pays 200 serial RTT+transfer cycles. A bounded 4–8-worker pool per collect is a
+  near-linear wall-clock win; raise `MaxIdleConnsPerHost` (default 2) at the same time and
+  add a `ResponseHeaderTimeout` — all collects share bare `http.DefaultClient` today.
+- **Dedup runs after download** for conda/crates/rubygems/helm/python-sdists even though the
+  upstream index declares the sha256 (and usually size) *before* the fetch: a recurring
+  watch re-downloads 100% of an unchanged channel every interval, then `markPriorFiles`
+  discards the bytes. apt/rpm/HF/containers already skip via `priorFileCheck`
+  (`lowside.go:1524`; e.g. `rpm.go:824`) — wire the same check into the other five.
+
+### P8 — git mirror: full clone per watch tick, no ref short-circuit, packs buffered in RAM
+`CollectGit` never compares the advertised ref tips against the last exported mirror, so an
+hourly watch full-clones an unchanged repo every hour (`gitmirror.go:1490–1525`), buffers
+up to 2 GiB of pack in memory (`gitReadCapped`), and — because the dedup key embeds the pack
+trailer (`gitPackRel`) — an upstream repack re-ships the whole pack across the diode with
+zero ref movement. *Cheapest fix:* after `gitFetchAdvertisement`, return Skipped when the
+selected ref set (name+sha) equals the last exported set.
+
+### P9 — Watch-driven index refetch has no conditional GET, no retry, size-capped-by-time downloads
+No collect-side request sends `If-None-Match`/`If-Modified-Since` (conda repodata — up to
+1 GiB compressed/8 GiB decompressed in RAM per tick, `conda.go:72`; OSV `all.zip`; apt/rpm
+metadata "always fetched", `rpm.go:816`; helm index; container tag pages). No request
+retries or honors `Retry-After` — one transient 429/5xx drops that item from the signed
+bundle (npm/crates/conda) or aborts the whole mirror collect (apt/rpm/git). And most
+downloads run under fixed wall-clock deadlines (30 min in `downloadVerifiedFileAuth`,
+10 min npm/pip, 15 min mvn) — a deadline caps effective file size by link speed regardless
+of progress; an idle/stall timeout (the `progressReader` already sees every chunk) would
+not. Persist per-URL validators beside `exported.db`, add a small retry helper, and switch
+the fixed deadlines to stall-based ones.
+
+### P10 — HTTP diode ingest serializes all uploads under one mutex for the full body transfer
+`handleDiodeUpload` holds `ingestMu` across `storeDiodeUpload`'s entire body copy
+(`diode.go:179–181`) — a 64 GiB PUT at 1 Gbit/s blocks every other stream's 4 KB signature
+upload for ~9 minutes (and a trickling client indefinitely; there is deliberately no server
+ReadTimeout). The lock only needs to make quota-check + admission atomic: reserve
+`ContentLength` against an in-memory pending counter under the lock, stream outside it,
+release on completion — the UDP assembler already does exactly this (`activeSize`,
+`diodewire.go:583`). Unknown-length uploads can keep the serialized path.
+
+### P11 — Pitcher/catcher data-path costs (matter above ~1 Gbit)
+Send side: each bundle file is read **twice** (SHA-256 pre-pass `pitcher.go:314`, then the
+paced send) — tee the hash at pack time and store it beside the bundle; `SendBundle` runs
+inside the collect job under `p.mu`, so one 64 GiB send (~15 min at the default 800 Mbit,
+77% goodput after FEC+headers) blocks other streams' *collect completions* — a durable
+outbound queue would decouple them; `splitDiodeBlock` allocates a fresh ~350 KB backing per
+block. Receive side: one ~8.7 KB heap copy per datagram (`addShard`,
+`diodewire.go:742`), a `SetReadDeadline` syscall per packet (`catcher.go:204`), up to 32
+`WriteAt`s per block, and the known L12 inline whole-file hash. At the 800 Mbit default all
+of this is comfortably fine; for multi-Gbit targets: one contiguous backing per block (one
+alloc, one `WriteAt` on the no-loss path), deadline reset only at sweep boundaries, and the
+L12 hash moved off the receive goroutine. **The single-goroutine catcher is the end-to-end
+ceiling (~1 Gbit easy, ~8 Gbit optimistic).**
+
+### P12 — Remaining per-request serve-path costs (M11/M12/L17 family, new instances)
+Verified but unfixed, in rough impact order: **VSX** `POST /vsx/gallery/extensionquery`
+(fired per keystroke by VS Code, never HTTP-cacheable) reads and parses every stored version
+JSON in the mirror **twice** per request (`vsx.go:439–451,517–521,778–793`); **OSV**
+`GET /osv/<eco>/<ID>.json` re-parses the whole database zip's central directory per advisory
+(`osv.go:299–318`) — memoize a name→entry map keyed by (size, modtime); **python**
+`/simple/<project>/` still ReadDirs + filename-parses the entire flat wheel store per
+request (`python.go:393–417`) — M4b removed the hashing, not the O(mirror) scan; **nuget**
+search still ReadDirs every package dir per request and the registration index reads every
+version's JSON twice (`nuget.go:521–558,607–655`); **npm** packuments rebuild with a double
+unmarshal per version per request (`npm.go:396–467`); **goproxy** `@v/list`/`@latest` do
+ReadDir + 4 stats + read + parse per version per request (`highside.go:464–507`) — extend
+L17; **composer** `packages.json` residual dir walk; **HF** case-insensitive fallback walks
+the whole tree on every miss of a bogus name (`hf.go:1262–1319`) and hub resolve re-parses
+the full repo index per file (`hf.go:1945`); **apk** re-reads and re-parses the RSA key per
+`GET /apk/keys/<name>` (`apk.go:628–641`). Publish-time upserts (npm/nuget/crates/…) are the
+right pattern to extend: store what serving needs at import.
+
+### P13 — No HTTP caching or compression on the serve surface
+The only `Cache-Control` on the high side is the dashboard's `no-store`; the only `ETag` is
+HF resolve. Digest-addressed immutable blobs (container/HF blobs, goproxy zips, `.crate`/
+`.nupkg`/`.tgz`) should get `Cache-Control: public, max-age=31536000, immutable`; generated
+metadata should get validators (digests are already known). No endpoint negotiates
+`Accept-Encoding`; all `writeJSON` output is `SetIndent`-pretty-printed (~20–40% larger);
+conda serves only plain `repodata.json` — conda/mamba probe `repodata.json.zst` first, so
+publishing the `.zst` beside it at regen time is both a 404-round-trip and a bandwidth win.
+Also perf-low: `ecosystems()` rebuilds all 22 descriptors on every request
+(`highside.go:298`) — a `sync.OnceValue` accessor removes the per-request garbage.
+
+### P14 — Maven collect re-downloads its entire closure every run
+`dependency:go-offline` resolves into a `maven.repo.local` inside the throwaway staging temp
+(`java.go:521–528`) — a daily watch pulls hundreds of MB from Central daily and then
+discards it all as prior. Go, by contrast, uses a persistent module cache. Give maven a
+persistent local repo under `<root>` (and python/pip already keeps its `$HOME` cache
+incidentally — worth pinning deliberately).
+
+## Recommended — operations & missing pieces
+
+- **O5 — The mirror is append-only forever.** No endpoint or tool prunes a mirrored
+  artifact or version except the `uploads` stream's delete; the only recourse is wiping the
+  high side and force-recollecting. An offline prune tool could reuse the existing
+  regenerate-from-disk publish machinery.
+- **O6 — The low-side `<root>/bundles` archive has no retention knob** (every bundle ever
+  exported, forever — by design for replay, but unbounded; `artigate_low_bundle_bytes`
+  already exposes the gauge to alert on). An age/byte budget with "never evict bundles the
+  high side hasn't imported" semantics needs a maintainer decision.
+- **O7 — No global concurrent-collect cap, jitter, or failure backoff.** All 22 streams can
+  collect simultaneously (`jobs.go:126` is per-stream only) — a restart after downtime
+  fires every overdue watch on one tick; `RecordRun` advances `next_run_at` identically on
+  success and failure (`watch.go:232–240`). A weighted semaphore (default ~4) plus ±10%
+  jitter and capped backoff would smooth all three.
+- **O8 — No `--version`, build stamp, or manifest format version.** Two air-gapped binaries
+  can't report what they run; unknown manifest *fields* are silently dropped by an older
+  high side. `-ldflags -X` stamp + `--version` + a manifest `format` field checked with a
+  clear error.
+- **O9 — Job queue/history are memory-only** (`jobs.go:9`) — queued manual collects vanish
+  silently on restart (watches persist and recover). Document at minimum.
+- **O10 — No disk-space readiness check** on either side; disk-full surfaces only as the
+  `artigate_disk_free_bytes` gauge and retry loops.
+- **O11 — No sequence rebase/recovery tooling** for a rebuilt low side (its bundles land in
+  `duplicates/` silently; recovery is hand-editing state files, undocumented), and no
+  operator control to abandon a dead quarantine gap.
+- **O12 — `exported.db` is insert-only** (`exported.go:102,179`) — millions of rows on a
+  large mirror; note the growth in docs, optionally compact.
+- **O13 — No diode throughput/loss metrics.** The catcher's packet/drop/repair counters are
+  log-only (`diodewire.go:1132`); the pitcher has none; import-pass duration isn't recorded.
+  The two numbers that size a diode deployment — achieved goodput and datagram loss vs the
+  parity budget — cannot be scraped or alerted on.
+- **O14 — HTTP diode transfers: no automatic retry, no resume** (one attempt, then a human
+  on the Status page; a 60 GiB PUT failing at 99% restarts from byte 0). The UDP path has
+  per-block resume; the HTTP path deserves at least bounded retries with backoff.
+- **O15 — Low-side startup sweep** for `<root>/<eco>/staging/collect-*` (the high-side half
+  is fixed as O3): crash-stranded collect staging accumulates silently.
+- **O16 — apt index decompression should fall through** to the next hash-verified candidate
+  when the decompressor binary is missing (the loop currently returns on the error,
+  `apt.go:421–438`; conda's zstd path already degrades gracefully). The image now ships lz4
+  (O4), so this is defense-in-depth.
+
+## Test gaps
+
+- **T1 — Zero benchmarks and zero fuzz targets** in the repo. Natural fuzz candidates parse
+  hostile bytes: `extractAndVerifyTarGz`, manifest load, `parseDiodePacket`,
+  `parseAptPackages`, the git pack verifier. Natural benchmarks: FEC encode/reassembly,
+  `createTarGzAtomic`, publish hooks at mirror scale.
+- **T2 — The UDP socket layer is the least-tested subsystem** (`catcher.go` 36% / `pitcher.go`
+  63% / `netsetup_linux.go` 17% file coverage; `run`/`receiveOne`/`SendBundle`/`sendFile`/
+  `writeRetry` at 0%), and the e2e suite exercises the HTTP transport only. A
+  loopback/veth pitcher→catcher integration test (skipped without privileges) would cover
+  the real receive loop.
+- **T3 — Minor untested paths:** `HandleCratesCollect`/`HandleOsvCollect` request parsing,
+  the split-go-bundle import path (`allManifestFilePaths`, `moduleEscFromInfoPath`),
+  `recordImportError`, `lz4Decompress`, `probeSumDBSupported`.
+
+## Docs drift (beyond the two fixed in O4)
+
+- **D1** — `configuration.md` claims exhaustiveness but omits 7 flags (`--composer-repo`,
+  `--conda-channel-base`, `--cran-mirror`, `--galaxy-server`, `--pypi-json` — the last
+  documented nowhere at all, `python.go:52` — `--rubygems-url`, `--vsx-registry`) and 4 env
+  vars (`ARTIGATE_LOW_ALLOW_UNAUTHENTICATED`, `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN`,
+  `ARTIGATE_WEBHOOK_URL`, `ARTIGATE_WEBHOOK_TOKEN`); the docs site never mentions webhooks.
+- **D2** — Python sdist support is implemented (`python.go:662`, README feature bullet) but
+  flatly denied in README:941 ("wheels only… always enforced") and in `python.md` and
+  `troubleshooting.md`.
+- **D3** — 8 of 22 streams have no docs page (conda, rubygems, composer, vsx, galaxy, cran,
+  git, uploads); `api.md` omits their collect endpoints, the whole jobs API
+  (`/admin/jobs*`), and `dry_run`.
+- **D4** — README says `hashpw` "reads the password from stdin so it never appears in your
+  shell history", but a `--password` flag exists and is documented in `configuration.md`.
+- **D5** — `ARTIGATE_HF_TOKEN` (needed for gated models) is absent from
+  `docker-compose.yml` and `.env.example`, unlike the other credential env vars.
+
+## What's healthy (round-3 positives, verified)
+
+- **Artifact serving is the right shape everywhere:** every file-backed response goes
+  through `http.ServeFile` (sendfile, Range, If-Modified-Since); no handler reads a large
+  artifact into memory to serve it (the two manifest reads are capped — M13).
+- **HTTP server hygiene:** `ReadHeaderTimeout` 30 s + `IdleTimeout` 120 s, deliberately no
+  whole-request timeouts for multi-GiB streams, 30 s graceful drain on SIGTERM.
+- **The UDP transport design is sound at its provisioned rate:** stateless per-packet
+  metadata, strict wire validation, per-block FEC with loss-only decode cost, per-transfer
+  and global RAM budgets, disk-backed reassembly, per-block resume across re-sends with
+  quota-correct adoption, eviction that keeps lossy transfers moving.
+- **Crash-consistency is exemplary:** tmp+fsync+rename everywhere (now including the
+  extract→rename install path), bundle-before-state ordering with skip-forward sequence
+  allocation, in-memory counters rolled back on failed state saves, idempotent re-imports.
+- **Background loops are contained:** coalesced import kicks (one worker, one pending slot),
+  panic recovery on every long-lived loop, the watch scheduler never blocks on collects,
+  per-stream queues isolate slow streams (on the low side).
+- **No TODO/FIXME debt:** zero in non-test code; the debt lives in docs and this file.
