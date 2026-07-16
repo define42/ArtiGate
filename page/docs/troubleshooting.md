@@ -228,7 +228,7 @@ The low side fetches Go modules with the host's own `go`/`git`. The simplest way
 to reach a private VCS host is a login on the collect — the Go page's *Private
 module host login* fields, or the `auth` field — or a standing
 `ARTIGATE_GO_AUTH=gitlab.example.com=bot:token` entry (which scheduled
-collects also use; `ARTIGATE_UPSTREAM_AUTH` is for the git/APT/RPM/Alpine
+collects also use; `ARTIGATE_UPSTREAM_AUTH` is for the git/APT/RPM/Alpine/Conda
 streams and is not read by Go collects). ArtiGate injects it into `go`/`git`
 for that collect and adds
 the host to `GOPRIVATE`/`GONOSUMDB` automatically, so no flags are needed for a

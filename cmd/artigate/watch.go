@@ -271,7 +271,7 @@ func validateWatch(w Watch) error {
 // existed).
 func watchSpecAuthError() error {
 	return errors.New("watch specs must not carry credentials (they are stored and shown in plaintext); set the stream's standing-credential variable on the low side instead (" +
-		containerAuthEnv + " for containers, " + goAuthEnv + " for go, " + upstreamAuthEnv + " for git/apt/rpm/apk)")
+		containerAuthEnv + " for containers, " + goAuthEnv + " for go, " + upstreamAuthEnv + " for git/apt/rpm/apk/conda)")
 }
 
 // watchSpecContainsAuth reports whether a spec's top-level object carries an

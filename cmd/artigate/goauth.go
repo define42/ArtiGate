@@ -30,8 +30,9 @@ import (
 // ARTIGATE_UPSTREAM_AUTH: a standing Go credential does more than
 // authenticate — buildGoAuthEnv marks its host module-private
 // (GOPRIVATE/GONOSUMDB/GONOPROXY), which bypasses the public proxy and
-// suppresses sumdb capture, and a git/apt/rpm/apk login on a shared host such
-// as github.com must never flip that host's public module fetches to private.
+// suppresses sumdb capture, and a git/apt/rpm/apk/conda login on a shared
+// host such as github.com must never flip that host's public module fetches
+// to private.
 const goAuthEnv = "ARTIGATE_GO_AUTH"
 
 // goAuthKey carries a credentialed collect's subprocess environment on the

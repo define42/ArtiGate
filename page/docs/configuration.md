@@ -241,7 +241,7 @@ The direct one-way-fiber transport — see [Built-in UDP diode](data-diode.md) f
 
 | Variable | Side | Default | Meaning |
 |---|---|---|---|
-| `ARTIGATE_UPSTREAM_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private git, APT, RPM, and Alpine upstreams; the key is the upstream's exact host, `host:port` included (e.g. `git.example.com=bot:token,apt.example.com=bot:secret`). Sent as HTTP Basic to the mirror host it is keyed to. Read at collect time, so it rotates without a restart, and the only credential source scheduled watches use |
+| `ARTIGATE_UPSTREAM_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private git, APT, RPM, Alpine, and Conda upstreams; the key is the upstream's exact host, `host:port` included (e.g. `git.example.com=bot:token,apt.example.com=bot:secret`). Sent as HTTP Basic to the mirror host it is keyed to. Read at collect time, so it rotates without a restart, and the only credential source scheduled watches use |
 | `ARTIGATE_GO_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private Go module hosts (the key is the VCS host, e.g. `gitlab.example.com=bot:token`); injected into the `go`/`git` subprocesses via a per-collect netrc + git credential helper, and each host is treated as private (`GOPRIVATE`/`GONOSUMDB`/`GONOPROXY`) for that collect — which is why Go has its own variable instead of sharing `ARTIGATE_UPSTREAM_AUTH`. Same rotation and scheduled-watch role |
 
 ### TLS

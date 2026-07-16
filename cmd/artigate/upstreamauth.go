@@ -1,9 +1,10 @@
 package main
 
 // Shared upstream-credential plumbing for streams that authenticate with HTTP
-// Basic against plain URL hosts (git, apt, rpm, apk). A per-pull login rides
-// the collect request's optional `auth` field and is never stored; standing
-// credentials live in ARTIGATE_UPSTREAM_AUTH and are re-read on every collect.
+// Basic against plain URL hosts (git, apt, rpm, apk, conda). A per-pull login
+// rides the collect request's optional `auth` field and is never stored;
+// standing credentials live in ARTIGATE_UPSTREAM_AUTH and are re-read on
+// every collect.
 // Containers and Go follow the same model with their own variables
 // (ARTIGATE_CONTAINER_AUTH, ARTIGATE_GO_AUTH), sharing parseAuthEnv — Go is
 // kept separate because a standing Go credential also marks its host
@@ -19,11 +20,11 @@ import (
 )
 
 // upstreamAuthEnv holds standing per-host credentials for the git, apt, rpm,
-// and apk streams as comma-separated host=user:password entries (the host may
-// carry a :port and must match the mirror URL's host exactly). It is read at
-// collect time so rotated credentials apply without a restart, and it is the
-// only credential source scheduled watches can use — watch specs must never
-// carry logins (they are stored and echoed in plaintext).
+// apk, and conda streams as comma-separated host=user:password entries (the
+// host may carry a :port and must match the mirror URL's host exactly). It is
+// read at collect time so rotated credentials apply without a restart, and
+// it is the only credential source scheduled watches can use — watch specs
+// must never carry logins (they are stored and echoed in plaintext).
 const upstreamAuthEnv = "ARTIGATE_UPSTREAM_AUTH"
 
 // HostCollectAuth is a collect request's optional login for one upstream
