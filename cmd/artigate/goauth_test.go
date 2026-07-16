@@ -10,13 +10,21 @@ import (
 )
 
 func TestGoCollectCredentials(t *testing.T) {
-	t.Setenv(upstreamAuthEnv, "gitlab.example.com=envuser:envpass")
+	t.Setenv(goAuthEnv, "gitlab.example.com=envuser:envpass")
+	// The mirror streams' variable must not reach a Go collect: buildGoAuthEnv
+	// treats every credentialed host as module-private, so a git/apt/rpm/apk
+	// login for github.com would flip public github.com/... fetches off the
+	// proxy and sumdb.
+	t.Setenv(upstreamAuthEnv, "github.com=gituser:gitpass")
 
 	// Without request auth the standing env credentials apply (the scheduled
 	// path).
 	creds, err := goCollectCredentials(GoCollectRequest{Modules: []string{"gitlab.example.com/g/m@v1.0.0"}})
 	if err != nil || creds["gitlab.example.com"].Username != "envuser" {
 		t.Fatalf("env creds = %v, %v", creds, err)
+	}
+	if _, ok := creds["github.com"]; ok {
+		t.Fatal("ARTIGATE_UPSTREAM_AUTH (git/apt/rpm/apk) must not apply to Go collects")
 	}
 
 	// A named host is authoritative and the request login wins over the env.
@@ -56,10 +64,16 @@ func TestGoCollectCredentials(t *testing.T) {
 		t.Error("a login without a password should fail")
 	}
 
-	// A malformed env value fails the collect, naming the variable.
+	// A malformed env value fails the collect, naming the variable — while a
+	// malformed ARTIGATE_UPSTREAM_AUTH is irrelevant here and must not.
+	t.Setenv(goAuthEnv, "garbage")
+	if _, err := goCollectCredentials(GoCollectRequest{Modules: []string{"x"}}); err == nil || !strings.Contains(err.Error(), goAuthEnv) {
+		t.Errorf("malformed env value should fail naming %s, got %v", goAuthEnv, err)
+	}
+	t.Setenv(goAuthEnv, "")
 	t.Setenv(upstreamAuthEnv, "garbage")
-	if _, err := goCollectCredentials(GoCollectRequest{Modules: []string{"x"}}); err == nil || !strings.Contains(err.Error(), upstreamAuthEnv) {
-		t.Errorf("malformed env value should fail naming %s, got %v", upstreamAuthEnv, err)
+	if creds, err := goCollectCredentials(GoCollectRequest{Modules: []string{"x"}}); err != nil || len(creds) != 0 {
+		t.Errorf("a malformed %s must not affect a Go collect, got %v, %v", upstreamAuthEnv, creds, err)
 	}
 }
 
@@ -281,10 +295,18 @@ func TestCollectGoPrivateModules(t *testing.T) {
 		t.Fatalf("authenticated collect = %+v, %v", res, err)
 	}
 
-	// Standing ARTIGATE_UPSTREAM_AUTH credentials work without request auth.
-	t.Setenv(upstreamAuthEnv, "gitlab.example.com=bot:s3cr3t")
+	// Standing ARTIGATE_GO_AUTH credentials work without request auth.
+	t.Setenv(goAuthEnv, "gitlab.example.com=bot:s3cr3t")
 	if _, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{mod}, Force: true}); err != nil {
 		t.Fatalf("env-authenticated collect: %v", err)
+	}
+
+	// The mirror streams' ARTIGATE_UPSTREAM_AUTH must not stand in for it: the
+	// same entry there leaves the collect anonymous (the fake go aborts).
+	t.Setenv(goAuthEnv, "")
+	t.Setenv(upstreamAuthEnv, "gitlab.example.com=bot:s3cr3t")
+	if _, err := ls.CollectGo(ctx, GoCollectRequest{Modules: []string{mod}, Force: true}); err == nil {
+		t.Fatal("ARTIGATE_UPSTREAM_AUTH alone must not authenticate a Go collect")
 	}
 
 	// No credential is left behind under the low root or export dir.
@@ -294,6 +316,37 @@ func TestCollectGoPrivateModules(t *testing.T) {
 	if entries, _ := os.ReadDir(filepath.Join(ls.cfg.Root, "gocollect")); len(entries) != 0 {
 		t.Errorf("gocollect scratch not cleaned: %v", entries)
 	}
+}
+
+// TestNewLowServerScrubsStaleGoAuthScratch proves a netrc stranded by a crash
+// (the per-collect cleanup never got to run) does not survive a restart:
+// NewLowServer removes the gocollect scratch dir before serving.
+func TestNewLowServerScrubsStaleGoAuthScratch(t *testing.T) {
+	root := t.TempDir()
+	stale := filepath.Join(root, "gocollect", "auth-stale")
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "netrc"), []byte("machine gitlab.example.com login bot password s3cr3t\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, priv := newTestKeys(t)
+	ls, err := NewLowServer(LowConfig{
+		Root:            root,
+		ExportDir:       filepath.Join(root, "out"),
+		UpstreamGOPROXY: "off",
+		GOSUMDB:         "off",
+	}, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ls.Close() })
+
+	if _, err := os.Stat(filepath.Join(root, "gocollect")); !os.IsNotExist(err) {
+		t.Error("stale gocollect scratch should be scrubbed at startup")
+	}
+	assertNoSecretOnDisk(t, root, "s3cr3t")
 }
 
 // assertNoSecretOnDisk walks dir and fails if any file contains secret.

@@ -4,8 +4,10 @@ package main
 // Basic against plain URL hosts (git, apt, rpm, apk). A per-pull login rides
 // the collect request's optional `auth` field and is never stored; standing
 // credentials live in ARTIGATE_UPSTREAM_AUTH and are re-read on every collect.
-// Containers follow the same model with their own registry-keyed variable
-// (ARTIGATE_CONTAINER_AUTH), sharing parseAuthEnv.
+// Containers and Go follow the same model with their own variables
+// (ARTIGATE_CONTAINER_AUTH, ARTIGATE_GO_AUTH), sharing parseAuthEnv — Go is
+// kept separate because a standing Go credential also marks its host
+// module-private (see goauth.go), which must never happen to a mirror login.
 
 import (
 	"errors"
