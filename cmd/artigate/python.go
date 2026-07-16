@@ -34,6 +34,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -481,8 +482,56 @@ type pyProjectFile struct {
 	requiresPython string
 }
 
+// pyDigestCache memoizes each wheel's SHA-256 and Requires-Python. The
+// unauthenticated /simple/<project>/ page pip fetches for every requirement
+// would otherwise re-hash and re-open every wheel of the project on each
+// request — O(total wheel bytes) per hit. A wheel is immutable once imported
+// and only ever replaced atomically, so (size, modtime) is a sound key: any
+// content change moves at least one of them, and a mismatch re-hashes.
+type pyDigestCache struct {
+	mu      sync.Mutex
+	entries map[string]pyDigestEntry
+}
+
+type pyDigestEntry struct {
+	size           int64
+	modTime        time.Time
+	sha256         string
+	requiresPython string
+}
+
+// get returns the wheel's cached SHA-256 and Requires-Python, recomputing them
+// only when the file is new or its size/modtime changed since last seen.
+func (c *pyDigestCache) get(abs string) (sha256, requiresPython string, err error) {
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return "", "", err
+	}
+	c.mu.Lock()
+	if e, ok := c.entries[abs]; ok && e.size == fi.Size() && e.modTime.Equal(fi.ModTime()) {
+		c.mu.Unlock()
+		return e.sha256, e.requiresPython, nil
+	}
+	c.mu.Unlock()
+
+	sum, err := sha256File(abs)
+	if err != nil {
+		return "", "", err
+	}
+	rp := requiresPythonFor(abs)
+
+	c.mu.Lock()
+	if c.entries == nil {
+		c.entries = make(map[string]pyDigestEntry)
+	}
+	c.entries[abs] = pyDigestEntry{size: fi.Size(), modTime: fi.ModTime(), sha256: sum, requiresPython: rp}
+	c.mu.Unlock()
+	return sum, rp, nil
+}
+
 // pyProjectFiles hashes and reads the metadata of every wheel of one project,
-// sorted by filename.
+// sorted by filename. Digests are memoized (see pyDigestCache) so a repeated
+// request does not re-hash unchanged wheels.
 func (s *HighServer) pyProjectFiles(project string) ([]pyProjectFile, error) {
 	files, err := s.scanPyFiles()
 	if err != nil {
@@ -494,11 +543,11 @@ func (s *HighServer) pyProjectFiles(project string) ([]pyProjectFile, error) {
 			continue
 		}
 		abs := filepath.Join(s.pythonDir(), f.filename)
-		sum, err := sha256File(abs)
+		sum, rp, err := s.pyDigests.get(abs)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, pyProjectFile{filename: f.filename, sha256: sum, requiresPython: requiresPythonFor(abs)})
+		out = append(out, pyProjectFile{filename: f.filename, sha256: sum, requiresPython: rp})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].filename < out[j].filename })
 	return out, nil

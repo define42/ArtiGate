@@ -1833,7 +1833,7 @@ func (s *HighServer) containerImageLayers(img ContainerImage) []UIImageLayer {
 		return nil
 	}
 	layerBlobs := img.Blobs[1:] // Blobs[0] is the config; the rest are layers.
-	b, err := os.ReadFile(s.containerBlobPath(img.Blobs[0].Digest))
+	b, err := readFileLimit(s.containerBlobPath(img.Blobs[0].Digest), maxRenderedBlobBytes)
 	if err != nil {
 		return nil
 	}

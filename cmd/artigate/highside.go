@@ -107,6 +107,10 @@ type HighServer struct {
 	// npmAudit memoizes the regenerated npm bulk-audit index (see
 	// osvnpmaudit.go) so audit requests do not re-parse it from disk.
 	npmAudit npmAuditCache
+	// pyDigests memoizes each wheel's SHA-256 and Requires-Python so the
+	// unauthenticated /simple/<project>/ page does not re-hash and re-open
+	// every wheel on every pip request (see pyProjectFiles).
+	pyDigests pyDigestCache
 	// derivedBlocks tracks osv derived-state files (stored metadata, the npm
 	// audit index) whose stale bytes a failed publish could not get off the
 	// disk; the osv read paths treat a blocked path as absent (see
@@ -375,7 +379,10 @@ func (s *HighServer) serveHighAdmin(w http.ResponseWriter, r *http.Request) bool
 		}
 		writeJSON(w, res)
 	case (r.URL.Path == "/admin/status" || r.URL.Path == "/admin/missing") && r.Method == http.MethodGet:
-		status, err := s.ImportStatus()
+		// Read-only: these monitoring endpoints are unauthenticated, so they
+		// must not run the quarantine sweep (which moves files and fires
+		// webhooks). The background import loop and diode kick own that sweep.
+		status, err := s.importStatusReadOnly()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return true
@@ -600,8 +607,10 @@ func (s *HighServer) ImportStatus() (ImportStatus, error) {
 }
 
 // importStatusReadOnly reports the same per-stream status as ImportStatus but
-// without the quarantine sweep, so the /metrics scrape observes state without
-// moving files on disk.
+// without the quarantine sweep, so an unauthenticated observer (the /metrics
+// scrape, /readyz, the dashboard overview poll, and the /admin/status and
+// /admin/missing monitoring endpoints) reports state without moving files on
+// disk or firing quarantine webhooks.
 func (s *HighServer) importStatusReadOnly() (ImportStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

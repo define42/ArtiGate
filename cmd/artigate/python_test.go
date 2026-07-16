@@ -681,6 +681,66 @@ func TestPySimpleRequiresPythonAndJSON(t *testing.T) {
 	}
 }
 
+// TestPyDigestCacheMemoizesAndInvalidates proves the /simple digest cache
+// serves a stored hash without re-reading the wheel, and re-hashes only when
+// the file's size or modtime changes — so the unauthenticated project page
+// cannot be amplified into an O(total-bytes) re-hash on every request.
+func TestPyDigestCacheMemoizesAndInvalidates(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	if err := os.MkdirAll(hs.pythonDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	whl := filepath.Join(hs.pythonDir(), "demo-1.0-py3-none-any.whl")
+	writeFile(t, whl, []byte("original-bytes")) // 14 bytes
+	fixed := time.Unix(1_700_000_000, 0)
+	if err := os.Chtimes(whl, fixed, fixed); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := hs.pyProjectFiles("demo")
+	if err != nil || len(first) != 1 {
+		t.Fatalf("pyProjectFiles: %v (n=%d)", err, len(first))
+	}
+	origSum, err := sha256File(whl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first[0].sha256 != origSum {
+		t.Fatalf("first sha256 = %q, want %q", first[0].sha256, origSum)
+	}
+
+	// Overwrite the content but restore the identical size and modtime. A
+	// re-hash would pick up the new bytes; a cache hit keeps the old digest.
+	writeFile(t, whl, []byte("tampered_bytes")) // also 14 bytes
+	if err := os.Chtimes(whl, fixed, fixed); err != nil {
+		t.Fatal(err)
+	}
+	cached, err := hs.pyProjectFiles("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached[0].sha256 != origSum {
+		t.Errorf("cache miss: sha256 = %q, want the memoized %q", cached[0].sha256, origSum)
+	}
+
+	// Bumping the modtime invalidates the entry, so the new content is hashed.
+	if err := os.Chtimes(whl, fixed.Add(time.Second), fixed.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	newSum, err := sha256File(whl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := hs.pyProjectFiles("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh[0].sha256 != newSum || newSum == origSum {
+		t.Errorf("stale after modtime change: sha256 = %q, want re-hashed %q (orig %q)", fresh[0].sha256, newSum, origSum)
+	}
+}
+
 // assertPySimpleProjectJSON checks the PEP 691 project page for the demo
 // wheel, decoding into a generic map so the exact JSON key spelling
 // (api-version, requires-python, hashes.sha256) is verified.

@@ -19,8 +19,13 @@ func TestHighServerUIOverview(t *testing.T) {
 	if _, err := hs.ImportNext(); err != nil {
 		t.Fatal(err)
 	}
-	// Bundle 3 arrives while 2 is missing: quarantined, and 2 is flagged missing.
+	// Bundle 3 arrives while 2 is missing: an import pass quarantines it and
+	// flags 2 as missing. The read-only overview endpoint reports that state
+	// but no longer runs the quarantine sweep itself.
 	writeSignedBundle(t, hs.cfg.Landing, priv, 3, 2, []moduleSpec{{"github.com/foo/baz", "v2.0.0"}})
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatal(err)
+	}
 
 	srv := httptest.NewServer(hs)
 	defer srv.Close()

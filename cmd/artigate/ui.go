@@ -126,7 +126,10 @@ func isReadMethod(r *http.Request) bool {
 }
 
 func (s *HighServer) handleUIOverview(w http.ResponseWriter) {
-	status, err := s.ImportStatus()
+	// Read-only: this endpoint is unauthenticated and polled by every open
+	// dashboard, so it must not run the quarantine sweep (which moves files and
+	// fires webhooks). The background import loop and diode kick own that sweep.
+	status, err := s.importStatusReadOnly()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

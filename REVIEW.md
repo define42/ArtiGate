@@ -9,9 +9,17 @@ faith.
 containment, archive extraction, manifest signature/sequence verification, the UDP wire
 parser, auth/sessions, TLS — is **exceptionally well engineered** and I found no way
 through it. The real defects are concentrated in the per-ecosystem *collect* and
-*publish* code and in a few unauthenticated high-side endpoints. Two are correctness/
-security bugs worth fixing before the next release; the rest are resource-exhaustion,
-integrity-consistency, and defense-in-depth gaps.
+*publish* code and in a few unauthenticated high-side endpoints. Every High/Medium from
+the first round (H1–H2, M1–M10) is now **fixed**; a second review round found the M11–M13
+class (unauthenticated per-request work on the public port) — request-cost/DoS, not
+trust-boundary — of which the two most concrete instances (M4b, L2 detail reads) are fixed
+and the rest are recommended follow-ups. The remainder are defense-in-depth (L-series).
+
+**Status at a glance (this branch):**
+- **Fixed:** H1, H2, M1, M2, M3, M4 (both parts), M5, M6, M7, M8, M9, M10; L2 (the two
+  unauthenticated dashboard config-blob reads).
+- **Open, recommended:** M11 (`/ui/api/detail` re-hash), M12 (nuget-search / composer
+  whole-mirror walks), M13 (container/HF manifest reads), and the L-series defense-in-depth.
 
 ## Validation baseline
 
@@ -20,9 +28,11 @@ All green on the current branch (Go 1.26.5):
 | check | result |
 |-------|--------|
 | `go build ./...` | ✅ |
-| `go vet ./...` | ✅ |
-| `go test -race ./...` | ✅ (62s) |
-| `golangci-lint run` (v2.12.2) | ✅ `0 issues` |
+| `go vet ./...` (incl. `-tags e2e ./e2e`) | ✅ |
+| `go test -race ./...` | ✅ (~60s) |
+| `golangci-lint run` (v2.12.2, `GOTOOLCHAIN=go1.26.5`) | ✅ `0 issues` |
+| `TestEcosystemRegistryWiring` (registry invariant) | ✅ |
+| `govulncheck ./...` | runs in CI (`.github/workflows/govulncheck.yml`); the vuln DB is unreachable from the sandbox |
 
 ## Method
 
@@ -31,8 +41,11 @@ Core trust-boundary files were read in full and traced by hand
 `login.go`, `goauth.go`, `goproxy.go`, `gosumdb.go`, `tls.go`, `readyz.go`). The
 per-ecosystem breadth was covered by parallel review agents (UDP transport, low-side
 control plane, container/HF, apt/rpm/apk/conda, npm/python/java/crates/nuget, the
-remaining ecosystems, and the UI). **Every agent finding was re-verified against the
-source before inclusion here**, and speculative or non-reproducible items were dropped.
+remaining ecosystems, and the UI). A follow-up round re-verified the landed fixes
+(rpm/helm metadata rework, nuget hash-pinning, conda auth) against source and swept the
+unauthenticated high-side serve paths for the M11–M13 request-cost class. **Every agent
+finding was re-verified against the source before inclusion here**, and speculative or
+non-reproducible items were dropped.
 
 ---
 
@@ -122,6 +135,10 @@ No datagram/bundle that triggers a live panic was found (the wire parser and man
 validation are thorough), so this is an **invariant-compliance / defense-in-depth** gap — but
 the blast radius is whole-process, and every sibling worker already has the guard.
 **Fix:** a one-line `defer func(){ recover() }()` (logging into an error) at the top of each loop.
+**Status: fixed** — a shared `recoverWorkerPanic` (`watch.go:417`) now wraps every iteration of
+all four long-lived loops: the diode catcher (`catcher.go:196`), both high-side import workers
+(`requestImport` `highside.go:240`, `importLoop` `highside.go:541`), and the watch scheduler
+tick (`watch.go:312`).
 
 ### M2 — Unbounded non-LFS Hugging Face file download (low-side staging exhaustion)
 
@@ -173,11 +190,20 @@ it runs on the **unauthenticated** high side via `GET /simple/<project>/`
   unauthenticated client (or the dashboard's own poll) repeatedly hitting `/ui/api/overview`
   churns the filesystem and serializes against the import loop.
   **Fix:** use `importStatusReadOnly` for these read endpoints.
+  **Status: fixed in this branch** — `handleUIOverview` (`ui.go:129`) and the `/admin/status`,
+  `/admin/missing` cases (`highside.go`) now call `importStatusReadOnly`, so no unauthenticated
+  read runs the quarantine sweep; the background import loop and diode kick still own it.
+  `TestHighServerUIOverview` was updated to drive the quarantine through an explicit import pass
+  and then assert the read endpoint faithfully reports it.
 - **`python.go:477`** (`pyProjectFiles`, the PEP 503/691 `/simple/<project>/` page pip fetches
   for every requirement) re-reads and SHA-256-hashes **all** of a project's wheels and re-opens
   each archive on **every request**, with no caching — O(total wheel bytes) per hit on an
   unauthenticated port (trivial to amplify against a project with multi-hundred-MB wheels).
   npm/nuget/crates persist digests at import instead. **Fix:** memoize digests at publish time.
+  **Status: fixed in this branch** — a `pyDigestCache` (`python.go`) memoizes each wheel's
+  SHA-256 and Requires-Python keyed by `(size, modtime)`; a repeated request re-`stat`s (cheap)
+  but re-hashes only changed wheels. Regression test `TestPyDigestCacheMemoizesAndInvalidates`
+  proves both the cache hit and modtime-driven invalidation.
 
 ### M5 — Upload staging has no part-count or aggregate cap (DoS on the signing plane)
 
@@ -228,6 +254,8 @@ return matched[start:min(start+size, len(matched))]
 range") — reachable even with zero mirrored extensions, unauthenticated, via
 `POST /vsx/gallery/extensionquery`. Recovered per-request by `net/http` (not a process crash),
 so it's a request-level DoS/defect. **Fix:** validate/clamp `pageNumber`, or guard `start < 0`.
+**Status: fixed** — `vsxGalleryPage` (`vsx.go:457`) now guards `start < 0 || start >= len`, so
+any out-of-range page (including an overflowed negative `start`) returns an empty page.
 
 ### M8 — terraform `git checkout` omits `--` before an attacker-controlled ref (option injection)
 
@@ -243,6 +271,9 @@ author via the registry's `X-Terraform-Get`/`location`). A `ref` starting with `
 as a `git checkout` option (argument injection; no shell, so bounded to what `checkout` flags
 can do). The clone line directly above deliberately uses `--`.
 **Fix:** add `--` before `ref`, and validate `ref` against a safe refname charset.
+**Status: fixed** — `splitGitSource` (`terraform.go:1581`) now validates `?ref=` against
+`tfGitRefRE` (`validateTfGitRef`, `terraform.go:1570`): a ref must start with an alphanumeric,
+so an option-shaped ref can never reach `git`, whichever argument position it lands in.
 
 ### M9 — conda channel URL accepts embedded credentials (login leaks across the diode + into logs)
 
@@ -253,6 +284,10 @@ because *"the URI is recorded in the signed manifest and echoed in progress and 
 it must never carry a login"*), conda accepts `https://user:token@channel` unchecked. The
 userinfo is stored in the signed bundle manifest that crosses to the unauthenticated high side
 and is printed by `emitProgress`. **Fix:** call `checkNoURLUserinfo` in `condaChannelURL`.
+**Status: fixed** — `condaChannelURL` (`conda.go:987`) now rejects a channel URL that embeds a
+login. Conda private-channel access was subsequently wired into the shared upstream-credential
+plumbing (a one-shot per-collect `auth` field / `ARTIGATE_UPSTREAM_AUTH`, never stored; watch
+specs still refuse any `auth` key), so rejecting the userinfo form no longer blocks private mirrors.
 
 ### M10 — NuGet mirrors content with no cryptographic pinning + weak flat-base check
 
@@ -265,6 +300,57 @@ host). A malicious/MITM source or service index can substitute arbitrary package
 the signed bundle then makes "verified" downstream.
 **Fix:** pin against the registration/catalog `packageHash` (SHA-512); parse the flat base as a
 real URL with a scheme allowlist.
+**Status: fixed** — each `.nupkg` is now verified against the upstream registration/catalog
+`packageHash` when the feed publishes one (nuget.org always does), via `nugetEntryDigest`
+(`nuget.go`) → `downloadVerifiedFile`, falling back to TLS-only integrity otherwise; and every
+service-index resource URL is parsed by `nugetResourceURLOK` (absolute http(s), real host, no
+userinfo) instead of `HasPrefix(id, "http")`. Regression tests `TestNugetUpstreamDigestPinning`
+and the URL-gate cases cover it. *Residual (by design):* the pin comes from the same upstream as
+the bytes, so it defends a compromised/buggy CDN edge, not a fully malicious source or a broken
+TLS session — TLS to the configured source stays the MITM defense, as the code comments state.
+
+---
+
+## Medium — newly found this review round (unauthenticated per-request work)
+
+A second sweep (beyond the original agents) turned up a *class* the first pass under-weighted:
+high-side serve endpoints that do work proportional to artifact or mirror size on **every**
+unauthenticated request, with no cache. None is a correctness or trust-boundary bug — the high
+side still serves only verified content — but each is an amplifiable request-cost/DoS vector on
+the public port. M4(b) (python `/simple`) was the first instance; these are its siblings.
+
+### M11 — `/ui/api/detail` re-hashes the selected artifact on every request (all ecosystems)
+
+**`ui.go:655`** (`handleUIDetail`, unauthenticated), which dispatches to each ecosystem's `detail`
+hook — `goDetail`, `pythonDetail`, `cratesDetail`, `uploadsDetail`, `nugetDetail`, `cranDetail`,
+`tfModuleDetail`, `gitDetail`, `composerDetailFor`, `mavenDetail`, `rubygemsDetail`, `vsxDetail`,
+`npmDetail` — nearly all of which call `sha256File` on the **whole** selected artifact per request.
+`GET /ui/api/detail?eco=<eco>&path=<spec>` against the largest mirrored artifact (an unbounded
+upload, a multi-GB HF/Go zip) is O(that artifact's bytes) per hit, uncached. `npmDetail`
+(`npm.go:758`) re-hashes even though npm already persists the digest at import.
+**Fix:** serve the digest persisted at publish time (npm/nuget/crates already store one), or a
+`(size, modtime)`-keyed cache like M4(b)'s `pyDigestCache`. **Status: open (recommended).**
+
+### M12 — Two unauthenticated endpoints walk the entire mirror per request
+
+- **`nuget.go:592`** (`handleNugetSearch`, `GET /nuget/v3/search`): `q` is optional and an
+  empty/absent `q` skips the filter, so it iterates every package id and reads each id's stored
+  metadata + all versions, emitting a body ∝ mirror size, with no pagination (`skip`/`take` are
+  ignored). **Fix:** require a non-empty `q` (or enforce a `take` cap) and filter ids before load.
+- **`composer.go:686`** (`handleComposerRoot` → `listComposerPackages` `composer.go:930`,
+  `GET /composer/packages.json` — the first document every Composer client fetches): to emit just
+  the name list it reads **every release's** stored JSON across the whole mirror. **Fix:** cache
+  the name list (invalidate on import), or derive names from directory structure without reading
+  each release. **Status: open (recommended).**
+
+### M13 — Unbounded manifest/config reads on the container/HF serve path (OOM)
+
+The dashboard-detail half of this (config blobs) is fixed under **L2** above. Still open: the
+registry manifest reads `handleContainerManifest` (`container.go:1624`) and `handleHFManifest`
+(`hf.go:1552`) `os.ReadFile` the manifest blob whole (size checked only `> 0` at import) on the
+unauthenticated `GET /v2/.../manifests/<ref>` pull path. Manifests are tiny in practice, so a cap
+is pure hardening, but it closes the last unauthenticated whole-blob-into-memory read.
+**Fix:** `readFileLimit` these two with a manifest-sized cap. **Status: open (recommended).**
 
 ---
 
@@ -277,6 +363,12 @@ real URL with a scheme allowlist.
   do `os.ReadFile` of a blob whose size is only checked `> 0` (`container.go:878`), up to the
   64 GiB archive cap → transient OOM from a giant declared "config" blob (low side every
   collect; high side per dashboard detail view).
+  **Status: partially fixed in this branch** — the two *unauthenticated high-side* detail reads
+  (`containerImageLayers` `container.go:1836`, `hfConfigFields` `hf.go`) now use
+  `readFileLimit(..., maxRenderedBlobBytes)` (32 MiB); an oversize blob is treated as unreadable,
+  so the panel omits those fields instead of OOMing (regression case added to
+  `TestCovR2_ContainerImageLayersFallbacks`). The collect-time read (`container.go:1267`, low side)
+  is left as-is. See also **M13** for the manifest-serving reads on the same path.
 - **L3 — Reflected `Host` baked into generated absolute URLs** (`npmBaseURL`, `npm.go:301`;
   reused for nuget/crates download bases). Behind a shared cache a poisoned `Host` can redirect
   downloads — DoS for npm (client re-verifies via `dist.integrity`), content substitution for
@@ -312,6 +404,45 @@ real URL with a scheme allowlist.
   doesn't).
 - **L14 — `diskusage_linux.go:24` multiplies a clamped `uint64` by block size without a second
   overflow guard** → theoretical negative `/metrics` gauge (not attacker-reachable).
+- **L15 — RPM filelists/other are string-filtered without a prior XML well-formedness check**
+  (`restagePkgidIndexes` `rpm.go:525` → `filterIndexXML`). Primary is `xml.Unmarshal`'d first, but
+  the pkgid-keyed indexes are only checksum-verified then block-matched as raw strings. A
+  malformed-but-checksum-matching upstream filelists could desync block boundaries. Bounded: low
+  side only, supplementary metadata (primary stays authoritative), no crash/traversal, output
+  stays count-consistent. Optional: `xml.Unmarshal`-validate before filtering.
+- **L16 — RPM sqlite `_db` indexes are not rewritten when packages are filtered**
+  (`isRpmPkgidIndex` `rpm.go:513` covers only the XML `filelists`/`filelists_ext`/`other`). If an
+  upstream still ships `primary_db`/`filelists_db`/`other_db`, those are served verbatim and still
+  list dropped packages, so an old sqlite-only yum client could 404 on a filtered `.rpm`.
+  Pre-existing and strictly improved by the filtered-metadata fix; modern `createrepo_c` omits
+  `_db`. Optional: rewrite or drop the `_db` entries too.
+- **L17 — Minor mirror-size-scaled reads on `/ui/api/detail` and metadata endpoints**
+  (`aptDetail` `apt.go:1631` / `rpmDetail` `rpm.go:1444` read the whole `index.json`;
+  `buildMavenMetadata` `java.go:214` does O(versions) `ReadDir` per `maven-metadata.xml`). Operator-
+  size, not attacker-size, and uncached — cache or bound if a mirror grows large. (Same family as
+  M11/M12, lower severity.)
+- **L18 — The NuGet V3 low side follows upstream-provided URLs with no host allowlist (blind-GET
+  SSRF surface).** `nugetResourceURLOK` (`nuget.go:1071`) validates *form* (absolute http(s), a
+  host, no userinfo) but not *host*, and it gates the service-index resources, the registration
+  base, and the `catalogEntry` catalog-document URL (`fetchNugetCatalogEntry` `nuget.go:1292`) —
+  all attacker-influenced if the configured feed is malicious/MITM'd. So a hostile feed can steer
+  the privileged low side to `GET` an arbitrary http(s) host (including link-local/internal). Bounded:
+  the response is parsed only for a `packageHash` the `.nupkg` must then match (blind GET, ≤4 MiB,
+  no body exfiltration to the attacker), and multi-host resolution is inherent to NuGet V3 — but a
+  host allowlist derived from the configured source would shrink the surface. Not specific to the
+  M10 catalog fetch; it is the whole V3 chain.
+- **L19 — An immutable-file conflict wedges a stream instead of rejecting the bundle.**
+  `installVerifiedFile` (`highside.go:1527`) returns a *plain* `"immutable file conflict"` error,
+  which `handleStreamImportError` (`highside.go:748`) classifies as **operational** (retried in
+  place) rather than `invalidBundleError` (rejected). A permanent conflict — two validly-signed
+  bundles writing different bytes to the same immutable path — therefore retries forever and blocks
+  every later bundle in that stream. General and pre-existing (the design deliberately leaves
+  operational faults like a full disk unmarked so a good bundle stays retryable; a *permanent*
+  conflict is the edge that slips through). Not attacker-reachable with a correct low side (paths
+  are content/version-pinned); the one concrete trigger is a pre-fix Helm bundle carrying the
+  adversarial legacy pair chart `a-1`@`1.0.0` + chart `a`@`1-1.0.0` (both legacy-map to
+  `a-1-1.0.0.tgz`), which is not producible by the current low side. Visible in `/readyz` and
+  `/admin/status`. Fix would be a semantic call (reject-and-skip vs wedge) best made deliberately.
 
 ---
 
