@@ -699,16 +699,18 @@ func (s *HighServer) handleComposerRoot(w http.ResponseWriter) {
 // at least one servable release, sorted. It is derived from the directory
 // structure alone — packages.json is the first document every Composer client
 // fetches, so unlike the dashboard tree it must not read every release's
-// stored JSON across the whole mirror per request.
+// stored JSON across the whole mirror per request. The result is never nil:
+// packages.json must advertise available-packages as [], not null, even on an
+// empty mirror.
 func (s *HighServer) listComposerPackageNames() ([]string, error) {
+	out := []string{}
 	vendors, err := os.ReadDir(s.composerMetadataDir())
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return out, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	var out []string
 	for _, v := range vendors {
 		if v.IsDir() {
 			out = s.appendComposerVendorNames(out, v.Name())
