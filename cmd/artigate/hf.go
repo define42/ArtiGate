@@ -2254,7 +2254,7 @@ func (s *HighServer) hfConfigFields(v HFVariant) []UIDetailField {
 	if len(v.Blobs) == 0 {
 		return nil
 	}
-	b, err := os.ReadFile(s.hfBlobPath(v.Blobs[0].Digest)) // Blobs[0] is the config
+	b, err := readFileLimit(s.hfBlobPath(v.Blobs[0].Digest), maxRenderedBlobBytes) // Blobs[0] is the config
 	if err != nil {
 		return nil
 	}

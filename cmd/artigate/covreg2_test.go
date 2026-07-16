@@ -499,6 +499,13 @@ func TestCovR2_ContainerImageLayersFallbacks(t *testing.T) {
 	if len(layers) != 1 || layers[0].Digest != layerDigest || layers[0].Command != "(no build history recorded)" {
 		t.Fatalf("raw layers = %+v", layers)
 	}
+	// A config blob past the render cap is treated as unreadable, so an
+	// attacker-influenced giant config cannot be read whole into memory by an
+	// unauthenticated /ui/api/detail render.
+	oversize := writeContainerConfig(strings.Repeat("A", maxRenderedBlobBytes+1))
+	if got := hs.containerImageLayers(ContainerImage{Blobs: []ContainerBlob{{Digest: oversize, Size: 1}}}); got != nil {
+		t.Errorf("oversize-config layers = %+v, want nil (cap enforced)", got)
+	}
 }
 
 func TestCovR2_ListContainerReposUntagged(t *testing.T) {

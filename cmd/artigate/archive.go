@@ -31,6 +31,14 @@ import (
 // chart, collection, or source package; mirrors terraform's tfModuleMaxExtractBytes.
 const tarScanMaxDecompressedBytes = 2 << 30
 
+// maxRenderedBlobBytes bounds a config/metadata blob read fully into memory to
+// render a dashboard detail panel (an OCI image config, an HF model config).
+// Such blobs are small in practice (KB), but their size is only checked >0 at
+// import, so an attacker-influenced giant "config" descriptor could OOM the high
+// side when an unauthenticated GET /ui/api/detail renders it. A blob past the cap
+// is treated as unreadable, so the panel simply omits those fields.
+const maxRenderedBlobBytes = 32 << 20
+
 func validateRelPath(rel string) error {
 	if rel == "" || strings.HasPrefix(rel, "/") || strings.Contains(rel, "\\") {
 		return errors.New("invalid relative path")
