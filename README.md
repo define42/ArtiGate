@@ -342,7 +342,7 @@ For APT, RPM, and Alpine, a **"Newest version only"** checkbox (on by default)
 mirrors just the latest version of each package; untick it to mirror every
 version.
 
-Private **git, APT, RPM, and Alpine** upstreams authenticate with HTTP Basic:
+Private **git, APT, RPM, Alpine, and Conda** upstreams authenticate with HTTP Basic:
 a one-shot login on the collect (each page's *Private … login* fields / the
 `auth` field, never stored) or standing `host=user:password` entries in
 `ARTIGATE_UPSTREAM_AUTH` on the low side — the latter is what scheduled

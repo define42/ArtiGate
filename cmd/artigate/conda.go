@@ -950,6 +950,11 @@ type CondaCollectRequest struct {
 	Subdirs  []string `json:"subdirs,omitempty"`
 	Packages []string `json:"packages"`
 	NoDeps   bool     `json:"no_deps,omitempty"`
+	// Auth optionally authenticates this collect against a private channel. It
+	// is used for this collect only and never stored; standing credentials
+	// belong in ARTIGATE_UPSTREAM_AUTH (watch specs must never carry logins —
+	// they are persisted and echoed in plaintext).
+	Auth *HostCollectAuth `json:"auth,omitempty"`
 	// Force disables export dedup for this collect: every package is packed
 	// even when already forwarded, producing a full self-contained bundle
 	// (for disaster recovery or rebuilding a high side from scratch).
@@ -1065,17 +1070,18 @@ func (s *LowServer) HandleCondaCollect(ctx context.Context, r *http.Request) (Ex
 // compressed forms: .zst first (shelling to the zstd binary — a missing
 // binary, or a channel without the file, falls through), then .bz2 (standard
 // library), then plain repodata.json. Whatever form arrives, the decompressed
-// document is capped at condaMaxRepodataBytes.
-func condaFetchRepodata(ctx context.Context, subdirURL string) ([]byte, error) {
-	doc, zstErr := condaFetchRepodataZst(ctx, subdirURL)
+// document is capped at condaMaxRepodataBytes. cred is the channel host's
+// optional login (nil means anonymous).
+func condaFetchRepodata(ctx context.Context, subdirURL string, cred *registryCredential) ([]byte, error) {
+	doc, zstErr := condaFetchRepodataZst(ctx, subdirURL, cred)
 	if zstErr == nil {
 		return doc, nil
 	}
-	doc, bz2Err := condaFetchRepodataBz2(ctx, subdirURL)
+	doc, bz2Err := condaFetchRepodataBz2(ctx, subdirURL, cred)
 	if bz2Err == nil {
 		return doc, nil
 	}
-	doc, plainErr := httpGetBytes(ctx, subdirURL+"/repodata.json", condaMaxRepodataBytes)
+	doc, plainErr := httpGetBytesAuth(ctx, subdirURL+"/repodata.json", condaMaxRepodataBytes, cred)
 	if plainErr == nil {
 		return doc, nil
 	}
@@ -1086,8 +1092,8 @@ func condaFetchRepodata(ctx context.Context, subdirURL string) ([]byte, error) {
 // repodata. Zstd has no standard-library decoder, so this pipes through the
 // zstd binary like the RPM adapter does for xz — output-capped, so a hostile
 // channel cannot balloon memory past the configured ceiling.
-func condaFetchRepodataZst(ctx context.Context, subdirURL string) ([]byte, error) {
-	b, err := httpGetBytes(ctx, subdirURL+"/repodata.json.zst", maxIndexFetchBytes)
+func condaFetchRepodataZst(ctx context.Context, subdirURL string, cred *registryCredential) ([]byte, error) {
+	b, err := httpGetBytesAuth(ctx, subdirURL+"/repodata.json.zst", maxIndexFetchBytes, cred)
 	if err != nil {
 		return nil, err
 	}
@@ -1096,8 +1102,8 @@ func condaFetchRepodataZst(ctx context.Context, subdirURL string) ([]byte, error
 
 // condaFetchRepodataBz2 fetches and decompresses the bzip2-compressed
 // repodata, the legacy compressed form older channels carry.
-func condaFetchRepodataBz2(ctx context.Context, subdirURL string) ([]byte, error) {
-	b, err := httpGetBytes(ctx, subdirURL+"/repodata.json.bz2", maxIndexFetchBytes)
+func condaFetchRepodataBz2(ctx context.Context, subdirURL string, cred *registryCredential) ([]byte, error) {
+	b, err := httpGetBytesAuth(ctx, subdirURL+"/repodata.json.bz2", maxIndexFetchBytes, cred)
 	if err != nil {
 		return nil, err
 	}
@@ -1135,11 +1141,11 @@ type condaPackageIndex map[string][]condaCandidate
 // that cannot be fetched fails the collect: a silently missing platform
 // would produce a mirror that cannot solve, which is worse than a loud
 // error.
-func condaFetchIndexes(ctx context.Context, channelURL string, subdirs []string) (condaPackageIndex, error) {
+func condaFetchIndexes(ctx context.Context, channelURL string, subdirs []string, cred *registryCredential) (condaPackageIndex, error) {
 	idx := condaPackageIndex{}
 	for _, sd := range subdirs {
 		emitProgress(ctx, "Fetching %s/%s/repodata.json…", channelURL, sd)
-		doc, err := condaFetchRepodata(ctx, channelURL+"/"+sd)
+		doc, err := condaFetchRepodata(ctx, channelURL+"/"+sd, cred)
 		if err != nil {
 			return nil, fmt.Errorf("subdir %s: %w", sd, err)
 		}
@@ -1331,6 +1337,11 @@ func (s *LowServer) CollectConda(ctx context.Context, req CondaCollectRequest) (
 	if err != nil {
 		return ExportResult{}, err
 	}
+	creds, err := upstreamCollectCredentials([]string{upstreamURLHost(channelURL)}, req.Auth)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	cred := credentialForHost(creds, upstreamURLHost(channelURL))
 	// Hold only the conda stream's lock for the whole fetch->write->commit
 	// so a concurrent conda exporter cannot claim the same sequence number
 	// between peek and commit. Other streams export in parallel.
@@ -1348,9 +1359,9 @@ func (s *LowServer) CollectConda(ctx context.Context, req CondaCollectRequest) (
 	}
 	defer os.RemoveAll(stageRoot)
 
-	idx, err := condaFetchIndexes(ctx, channelURL, subdirs)
+	idx, err := condaFetchIndexes(ctx, channelURL, subdirs, cred)
 	if err != nil {
-		return ExportResult{}, err
+		return ExportResult{}, decorateUpstreamAuthError(err, creds)
 	}
 	emitProgress(ctx, "Resolving %d package spec(s)…", len(req.Packages))
 	resolver := &condaResolver{idx: idx, noDeps: req.NoDeps, byName: map[string]bool{}}
@@ -1358,7 +1369,7 @@ func (s *LowServer) CollectConda(ctx context.Context, req CondaCollectRequest) (
 	if len(selected) == 0 {
 		return ExportResult{}, fmt.Errorf("no conda packages could be resolved: %s", summarizeFailures(skipped))
 	}
-	pkgs, files, failed := s.downloadCondaPackages(ctx, stageRoot, mirror, channelURL, selected)
+	pkgs, files, failed := s.downloadCondaPackages(ctx, stageRoot, mirror, channelURL, selected, cred)
 	failed = append(skipped, failed...)
 	if len(pkgs) == 0 {
 		return ExportResult{}, fmt.Errorf("no conda packages could be fetched: %s", summarizeFailures(failed))
@@ -1378,8 +1389,9 @@ func (s *LowServer) CollectConda(ctx context.Context, req CondaCollectRequest) (
 
 // downloadCondaPackages fetches every selected package file into the staging
 // tree, verifying each against its repodata-declared SHA-256. A failed
-// download is collected rather than aborting the batch.
-func (s *LowServer) downloadCondaPackages(ctx context.Context, stageRoot, mirror, channelURL string, selected []condaCandidate) ([]CondaPackage, []ManifestFile, []FailedModule) {
+// download is collected rather than aborting the batch. cred is the channel
+// host's optional login (nil means anonymous).
+func (s *LowServer) downloadCondaPackages(ctx context.Context, stageRoot, mirror, channelURL string, selected []condaCandidate, cred *registryCredential) ([]CondaPackage, []ManifestFile, []FailedModule) {
 	var pkgs []CondaPackage
 	var files []ManifestFile
 	var failed []FailedModule
@@ -1387,7 +1399,7 @@ func (s *LowServer) downloadCondaPackages(ctx context.Context, stageRoot, mirror
 		emitProgress(ctx, "→ [%d/%d] %s/%s", i+1, len(selected), sel.subdir, sel.filename)
 		rel := condaFileRel(mirror, sel.subdir, sel.filename)
 		abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
-		sum, size, err := downloadVerifiedFile(ctx, channelURL+"/"+sel.subdir+"/"+sel.filename, abs, 0, "sha256", sel.entry.SHA256)
+		sum, size, err := downloadVerifiedFileAuth(ctx, channelURL+"/"+sel.subdir+"/"+sel.filename, abs, 0, "sha256", sel.entry.SHA256, cred)
 		if err != nil {
 			emitProgress(ctx, "  ✗ %s: %s", sel.filename, err)
 			failed = append(failed, FailedModule{Module: sel.entry.Name, Version: sel.entry.Version + "-" + sel.entry.Build, Error: err.Error()})

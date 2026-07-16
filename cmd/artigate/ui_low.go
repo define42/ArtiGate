@@ -227,7 +227,7 @@ const lowUIHTML = `<!DOCTYPE html>
           <label>Username<input id="goAuthUser" type="text" autocomplete="off"></label>
           <label>Password or token<input id="goAuthPass" type="password" autocomplete="new-password"></label>
         </div>
-        <p class="hint">Handed to <code>go</code>/<code>git</code> for this collect only &mdash; never stored and never part of a schedule; the host is also added to <code>GOPRIVATE</code> for the run. Standing credentials, which scheduled collects also use, go in <code>ARTIGATE_GO_AUTH</code> on the low side (comma-separated <code>host=user:password</code>; <code>ARTIGATE_UPSTREAM_AUTH</code> is for the git/APT/RPM/Alpine streams and is not read here).</p>
+        <p class="hint">Handed to <code>go</code>/<code>git</code> for this collect only &mdash; never stored and never part of a schedule; the host is also added to <code>GOPRIVATE</code> for the run. Standing credentials, which scheduled collects also use, go in <code>ARTIGATE_GO_AUTH</code> on the low side (comma-separated <code>host=user:password</code>; <code>ARTIGATE_UPSTREAM_AUTH</code> is for the git/APT/RPM/Alpine/Conda streams and is not read here).</p>
       </details>
       <label class="pytarget-check"><input id="goForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
@@ -663,6 +663,14 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">Packages <span class="opt">&mdash; one per line; name, name==1.2.3, or name&gt;=1.2</span>
         <textarea id="condapkgs" rows="4" placeholder="numpy&#10;scipy==1.13.1" autocomplete="off"></textarea>
       </label>
+      <details class="pytarget">
+        <summary>Private channel login (optional)</summary>
+        <div class="pytarget-grid">
+          <label>Username<input id="condaAuthUser" type="text" autocomplete="off"></label>
+          <label>Password or token<input id="condaAuthPass" type="password" autocomplete="new-password"></label>
+        </div>
+        <p class="hint">Used for this collect only &mdash; never stored and never part of a schedule. Standing credentials, which scheduled pulls also use, go in <code>ARTIGATE_UPSTREAM_AUTH</code> on the low side (comma-separated <code>host=user:password</code>). Do not put <code>user:pass@</code> in the channel URL &mdash; such URLs are rejected.</p>
+      </details>
       <label class="pytarget-check"><input id="condaForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
       <div class="btnrow">
         <button class="primary" type="submit" id="condaBtn">Collect &amp; export</button>
@@ -1861,8 +1869,11 @@ function condaBody(){
 
 async function collectConda(ev, dry){
   ev.preventDefault();
+  // condaBody() is shared with scheduleConda, so the login is attached here
+  // only — a schedule's spec must never carry credentials.
   const body=condaBody();
   if(!body){ showCondaResult('err','Give the channel and at least one package.'); return; }
+  if(!attachHostAuth(body,'conda',showCondaResult)) return;
   runCollect({dry:dry, btnId:'condaBtn', showFn:showCondaResult, title:'Collecting Conda packages',
     url:'/admin/conda/collect', body:applyForce(body,'condaForce'), forceId:'condaForce',
     render:d=>skippedItems(collectedMsg(d,'Collected','package(s)'), d)});

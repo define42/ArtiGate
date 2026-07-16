@@ -83,6 +83,10 @@ type fakeCondaChannel struct {
 	hits map[string]int
 	docs map[string]string
 	pkgs map[string][]byte
+	// requireAuth, when set before the first request, is the exact
+	// Authorization value every request must carry; anything else gets a 401
+	// Basic challenge (a private channel).
+	requireAuth string
 }
 
 func newFakeCondaChannel(t *testing.T, pkgs []condaTestPkg) *fakeCondaChannel {
@@ -108,7 +112,13 @@ func (f *fakeCondaChannel) handle(w http.ResponseWriter, r *http.Request) {
 	f.hits[r.URL.Path]++
 	doc, okDoc := f.docs[r.URL.Path]
 	body, okPkg := f.pkgs[r.URL.Path]
+	auth := f.requireAuth
 	f.mu.Unlock()
+	if auth != "" && r.Header.Get("Authorization") != auth {
+		w.Header().Set("Www-Authenticate", `Basic realm="channel"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	switch {
 	case okDoc:
 		_, _ = w.Write([]byte(doc))
@@ -459,7 +469,7 @@ func TestCondaFetchRepodataFallback(t *testing.T) {
 
 	t.Run("plain", func(t *testing.T) {
 		url := serve(t, map[string][]byte{"repodata.json": plain})
-		got, err := condaFetchRepodata(context.Background(), url)
+		got, err := condaFetchRepodata(context.Background(), url, nil)
 		if err != nil || string(got) != string(plain) {
 			t.Fatalf("plain fallback = %q, %v", got, err)
 		}
@@ -473,7 +483,7 @@ func TestCondaFetchRepodataFallback(t *testing.T) {
 			t.Fatal(err)
 		}
 		url := serve(t, map[string][]byte{"repodata.json.bz2": comp})
-		got, err := condaFetchRepodata(context.Background(), url)
+		got, err := condaFetchRepodata(context.Background(), url, nil)
 		if err != nil || string(got) != string(plain) {
 			t.Fatalf("bz2 fetch = %q, %v", got, err)
 		}
@@ -491,14 +501,14 @@ func TestCondaFetchRepodataFallback(t *testing.T) {
 			t.Fatal(err)
 		}
 		url := serve(t, map[string][]byte{"repodata.json.zst": comp})
-		got, err := condaFetchRepodata(context.Background(), url)
+		got, err := condaFetchRepodata(context.Background(), url, nil)
 		if err != nil || string(got) != string(plain) {
 			t.Fatalf("zst fetch = %q, %v", got, err)
 		}
 	})
 	t.Run("missing", func(t *testing.T) {
 		url := serve(t, map[string][]byte{})
-		if _, err := condaFetchRepodata(context.Background(), url); err == nil || !strings.Contains(err.Error(), "repodata unavailable") {
+		if _, err := condaFetchRepodata(context.Background(), url, nil); err == nil || !strings.Contains(err.Error(), "repodata unavailable") {
 			t.Fatalf("missing repodata = %v, want 'repodata unavailable'", err)
 		}
 	})
@@ -1023,6 +1033,57 @@ func TestCondaCollectShaTamper(t *testing.T) {
 		Channel: up.srv.URL, Name: "chan", Packages: []string{"pkga"},
 	}); err == nil {
 		t.Fatal("a tampered sole package should fail the collect")
+	}
+}
+
+// TestCollectCondaPrivateUpstream exercises HTTP Basic against a channel that
+// demands a login on every request (repodata and packages alike).
+func TestCollectCondaPrivateUpstream(t *testing.T) {
+	up := newFakeCondaChannel(t, []condaTestPkg{{subdir: "noarch", name: "pkga", version: "1.0.0", build: "h1_0", ext: ".conda"}})
+	up.requireAuth = testBasicAuth("bot", "hunter2")
+	ls, _ := newCondaLowServer(t)
+	ctx := context.Background()
+	req := CondaCollectRequest{Channel: up.srv.URL, Name: "chan", Packages: []string{"pkga"}}
+
+	// Anonymous collects fail at the repodata fetch with guidance naming both
+	// supply paths.
+	_, err := ls.CollectConda(ctx, req)
+	if err == nil || !strings.Contains(err.Error(), upstreamAuthEnv) {
+		t.Fatalf("anonymous collect error = %v", err)
+	}
+
+	// A wrong login is reported as rejected — and never echoed.
+	wrong := req
+	wrong.Auth = &HostCollectAuth{Username: "bot", Password: "nope"}
+	_, err = ls.CollectConda(ctx, wrong)
+	if err == nil || !strings.Contains(err.Error(), "were not accepted") || strings.Contains(err.Error(), "nope") {
+		t.Fatalf("wrong-login error = %v", err)
+	}
+
+	// The per-collect login mirrors the channel — the repodata and the package
+	// downloads all authenticate.
+	good := req
+	good.Auth = &HostCollectAuth{Username: "bot", Password: "hunter2"}
+	if _, err := ls.CollectConda(ctx, good); err != nil {
+		t.Fatalf("authenticated collect: %v", err)
+	}
+
+	// Standing ARTIGATE_UPSTREAM_AUTH credentials work without request auth —
+	// the only credential source scheduled collects have.
+	t.Setenv(upstreamAuthEnv, strings.TrimPrefix(up.srv.URL, "http://")+"=bot:hunter2")
+	force := req
+	force.Force = true
+	if _, err := ls.CollectConda(ctx, force); err != nil {
+		t.Fatalf("env-authenticated collect: %v", err)
+	}
+
+	// A channel URL that smuggles the login as userinfo is rejected without
+	// echoing it (the URL would cross the diode inside the signed manifest).
+	userinfo := req
+	userinfo.Channel = "http://bot:hunter2@" + strings.TrimPrefix(up.srv.URL, "http://")
+	_, err = ls.CollectConda(ctx, userinfo)
+	if err == nil || !strings.Contains(err.Error(), "must not embed credentials") || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("userinfo channel error = %v", err)
 	}
 }
 

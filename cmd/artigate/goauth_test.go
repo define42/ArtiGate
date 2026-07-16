@@ -12,9 +12,9 @@ import (
 func TestGoCollectCredentials(t *testing.T) {
 	t.Setenv(goAuthEnv, "gitlab.example.com=envuser:envpass")
 	// The mirror streams' variable must not reach a Go collect: buildGoAuthEnv
-	// treats every credentialed host as module-private, so a git/apt/rpm/apk
-	// login for github.com would flip public github.com/... fetches off the
-	// proxy and sumdb.
+	// treats every credentialed host as module-private, so a git/apt/rpm/apk/
+	// conda login for github.com would flip public github.com/... fetches off
+	// the proxy and sumdb.
 	t.Setenv(upstreamAuthEnv, "github.com=gituser:gitpass")
 
 	// Without request auth the standing env credentials apply (the scheduled
@@ -24,7 +24,7 @@ func TestGoCollectCredentials(t *testing.T) {
 		t.Fatalf("env creds = %v, %v", creds, err)
 	}
 	if _, ok := creds["github.com"]; ok {
-		t.Fatal("ARTIGATE_UPSTREAM_AUTH (git/apt/rpm/apk) must not apply to Go collects")
+		t.Fatal("ARTIGATE_UPSTREAM_AUTH (git/apt/rpm/apk/conda) must not apply to Go collects")
 	}
 
 	// A named host is authoritative and the request login wins over the env.
