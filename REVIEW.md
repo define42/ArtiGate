@@ -421,6 +421,28 @@ is pure hardening, but it closes the last unauthenticated whole-blob-into-memory
   `buildMavenMetadata` `java.go:214` does O(versions) `ReadDir` per `maven-metadata.xml`). Operator-
   size, not attacker-size, and uncached — cache or bound if a mirror grows large. (Same family as
   M11/M12, lower severity.)
+- **L18 — The NuGet V3 low side follows upstream-provided URLs with no host allowlist (blind-GET
+  SSRF surface).** `nugetResourceURLOK` (`nuget.go:1071`) validates *form* (absolute http(s), a
+  host, no userinfo) but not *host*, and it gates the service-index resources, the registration
+  base, and the `catalogEntry` catalog-document URL (`fetchNugetCatalogEntry` `nuget.go:1292`) —
+  all attacker-influenced if the configured feed is malicious/MITM'd. So a hostile feed can steer
+  the privileged low side to `GET` an arbitrary http(s) host (including link-local/internal). Bounded:
+  the response is parsed only for a `packageHash` the `.nupkg` must then match (blind GET, ≤4 MiB,
+  no body exfiltration to the attacker), and multi-host resolution is inherent to NuGet V3 — but a
+  host allowlist derived from the configured source would shrink the surface. Not specific to the
+  M10 catalog fetch; it is the whole V3 chain.
+- **L19 — An immutable-file conflict wedges a stream instead of rejecting the bundle.**
+  `installVerifiedFile` (`highside.go:1527`) returns a *plain* `"immutable file conflict"` error,
+  which `handleStreamImportError` (`highside.go:748`) classifies as **operational** (retried in
+  place) rather than `invalidBundleError` (rejected). A permanent conflict — two validly-signed
+  bundles writing different bytes to the same immutable path — therefore retries forever and blocks
+  every later bundle in that stream. General and pre-existing (the design deliberately leaves
+  operational faults like a full disk unmarked so a good bundle stays retryable; a *permanent*
+  conflict is the edge that slips through). Not attacker-reachable with a correct low side (paths
+  are content/version-pinned); the one concrete trigger is a pre-fix Helm bundle carrying the
+  adversarial legacy pair chart `a-1`@`1.0.0` + chart `a`@`1-1.0.0` (both legacy-map to
+  `a-1-1.0.0.tgz`), which is not producible by the current low side. Visible in `/readyz` and
+  `/admin/status`. Fix would be a semantic call (reject-and-skip vs wedge) best made deliberately.
 
 ---
 
