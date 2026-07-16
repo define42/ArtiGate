@@ -662,13 +662,17 @@ func TestCovR2_DownloadHFRepoFiles(t *testing.T) {
 	}
 
 	// downloadHFToTemp directly: success then a 404.
-	sha, n, tmp, err := c.downloadHFToTemp(ctx, "cfg", srv.URL+"/plain", stage)
+	sha, n, tmp, err := c.downloadHFToTemp(ctx, "cfg", srv.URL+"/plain", stage, hfMaxPlainFileBytes)
 	if err != nil || sha != hexSHA(plainContent) || n != int64(len(plainContent)) {
 		t.Fatalf("downloadHFToTemp = %q %d, %v", sha, n, err)
 	}
 	_ = os.Remove(tmp)
-	if _, _, _, err := c.downloadHFToTemp(ctx, "cfg", srv.URL+"/404", stage); err == nil {
+	if _, _, _, err := c.downloadHFToTemp(ctx, "cfg", srv.URL+"/404", stage, hfMaxPlainFileBytes); err == nil {
 		t.Error("downloadHFToTemp 404 should fail")
+	}
+	// A body past the limit is rejected and leaves no staged temp behind.
+	if _, _, _, err := c.downloadHFToTemp(ctx, "cfg", srv.URL+"/plain", stage, int64(len(plainContent)-1)); err == nil || !strings.Contains(err.Error(), "non-LFS file limit") {
+		t.Errorf("oversized plain download = %v, want a non-LFS file limit error", err)
 	}
 }
 

@@ -301,7 +301,9 @@ func extractChartYAML(tgzPath string) (map[string]any, error) {
 		return nil, err
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	// Bound total decompression: tr.Next() inflates every skipped entry, so a
+	// gzip bomb with Chart.yaml last (or absent) would otherwise inflate wholesale.
+	tr := tar.NewReader(io.LimitReader(gz, tarScanMaxDecompressedBytes))
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {

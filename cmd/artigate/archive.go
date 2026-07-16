@@ -23,6 +23,14 @@ import (
 	"time"
 )
 
+// tarScanMaxDecompressedBytes bounds the total decompressed bytes read while
+// scanning a .tar.gz for a single metadata member (helm Chart.yaml, galaxy
+// MANIFEST.json, cran DESCRIPTION). tar.Reader.Next() decompresses every skipped
+// entry, so without this cap a crafted gzip bomb — the wanted member placed last,
+// or absent — would inflate the whole archive. Generous enough for any real
+// chart, collection, or source package; mirrors terraform's tfModuleMaxExtractBytes.
+const tarScanMaxDecompressedBytes = 2 << 30
+
 func validateRelPath(rel string) error {
 	if rel == "" || strings.HasPrefix(rel, "/") || strings.Contains(rel, "\\") {
 		return errors.New("invalid relative path")
