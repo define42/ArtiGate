@@ -76,6 +76,12 @@ const (
 	gitMaxPackBytes = 2 << 30
 	// gitMaxObjectBytes caps one decompressed object (zlib-bomb guard).
 	gitMaxObjectBytes = 512 << 20
+	// gitInitialObjectHint caps the object slice's pre-allocated capacity. The
+	// pack header's object count is attacker-controlled (a forged 2 GiB pack can
+	// claim hundreds of millions of objects), so it must not size an eager
+	// allocation; the slice instead grows to the real count as scanObject
+	// consumes actual pack bytes.
+	gitInitialObjectHint = 1 << 16
 	// gitMaxPktBytes is the pkt-line format's maximum packet length: four
 	// hex length digits count themselves, so 65520 total.
 	gitMaxPktBytes = 65520
@@ -781,7 +787,7 @@ func (p *gitPackParser) inflate(declared int64) ([]byte, error) {
 // trailer stripped), leaving deltas unresolved.
 func gitScanPack(body []byte, count uint32) ([]*gitPackObject, error) {
 	p := &gitPackParser{body: body, pos: 12}
-	objs := make([]*gitPackObject, 0, count)
+	objs := make([]*gitPackObject, 0, min(count, gitInitialObjectHint))
 	for i := uint32(0); i < count; i++ {
 		o, err := p.scanObject()
 		if err != nil {

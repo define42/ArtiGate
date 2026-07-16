@@ -138,6 +138,9 @@ manifests via `io.LimitReader(…, 8<<20)`). The plain path is taken whenever a 
 non-LFS file → the privileged low side streams it unbounded into staging → **disk exhaustion**
 (fails all streams' collects, since staging shares the low-side root).
 **Fix:** `io.LimitReader(resp.Body, meta.Size+1)` (or a sane plain-file cap) and verify the count.
+**Status: fixed in this branch** — the plain path is bounded by a fixed `hfMaxPlainFileBytes`
+cap (512 MiB) via `io.LimitReader`, rejecting an oversized body; regression assertion added to
+`TestCovR2_DownloadHFRepoFiles`.
 
 ### M3 — gzip-bomb decompression while scanning archives for a metadata file
 
@@ -152,6 +155,9 @@ entire import pipeline** (all streams) while it grinds. cran also hits it on the
 The repo already has the correct pattern: `terraform.go:1420` (`extractTarGzTree`) caps with a
 `remaining int64` budget.
 **Fix:** wrap the gzip/tar stream in a total-bytes budget as terraform does.
+**Status: fixed in this branch** — all three scanners now read through
+`io.LimitReader(gz, tarScanMaxDecompressedBytes)` (2 GiB), so a bomb is bounded instead of
+inflated wholesale.
 
 ### M4 — Unauthenticated high-side endpoints do expensive / mutating work
 
@@ -178,6 +184,10 @@ parts → inode exhaustion; a single huge part → disk full. Because `<root>` a
 `low-state.json` and bundle archives, exhaustion breaks state/bundle writes on the plane that
 holds the signing key. (Per-file size is intentionally unbounded for large models; the gap is
 the missing part-count / aggregate-bytes / free-space guard.)
+- **Status: fixed in this branch** — `stageUploadParts` now rejects an upload exceeding
+  `maxUploadParts` (10000) parts, closing the inode/handle-exhaustion vector; regression test
+  `TestStageUploadPartsCountCap`. (The single-huge-part disk-fill is inherent to the deliberately
+  unbounded per-file size for large-model uploads and is left as-is.)
 
 ### M6 — git pack header object count drives an eager multi-GB allocation (low-side OOM)
 
@@ -192,6 +202,10 @@ objs := make([]*gitPackObject, 0, count)            // eager count*8 bytes
 `count` can be ~716M → `make(…, 0, count)` reserves ~5.7 GiB **before** any object body is
 read, on top of the 2 GiB pack already in memory → OOM of the low-side control plane when
 mirroring a hostile repo. **Fix:** cap `count` to a sane maximum (or grow the slice lazily).
+**Status: fixed in this branch** — the object slice is pre-sized to
+`min(count, gitInitialObjectHint)` (64Ki) and grows to the real count as objects are scanned,
+so a forged count can no longer drive the up-front allocation; smoke test
+`TestGitScanPackForgedObjectCount`.
 
 ### M7 — vsx gallery `pageNumber` overflow → slice-bounds panic (unauthenticated)
 

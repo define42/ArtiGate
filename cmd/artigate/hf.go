@@ -327,6 +327,14 @@ func parseHFRepoRef(spec string) (hfRepoRef, error) {
 // than container layers (a 20B-parameter GGUF is tens of gigabytes).
 const hfBlobDownloadTimeout = 4 * time.Hour
 
+// hfMaxPlainFileBytes caps a non-LFS repository file (config, tokenizer, …).
+// These carry no upstream hash and their listed size is upstream-controlled, so
+// the download is bounded by a fixed generous cap rather than the declared size:
+// a repo whose .gitattributes leaves a large file un-LFS-tracked takes this plain
+// path and could otherwise stream unbounded bytes into low-side staging. The
+// large blobs (model weights) are LFS-backed and take the size+hash-verified path.
+const hfMaxPlainFileBytes = 512 << 20
+
 // hfClient talks to the Hugging Face model API for one collect run.
 type hfClient struct {
 	base string
@@ -622,7 +630,7 @@ func (c *hfClient) downloadHFRepoLFSFile(ctx context.Context, ref hfRepoRef, met
 // downloadHFRepoPlainFile fetches a small non-LFS file (config, tokenizer),
 // hashing it while downloading and placing it by the computed hash.
 func (c *hfClient) downloadHFRepoPlainFile(ctx context.Context, ref hfRepoRef, meta hfRepoFileMeta, rawURL, stageRoot string, staged map[string]bool) (HFRepoFile, ManifestFile, error) {
-	sha, size, tmp, err := c.downloadHFToTemp(ctx, ref.String()+": "+meta.Path, rawURL, stageRoot)
+	sha, size, tmp, err := c.downloadHFToTemp(ctx, ref.String()+": "+meta.Path, rawURL, stageRoot, hfMaxPlainFileBytes)
 	if err != nil {
 		return HFRepoFile{}, ManifestFile{}, err
 	}
@@ -650,7 +658,7 @@ func (c *hfClient) downloadHFRepoPlainFile(ctx context.Context, ref hfRepoRef, m
 // downloadHFToTemp streams a URL into a temp file under stageRoot, returning
 // the content's hex sha256 and size. The caller moves it into place (or
 // removes it).
-func (c *hfClient) downloadHFToTemp(ctx context.Context, label, rawURL, stageRoot string) (sha string, size int64, tmpPath string, err error) {
+func (c *hfClient) downloadHFToTemp(ctx context.Context, label, rawURL, stageRoot string, limit int64) (sha string, size int64, tmpPath string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, hfBlobDownloadTimeout)
 	defer cancel()
 	resp, err := c.do(ctx, label, rawURL, "")
@@ -666,11 +674,18 @@ func (c *hfClient) downloadHFToTemp(ctx context.Context, label, rawURL, stageRoo
 		return "", 0, "", err
 	}
 	h := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(f, h), resp.Body)
+	// Bound the copy: this path carries no upstream hash and the listed size is
+	// upstream-controlled, so read at most one past the limit to detect an
+	// oversized body instead of streaming it unbounded into staging.
+	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, limit+1))
 	closeErr := f.Close()
 	if err := errors.Join(copyErr, closeErr); err != nil {
 		_ = os.Remove(f.Name())
 		return "", 0, "", fmt.Errorf("%s: %w", label, err)
+	}
+	if n > limit {
+		_ = os.Remove(f.Name())
+		return "", 0, "", fmt.Errorf("%s exceeds the %s non-LFS file limit", label, formatBytes(limit))
 	}
 	return hex.EncodeToString(h.Sum(nil)), n, f.Name(), nil
 }

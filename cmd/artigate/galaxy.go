@@ -777,7 +777,9 @@ func extractGalaxyCollectionInfo(tgzPath string) (galaxyCollectionInfo, error) {
 		return galaxyCollectionInfo{}, err
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	// Bound total decompression: tr.Next() inflates every skipped entry, so a
+	// gzip bomb with MANIFEST.json last (or absent) would otherwise inflate wholesale.
+	tr := tar.NewReader(io.LimitReader(gz, tarScanMaxDecompressedBytes))
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {

@@ -144,6 +144,13 @@ func validateUploadsManifest(m *UploadsManifest, seen map[string]bool, files []M
 // capped far below this anyway.
 const uploadFolderFieldLimit = 4 << 10
 
+// maxUploadParts bounds how many multipart parts one upload may carry. Each file
+// part is streamed to its own temp file held until the whole request finishes,
+// so an unbounded part count is an inode/handle-exhaustion vector against the
+// low-side control plane (which also holds the state and bundle files). The cap
+// is far above any real multi-file upload.
+const maxUploadParts = 10000
+
 // stagedUpload is one file part already streamed (and hashed) into staging.
 type stagedUpload struct {
 	name string
@@ -184,6 +191,7 @@ func (s *LowServer) HandleUploadsCollect(ctx context.Context, r *http.Request) (
 // order is not trusted — the folder may arrive after the files.
 func stageUploadParts(ctx context.Context, mr *multipart.Reader, stageRoot string) (folder string, staged []stagedUpload, err error) {
 	seen := map[string]bool{}
+	parts := 0
 	for {
 		part, err := mr.NextPart()
 		if errors.Is(err, io.EOF) {
@@ -191,6 +199,10 @@ func stageUploadParts(ctx context.Context, mr *multipart.Reader, stageRoot strin
 		}
 		if err != nil {
 			return "", nil, err
+		}
+		parts++
+		if parts > maxUploadParts {
+			return "", nil, fmt.Errorf("upload has more than %d parts", maxUploadParts)
 		}
 		up, folderVal, err := consumeUploadPart(ctx, part, stageRoot)
 		if err != nil {
@@ -200,14 +212,9 @@ func stageUploadParts(ctx context.Context, mr *multipart.Reader, stageRoot strin
 			folder = folderVal
 			continue
 		}
-		if up.name == "" {
-			continue // an unknown non-file field, drained and ignored
+		if staged, err = recordStagedUpload(staged, seen, up); err != nil {
+			return "", nil, err
 		}
-		if seen[up.name] {
-			return "", nil, fmt.Errorf("file %q appears twice in the upload", up.name)
-		}
-		seen[up.name] = true
-		staged = append(staged, up)
 	}
 	if err := validateUploadComponent("folder", folder); err != nil {
 		return "", nil, err
@@ -216,6 +223,19 @@ func stageUploadParts(ctx context.Context, mr *multipart.Reader, stageRoot strin
 		return "", nil, errors.New("no file in the upload")
 	}
 	return folder, staged, nil
+}
+
+// recordStagedUpload appends a staged file part, rejecting a duplicate name. A
+// non-file field (empty name) is drained by the caller and ignored here.
+func recordStagedUpload(staged []stagedUpload, seen map[string]bool, up stagedUpload) ([]stagedUpload, error) {
+	if up.name == "" {
+		return staged, nil
+	}
+	if seen[up.name] {
+		return nil, fmt.Errorf("file %q appears twice in the upload", up.name)
+	}
+	seen[up.name] = true
+	return append(staged, up), nil
 }
 
 // consumeUploadPart reads one multipart part: the folder field yields its

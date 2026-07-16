@@ -408,3 +408,24 @@ func TestUploadsTreeAndDetail(t *testing.T) {
 		t.Fatalf("traversal delete status = %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestStageUploadPartsCountCap is a regression test: an upload with more than
+// maxUploadParts multipart parts is refused, so a flood of parts cannot exhaust
+// inodes/handles on the low-side control plane. Non-file fields are used so the
+// cap is exercised without staging temp files.
+func TestStageUploadPartsCountCap(t *testing.T) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for i := 0; i < maxUploadParts+1; i++ {
+		if err := mw.WriteField("x", "y"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mr := multipart.NewReader(&buf, mw.Boundary())
+	if _, _, err := stageUploadParts(context.Background(), mr, t.TempDir()); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("stageUploadParts over the part cap = %v, want a part-count error", err)
+	}
+}

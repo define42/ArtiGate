@@ -1372,3 +1372,13 @@ func TestGitTypeNameAndReadCapped(t *testing.T) {
 		t.Error("reader error not propagated")
 	}
 }
+
+// TestGitScanPackForgedObjectCount is a regression test: a pack header's object
+// count is attacker-controlled, so it must not size an eager allocation. Scanning
+// a header-only body that claims a billion objects must fail gracefully as soon
+// as the body is exhausted, not pre-allocate gigabytes from the forged count.
+func TestGitScanPackForgedObjectCount(t *testing.T) {
+	if _, err := gitScanPack(make([]byte, 12), 1<<30); err == nil {
+		t.Fatal("gitScanPack with a forged object count and empty body should error")
+	}
+}
