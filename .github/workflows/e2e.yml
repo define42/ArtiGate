@@ -85,12 +85,28 @@ jobs:
           Rscript --version
           micromamba --version
           git --version
-          # Availability preflight. ck retries transient upstream errors (5xx
-          # and timeouts) so a brief outage — e.g. an intermittent
-          # huggingface.co 504 — does not fail the whole suite; a real 404
-          # (rotted reference) still fails fast, because curl --retry does not
-          # retry a 404.
-          ck() { curl -fsS --retry 5 --retry-delay 3 --retry-max-time 180 --connect-timeout 15 "$@"; }
+          # Availability preflight. ck retries transient upstream errors so a
+          # brief outage does not fail the whole suite: curl --retry covers
+          # timeouts, 429, and 5xx (e.g. an intermittent huggingface.co 504),
+          # and the shell loop re-runs the transport-level failures --retry
+          # never covers, like a TLS-handshake "connection reset by peer"
+          # (exit 35/56). A real 404 (rotted reference) still fails fast:
+          # with -f it surfaces as curl exit 22, which is never retried.
+          ck() {
+            local rc i
+            for i in 1 2 3 4 5; do
+              if curl -fsS --retry 5 --retry-delay 3 --retry-max-time 180 --connect-timeout 15 "$@"; then
+                return 0
+              else
+                rc=$?
+              fi
+              if [ "$rc" -eq 22 ]; then
+                return "$rc"
+              fi
+              sleep 3
+            done
+            return "$rc"
+          }
           # Fail fast if the suite's default GGUF reference has rotted
           # upstream (keep in sync with defaultGGUF in e2e/hf_test.go).
           ck -I -o /dev/null "https://huggingface.co/v2/bartowski/SmolLM2-135M-Instruct-GGUF/manifests/Q4_K_M"
