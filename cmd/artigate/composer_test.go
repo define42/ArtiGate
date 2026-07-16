@@ -924,6 +924,35 @@ func TestComposerServeHardening(t *testing.T) {
 	}
 }
 
+// TestComposerRootEmptyMirror proves packages.json advertises
+// available-packages as an empty array — never null — both on a fresh high
+// side with no composer metadata directory yet and once the metadata tree
+// exists but no release is servable.
+func TestComposerRootEmptyMirror(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+
+	assertEmpty := func(when string) {
+		t.Helper()
+		code, body := composerServe(t, hs, http.MethodGet, "http://x/composer/packages.json")
+		if code != http.StatusOK {
+			t.Fatalf("packages.json %s: status %d: %s", when, code, body)
+		}
+		if !strings.Contains(body, `"available-packages": []`) {
+			t.Errorf("packages.json %s = %s, want available-packages []", when, body)
+		}
+	}
+	assertEmpty("on a fresh mirror")
+
+	// Publishing a release and removing its zip leaves the metadata tree in
+	// place with nothing servable — the other path that must yield [].
+	composerTestPublish(t, hs, "acme/app", "1.0.0", "1.0.0.0", []byte("zip"), nil)
+	if err := os.Remove(filepath.Join(hs.downloadDir, filepath.FromSlash(composerDistRel("acme/app", "1.0.0.0")))); err != nil {
+		t.Fatal(err)
+	}
+	assertEmpty("with no servable release")
+}
+
 // TestComposerPublishRejectsBadRecords proves a tampered or incomplete record
 // is logged and skipped at publish — its version 404s — without failing the
 // rest of the bundle.
