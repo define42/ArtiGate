@@ -183,31 +183,43 @@ func (c *diodeCatcher) Close() error {
 }
 
 // run is the catcher's single-threaded receive loop. One goroutine owns the
-// socket and the assembler, so there is no locking anywhere on the hot path;
-// the read deadline doubles as the idle tick for expiry and stats.
+// socket and the assembler, so there is no locking anywhere on the hot path.
+// Every iteration runs under panic recovery: the datagrams come straight off
+// the wire, and one malformed frame hitting a reassembly bug must not take
+// down the whole high side.
 func (c *diodeCatcher) run() {
 	buf := make([]byte, diodeReadBufSize)
 	nextSweep := time.Now().Add(diodeSweepEvery)
-	for {
-		_ = c.conn.SetReadDeadline(time.Now().Add(diodeSweepEvery))
-		n, _, err := c.conn.ReadFromUDP(buf)
-		now := time.Now()
-		switch {
-		case err == nil:
-			c.asm.handleDatagram(buf[:n], now)
-		case errors.Is(err, os.ErrDeadlineExceeded):
-			// idle: sweep below
-		case errors.Is(err, net.ErrClosed):
-			return
-		default:
-			log.Printf("diode catch: read: %v", err)
-		}
-		if now.After(nextSweep) {
-			c.asm.expireStale(now)
-			c.asm.logStats()
-			nextSweep = now.Add(diodeSweepEvery)
-		}
+	closed := false
+	step := func() { closed = c.receiveOne(buf, &nextSweep) }
+	for !closed {
+		recoverWorkerPanic("diode catch", step)
 	}
+}
+
+// receiveOne waits for one datagram and feeds the assembler, reporting
+// whether the socket has been closed; the read deadline doubles as the idle
+// tick for expiry and stats.
+func (c *diodeCatcher) receiveOne(buf []byte, nextSweep *time.Time) (closed bool) {
+	_ = c.conn.SetReadDeadline(time.Now().Add(diodeSweepEvery))
+	n, _, err := c.conn.ReadFromUDP(buf)
+	now := time.Now()
+	switch {
+	case err == nil:
+		c.asm.handleDatagram(buf[:n], now)
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		// idle: sweep below
+	case errors.Is(err, net.ErrClosed):
+		return true
+	default:
+		log.Printf("diode catch: read: %v", err)
+	}
+	if now.After(*nextSweep) {
+		c.asm.expireStale(now)
+		c.asm.logStats()
+		*nextSweep = now.Add(diodeSweepEvery)
+	}
+	return false
 }
 
 // onDiodeFileLanded is the catcher→importer bridge: when a landed file

@@ -1555,6 +1555,27 @@ func packModuleTree(root, abs string) (string, int64, error) {
 	return mf.SHA256, mf.Size, nil
 }
 
+// tfGitRefRE matches the ?ref= revisions the mirror will hand to git — tag
+// or branch names and commit ids, starting alphanumeric, every character
+// path- and shell-safe. Like gitmirror's gitRefNameRE it is stricter than
+// git-check-ref-format(1).
+var tfGitRefRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._/\-]*$`)
+
+// validateTfGitRef rejects a module source's ?ref= revision that git could
+// parse as anything but a revision. The ref comes from a mirrored module's
+// upstream metadata and is handed to git checkout in an option position, so
+// an option-shaped ref ("-x", "--upload-pack=...") must never get through;
+// "--" is no protection there, since git checkout reads what follows it as
+// pathspecs rather than revisions.
+func validateTfGitRef(ref string) error {
+	if !tfGitRefRE.MatchString(ref) || len(ref) > 255 ||
+		strings.Contains(ref, "..") || strings.Contains(ref, "//") ||
+		strings.HasSuffix(ref, "/") {
+		return fmt.Errorf("invalid git ref %q in module source", ref)
+	}
+	return nil
+}
+
 // splitGitSource splits a go-getter git URL into the repository URL, the
 // optional //subdir, and the ?ref= revision.
 func splitGitSource(gitURL string) (repoURL, subdir, ref string, err error) {
@@ -1563,6 +1584,11 @@ func splitGitSource(gitURL string) (repoURL, subdir, ref string, err error) {
 		return "", "", "", fmt.Errorf("unsupported git source %q (only http(s) remotes are mirrored)", gitURL)
 	}
 	ref = u.Query().Get("ref")
+	if ref != "" {
+		if err := validateTfGitRef(ref); err != nil {
+			return "", "", "", err
+		}
+	}
 	u.RawQuery = ""
 	if i := strings.Index(u.Path, "//"); i >= 0 {
 		subdir = strings.Trim(u.Path[i+2:], "/")

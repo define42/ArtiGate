@@ -373,6 +373,22 @@ func TestCov3D_RecoverCollectPanic(t *testing.T) {
 	}
 }
 
+// TestCov3D_RecoverWorkerPanic verifies the long-lived workers' per-iteration
+// firewall: a panicking iteration is contained (the scheduler tick, import
+// pass, or diode receive loop just moves on) and a clean iteration runs
+// normally.
+func TestCov3D_RecoverWorkerPanic(t *testing.T) {
+	// If the firewall regresses, this panic crashes the test binary — exactly
+	// the production failure being guarded.
+	recoverWorkerPanic("test worker", func() { panic("boom in worker") })
+
+	ran := false
+	recoverWorkerPanic("test worker", func() { ran = true })
+	if !ran {
+		t.Error("recoverWorkerPanic did not run the clean iteration")
+	}
+}
+
 // TestCov3D_RunWatchSurvivesPanickingCollect drives the record path with a
 // collect that panics inside the firewall, and asserts the run is contained and
 // recorded as a failed run (not propagated up the goroutine). This is the

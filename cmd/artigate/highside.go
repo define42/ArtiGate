@@ -231,13 +231,17 @@ func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
 
 // requestImport coalesces any number of HTTP/UDP completion notifications onto
 // one worker and one pending slot. A burst can never create unbounded goroutines.
+// Each import runs under panic recovery: the worker outlives every bundle, and
+// one malformed bundle hitting an import bug must not crash the high side.
 func (s *HighServer) requestImport() {
 	s.importOnce.Do(func() {
 		go func() {
 			for range s.importKick {
-				if _, err := s.ImportNext(); err != nil {
-					log.Printf("diode import after landing: %v", err)
-				}
+				recoverWorkerPanic("diode import after landing", func() {
+					if _, err := s.ImportNext(); err != nil {
+						log.Printf("diode import after landing: %v", err)
+					}
+				})
 			}
 		}()
 	})
@@ -522,6 +526,9 @@ func (s *HighServer) saveStateLocked() error {
 	return writeJSONAtomic(s.statePath, s.state, stateFileMode)
 }
 
+// importLoop drives the timer-based import pipeline. Each pass runs under
+// panic recovery: the loop outlives every bundle, and one malformed bundle
+// hitting an import bug must not crash the high side.
 func (s *HighServer) importLoop(ctx context.Context) {
 	t := time.NewTicker(s.cfg.ImportInterval)
 	defer t.Stop()
@@ -531,15 +538,20 @@ func (s *HighServer) importLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		res, err := s.ImportNext()
-		if err != nil {
-			s.metrics.recordImportError()
-			log.Printf("import failed: %v", err)
-			continue
-		}
-		if res.Imported {
-			log.Printf("imported bundles: %s", strings.Join(res.ImportedBundles, ", "))
-		}
+		recoverWorkerPanic("import", s.importTick)
+	}
+}
+
+// importTick runs one timer-driven import attempt and logs its outcome.
+func (s *HighServer) importTick() {
+	res, err := s.ImportNext()
+	if err != nil {
+		s.metrics.recordImportError()
+		log.Printf("import failed: %v", err)
+		return
+	}
+	if res.Imported {
+		log.Printf("imported bundles: %s", strings.Join(res.ImportedBundles, ", "))
 	}
 }
 

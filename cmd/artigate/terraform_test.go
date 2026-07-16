@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -169,6 +170,18 @@ func TestTerraformSplitGitSource(t *testing.T) {
 	for _, in := range []string{"", "ssh://git@host/repo?ref=x", "git@github.com:org/repo.git", "file:///etc"} {
 		if _, _, _, err := splitGitSource(in); err == nil {
 			t.Errorf("splitGitSource(%q) = nil, want error (only http(s) remotes)", in)
+		}
+	}
+	// Option-shaped or otherwise malformed refs are rejected before any git
+	// invocation — the checkout passes the ref in an option position.
+	badRefs := []string{
+		"--upload-pack=/tmp/evil", "-x", "a b", "a..b", "a//b", "a/",
+		"@{upstream}", strings.Repeat("v", 256),
+	}
+	for _, ref := range badRefs {
+		in := "https://host.example/org/repo?ref=" + url.QueryEscape(ref)
+		if _, _, _, err := splitGitSource(in); err == nil {
+			t.Errorf("splitGitSource(ref=%q) = nil, want error", ref)
 		}
 	}
 }

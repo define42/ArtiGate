@@ -977,6 +977,11 @@ func condaChannelURL(channel, base string) (string, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return "", fmt.Errorf("conda channel %q must be a bare channel name or an http(s) URL", channel)
 	}
+	// The channel URL is recorded in the signed manifest and echoed in
+	// progress and error text, so it must never carry a login.
+	if err := checkNoURLUserinfo(u, "conda channel"); err != nil {
+		return "", err
+	}
 	return strings.TrimSuffix(channel, "/"), nil
 }
 
