@@ -1,7 +1,11 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -818,5 +822,145 @@ func TestCovR2_LoadHFRepoIndexFold(t *testing.T) {
 	// A repository that does not exist at all still reports not-found.
 	if _, err := hs.loadHFRepoIndexFold("nobody", "nothing"); err == nil {
 		t.Error("unknown repo fold should fail")
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Tar-over-gzip scan decompression budget (M3 regression)
+// -----------------------------------------------------------------------------
+
+const (
+	tarScanProbeFillerBytes = 256 << 10 // decompressed filler ahead of the wanted member
+	tarScanProbeBudget      = 64 << 10  // scan budget that runs out inside the filler
+)
+
+// tarScanProbeTgz builds the shape of a tar bomb: a filler entry larger than
+// tarScanProbeBudget followed by the scanner's wanted member, gzip-compressed.
+// A scanner whose traversal is bounded runs out of budget inside the filler
+// and never sees the member; an unbounded traversal (the M3 bug) inflates its
+// way through and finds it.
+func tarScanProbeTgz(t *testing.T, member, content string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, f := range []struct {
+		name string
+		body []byte
+	}{
+		{"0-filler.bin", make([]byte, tarScanProbeFillerBytes)},
+		{member, []byte(content)},
+	} {
+		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: 0o644, Size: int64(len(f.body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(f.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// tarScanProbeCases lists every "scan a .tar.gz for one named member" reader
+// with the member it wants and a probe reporting whether the member was found
+// under the given total-decompression budget.
+func tarScanProbeCases() []struct {
+	name    string
+	member  string
+	content string
+	found   func(tgz string, budget int64) bool
+} {
+	return []struct {
+		name    string
+		member  string
+		content string
+		found   func(tgz string, budget int64) bool
+	}{
+		{
+			name:    "python-sdistRequiresPython",
+			member:  "pkg-1.0/PKG-INFO",
+			content: "Metadata-Version: 2.1\nName: pkg\nVersion: 1.0\nRequires-Python: >=3.9\n",
+			found: func(tgz string, budget int64) bool {
+				return sdistRequiresPythonBounded(tgz, budget) == ">=3.9"
+			},
+		},
+		{
+			name:    "apk-apkIndexFromArchive",
+			member:  "APKINDEX",
+			content: "P:pkg\nV:1.0-r0\nA:x86_64\n",
+			found: func(tgz string, budget int64) bool {
+				b, err := os.ReadFile(tgz)
+				if err != nil {
+					return false
+				}
+				text, err := apkIndexFromArchiveBounded(b, 1<<20, budget)
+				return err == nil && strings.Contains(text, "P:pkg")
+			},
+		},
+		{
+			name:    "npm-extractNpmPackageJSON",
+			member:  "package/package.json",
+			content: `{"name":"pkg","version":"1.0.0"}`,
+			found: func(tgz string, budget int64) bool {
+				b, err := extractNpmPackageJSONBounded(tgz, budget)
+				return err == nil && strings.Contains(string(b), `"pkg"`)
+			},
+		},
+		{
+			name:    "helm-extractChartYAML",
+			member:  "chart/Chart.yaml",
+			content: "apiVersion: v2\nname: chart\nversion: 1.0.0\n",
+			found: func(tgz string, budget int64) bool {
+				meta, err := extractChartYAMLBounded(tgz, budget)
+				return err == nil && meta["name"] == "chart"
+			},
+		},
+		{
+			name:    "galaxy-extractGalaxyCollectionInfo",
+			member:  "MANIFEST.json",
+			content: `{"collection_info":{"namespace":"ns","name":"col","version":"1.0.0"}}`,
+			found: func(tgz string, budget int64) bool {
+				info, err := extractGalaxyCollectionInfoBounded(tgz, budget)
+				return err == nil && info.Namespace == "ns"
+			},
+		},
+		{
+			name:    "cran-extractCRANDescription",
+			member:  "pkg/DESCRIPTION",
+			content: "Package: pkg\nVersion: 1.0\n",
+			found: func(tgz string, budget int64) bool {
+				desc, err := extractCRANDescriptionBounded(tgz, "pkg", budget)
+				return err == nil && desc["Package"] == "pkg"
+			},
+		},
+	}
+}
+
+// TestTarScanDecompressionBudget is the M3 regression test: every "scan a
+// .tar.gz for one named member" reader must bound the total bytes it
+// decompresses, because tar.Reader.Next() inflates every skipped entry — a
+// crafted archive with the wanted member placed after a gzip bomb would
+// otherwise be inflated wholesale. python/apk/npm shipped without the bound
+// once (helm/galaxy/cran were fixed a pass earlier), so each scanner is probed
+// twice over the same bomb-shaped archive: with a budget that runs out inside
+// the filler it must give up without finding the member, and with the default
+// budget it must find it — proving the budget, not a parse error, stopped it.
+func TestTarScanDecompressionBudget(t *testing.T) {
+	dir := t.TempDir()
+	for i, tc := range tarScanProbeCases() {
+		tgz := filepath.Join(dir, fmt.Sprintf("probe-%d.tar.gz", i))
+		writeFile(t, tgz, tarScanProbeTgz(t, tc.member, tc.content))
+		if tc.found(tgz, tarScanProbeBudget) {
+			t.Errorf("%s: member found behind a filler larger than the scan budget — total decompression is not bounded", tc.name)
+		}
+		if !tc.found(tgz, tarScanMaxDecompressedBytes) {
+			t.Errorf("%s: member not found under the default budget — probe archive or scanner broken", tc.name)
+		}
 	}
 }

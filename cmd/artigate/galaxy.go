@@ -767,6 +767,13 @@ func (s *HighServer) writeGalaxyStoredVersion(c GalaxyCollection, abs string, de
 // level of a collection archive (ansible-galaxy packs it at the archive
 // root).
 func extractGalaxyCollectionInfo(tgzPath string) (galaxyCollectionInfo, error) {
+	return extractGalaxyCollectionInfoBounded(tgzPath, tarScanMaxDecompressedBytes)
+}
+
+// extractGalaxyCollectionInfoBounded is extractGalaxyCollectionInfo with the
+// scan's total-decompression budget as a parameter, so the gzip-bomb bound is
+// regression-testable without a multi-GiB fixture.
+func extractGalaxyCollectionInfoBounded(tgzPath string, scanBudget int64) (galaxyCollectionInfo, error) {
 	f, err := os.Open(tgzPath)
 	if err != nil {
 		return galaxyCollectionInfo{}, err
@@ -779,7 +786,7 @@ func extractGalaxyCollectionInfo(tgzPath string) (galaxyCollectionInfo, error) {
 	defer gz.Close()
 	// Bound total decompression: tr.Next() inflates every skipped entry, so a
 	// gzip bomb with MANIFEST.json last (or absent) would otherwise inflate wholesale.
-	tr := tar.NewReader(io.LimitReader(gz, tarScanMaxDecompressedBytes))
+	tr := tar.NewReader(io.LimitReader(gz, scanBudget))
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {

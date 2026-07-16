@@ -12,6 +12,28 @@
 // container), docker, huggingface_hub's CLI, micromamba (or conda),
 // bundler, composer, ansible-galaxy, Rscript, git, and curl.
 //
+// Beyond the per-stream client round-trips, the suite exercises the parts of
+// the system that sit between the low and high sides. These do not lean on any
+// one upstream and several build their own dedicated low+high pair (see
+// pair_test.go) so they can inject faults or reconfigure the transport:
+//
+//   - the trust boundary (tamper_test.go): a delivered bundle with a flipped
+//     signature byte or a corrupted archive byte is rejected while prior
+//     content keeps serving; an out-of-order (future) bundle is quarantined
+//     and then imported once its predecessor arrives.
+//   - re-export and re-import idempotency (reimport_test.go): a re-transmitted
+//     already-imported bundle is filed as a duplicate, not re-imported.
+//   - multi-version index regeneration across separate bundles
+//     (multiversion_test.go): two versions collected as two bundles both
+//     appear in the regenerated npm/rubygems index, and the older artifact
+//     still installs after the newer bundle imported on top of it.
+//   - the scheduled-collect subsystem (watch_test.go), the low-side session
+//     login (auth_test.go), and the low/high dashboards (ui_test.go).
+//
+// The built-in UDP data-diode transport (pitcher/catcher) is covered by unit
+// tests rather than here: a real transfer needs a multicast-capable one-way
+// NIC, which the loopback-only CI environment does not provide.
+//
 // Everything except this file is behind the "e2e" build tag, so the default
 // `go build ./...`, `go vet ./...`, `go test ./...`, and golangci-lint runs
 // are unaffected. Run the suite with:

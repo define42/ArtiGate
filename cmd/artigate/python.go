@@ -164,6 +164,13 @@ func isWheelMetadataPath(name string) bool {
 // absent or unreadable. Like wheelRequiresPython, reading the artifact itself
 // keeps every served attribute derived from verified bytes.
 func sdistRequiresPython(p string) string {
+	return sdistRequiresPythonBounded(p, tarScanMaxDecompressedBytes)
+}
+
+// sdistRequiresPythonBounded is sdistRequiresPython with the scan's
+// total-decompression budget as a parameter, so the gzip-bomb bound is
+// regression-testable without a multi-GiB fixture.
+func sdistRequiresPythonBounded(p string, scanBudget int64) string {
 	if strings.HasSuffix(p, ".zip") {
 		return sdistZipRequiresPython(p)
 	}
@@ -182,7 +189,7 @@ func sdistRequiresPython(p string) string {
 	defer gz.Close()
 	// Bound total decompression: tr.Next() inflates every skipped entry, so a
 	// gzip bomb with PKG-INFO last (or absent) would otherwise inflate wholesale.
-	tr := tar.NewReader(io.LimitReader(gz, tarScanMaxDecompressedBytes))
+	tr := tar.NewReader(io.LimitReader(gz, scanBudget))
 	for {
 		hdr, err := tr.Next()
 		if err != nil {
