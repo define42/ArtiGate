@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -292,6 +293,16 @@ func TestHelmValidateRepos(t *testing.T) {
 		t.Errorf("valid repo rejected: %v", err)
 	}
 
+	// A bundle minted by a pre-fix low side still validates: the legacy
+	// '-'-joined filename is accepted when the name carries no '_'.
+	legacyPath := "helm/bitnami/charts/web-1.0.0.tgz"
+	legacy := []HelmRepo{{Name: "bitnami", URL: "u", Charts: []HelmChart{{
+		Name: "web", Version: "1.0.0", Filename: "web-1.0.0.tgz", Path: legacyPath, SHA256: strings.Repeat("a", 64),
+	}}}}
+	if err := validateHelmRepos(legacy, map[string]bool{legacyPath: true}); err != nil {
+		t.Errorf("legacy-named chart rejected: %v", err)
+	}
+
 	bad := []struct {
 		name  string
 		repos []HelmRepo
@@ -310,13 +321,14 @@ func TestHelmValidateRepos(t *testing.T) {
 			map[string]bool{"helm/bitnami/charts/web.tgz": true},
 		},
 		{
-			// The pre-fix '-'-joined filename is ambiguous (a-1@1.0.0 vs
-			// a@1-1.0.0) and must no longer validate as canonical.
-			"legacy hyphen filename",
+			// The legacy '-'-joined form of a '_'-carrying name is a current
+			// canonical filename in disguise (a_1-1.0.0.tgz is canonical for
+			// a@1-1.0.0), so it must stay rejected or the collision returns.
+			"legacy filename with underscore name",
 			[]HelmRepo{{Name: "bitnami", URL: "u", Charts: []HelmChart{
-				{Name: "web", Version: "1.0.0", Filename: "web-1.0.0.tgz", Path: "helm/bitnami/charts/web-1.0.0.tgz"},
+				{Name: "a_1", Version: "1.0.0", Filename: "a_1-1.0.0.tgz", Path: "helm/bitnami/charts/a_1-1.0.0.tgz"},
 			}}},
-			map[string]bool{"helm/bitnami/charts/web-1.0.0.tgz": true},
+			map[string]bool{"helm/bitnami/charts/a_1-1.0.0.tgz": true},
 		},
 		{
 			"path not in seen map",
@@ -655,6 +667,180 @@ func TestHelmAdversarialNameVersionNoCollision(t *testing.T) {
 		if err != nil || d.Title != spec.chart || d.Subtitle != spec.version {
 			t.Errorf("detail %s@%s = %+v, %v", spec.chart, spec.version, d, err)
 		}
+	}
+}
+
+// mintLegacyHelmBundle writes a signed helm bundle whose chart record uses the
+// pre-collision-fix '-'-joined filename, exactly as a pre-fix low side would
+// have produced it (for upgrade-ordering tests: such bundles may still be
+// queued on the diode when the high side upgrades first).
+func mintLegacyHelmBundle(t *testing.T, ls *LowServer, mirror string, seq int64, name, version string, body []byte) string {
+	t.Helper()
+	filename := name + "-" + version + ".tgz"
+	rel := "helm/" + mirror + "/charts/" + filename
+	stageRoot := t.TempDir()
+	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, abs, body)
+	files := []ManifestFile{{Path: rel, SHA256: helmTestSHA256(body), Size: int64(len(body))}}
+	id := bundleIDFor(streamHelm, seq)
+	manifest := BundleManifest{
+		Type:             manifestType,
+		Stream:           streamHelm,
+		Sequence:         seq,
+		PreviousSequence: seq - 1,
+		Created:          time.Now().UTC(),
+		Generator:        "legacy-low-side",
+		BundleID:         id,
+		Ecosystems:       []string{"helm"},
+		Helm: &HelmManifest{Repos: []HelmRepo{{Name: mirror, URL: "https://legacy.example", Charts: []HelmChart{{
+			Name: name, Version: version, Filename: filename, Path: rel, SHA256: helmTestSHA256(body),
+		}}}}},
+		Files: files,
+	}
+	b, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(ls.cfg.ExportDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ls.writeBundleArtifacts(context.Background(), id, stageRoot, b, files); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// TestHelmImportAcceptsLegacyBundle: a bundle minted by a pre-fix low side
+// names archives "<name>-<version>.tgz". The high side must keep importing,
+// indexing, and serving it — the collision fix only tightens what new low
+// sides produce — or a queued bundle would wedge the helm stream after an
+// upgrade.
+func TestHelmImportAcceptsLegacyBundle(t *testing.T) {
+	web := helmTestChartTgz(t, "web", "1.0.0")
+	ls, priv := newHelmLowServer(t)
+	id := mintLegacyHelmBundle(t, ls, "legacy", 1, "web", "1.0.0", web)
+
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	transferAptBundle(t, ls, hs, id)
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("legacy-named bundle must import: %v", err)
+	}
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	code, body := httpGet(t, srv.URL+"/helm/legacy/index.yaml")
+	if code != http.StatusOK {
+		t.Fatalf("index.yaml status %d: %s", code, body)
+	}
+	var idx helmIndex
+	if err := yaml.Unmarshal([]byte(body), &idx); err != nil {
+		t.Fatalf("index.yaml is not YAML: %v\n%s", err, body)
+	}
+	e := helmFindEntry(t, idx, "web", "1.0.0")
+	urls, _ := e["urls"].([]any)
+	if len(urls) != 1 {
+		t.Fatalf("web urls = %v, want one entry", e["urls"])
+	}
+	if s, _ := urls[0].(string); s != "charts/web-1.0.0.tgz" {
+		t.Errorf("legacy entry url = %v, want charts/web-1.0.0.tgz", urls[0])
+	}
+	if code, got := httpGet(t, srv.URL+"/helm/legacy/charts/web-1.0.0.tgz"); code != http.StatusOK || got != string(web) {
+		t.Errorf("legacy archive download: status %d, %d bytes (want %d)", code, len(got), len(web))
+	}
+	// The dashboard resolves it (publish stored it under the canonical stem).
+	if d, err := hs.helmDetail("legacy/web@1.0.0"); err != nil || d.Title != "web" || d.Subtitle != "1.0.0" {
+		t.Errorf("legacy chart detail = %+v, %v", d, err)
+	}
+}
+
+// TestHelmReimportSupersedesLegacyMetadata: a mirror carrying pre-fix
+// metadata ("<name>-<version>.json") re-imports the same chart version under
+// the canonical stem. The legacy record must be superseded — not left to
+// double-list the version in index.yaml or keep serving a stale digest —
+// while a legacy record that merely flattened to the same key from a
+// different chart identity must survive untouched.
+func TestHelmReimportSupersedesLegacyMetadata(t *testing.T) {
+	webNew := helmTestChartTgz(t, "web", "1.0.0")
+	a1 := helmTestChartTgz(t, "a-1", "1.0.0")
+	repo := fakeHelmRepo(t, []helmTestEntry{
+		{name: "web", version: "1.0.0", digest: "sha256:" + helmTestSHA256(webNew), body: webNew},
+		{name: "a-1", version: "1.0.0", digest: "sha256:" + helmTestSHA256(a1), body: a1, url: "pool/a1.tgz"},
+	})
+
+	ls, priv := newHelmLowServer(t)
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+
+	// Pre-fix leftovers on the high side: web@1.0.0 under the legacy stem
+	// (stale digest, republished bytes), and the ambiguous "a-1-1.0.0" stem
+	// holding a DIFFERENT identity (chart "a" at 1-1.0.0).
+	chartsDir := filepath.Join(hs.helmDir(), "m", "charts")
+	metaDir := filepath.Join(hs.helmDir(), "m", "metadata")
+	for _, d := range []string{chartsDir, metaDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(chartsDir, "web-1.0.0.tgz"), []byte("stale web archive"))
+	writeFile(t, filepath.Join(chartsDir, "a-1-1.0.0.tgz"), []byte("chart a archive"))
+	seed := func(file string, meta map[string]any) {
+		t.Helper()
+		st := helmStoredChart{Filename: strings.TrimSuffix(file, ".json") + ".tgz", Digest: "stale", Metadata: meta}
+		if err := writeJSONAtomic(filepath.Join(metaDir, file), st, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("web-1.0.0.json", map[string]any{"name": "web", "version": "1.0.0"})
+	seed("a-1-1.0.0.json", map[string]any{"name": "a", "version": "1-1.0.0"})
+
+	res, err := ls.CollectHelm(context.Background(), HelmCollectRequest{
+		Name: "m", URL: repo.URL, Charts: []string{"web@1.0.0", "a-1@1.0.0"},
+	})
+	if err != nil {
+		t.Fatalf("CollectHelm: %v", err)
+	}
+	transferAptBundle(t, ls, hs, res.BundleID)
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	code, body := httpGet(t, srv.URL+"/helm/m/index.yaml")
+	if code != http.StatusOK {
+		t.Fatalf("index.yaml status %d", code)
+	}
+	var idx helmIndex
+	if err := yaml.Unmarshal([]byte(body), &idx); err != nil {
+		t.Fatalf("index.yaml is not YAML: %v\n%s", err, body)
+	}
+	// web@1.0.0 appears exactly once, from the canonical record.
+	if got := helmEntryVersions(idx, "web"); len(got) != 1 || got[0] != "1.0.0" {
+		t.Fatalf("web versions = %v, want exactly [1.0.0]", got)
+	}
+	web := helmFindEntry(t, idx, "web", "1.0.0")
+	if got, _ := web["digest"].(string); got != helmTestSHA256(webNew) {
+		t.Errorf("web digest = %q, want the reimported %q (stale legacy record survived?)", got, helmTestSHA256(webNew))
+	}
+	if urls, _ := web["urls"].([]any); len(urls) != 1 || urls[0] != "charts/web_1.0.0.tgz" {
+		t.Errorf("web urls = %v, want [charts/web_1.0.0.tgz]", web["urls"])
+	}
+	if fileExists(filepath.Join(metaDir, "web-1.0.0.json")) {
+		t.Error("superseded legacy metadata record was not removed")
+	}
+	// The ambiguous sibling identity is untouched: chart "a" at 1-1.0.0 keeps
+	// its legacy record and entry alongside the reimported a-1@1.0.0.
+	if !fileExists(filepath.Join(metaDir, "a-1-1.0.0.json")) {
+		t.Error("legacy record of the different chart identity must survive")
+	}
+	helmFindEntry(t, idx, "a-1", "1.0.0")
+	aEntry := helmFindEntry(t, idx, "a", "1-1.0.0")
+	if urls, _ := aEntry["urls"].([]any); len(urls) != 1 || urls[0] != "charts/a-1-1.0.0.tgz" {
+		t.Errorf("chart a urls = %v, want its legacy archive", aEntry["urls"])
 	}
 }
 
