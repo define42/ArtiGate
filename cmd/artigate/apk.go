@@ -301,7 +301,9 @@ func apkIndexFromArchive(b []byte, limit int64) (string, error) {
 		return "", err
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	// Bound total decompression: tr.Next() inflates every skipped entry, so a
+	// gzip bomb with APKINDEX last (or absent) would otherwise inflate wholesale.
+	tr := tar.NewReader(io.LimitReader(gz, tarScanMaxDecompressedBytes))
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
