@@ -180,7 +180,9 @@ func sdistRequiresPython(p string) string {
 		return ""
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	// Bound total decompression: tr.Next() inflates every skipped entry, so a
+	// gzip bomb with PKG-INFO last (or absent) would otherwise inflate wholesale.
+	tr := tar.NewReader(io.LimitReader(gz, tarScanMaxDecompressedBytes))
 	for {
 		hdr, err := tr.Next()
 		if err != nil {

@@ -155,9 +155,14 @@ entire import pipeline** (all streams) while it grinds. cran also hits it on the
 The repo already has the correct pattern: `terraform.go:1420` (`extractTarGzTree`) caps with a
 `remaining int64` budget.
 **Fix:** wrap the gzip/tar stream in a total-bytes budget as terraform does.
-**Status: fixed in this branch** — all three scanners now read through
-`io.LimitReader(gz, tarScanMaxDecompressedBytes)` (2 GiB), so a bomb is bounded instead of
-inflated wholesale.
+**Status: fixed in this branch** — every "scan a `.tar.gz` for one named member" reader now reads
+through `io.LimitReader(gz, tarScanMaxDecompressedBytes)` (2 GiB), so a bomb is bounded instead
+of inflated wholesale. The first pass bounded only three of the six such scanners
+(`helm.go`/`galaxy.go`/`cran.go`); the identical idiom in `python.go` (`sdistRequiresPython`,
+PKG-INFO), `apk.go` (`apkIndexFromArchive`, APKINDEX), and `npm.go` (`extractNpmPackageJSON`,
+package.json) was left raw and is now wrapped too. The `python.go` site was the most exposed:
+it runs on the **unauthenticated** high side via `GET /simple/<project>/`
+(`pyProjectFiles` → `requiresPythonFor`) and is re-scanned per request, not just once at import.
 
 ### M4 — Unauthenticated high-side endpoints do expensive / mutating work
 

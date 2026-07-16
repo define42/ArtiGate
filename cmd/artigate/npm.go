@@ -615,7 +615,9 @@ func extractNpmPackageJSON(tgzPath string) (json.RawMessage, error) {
 		return nil, err
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	// Bound total decompression: tr.Next() inflates every skipped entry, so a
+	// gzip bomb with package.json last (or absent) would otherwise inflate wholesale.
+	tr := tar.NewReader(io.LimitReader(gz, tarScanMaxDecompressedBytes))
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
