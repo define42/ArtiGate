@@ -974,3 +974,33 @@ func TestValidateContainerRepos(t *testing.T) {
 		t.Error("mismatched blob sha256 should be rejected")
 	}
 }
+
+// TestContainerManifestServeCapsBlobRead is the manifest-side sibling of the
+// config-blob cap: import checks a manifest blob's size only > 0, so the
+// unauthenticated pull path must not read an arbitrarily large "manifest"
+// whole into memory. A blob past maxServedManifestBytes 404s (by tag and by
+// digest) while normal manifests keep serving.
+func TestContainerManifestServeCapsBlobRead(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	ok := []byte(`{"schemaVersion":2}`)
+	huge := []byte(strings.Repeat("A", maxServedManifestBytes+1))
+	okDigest, hugeDigest := containerSHA(ok), containerSHA(huge)
+	covR2WriteFile(t, hs.containerBlobPath(okDigest), ok)
+	covR2WriteFile(t, hs.containerBlobPath(hugeDigest), huge)
+	if err := hs.mergeContainerRepo(ContainerRepo{
+		Registry: "docker.io", Repository: "library/demo",
+		Images: []ContainerImage{
+			{Tag: "ok", Digest: okDigest, MediaType: mtDockerManifest},
+			{Tag: "huge", Digest: hugeDigest, MediaType: mtDockerManifest},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	assertHTTPBody(t, srv.URL+"/v2/docker.io/library/demo/manifests/ok", string(ok))
+	assertHTTPStatus(t, srv.URL+"/v2/docker.io/library/demo/manifests/huge", http.StatusNotFound)
+	assertHTTPStatus(t, srv.URL+"/v2/docker.io/library/demo/manifests/"+hugeDigest, http.StatusNotFound)
+}

@@ -1549,9 +1549,11 @@ func (s *HighServer) handleHFManifest(w http.ResponseWriter, r *http.Request, mo
 		registryError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "model variant not found")
 		return
 	}
-	b, err := os.ReadFile(s.hfBlobPath(v.Digest))
+	// Capped like handleContainerManifest: import checks the manifest's size
+	// only > 0, and this pull path is unauthenticated.
+	b, err := readFileLimit(s.hfBlobPath(v.Digest), maxServedManifestBytes)
 	if err != nil {
-		registryError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest blob missing")
+		registryError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest blob missing or oversized")
 		return
 	}
 	mediaType := v.MediaType

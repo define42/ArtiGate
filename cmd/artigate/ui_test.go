@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHighServerUIOverview(t *testing.T) {
@@ -493,5 +494,69 @@ func TestHighServerUIAppJS(t *testing.T) {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("app.js missing %q", want)
 		}
+	}
+}
+
+// TestDetailDigestCacheMemoizesAndInvalidates proves the shared /ui/api/detail
+// digest cache serves a stored hash without re-reading the artifact, and
+// re-hashes only when the file's size or modtime changes — so the
+// unauthenticated detail panel cannot be amplified into an O(artifact-bytes)
+// re-hash on every request (exercised through the uploads hook; every
+// ecosystem's detail hook shares s.detailDigests).
+func TestDetailDigestCacheMemoizesAndInvalidates(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	abs := filepath.Join(hs.uploadsDir(), "docs", "readme.md")
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, abs, []byte("original-bytes")) // 14 bytes
+	fixed := time.Unix(1_700_000_000, 0)
+	if err := os.Chtimes(abs, fixed, fixed); err != nil {
+		t.Fatal(err)
+	}
+	digestOf := func() string {
+		t.Helper()
+		detail, err := hs.uploadsDetail("docs/readme.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range detail.Fields {
+			if f.Label == "SHA-256" {
+				return f.Value
+			}
+		}
+		t.Fatal("detail has no SHA-256 field")
+		return ""
+	}
+
+	origSum, err := sha256File(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := digestOf(); got != origSum {
+		t.Fatalf("first digest = %q, want %q", got, origSum)
+	}
+
+	// Overwrite the content but restore the identical size and modtime. A
+	// re-hash would pick up the new bytes; a cache hit keeps the old digest.
+	writeFile(t, abs, []byte("tampered_bytes")) // also 14 bytes
+	if err := os.Chtimes(abs, fixed, fixed); err != nil {
+		t.Fatal(err)
+	}
+	if got := digestOf(); got != origSum {
+		t.Errorf("cache miss: digest = %q, want the memoized %q", got, origSum)
+	}
+
+	// Bumping the modtime invalidates the entry, so the new content is hashed.
+	if err := os.Chtimes(abs, fixed.Add(time.Second), fixed.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	newSum, err := sha256File(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := digestOf(); got != newSum || newSum == origSum {
+		t.Errorf("stale after modtime change: digest = %q, want re-hashed %q (orig %q)", got, newSum, origSum)
 	}
 }

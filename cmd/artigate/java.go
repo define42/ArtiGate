@@ -397,7 +397,7 @@ func (s *HighServer) mavenDetail(spec string) (UIDetail, error) {
 		fields = append(fields, UIDetailField{Label: name, Value: formatBytes(info.Size())})
 		downloads = append(downloads, UIDownload{Label: name, URL: "/maven/" + artifactPath + "/" + version + "/" + name})
 	}
-	if sum, err := sha256File(filepath.Join(dir, artifactID+"-"+version+".jar")); err == nil {
+	if sum, err := s.detailDigests.get(filepath.Join(dir, artifactID+"-"+version+".jar")); err == nil {
 		fields = append(fields, UIDetailField{Label: "JAR SHA-256", Value: sum, Mono: true})
 	}
 	return UIDetail{Title: groupID + ":" + artifactID, Subtitle: version, Fields: fields, Downloads: downloads}, nil

@@ -111,6 +111,10 @@ type HighServer struct {
 	// unauthenticated /simple/<project>/ page does not re-hash and re-open
 	// every wheel on every pip request (see pyProjectFiles).
 	pyDigests pyDigestCache
+	// detailDigests memoizes artifact SHA-256 digests for the unauthenticated
+	// /ui/api/detail panel, so repeated detail requests do not re-hash the
+	// selected artifact on every hit (see detailDigestCache).
+	detailDigests detailDigestCache
 	// derivedBlocks tracks osv derived-state files (stored metadata, the npm
 	// audit index) whose stale bytes a failed publish could not get off the
 	// disk; the osv read paths treat a blocked path as absent (see

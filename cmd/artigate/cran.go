@@ -615,7 +615,7 @@ func (s *HighServer) cranDetail(spec string) (UIDetail, error) {
 	if fi, err := os.Stat(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "Tarball size", Value: formatBytes(fi.Size())})
 	}
-	if sum, err := sha256File(abs); err == nil {
+	if sum, err := s.detailDigests.get(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
 	}
 	fields = append(fields, UIDetailField{Label: "Repository path", Value: "/cran/src/contrib/" + st.Filename, Mono: true})

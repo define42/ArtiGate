@@ -652,6 +652,54 @@ type UIImageLayer struct {
 	Empty   bool   `json:"empty,omitempty"`
 }
 
+// detailDigestCache memoizes artifact SHA-256 digests for the dashboard's
+// detail panel. /ui/api/detail is unauthenticated and nearly every
+// ecosystem's hook shows the selected artifact's digest; recomputing it per
+// request would be O(artifact bytes) per hit, so repeated GETs against the
+// largest mirrored artifact (an unbounded upload, a multi-GB zip) could
+// saturate the host. An artifact is immutable once imported and only ever
+// replaced atomically, so (size, modtime) is a sound key: any content change
+// moves at least one of them, and a mismatch re-hashes. (Same pattern as
+// pyDigestCache, which additionally memoizes wheel metadata.)
+type detailDigestCache struct {
+	mu      sync.Mutex
+	entries map[string]detailDigestEntry
+}
+
+type detailDigestEntry struct {
+	size    int64
+	modTime time.Time
+	sha256  string
+}
+
+// get returns the file's cached SHA-256, recomputing it only when the file is
+// new or its size/modtime changed since last seen.
+func (c *detailDigestCache) get(abs string) (string, error) {
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	if e, ok := c.entries[abs]; ok && e.size == fi.Size() && e.modTime.Equal(fi.ModTime()) {
+		c.mu.Unlock()
+		return e.sha256, nil
+	}
+	c.mu.Unlock()
+
+	sum, err := sha256File(abs)
+	if err != nil {
+		return "", err
+	}
+
+	c.mu.Lock()
+	if c.entries == nil {
+		c.entries = make(map[string]detailDigestEntry)
+	}
+	c.entries[abs] = detailDigestEntry{size: fi.Size(), modTime: fi.ModTime(), sha256: sum}
+	c.mu.Unlock()
+	return sum, nil
+}
+
 // handleUIDetail returns details for a selected leaf. path is "module@version"
 // for Go and a wheel filename for Python. An unknown eco key keeps describing
 // Go modules, as it did before the dashboard grew per-ecosystem views.
@@ -703,7 +751,7 @@ func (s *HighServer) goDetail(spec string) (UIDetail, error) {
 	if st, err := os.Stat(filepath.Join(base, versionEsc+".zip")); err == nil {
 		fields = append(fields, UIDetailField{Label: "Zip size", Value: formatBytes(st.Size())})
 	}
-	if sum, err := sha256File(filepath.Join(base, versionEsc+".zip")); err == nil {
+	if sum, err := s.detailDigests.get(filepath.Join(base, versionEsc+".zip")); err == nil {
 		fields = append(fields, UIDetailField{Label: "Zip SHA-256", Value: sum, Mono: true})
 	}
 	fields = append(fields, UIDetailField{Label: "Proxy path", Value: "/go/" + moduleEsc + "/@v/" + versionEsc + ".zip", Mono: true})
@@ -744,7 +792,9 @@ func (s *HighServer) pythonDetail(filename string) (UIDetail, error) {
 		{Label: "Size", Value: formatBytes(st.Size())},
 		{Label: "Download", Value: "/packages/" + filename, Mono: true},
 	}
-	if sum, err := sha256File(abs); err == nil {
+	// The wheel's digest comes from the same cache the /simple project pages
+	// use, so a wheel is hashed at most once across both endpoints.
+	if sum, _, err := s.pyDigests.get(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
 	}
 	title := project

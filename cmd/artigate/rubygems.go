@@ -887,7 +887,7 @@ func (s *HighServer) rubygemsDetail(spec string) (UIDetail, error) {
 	if fi, err := os.Stat(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "File size", Value: formatBytes(fi.Size())})
 	}
-	if sum, err := sha256File(abs); err == nil {
+	if sum, err := s.detailDigests.get(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
 	}
 	fields = append(fields, UIDetailField{Label: "Registry path", Value: "/rubygems/gems/" + filename, Mono: true})

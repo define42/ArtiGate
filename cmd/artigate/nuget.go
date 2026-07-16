@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -587,8 +588,22 @@ func (s *HighServer) nugetRegistrationLeaf(base, id, version string) map[string]
 	return map[string]any{"@id": entry["@id"], "catalogEntry": entry, "packageContent": content}
 }
 
+const (
+	// nugetSearchDefaultTake and nugetSearchMaxTake bound one search response.
+	// The v3 search protocol pages with skip/take (nuget.org defaults take to
+	// 20); before the window was enforced, a q-less unauthenticated request
+	// listed every mirrored package — with its whole version list — in one
+	// body, an I/O and response cost proportional to the mirror per hit.
+	nugetSearchDefaultTake = 20
+	nugetSearchMaxTake     = 100
+)
+
 // handleNugetSearch implements a minimal search over the mirrored packages: a
-// case-insensitive substring match on the id, newest version listed first.
+// case-insensitive substring match on the id, newest version listed first,
+// paged by the protocol's skip/take. Ids are matched before any stored
+// metadata is read — servability needs only directory scans and stats — and
+// full metadata is loaded for the returned window alone, so a request's cost
+// is bounded by the take cap rather than the mirror size.
 func (s *HighServer) handleNugetSearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	ids, err := s.listNugetIDs()
@@ -596,17 +611,68 @@ func (s *HighServer) handleNugetSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	matched := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if (q == "" || strings.Contains(id, q)) && s.nugetHasServableVersion(id) {
+			matched = append(matched, id)
+		}
+	}
 	base := npmBaseURL(r)
 	data := []map[string]any{}
-	for _, id := range ids {
-		if q != "" && !strings.Contains(id, q) {
-			continue
-		}
+	for _, id := range nugetSearchPage(matched, r.URL.Query()) {
 		if item := s.nugetSearchItem(base, id); item != nil {
 			data = append(data, item)
 		}
 	}
-	writeJSON(w, map[string]any{"totalHits": len(data), "data": data})
+	writeJSON(w, map[string]any{"totalHits": len(matched), "data": data})
+}
+
+// nugetHasServableVersion reports whether at least one of the package's
+// stored versions still has its archive on disk — the same gate
+// readNugetStored applies, minus reading any stored JSON, so counting every
+// matching id per search request stays cheap. The window's items are still
+// built through readNugetStored, which re-checks completeness per version.
+func (s *HighServer) nugetHasServableVersion(id string) bool {
+	dir := filepath.Join(s.nugetMetadataDir(), id)
+	if !safeJoin(s.nugetMetadataDir(), dir) {
+		return false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		version := strings.TrimSuffix(e.Name(), ".json")
+		if e.IsDir() || version == e.Name() || validateNugetVersion(version) != nil {
+			continue
+		}
+		pkg := filepath.Join(s.downloadDir, filepath.FromSlash(nugetPackageRel(id, version)))
+		if safeJoin(s.nugetPackagesDir(), pkg) && fileExists(pkg) {
+			return true
+		}
+	}
+	return false
+}
+
+// nugetSearchPage applies the request's skip/take window to the matched ids.
+func nugetSearchPage(ids []string, query url.Values) []string {
+	skip := nugetSearchParam(query.Get("skip"), 0, len(ids))
+	take := nugetSearchParam(query.Get("take"), nugetSearchDefaultTake, nugetSearchMaxTake)
+	ids = ids[skip:]
+	if take < len(ids) {
+		ids = ids[:take]
+	}
+	return ids
+}
+
+// nugetSearchParam parses one non-negative paging parameter, falling back to
+// fallback when absent, malformed, or negative, and clamping to limit.
+func nugetSearchParam(raw string, fallback, limit int) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		n = fallback
+	}
+	return min(n, limit)
 }
 
 func (s *HighServer) nugetSearchItem(base, id string) map[string]any {
@@ -718,7 +784,7 @@ func (s *HighServer) nugetDetail(spec string) (UIDetail, error) {
 	if fi, err := os.Stat(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "Package size", Value: formatBytes(fi.Size())})
 	}
-	if sum, err := sha256File(abs); err == nil {
+	if sum, err := s.detailDigests.get(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
 	}
 	idl, verl := strings.ToLower(id), strings.ToLower(version)

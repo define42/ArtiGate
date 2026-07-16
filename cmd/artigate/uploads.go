@@ -569,7 +569,7 @@ func (s *HighServer) uploadsDetail(spec string) (UIDetail, error) {
 		{Label: "Modified", Value: st.ModTime().UTC().Format(time.RFC3339)},
 		{Label: "Download", Value: "/" + uploadsFileRel(folder, name), Mono: true},
 	}
-	if sum, err := sha256File(abs); err == nil {
+	if sum, err := s.detailDigests.get(abs); err == nil {
 		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
 	}
 	downloads := []UIDownload{{Label: name, URL: "/" + uploadsFileRel(folder, name)}}

@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1478,5 +1479,92 @@ func TestNugetUIWiring(t *testing.T) {
 		if !strings.Contains(uiAppJS, want) {
 			t.Errorf("high-side app.js missing %s", want)
 		}
+	}
+}
+
+// nugetTestSearch fetches the search route with raw query parameters,
+// returning totalHits and the returned ids in order.
+func nugetTestSearch(t *testing.T, base, params string) (int, []string) {
+	t.Helper()
+	code, body := httpGet(t, base+"/nuget/v3/search?"+params)
+	if code != http.StatusOK {
+		t.Fatalf("search %q status %d: %s", params, code, body)
+	}
+	var doc struct {
+		TotalHits int `json:"totalHits"`
+		Data      []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("search response is not JSON: %v", err)
+	}
+	ids := make([]string, 0, len(doc.Data))
+	for _, d := range doc.Data {
+		ids = append(ids, d.ID)
+	}
+	return doc.TotalHits, ids
+}
+
+// TestNugetSearchPaging proves the search response is windowed by skip/take —
+// totalHits still counts every servable match, but only the requested page's
+// metadata is loaded and returned, so an unauthenticated q-less request can
+// no longer pull the whole mirror's metadata in one response.
+func TestNugetSearchPaging(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	nupkgs := map[string][]byte{}
+	for _, id := range []string{"Pkg.A", "Pkg.B", "Pkg.C", "Pkg.D", "Pkg.E"} {
+		nupkgs[id+"@1.0.0"] = nugetTestNupkg(t, id, "1.0.0")
+	}
+	nugetTestWriteSignedBundle(t, hs.cfg.Landing, priv, 1, nupkgs)
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	if hits, ids := nugetTestSearch(t, srv.URL, ""); hits != 5 || len(ids) != 5 {
+		t.Errorf("unpaged search = %d hits, %v", hits, ids)
+	}
+	if hits, ids := nugetTestSearch(t, srv.URL, "take=2"); hits != 5 ||
+		strings.Join(ids, " ") != "Pkg.A Pkg.B" {
+		t.Errorf("first page = %d hits, %v", hits, ids)
+	}
+	if hits, ids := nugetTestSearch(t, srv.URL, "skip=2&take=2"); hits != 5 ||
+		strings.Join(ids, " ") != "Pkg.C Pkg.D" {
+		t.Errorf("second page = %d hits, %v", hits, ids)
+	}
+	if hits, ids := nugetTestSearch(t, srv.URL, "skip=99"); hits != 5 || len(ids) != 0 {
+		t.Errorf("out-of-range skip = %d hits, %v", hits, ids)
+	}
+	// take=0 is a valid count-only probe; malformed or negative values fall
+	// back to the default window.
+	if hits, ids := nugetTestSearch(t, srv.URL, "take=0"); hits != 5 || len(ids) != 0 {
+		t.Errorf("take=0 = %d hits, %v", hits, ids)
+	}
+	if hits, ids := nugetTestSearch(t, srv.URL, "skip=junk&take=-3"); hits != 5 || len(ids) != 5 {
+		t.Errorf("malformed paging = %d hits, %v", hits, ids)
+	}
+	// The window applies after the q filter.
+	if hits, ids := nugetTestSearch(t, srv.URL, "q=pkg&take=1&skip=1"); hits != 5 ||
+		strings.Join(ids, " ") != "Pkg.B" {
+		t.Errorf("filtered page = %d hits, %v", hits, ids)
+	}
+}
+
+// TestNugetSearchPageCap proves the take cap directly: a request cannot ask
+// for more than nugetSearchMaxTake items no matter what it sends.
+func TestNugetSearchPageCap(t *testing.T) {
+	ids := make([]string, 3*nugetSearchMaxTake)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("pkg.%04d", i)
+	}
+	page := nugetSearchPage(ids, url.Values{"take": {"999999"}})
+	if len(page) != nugetSearchMaxTake || page[0] != ids[0] {
+		t.Fatalf("capped page = %d items (first %q), want %d", len(page), page[0], nugetSearchMaxTake)
+	}
+	if page := nugetSearchPage(ids, url.Values{}); len(page) != nugetSearchDefaultTake {
+		t.Fatalf("default page = %d items, want %d", len(page), nugetSearchDefaultTake)
 	}
 }
