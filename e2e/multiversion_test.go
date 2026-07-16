@@ -22,6 +22,12 @@ import (
 // regenerated index lists BOTH, and that the older, superseded artifact is
 // still resolvable and downloadable by the real client after the newer bundle
 // imported on top of it.
+//
+// They run on their own dedicated low+high pair rather than the shared stack:
+// the shared stack's per-stream tests collect the same packages (left-pad,
+// rake), and the low side dedups already-forwarded content across collects, so
+// sharing a stack would make whichever test ran second see an unexpected
+// "nothing new to export" skip. A private pair keeps each test self-contained.
 
 // leftPadOldVersion and leftPadNewVersion are two immutable, dependency-free
 // left-pad releases; npmjs keeps both forever.
@@ -35,23 +41,23 @@ const (
 // installs the older one with the real npm to prove the first bundle's
 // artifact still serves after the second bundle imported.
 func TestNpmMultiVersionAccumulation(t *testing.T) {
-	stack.Prepare(t)
 	npm := requireTool(t, "npm")
 	node := requireTool(t, "node")
+	p := startTestPair(t, pairConfig{name: "npmmultiver", httpDiode: true})
 
 	// Two separate collects → two separate bundles on the npm stream.
-	resOld := stack.Collect(t, "npm", map[string]any{"packages": []string{"left-pad@" + leftPadOldVersion}})
-	stack.WaitImported(t, "npm", resOld.Sequence)
-	resNew := stack.Collect(t, "npm", map[string]any{"packages": []string{"left-pad@" + leftPadNewVersion}})
+	resOld := p.Collect(t, "npm", map[string]any{"packages": []string{"left-pad@" + leftPadOldVersion}})
+	p.WaitImported(t, "npm", resOld.Sequence)
+	resNew := p.Collect(t, "npm", map[string]any{"packages": []string{"left-pad@" + leftPadNewVersion}})
 	if resNew.Sequence <= resOld.Sequence {
 		t.Fatalf("second npm collect did not advance the stream: %d then %d", resOld.Sequence, resNew.Sequence)
 	}
-	stack.WaitImported(t, "npm", resNew.Sequence)
+	p.WaitImported(t, "npm", resNew.Sequence)
 
 	// The regenerated packument must list both versions — one delivered by each
 	// bundle — proving the index accumulates artifacts across bundles rather
 	// than reflecting only the newest one.
-	code, body := httpGet(t, stack.HighURL+"/npm/left-pad")
+	code, body := httpGet(t, p.HighURL+"/npm/left-pad")
 	if code != 200 {
 		t.Fatalf("packument HTTP %d: %s", code, body)
 	}
@@ -78,7 +84,7 @@ cache=%s
 audit=false
 fund=false
 update-notifier=false
-`, stack.HighURL, filepath.Join(tmp, "npm-cache")))
+`, p.HighURL, filepath.Join(tmp, "npm-cache")))
 	env := []string{"HOME=" + filepath.Join(tmp, "home")}
 	run(t, proj, env, npm, "install", "left-pad@"+leftPadOldVersion, "--no-audit", "--no-fund")
 	out := runStdout(t, proj, env, node, "-e",
@@ -100,21 +106,21 @@ const (
 // then installs the older one with the real bundler to prove the first
 // bundle's .gem still serves after the second bundle imported.
 func TestRubyGemsMultiVersionAccumulation(t *testing.T) {
-	stack.Prepare(t)
+	p := startTestPair(t, pairConfig{name: "rubygemsmultiver", httpDiode: true})
 
-	resOld := stack.Collect(t, "rubygems", map[string]any{"gems": []string{"rake@" + rakeOldVersion}})
-	stack.WaitImported(t, "rubygems", resOld.Sequence)
-	resNew := stack.Collect(t, "rubygems", map[string]any{"gems": []string{"rake@" + rakeNewVersion}})
+	resOld := p.Collect(t, "rubygems", map[string]any{"gems": []string{"rake@" + rakeOldVersion}})
+	p.WaitImported(t, "rubygems", resOld.Sequence)
+	resNew := p.Collect(t, "rubygems", map[string]any{"gems": []string{"rake@" + rakeNewVersion}})
 	if resNew.Sequence <= resOld.Sequence {
 		t.Fatalf("second rubygems collect did not advance the stream: %d then %d", resOld.Sequence, resNew.Sequence)
 	}
-	stack.WaitImported(t, "rubygems", resNew.Sequence)
+	p.WaitImported(t, "rubygems", resNew.Sequence)
 
 	// The regenerated /info/rake must carry an info line for each version — one
 	// from each bundle — and /versions must list both tokens. A single blank
 	// line or wrong separator (the class of bug these tests guard) would drop
 	// one of them.
-	code, body := httpGet(t, stack.HighURL+"/rubygems/info/rake")
+	code, body := httpGet(t, p.HighURL+"/rubygems/info/rake")
 	if code != 200 {
 		t.Fatalf("/info/rake HTTP %d: %s", code, body)
 	}
@@ -123,7 +129,7 @@ func TestRubyGemsMultiVersionAccumulation(t *testing.T) {
 			t.Fatalf("/info/rake missing version %s (cross-bundle index did not accumulate):\n%s", v, body)
 		}
 	}
-	code, body = httpGet(t, stack.HighURL+"/rubygems/versions")
+	code, body = httpGet(t, p.HighURL+"/rubygems/versions")
 	if code != 200 || !strings.Contains(string(body), "\nrake ") {
 		t.Fatalf("/versions = %d %s", code, body)
 	}
@@ -136,7 +142,7 @@ func TestRubyGemsMultiVersionAccumulation(t *testing.T) {
 	// index and re-verifies its checksum against the .gem the first bundle
 	// delivered.
 	writeFile(t, filepath.Join(proj, "Gemfile"), fmt.Sprintf("source %q\ngem \"rake\", %q\n",
-		stack.HighURL+"/rubygems", rakeOldVersion))
+		p.HighURL+"/rubygems", rakeOldVersion))
 	env := []string{
 		"HOME=" + filepath.Join(tmp, "home"),
 		"GEM_HOME=" + filepath.Join(tmp, "gems"),
