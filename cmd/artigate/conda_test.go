@@ -406,6 +406,14 @@ func TestCondaChannelURLAndSubdirs(t *testing.T) {
 			t.Errorf("condaChannelURL(%q) = nil error, want error", bad)
 		}
 	}
+	// A login embedded in the channel URL would cross to the high side inside
+	// the signed manifest and progress text; it is refused without ever
+	// echoing the secret back.
+	if _, err := condaChannelURL("https://user:token@host.example/chan", "https://base.example"); err == nil {
+		t.Error("channel URL with userinfo accepted")
+	} else if strings.Contains(err.Error(), "token") {
+		t.Errorf("channel userinfo error echoes the secret: %v", err)
+	}
 
 	if got, err := condaRequestSubdirs(nil); err != nil || len(got) != 1 || got[0] != "noarch" {
 		t.Errorf("default subdirs = %v, %v; want [noarch]", got, err)

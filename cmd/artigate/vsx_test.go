@@ -627,6 +627,15 @@ func vsxAssertSearchAndPagination(t *testing.T, base string) {
 	if exts, total := vsxDecodeQuery(t, body); total != 3 || len(exts) != 0 {
 		t.Errorf("out-of-range page = %d entries (total %d), want 0 of 3", len(exts), total)
 	}
+	// A pageNumber chosen so (page-1)*size wraps negative ((2^62-1)*4 = -4 in
+	// int64) must be an empty page, not a slice panic.
+	code, body := vsxPostQuery(t, base, `{"filters":[{"criteria":[],"pageNumber":4611686018427387904,"pageSize":4}]}`)
+	if code != http.StatusOK {
+		t.Fatalf("overflowing page status %d: %s", code, body)
+	}
+	if exts, total := vsxDecodeQuery(t, body); total != 3 || len(exts) != 0 {
+		t.Errorf("overflowing page = %d entries (total %d), want 0 of 3", len(exts), total)
+	}
 }
 
 // vsxAssertDownloads checks the manifest asset and the direct /vsx/files

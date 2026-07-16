@@ -11,7 +11,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -451,12 +454,16 @@ func TestNugetExtractNuspec(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 // fakeNugetUpstream is a minimal NuGet v3 source: a service index at
-// /v3/index.json plus a flat container under /flat/ serving canned version
-// lists and .nupkg bytes.
+// /v3/index.json, a flat container under /flat/ serving canned version lists
+// and .nupkg bytes, and registration leaves whose catalog documents publish
+// each package's SHA-512 — the digest chain nuget.org serves.
 type fakeNugetUpstream struct {
 	srv      *httptest.Server
 	versions map[string][]string // lowercase id -> published version strings
 	nupkgs   map[string][]byte   // "<id>/<version>" (lowercase) -> archive bytes
+
+	tamperHash bool // serve wrong catalog hashes to drive verification failures
+	noHashes   bool // pretend the feed publishes no registration/catalog data
 }
 
 func fakeNugetService(t *testing.T) *fakeNugetUpstream {
@@ -482,6 +489,8 @@ func fakeNugetService(t *testing.T) *fakeNugetUpstream {
 		_, _ = w.Write([]byte("this is not a service index"))
 	})
 	mux.HandleFunc("/flat/", f.handleFlat)
+	mux.HandleFunc("/v3/registration/", f.handleRegistration)
+	mux.HandleFunc("/v3/catalog/", f.handleCatalog)
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -507,6 +516,44 @@ func (f *fakeNugetUpstream) handleFlat(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+// leafKey maps a registration/catalog "<id>/<version>.json" path suffix to
+// the published nupkgs key.
+func (f *fakeNugetUpstream) leafKey(rest string) (string, bool) {
+	key, ok := strings.CutSuffix(rest, ".json")
+	if !ok || f.noHashes || f.nupkgs[key] == nil {
+		return "", false
+	}
+	return key, true
+}
+
+// handleRegistration serves per-version registration leaves whose
+// catalogEntry is the URL of the catalog document, like nuget.org's.
+func (f *fakeNugetUpstream) handleRegistration(w http.ResponseWriter, r *http.Request) {
+	key, ok := f.leafKey(strings.TrimPrefix(r.URL.Path, "/v3/registration/"))
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]any{"catalogEntry": "http://" + r.Host + "/v3/catalog/" + key + ".json"})
+}
+
+// handleCatalog serves the catalog document carrying the package hash.
+func (f *fakeNugetUpstream) handleCatalog(w http.ResponseWriter, r *http.Request) {
+	key, ok := f.leafKey(strings.TrimPrefix(r.URL.Path, "/v3/catalog/"))
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	sum := sha512.Sum512(f.nupkgs[key])
+	if f.tamperHash {
+		sum[0] ^= 0xff
+	}
+	writeJSON(w, map[string]any{
+		"packageHash":          base64.StdEncoding.EncodeToString(sum[:]),
+		"packageHashAlgorithm": "SHA512",
+	})
 }
 
 // fakeNugetStandardUpstream publishes Root.Pkg 2.0.0 (depending on Dep.One
@@ -1140,6 +1187,95 @@ func TestNugetCollectUpstreamErrors(t *testing.T) {
 	lsDefault, _ := nugetTestLowServer(t, "")
 	if got := lsDefault.nugetSource(); got != defaultNugetSource {
 		t.Errorf("default nugetSource = %q, want %q", got, defaultNugetSource)
+	}
+}
+
+// TestNugetResourceURLOK pins the service-index resource gate: only absolute
+// http(s) URLs with a host and no embedded login are usable fetch bases (the
+// old prefix check accepted anything starting with "http", httpfoo:// schemes
+// and credentialed URLs included).
+func TestNugetResourceURLOK(t *testing.T) {
+	for _, u := range []string{"http://host.example/flat/", "https://host.example/v3/registration/"} {
+		if !nugetResourceURLOK(u) {
+			t.Errorf("nugetResourceURLOK(%q) = false, want true", u)
+		}
+	}
+	bad := []string{
+		"", "httpfoo://host.example/flat/", "ftp://host.example/flat/", "http://",
+		"/v3/flat/", "http://user:pw@host.example/flat/", "http://ho st.example/flat/",
+	}
+	for _, u := range bad {
+		if nugetResourceURLOK(u) {
+			t.Errorf("nugetResourceURLOK(%q) = true, want false", u)
+		}
+	}
+}
+
+// TestNugetUpstreamDigestPinning drives the registration/catalog digest path:
+// a catalog hash that does not match the served .nupkg fails the package (and
+// with every package failing, the whole collect), while a feed publishing no
+// hashes still collects with integrity resting on TLS.
+func TestNugetUpstreamDigestPinning(t *testing.T) {
+	up, _, _ := fakeNugetStandardUpstream(t)
+	up.tamperHash = true
+	ls, _ := nugetTestLowServer(t, up.url())
+	_, err := ls.CollectNuget(context.Background(), NugetCollectRequest{Packages: []string{"Root.Pkg@2.0.0"}})
+	if err == nil || !strings.Contains(err.Error(), "sha512 mismatch") {
+		t.Fatalf("collect with a tampered catalog hash = %v, want a sha512 mismatch", err)
+	}
+
+	up.tamperHash, up.noHashes = false, true
+	lsPlain, _ := nugetTestLowServer(t, up.url())
+	if _, err := lsPlain.CollectNuget(context.Background(), NugetCollectRequest{Packages: []string{"Root.Pkg@2.0.0"}}); err != nil {
+		t.Fatalf("collect against a hashless feed = %v, want success", err)
+	}
+}
+
+// TestNugetCatalogEntryShapes covers the two catalogEntry encodings — the
+// entry object inlined in the leaf, and the URL of a catalog document — plus
+// the refusals that fall back to TLS-only integrity.
+func TestNugetCatalogEntryShapes(t *testing.T) {
+	ctx := context.Background()
+	sum := sha256.Sum256([]byte("nupkg bytes"))
+	b64 := base64.StdEncoding.EncodeToString(sum[:])
+
+	inline := json.RawMessage(`{"packageHash":"` + b64 + `","packageHashAlgorithm":"SHA256"}`)
+	entry, ok := fetchNugetCatalogEntry(ctx, inline)
+	if !ok {
+		t.Fatal("inline catalogEntry rejected")
+	}
+	if typ, digest := nugetEntryDigest(entry); typ != "sha256" || digest != hex.EncodeToString(sum[:]) {
+		t.Errorf("inline entry digest = %q %q", typ, digest)
+	}
+
+	// The catalogEntry-as-URL shape fetches the catalog document.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"packageHash": b64, "packageHashAlgorithm": "SHA256"})
+	}))
+	defer srv.Close()
+	entry, ok = fetchNugetCatalogEntry(ctx, json.RawMessage(`"`+srv.URL+`/entry.json"`))
+	if !ok || entry.PackageHash != b64 {
+		t.Errorf("catalog-document entry = %+v ok=%v", entry, ok)
+	}
+
+	// Junk shapes and unfetchable/unsafe catalog URLs report no entry.
+	for _, raw := range []string{"", `42`, `"ftp://host.invalid/entry.json"`, `"http://user:pw@host.invalid/entry.json"`, `{"packageHash":""}`} {
+		if _, ok := fetchNugetCatalogEntry(ctx, json.RawMessage(raw)); ok {
+			t.Errorf("catalogEntry %q accepted", raw)
+		}
+	}
+
+	// Unknown algorithms, wrong-length hashes, and undecodable hashes yield no
+	// digest (TLS-only fallback), never a bogus verification input.
+	for _, e := range []nugetCatalogEntry{
+		{PackageHash: b64, PackageHashAlgorithm: "MD5"},
+		{PackageHash: b64, PackageHashAlgorithm: "SHA512"}, // 32 bytes, not 64
+		{PackageHash: "!!!not base64!!!", PackageHashAlgorithm: "SHA256"},
+		{PackageHash: "", PackageHashAlgorithm: "SHA256"},
+	} {
+		if typ, digest := nugetEntryDigest(e); typ != "" || digest != "" {
+			t.Errorf("nugetEntryDigest(%+v) = %q %q, want empty", e, typ, digest)
+		}
 	}
 }
 

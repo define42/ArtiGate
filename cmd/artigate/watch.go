@@ -297,7 +297,9 @@ func isKnownStream(stream string) bool {
 // Scheduler
 // -----------------------------------------------------------------------------
 
-// watchLoop runs due watches on a fixed tick until ctx is cancelled.
+// watchLoop runs due watches on a fixed tick until ctx is cancelled. Each
+// tick runs under panic recovery so a scheduler bug cannot crash the server
+// (the collects themselves are already firewalled by recoverCollectPanic).
 func (s *LowServer) watchLoop(ctx context.Context) {
 	t := time.NewTicker(s.watchTick)
 	defer t.Stop()
@@ -307,7 +309,7 @@ func (s *LowServer) watchLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.runDueWatches()
+			recoverWorkerPanic("watch scheduler", s.runDueWatches)
 		}
 	}
 }
@@ -406,6 +408,19 @@ func recoverCollectPanic(stream string, fn func() (ExportResult, error)) (res Ex
 		}
 	}()
 	return fn()
+}
+
+// recoverWorkerPanic runs one iteration of a long-lived worker loop — a
+// scheduler tick, an import pass, a received diode datagram — and turns any
+// panic into a log line, so a single bad input or bug cannot crash the whole
+// server; the caller's loop just continues with the next iteration.
+func recoverWorkerPanic(what string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("%s: panic recovered: %v\n%s", what, r, debug.Stack())
+		}
+	}()
+	fn()
 }
 
 func watchRunMessage(res ExportResult) string {

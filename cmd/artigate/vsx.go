@@ -451,10 +451,12 @@ func (s *HighServer) vsxGalleryResults(base string, f vsxGalleryFilter) ([]vsxGa
 	return vsxGalleryPage(matched, f.page, f.size), len(matched), nil
 }
 
-// vsxGalleryPage slices one page out of the matched entries.
+// vsxGalleryPage slices one page out of the matched entries. A huge
+// unauthenticated pageNumber can overflow (page-1)*size to a negative start,
+// so anything outside [0, len) is just an empty page, never a slice panic.
 func vsxGalleryPage(matched []vsxGalleryExtension, page, size int) []vsxGalleryExtension {
 	start := (page - 1) * size
-	if start >= len(matched) {
+	if start < 0 || start >= len(matched) {
 		return []vsxGalleryExtension{}
 	}
 	return matched[start:min(start+size, len(matched))]

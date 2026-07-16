@@ -13,6 +13,10 @@ package main
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -21,6 +25,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -992,6 +997,7 @@ type nugetResolver struct {
 	s           *LowServer
 	stageRoot   string
 	flatBase    string // PackageBaseAddress resource, trailing slash trimmed
+	regBase     string // RegistrationsBaseUrl resource ("" when the feed has none)
 	resolveDeps bool
 	versions    map[string][]string // lowercase id -> normalized versions (ascending)
 	picked      map[string]bool     // lowercase id@version already downloaded
@@ -1058,8 +1064,19 @@ func (r *nugetResolver) resolve(ctx context.Context, specs []string) ([]NugetPac
 	return pkgs, files, failed
 }
 
+// nugetResourceURLOK reports whether a service-index resource URL is usable
+// as a fetch base: an absolute http(s) URL with a host and no embedded login
+// (resource URLs are echoed in progress and error text, so a credential
+// there would leak — including across the diode in failure reports).
+func nugetResourceURLOK(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil
+}
+
 // loadServiceIndex reads the v3 service index and locates the flat-container
-// base URL.
+// base URL packages are fetched from, plus the registration base their
+// upstream digests are looked up under (feeds without one skip digest
+// pinning). The first usable resource of each type wins.
 func (r *nugetResolver) loadServiceIndex(ctx context.Context) error {
 	b, err := httpGetBytes(ctx, r.s.nugetSource(), 4<<20)
 	if err != nil {
@@ -1075,12 +1092,21 @@ func (r *nugetResolver) loadServiceIndex(ctx context.Context) error {
 		return fmt.Errorf("parse service index: %w", err)
 	}
 	for _, res := range idx.Resources {
-		if res.Type == "PackageBaseAddress/3.0.0" && strings.HasPrefix(res.ID, "http") {
-			r.flatBase = strings.TrimSuffix(res.ID, "/")
-			return nil
+		switch res.Type {
+		case "PackageBaseAddress/3.0.0":
+			if r.flatBase == "" && nugetResourceURLOK(res.ID) {
+				r.flatBase = strings.TrimSuffix(res.ID, "/")
+			}
+		case "RegistrationsBaseUrl", "RegistrationsBaseUrl/3.4.0", "RegistrationsBaseUrl/3.6.0":
+			if r.regBase == "" && nugetResourceURLOK(res.ID) {
+				r.regBase = strings.TrimSuffix(res.ID, "/")
+			}
 		}
 	}
-	return errors.New("service index has no PackageBaseAddress/3.0.0 resource")
+	if r.flatBase == "" {
+		return errors.New("service index has no PackageBaseAddress/3.0.0 resource")
+	}
+	return nil
 }
 
 // idVersions lists a package's published versions (normalized, ascending),
@@ -1221,17 +1247,95 @@ func pickNugetMinimum(versions []string, rng nugetRange) (string, error) {
 	return "", errors.New("no published version satisfies the dependency range")
 }
 
+// nugetCatalogEntry is the subset of a catalog/registration entry that pins
+// a package's bytes.
+type nugetCatalogEntry struct {
+	PackageHash          string `json:"packageHash"`
+	PackageHashAlgorithm string `json:"packageHashAlgorithm"`
+}
+
+// upstreamDigest looks up the upstream-published digest of one package: the
+// version's registration leaf carries a catalogEntry — inlined, or as the
+// URL of the catalog document — whose packageHash pins the .nupkg bytes. It
+// returns ("", "") when the feed publishes none, leaving integrity on TLS
+// like the other index-less fetches; a published digest that then mismatches
+// fails the download.
+func (r *nugetResolver) upstreamDigest(ctx context.Context, idl, verl string) (checksumType, digest string) {
+	if r.regBase == "" {
+		return "", ""
+	}
+	b, err := httpGetBytes(ctx, r.regBase+"/"+idl+"/"+verl+".json", 4<<20)
+	if err != nil {
+		return "", ""
+	}
+	var leaf struct {
+		CatalogEntry json.RawMessage `json:"catalogEntry"`
+	}
+	if err := json.Unmarshal(b, &leaf); err != nil {
+		return "", ""
+	}
+	entry, ok := fetchNugetCatalogEntry(ctx, leaf.CatalogEntry)
+	if !ok {
+		return "", ""
+	}
+	return nugetEntryDigest(entry)
+}
+
+// fetchNugetCatalogEntry resolves a registration leaf's catalogEntry field:
+// the entry object inlined, or the URL of the catalog document to fetch.
+func fetchNugetCatalogEntry(ctx context.Context, raw json.RawMessage) (nugetCatalogEntry, bool) {
+	var entry nugetCatalogEntry
+	if json.Unmarshal(raw, &entry) == nil && entry.PackageHash != "" {
+		return entry, true
+	}
+	var catalogURL string
+	if json.Unmarshal(raw, &catalogURL) != nil || !nugetResourceURLOK(catalogURL) {
+		return nugetCatalogEntry{}, false
+	}
+	b, err := httpGetBytes(ctx, catalogURL, 4<<20)
+	if err != nil {
+		return nugetCatalogEntry{}, false
+	}
+	if json.Unmarshal(b, &entry) != nil || entry.PackageHash == "" {
+		return nugetCatalogEntry{}, false
+	}
+	return entry, true
+}
+
+// nugetEntryDigest converts a catalog entry's base64 packageHash into the
+// (checksumType, hex digest) pair downloadVerifiedFile takes. An algorithm
+// the mirror does not know — or a hash of the wrong length — reports no
+// digest rather than failing the package.
+func nugetEntryDigest(entry nugetCatalogEntry) (checksumType, digest string) {
+	sizes := map[string]int{"sha512": sha512.Size, "sha256": sha256.Size}
+	algo := strings.ToLower(strings.TrimSpace(entry.PackageHashAlgorithm))
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(entry.PackageHash))
+	if err != nil || len(raw) == 0 || len(raw) != sizes[algo] {
+		return "", ""
+	}
+	return algo, hex.EncodeToString(raw)
+}
+
 // downloadPackage fetches one .nupkg into the staging tree, validates its
 // embedded nuspec against the requested identity, and returns the dependency
-// wants its nuspec declares. Integrity rests on TLS to the configured source
-// (the flat container publishes no digests); the embedded nuspec check keeps
-// a mixed-up upstream response out of the bundle.
+// wants its nuspec declares. The archive is verified against the upstream
+// catalog digest when the feed publishes one (nuget.org always does); the
+// flat container itself publishes no digests, so without a registration
+// entry integrity rests on TLS to the configured source. The embedded nuspec
+// check keeps a mixed-up upstream response out of the bundle either way.
 func (r *nugetResolver) downloadPackage(ctx context.Context, id, version string) (*NugetPackage, *ManifestFile, []nugetWant, error) {
 	idl, verl := strings.ToLower(id), strings.ToLower(version)
 	rel := nugetPackageRel(id, version)
 	abs := filepath.Join(r.stageRoot, filepath.FromSlash(rel))
-	url := r.flatBase + "/" + idl + "/" + verl + "/" + idl + "." + verl + ".nupkg"
-	sum, size, err := downloadFileSHA256(ctx, url, abs)
+	dlURL := r.flatBase + "/" + idl + "/" + verl + "/" + idl + "." + verl + ".nupkg"
+	var sum string
+	var size int64
+	var err error
+	if checksumType, digest := r.upstreamDigest(ctx, idl, verl); digest != "" {
+		sum, size, err = downloadVerifiedFile(ctx, dlURL, abs, 0, checksumType, digest)
+	} else {
+		sum, size, err = downloadFileSHA256(ctx, dlURL, abs)
+	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
