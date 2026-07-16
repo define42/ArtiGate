@@ -329,6 +329,50 @@ func TestCov3A_InstallVerifiedFileBranches(t *testing.T) {
 	}
 }
 
+// TestCov3A_InstallVerifiedFileMovesFromStaging pins the install fast path: a
+// fresh file is renamed out of staging (no second byte copy of the artifact),
+// and a mutable path replaces its predecessor the same way. Staging and the
+// repository share a filesystem here, as they do in production (<root>/tmp vs
+// <root>/cache) — the copy fallback is only for a cross-device staging mount.
+func TestCov3A_InstallVerifiedFileMovesFromStaging(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	base := hs.downloadDir
+	staging := filepath.Join(filepath.Dir(base), "staging")
+
+	fresh := []byte("fresh artifact bytes")
+	for _, dir := range []string{filepath.Join(staging, "pkg"), filepath.Join(staging, "uploads"), filepath.Join(base, "uploads")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(staging, "pkg", "a.zip"), fresh)
+	mf := ManifestFile{Path: "pkg/a.zip", SHA256: cov3ASHA(fresh), Size: int64(len(fresh))}
+	if err := installVerifiedFile(staging, base, mf); err != nil {
+		t.Fatalf("installVerifiedFile fresh = %v, want nil", err)
+	}
+	got, err := os.ReadFile(filepath.Join(base, "pkg", "a.zip"))
+	if err != nil || !bytes.Equal(got, fresh) {
+		t.Fatalf("installed file = %q, %v; want the staged bytes", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(staging, "pkg", "a.zip")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staged file still present after install (stat err %v) — install copied instead of renaming", err)
+	}
+
+	// A mutable path (uploads/) with different existing content is replaced.
+	writeFile(t, filepath.Join(base, "uploads", "doc.txt"), []byte("old"))
+	replacement := []byte("new")
+	writeFile(t, filepath.Join(staging, "uploads", "doc.txt"), replacement)
+	up := ManifestFile{Path: "uploads/doc.txt", SHA256: cov3ASHA(replacement), Size: int64(len(replacement))}
+	if err := installVerifiedFile(staging, base, up); err != nil {
+		t.Fatalf("installVerifiedFile mutable replace = %v, want nil", err)
+	}
+	got, err = os.ReadFile(filepath.Join(base, "uploads", "doc.txt"))
+	if err != nil || !bytes.Equal(got, replacement) {
+		t.Fatalf("replaced upload = %q, %v; want the staged bytes", got, err)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // archive.go: extractTarEntry filesystem faults
 // -----------------------------------------------------------------------------

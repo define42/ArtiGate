@@ -1669,7 +1669,7 @@ func (s *LowServer) bundleArchiveDir() string {
 	return filepath.Join(s.cfg.Root, "bundles")
 }
 
-// archiveBundle copies a freshly written bundle's three files into the archive.
+// archiveBundle records a freshly written bundle's three files in the archive.
 func (s *LowServer) archiveBundle(bundleID string) error {
 	dir := s.bundleArchiveDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1678,9 +1678,30 @@ func (s *LowServer) archiveBundle(bundleID string) error {
 	for _, suffix := range bundleSuffixes() {
 		src := filepath.Join(s.cfg.ExportDir, bundleID+suffix)
 		dst := filepath.Join(dir, bundleID+suffix)
-		if err := copyFileAtomic(src, dst, 0o644); err != nil {
+		if err := linkOrCopyFile(src, dst); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// linkOrCopyFile makes dst another name for src's already-fsynced bytes. The
+// bundle files this backs are immutable signed artifacts, and the export spool
+// and archive share a filesystem in the default layout, so a hardlink replaces
+// what used to be a full read+write copy of a potentially multi-gigabyte
+// archive on every export and every re-export. Cross-device layouts (EXDEV) —
+// or a filesystem without hardlinks — fall back to the copy. An existing dst
+// is replaced so replay stays idempotent, matching the copy path's rename-over
+// behavior.
+func linkOrCopyFile(src, dst string) error {
+	tmp := dst + ".tmp"
+	_ = os.Remove(tmp)
+	if err := os.Link(src, tmp); err != nil {
+		return copyFileAtomic(src, dst, 0o644)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
 	}
 	return nil
 }
@@ -1701,7 +1722,7 @@ func (s *LowServer) replayArchivedBundle(stream string, seq int64) (ExportResult
 	for _, suffix := range bundleSuffixes() {
 		src := filepath.Join(archive, bundleID+suffix)
 		dst := filepath.Join(s.cfg.ExportDir, bundleID+suffix)
-		if err := copyFileAtomic(src, dst, 0o644); err != nil {
+		if err := linkOrCopyFile(src, dst); err != nil {
 			return ExportResult{}, false, err
 		}
 	}

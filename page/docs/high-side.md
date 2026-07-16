@@ -65,7 +65,7 @@ Imports are **strictly consecutive within a stream**. The manifest carries a `pr
 | successfully imported | its three files move to `<landing>/imported` |
 
 !!! warning
-    Import moves files into `<landing>/imported`, `<landing>/duplicates`, quarantine, and `<root>/rejected` rather than deleting them, and the low side keeps its own `<root>/bundles` archive. Account for disk growth in all of these — automatic retention/pruning is not yet built.
+    Import moves files into `<landing>/imported`, `<landing>/duplicates`, quarantine, and `<root>/rejected` rather than deleting them, and the low side keeps its own `<root>/bundles` archive. `imported`, `duplicates`, and `rejected` files are reaped after 7 days; quarantine is retained until its gap fills (or an operator clears it), and the low-side `bundles` archive has no automatic retention — account for disk growth there.
 
 Every imported bundle is verified before it counts: new `ed25519ph:` signatures stream the bounded manifest through SHA-512 before Ed25519 verification (legacy raw signatures remain readable), the manifest's sequence chain and completeness are validated, and the archive is extracted into a staging area where each file's size and streaming SHA-256 must match the manifest. Installation is **write-once** — a repo path that already exists must hash identically, or the import fails with an immutable-file conflict. See [Architecture](architecture.md) for the full verification chain.
 
@@ -125,7 +125,7 @@ The dashboard is backed by read-only JSON endpoints under `/ui/api/` (`overview`
 !!! note
     Two prefixes are easy to get wrong. Python's index prefix is **`/simple`** (not `/python`), with downloads under `/packages/`; containers use **`/v2`** (the Docker Registry v2 API), where a bare `/v2/` returns the API-version header and `/v2/_catalog` lists repositories. The `/v2/` space is shared: a request for a mirrored Hugging Face model (`/v2/<org>/<model>/…`) is answered by the model registry first, and everything else falls through to the container registry — which is what lets `ollama pull <host>/<org>/<model>:<tag>` and `docker pull <host>/docker.io/library/alpine:3.20` coexist on one port.
 
-`GET /admin/status` and `GET /admin/missing` are aliases — both return the identical import-status JSON. Requesting status also has a side effect: it first sorts any stray landing bundles into quarantine/duplicates, exactly as an import pass would.
+`GET /admin/status` and `GET /admin/missing` are aliases — both return the identical import-status JSON. Both are read-only: stray landing bundles are sorted into quarantine/duplicates only by import passes (the background loop, a diode-ingest kick, or `POST /admin/import`), never by a status read.
 
 ### The trust model
 

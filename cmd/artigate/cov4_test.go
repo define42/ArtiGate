@@ -436,3 +436,48 @@ func TestCov4_CachedListsError(t *testing.T) {
 		t.Fatal("cachedTrees should propagate the WalkDir permission error")
 	}
 }
+
+// TestCov4_TreeCacheInvalidation pins the dashboard scan cache's contract: a
+// warmed cache serves the memoized scan (the mirror only changes on import or
+// upload deletion), and invalidate() makes the next request re-scan so those
+// mutations are visible immediately instead of after the TTL.
+func TestCov4_TreeCacheInvalidation(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	uploadsDir := filepath.Join(hs.uploadsDir(), "docs")
+	if err := os.MkdirAll(uploadsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(uploadsDir, "a.txt"), []byte("a"))
+
+	docsFiles := func(trees map[string]uiTree) int {
+		return len(trees["uploads"].children("docs"))
+	}
+	first, err := hs.cachedTrees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if docsFiles(first) != 1 {
+		t.Fatalf("uploads docs folder = %d file(s), want 1", docsFiles(first))
+	}
+
+	// A direct disk write is invisible while the cache is warm…
+	writeFile(t, filepath.Join(uploadsDir, "b.txt"), []byte("b"))
+	cached, err := hs.cachedTrees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if docsFiles(cached) != 1 {
+		t.Fatalf("cached uploads docs folder = %d file(s), want the memoized 1", docsFiles(cached))
+	}
+
+	// …and visible immediately after the mutation paths invalidate the cache.
+	hs.tree.invalidate()
+	fresh, err := hs.cachedTrees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if docsFiles(fresh) != 2 {
+		t.Fatalf("invalidated uploads docs folder = %d file(s), want 2", docsFiles(fresh))
+	}
+}
