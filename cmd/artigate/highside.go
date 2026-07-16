@@ -50,6 +50,12 @@ const (
 	// minutes to hours; a set still incomplete long after was orphaned by an
 	// interrupted transfer and would otherwise pin the quota forever.
 	incompleteLandingRetention = 48 * time.Hour
+	// processedLandingRetention bounds how long already-processed bundle files
+	// (landing/imported and landing/duplicates) are kept for diagnostics. The
+	// authoritative replay copy lives in the low side's bundle archive, so
+	// retaining these forever would accumulate a compressed second copy of
+	// everything ever imported and eventually fill the landing volume.
+	processedLandingRetention = 7 * 24 * time.Hour
 )
 
 type HighConfig struct {
@@ -213,6 +219,13 @@ func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
 	}
 	dl := filepath.Join(cfg.Root, "cache", "download")
 	if err := os.MkdirAll(dl, 0o755); err != nil {
+		return nil, err
+	}
+	// <root>/tmp holds only per-bundle import staging, normally removed by the
+	// importing pass itself. A hard kill (OOM, power loss) mid-import strands
+	// the extracted copy — potentially many gigabytes — and nothing else ever
+	// looks at it. No import can be running at construction, so sweep it.
+	if err := os.RemoveAll(filepath.Join(cfg.Root, "tmp")); err != nil {
 		return nil, err
 	}
 	// Bundles imported by a pre-sumdb-serving binary installed sumdb/ files
@@ -844,6 +857,9 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 	if err := s.commitImportedStateLocked(stream, bundleID, manifest.Sequence); err != nil {
 		return BundleManifest{}, err
 	}
+	// The freshly installed artifacts must show up in the dashboard tree right
+	// away, not after the scan cache's TTL.
+	s.tree.invalidate()
 	if err := moveImportedFilesFromDir(bundleDir, filepath.Join(s.cfg.Landing, "imported"), manifest.BundleID); err != nil {
 		log.Printf("move imported files: %v", err)
 	}
@@ -1122,28 +1138,40 @@ func streamOfBundleID(bundleID string) string {
 // it holds valid future bundles waiting for an earlier one to fill a gap.
 // Callers hold s.mu.
 func (s *HighServer) reapUnverifiedLocked(now time.Time) {
-	if n, err := reapRejectedDir(filepath.Join(s.cfg.Root, "rejected"), now.Add(-rejectedRetention)); err != nil {
+	if n, err := reapFilesOlderThan(filepath.Join(s.cfg.Root, "rejected"), now.Add(-rejectedRetention)); err != nil {
 		log.Printf("reap rejected: %v", err)
 	} else if n > 0 {
 		log.Printf("reaped %d expired rejected file(s)", n)
+	}
+	// Processed bundles (already imported, or duplicates of imports) are moved
+	// into landing subdirectories that no import pass ever reads again; without
+	// retention they grow by one full bundle per import, forever.
+	for _, sub := range []string{"imported", "duplicates"} {
+		if n, err := reapFilesOlderThan(filepath.Join(s.cfg.Landing, sub), now.Add(-processedLandingRetention)); err != nil {
+			log.Printf("reap landing/%s: %v", sub, err)
+		} else if n > 0 {
+			log.Printf("reaped %d processed bundle file(s) from landing/%s", n, sub)
+		}
 	}
 	if n, err := reapIncompleteLanding(s.cfg.Landing, now.Add(-incompleteLandingRetention)); err != nil {
 		log.Printf("reap incomplete landing: %v", err)
 	} else if n > 0 {
 		log.Printf("reaped %d orphaned partial landing file(s)", n)
 	}
-	if n, err := reapStaleUDPTemps(s.cfg.Landing, now.Add(-incompleteLandingRetention)); err != nil {
-		log.Printf("reap stale UDP temp files: %v", err)
+	if n, err := reapStaleTransportTemps(s.cfg.Landing, now.Add(-incompleteLandingRetention)); err != nil {
+		log.Printf("reap stale transport temp files: %v", err)
 	} else if n > 0 {
-		log.Printf("reaped %d stale UDP reassembly temp file(s)", n)
+		log.Printf("reaped %d stale transport temp file(s)", n)
 	}
 }
 
-// reapStaleUDPTemps deletes orphaned UDP reassembly temp files last modified
-// before cutoff — a partial reassembly whose process was killed mid-transfer.
-// In-flight reassemblies keep a recent mtime (and the catcher expires stale
+// reapStaleTransportTemps deletes orphaned transport temp files last modified
+// before cutoff: UDP reassembly temps and HTTP ingest upload temps whose
+// process was killed mid-transfer. Both count against the unverified storage
+// quota, so an orphan would pin it forever. In-flight transfers keep a recent
+// mtime (writes touch the file continuously, and the catcher expires stale
 // transfers itself), so only long-abandoned temps are removed here.
-func reapStaleUDPTemps(dir string, cutoff time.Time) (int, error) {
+func reapStaleTransportTemps(dir string, cutoff time.Time) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
@@ -1153,7 +1181,7 @@ func reapStaleUDPTemps(dir string, cutoff time.Time) (int, error) {
 	}
 	var removed int
 	for _, e := range entries {
-		if e.IsDir() || !isUDPTempName(e.Name()) {
+		if e.IsDir() || !(isUDPTempName(e.Name()) || isIngestUploadTempName(e.Name())) {
 			continue
 		}
 		if removeIfOlder(filepath.Join(dir, e.Name()), cutoff) {
@@ -1163,9 +1191,10 @@ func reapStaleUDPTemps(dir string, cutoff time.Time) (int, error) {
 	return removed, nil
 }
 
-// reapRejectedDir deletes regular files in the rejected directory last modified
-// before cutoff.
-func reapRejectedDir(dir string, cutoff time.Time) (int, error) {
+// reapFilesOlderThan deletes the directory's regular files last modified before
+// cutoff (the retention sweep behind rejected/, landing/imported, and
+// landing/duplicates).
+func reapFilesOlderThan(dir string, cutoff time.Time) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
@@ -1533,6 +1562,20 @@ func installVerifiedFile(staging, base string, f ManifestFile) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
+	}
+	return moveVerifiedFile(src, dst)
+}
+
+// moveVerifiedFile publishes one verified staged file at its repository path.
+// Staging lives under the same root as the repository, so a rename moves the
+// bytes for free and atomically — extraction already fsynced them — where a
+// copy would rewrite (and re-fsync) every byte of every import a second time.
+// A staging directory mounted on its own filesystem (EXDEV) falls back to the
+// copying path, as does any other rename failure whose cause a copy attempt
+// will report more precisely.
+func moveVerifiedFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
 	}
 	return copyFileAtomic(src, dst, 0o644)
 }

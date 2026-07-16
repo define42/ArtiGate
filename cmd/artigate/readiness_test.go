@@ -81,14 +81,14 @@ func writeAged(t *testing.T, p string, age time.Duration) {
 	}
 }
 
-func TestReapRejectedDir(t *testing.T) {
+func TestReapFilesOlderThan(t *testing.T) {
 	dir := t.TempDir()
 	old := filepath.Join(dir, "go-bundle-000001.tar.gz")
 	recent := filepath.Join(dir, "go-bundle-000002.tar.gz")
 	writeAged(t, old, 2*time.Hour)
 	writeAged(t, recent, 0)
 
-	n, err := reapRejectedDir(dir, time.Now().Add(-time.Hour))
+	n, err := reapFilesOlderThan(dir, time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,8 +103,37 @@ func TestReapRejectedDir(t *testing.T) {
 	}
 
 	// A missing directory is not an error.
-	if _, err := reapRejectedDir(filepath.Join(dir, "nope"), time.Now()); err != nil {
+	if _, err := reapFilesOlderThan(filepath.Join(dir, "nope"), time.Now()); err != nil {
 		t.Errorf("missing dir should be fine: %v", err)
+	}
+}
+
+// TestReapProcessedLandingDirs pins the retention for landing/imported and
+// landing/duplicates: without it the high side accumulates the compressed
+// archive of every bundle ever imported and eventually fills the landing
+// volume.
+func TestReapProcessedLandingDirs(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	for _, sub := range []string{"imported", "duplicates"} {
+		dir := filepath.Join(hs.cfg.Landing, sub)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeAged(t, filepath.Join(dir, "go-bundle-000001.tar.gz"), processedLandingRetention+time.Hour)
+		writeAged(t, filepath.Join(dir, "go-bundle-000002.tar.gz"), time.Hour)
+	}
+
+	hs.reapUnverifiedLocked(time.Now())
+
+	for _, sub := range []string{"imported", "duplicates"} {
+		dir := filepath.Join(hs.cfg.Landing, sub)
+		if fileExists(filepath.Join(dir, "go-bundle-000001.tar.gz")) {
+			t.Errorf("landing/%s: file past retention should be reaped", sub)
+		}
+		if !fileExists(filepath.Join(dir, "go-bundle-000002.tar.gz")) {
+			t.Errorf("landing/%s: recent file must be kept", sub)
+		}
 	}
 }
 

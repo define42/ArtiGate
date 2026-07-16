@@ -461,6 +461,9 @@ func (s *HighServer) handleDeleteUpload(w http.ResponseWriter, r *http.Request) 
 	}
 	// Best-effort: a folder lives only through its files.
 	_ = os.Remove(filepath.Dir(abs))
+	// The deleted file must drop out of the dashboard tree right away, not
+	// after the scan cache's TTL.
+	s.tree.invalidate()
 	log.Printf("uploads: deleted %s/%s", req.Folder, req.Name)
 	writeJSON(w, map[string]string{"status": "ok"})
 	return true

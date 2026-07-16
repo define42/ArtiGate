@@ -334,6 +334,14 @@ func isUDPTempName(name string) bool {
 	return strings.Contains(name, ".udp-")
 }
 
+// isIngestUploadTempName matches an HTTP diode ingest's in-progress temp file
+// (writeStreamAtomicLimit's "<bundle file>.upload-<rand>"). A strictly valid
+// bundle file name can never contain the marker, so the match cannot shadow
+// real landed content.
+func isIngestUploadTempName(name string) bool {
+	return strings.Contains(name, ".upload-")
+}
+
 // isUDPPartialName matches a persisted partial transfer and its resume state
 // (diodewire.go): kept bytes that count against the unverified storage quota
 // like any other stored transport data.
