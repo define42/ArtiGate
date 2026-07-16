@@ -97,7 +97,9 @@ func validateHelmChartName(name string) error {
 }
 
 // helmVersionRE matches a chart version: semver, optionally "v"-prefixed like
-// many repos publish. Always starts alphanumeric, so it is path-safe.
+// many repos publish. Always starts alphanumeric, so it is path-safe. The
+// charset deliberately excludes '_' — helmChartStem depends on versions never
+// carrying one.
 var helmVersionRE = regexp.MustCompile(`^v?[0-9][0-9A-Za-z.+-]*$`)
 
 func validateHelmVersion(v string) error {
@@ -107,10 +109,21 @@ func validateHelmVersion(v string) error {
 	return nil
 }
 
+// helmChartStem is the canonical "<name>_<version>" stem a mirrored chart's
+// artifacts (archive and regenerated metadata) are stored under. Names and
+// versions both routinely contain '-', so a '-'-joined key would collide for
+// adversarial pairs (chart "a-1" at 1.0.0 vs chart "a" at 1-1.0.0) and let one
+// chart silently overwrite the other; '_' can never appear in a version
+// (helmVersionRE), so this key maps distinct chart identities to distinct
+// stems.
+func helmChartStem(name, version string) string {
+	return name + "_" + version
+}
+
 // helmChartFilename is the canonical archive name a mirrored chart is stored
 // under, whatever the upstream download URL looked like.
 func helmChartFilename(name, version string) string {
-	return name + "-" + version + ".tgz"
+	return helmChartStem(name, version) + ".tgz"
 }
 
 // helmChartRel is the repository-relative path of one chart archive.
@@ -118,8 +131,21 @@ func helmChartRel(mirror, filename string) string {
 	return path.Join("helm", mirror, "charts", filename)
 }
 
+// isLegacyHelmChartFilename reports whether filename is the pre-collision-fix
+// archive name for the chart: "<name>-<version>.tgz". Bundles minted by a
+// pre-fix low side (possibly still queued on the diode when the high side
+// upgrades first) must keep importing. Acceptance is limited to names without
+// '_': such a legacy filename contains no '_' at all, while every current
+// canonical filename contains the '_' separator, so the two accepted shapes
+// stay disjoint and a legacy record can never claim a current chart's archive
+// path.
+func isLegacyHelmChartFilename(name, version, filename string) bool {
+	return !strings.ContainsRune(name, '_') && filename == name+"-"+version+".tgz"
+}
+
 // validateHelmChart checks one manifest chart record: path-safe identity, the
-// canonical storage path, and that the referenced file is listed.
+// canonical (or unambiguous legacy) storage path, and that the referenced file
+// is listed.
 func validateHelmChart(mirror string, c HelmChart, seen map[string]bool) error {
 	if err := validateHelmChartName(c.Name); err != nil {
 		return err
@@ -127,7 +153,7 @@ func validateHelmChart(mirror string, c HelmChart, seen map[string]bool) error {
 	if err := validateHelmVersion(c.Version); err != nil {
 		return fmt.Errorf("chart %s: %w", c.Name, err)
 	}
-	if c.Filename != helmChartFilename(c.Name, c.Version) {
+	if c.Filename != helmChartFilename(c.Name, c.Version) && !isLegacyHelmChartFilename(c.Name, c.Version, c.Filename) {
 		return fmt.Errorf("chart %s@%s has non-canonical filename %s", c.Name, c.Version, c.Filename)
 	}
 	if c.Path != helmChartRel(mirror, c.Filename) || !seen[c.Path] {
@@ -281,11 +307,43 @@ func (s *HighServer) publishHelmChart(mirror string, c HelmChart) error {
 		return err
 	}
 	st := helmStoredChart{Filename: c.Filename, Digest: digest, Metadata: meta}
-	out := filepath.Join(s.helmDir(), mirror, "metadata", c.Name+"-"+c.Version+".json")
+	out := filepath.Join(s.helmDir(), mirror, "metadata", helmChartStem(c.Name, c.Version)+".json")
 	if !safeJoin(s.helmDir(), out) {
 		return fmt.Errorf("unsafe metadata path for %s@%s", c.Name, c.Version)
 	}
-	return writeJSONAtomic(out, st, 0o644)
+	if err := writeJSONAtomic(out, st, 0o644); err != nil {
+		return err
+	}
+	s.removeSupersededHelmMetadata(mirror, c.Name, c.Version)
+	return nil
+}
+
+// removeSupersededHelmMetadata deletes the legacy "<name>-<version>.json"
+// record once the canonical stem holds the same chart identity — otherwise
+// regenerated indexes would list the version twice (and could keep serving a
+// stale legacy digest/URL). The legacy stem is ambiguous, so the record is
+// only removed when its embedded identity matches; a record that flattened to
+// the same key from a different chart keeps serving that chart. The legacy
+// path can never equal the canonical one (the separators differ), so this
+// never removes the record just written.
+func (s *HighServer) removeSupersededHelmMetadata(mirror, name, version string) {
+	p := filepath.Join(s.helmDir(), mirror, "metadata", name+"-"+version+".json")
+	if !safeJoin(s.helmDir(), p) {
+		return
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	var st helmStoredChart
+	if json.Unmarshal(b, &st) != nil {
+		return
+	}
+	n, _ := st.Metadata["name"].(string)
+	v, _ := st.Metadata["version"].(string)
+	if n == name && v == version {
+		_ = os.Remove(p)
+	}
 }
 
 // extractChartYAML reads the Chart.yaml embedded in a chart archive (helm
@@ -486,8 +544,8 @@ func (s *HighServer) collectHelmMirrorCharts(mirror string, byChart map[string][
 	}
 }
 
-// readHelmStored loads one chart's stored metadata by its "<name>-<version>"
-// stem and checks the archive is still present.
+// readHelmStored loads one chart's stored metadata by its stem (see
+// helmChartStem) and checks the archive is still present.
 func (s *HighServer) readHelmStored(mirror, stem string) (helmStoredChart, error) {
 	p := filepath.Join(s.helmDir(), mirror, "metadata", stem+".json")
 	if !safeJoin(s.helmDir(), p) {
@@ -511,6 +569,28 @@ func (s *HighServer) readHelmStored(mirror, stem string) (helmStoredChart, error
 	return st, nil
 }
 
+// loadHelmStoredVersion resolves one chart version's stored metadata: the
+// canonical stem first, then the legacy "<name>-<version>" stem written by
+// imports that predate the collision-safe naming. The legacy key is ambiguous
+// (chart "a-1" at 1.0.0 and chart "a" at 1-1.0.0 share it), so a legacy hit
+// must prove its embedded identity before it may answer.
+func (s *HighServer) loadHelmStoredVersion(mirror, chart, version string) (helmStoredChart, error) {
+	st, err := s.readHelmStored(mirror, helmChartStem(chart, version))
+	if err == nil {
+		return st, nil
+	}
+	st, err = s.readHelmStored(mirror, chart+"-"+version)
+	if err != nil {
+		return helmStoredChart{}, err
+	}
+	name, _ := st.Metadata["name"].(string)
+	ver, _ := st.Metadata["version"].(string)
+	if name != chart || ver != version {
+		return helmStoredChart{}, errors.New("legacy metadata is a different chart")
+	}
+	return st, nil
+}
+
 // helmDetail describes one mirrored chart version for the dashboard detail
 // panel. spec is "<mirror>/<chart>@<version>".
 func (s *HighServer) helmDetail(spec string) (UIDetail, error) {
@@ -520,7 +600,7 @@ func (s *HighServer) helmDetail(spec string) (UIDetail, error) {
 		validateHelmChartName(chart) != nil || validateHelmVersion(version) != nil {
 		return UIDetail{}, errors.New("invalid mirror/chart@version")
 	}
-	st, err := s.readHelmStored(mirror, chart+"-"+version)
+	st, err := s.loadHelmStoredVersion(mirror, chart, version)
 	if err != nil {
 		return UIDetail{}, errors.New("version not found")
 	}

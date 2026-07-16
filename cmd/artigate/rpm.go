@@ -396,10 +396,12 @@ func rpmPkgidSet(pkgs []RpmPackage) map[string]bool {
 	return set
 }
 
-// filterPrimaryXML rewrites a primary.xml, keeping only <package> elements whose
-// pkgid is in keep, and updates the root packages="N" count. Each kept package's
-// XML is preserved verbatim, so no metadata fields are lost.
-func filterPrimaryXML(plain []byte, keep map[string]bool) []byte {
+// filterIndexXML rewrites an rpm metadata index (primary, filelists, other),
+// keeping only <package> elements whose pkgid — extracted by the index-specific
+// pkgid func — is in keep, and updates the root packages="N" count. Each kept
+// package's XML is preserved verbatim, so no metadata fields are lost; a block
+// whose pkgid cannot be found is kept.
+func filterIndexXML(plain []byte, keep map[string]bool, pkgid func(block string) string) []byte {
 	s := string(plain)
 	const open, closeTag = "<package", "</package>"
 	first := strings.Index(s, open)
@@ -420,15 +422,16 @@ func filterPrimaryXML(plain []byte, keep map[string]bool) []byte {
 		}
 		end := start + rel + len(closeTag)
 		block := s[start:end]
-		if id := primaryPkgid(block); id == "" || keep[id] {
+		if id := pkgid(block); id == "" || keep[id] {
 			kept = append(kept, block)
 		}
 		i, lastEnd = end, end
 	}
-	return []byte(setPrimaryCount(s[:first], len(kept)) + strings.Join(kept, "") + s[lastEnd:])
+	return []byte(setPackagesCount(s[:first], len(kept)) + strings.Join(kept, "") + s[lastEnd:])
 }
 
-// primaryPkgid extracts a <package> block's pkgid (its own SHA256), lowercased.
+// primaryPkgid extracts a primary.xml <package> block's pkgid (its own SHA256,
+// carried as the <checksum pkgid="YES"> element text), lowercased.
 func primaryPkgid(block string) string {
 	i := strings.Index(block, `pkgid="YES"`)
 	if i < 0 {
@@ -446,8 +449,27 @@ func primaryPkgid(block string) string {
 	return strings.ToLower(strings.TrimSpace(rest[:lt]))
 }
 
-// setPrimaryCount replaces the packages="N" attribute in a primary.xml header.
-func setPrimaryCount(header string, n int) string {
+// listPkgid extracts a filelists/other <package> block's pkgid (the package's
+// SHA256, carried as a pkgid="…" attribute of the <package> element itself),
+// lowercased. The first raw occurrence is the attribute: a quote inside an
+// attribute value would be escaped as &quot;.
+func listPkgid(block string) string {
+	const key = `pkgid="`
+	i := strings.Index(block, key)
+	if i < 0 {
+		return ""
+	}
+	rest := block[i+len(key):]
+	end := strings.IndexByte(rest, '"')
+	if end < 0 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(rest[:end]))
+}
+
+// setPackagesCount replaces the packages="N" attribute in an rpm metadata index
+// header (primary's <metadata>, filelists' <filelists>, other's <otherdata>).
+func setPackagesCount(header string, n int) string {
 	const key = `packages="`
 	i := strings.Index(header, key)
 	if i < 0 {
@@ -463,8 +485,8 @@ func setPrimaryCount(header string, n int) string {
 
 // applyRpmFilters drops packages outside the requested architectures and (when
 // newestOnly) older EVRs; when anything was dropped, it rewrites the staged
-// primary index (and its manifest and repodata entries) so the served repo
-// advertises only the kept packages.
+// primary index and every pkgid-keyed index (and their manifest and repodata
+// entries) so the served repo advertises only the kept packages.
 func applyRpmFilters(stageRoot, name, primaryRel string, primaryPlain []byte, pkgs []RpmPackage, files []ManifestFile, repodata []RpmData, arches []string, newestOnly bool) ([]RpmPackage, error) {
 	kept := filterRpmArch(pkgs, arches)
 	if newestOnly {
@@ -473,11 +495,48 @@ func applyRpmFilters(stageRoot, name, primaryRel string, primaryPlain []byte, pk
 	if len(kept) == len(pkgs) {
 		return pkgs, nil
 	}
-	newPlain := filterPrimaryXML(primaryPlain, rpmPkgidSet(kept))
-	if err := restagePrimary(stageRoot, name, primaryRel, newPlain, files, repodata); err != nil {
+	keep := rpmPkgidSet(kept)
+	newPlain := filterIndexXML(primaryPlain, keep, primaryPkgid)
+	if err := restageIndex(stageRoot, name, "primary", primaryRel, newPlain, files, repodata); err != nil {
+		return nil, err
+	}
+	if err := restagePkgidIndexes(stageRoot, name, keep, files, repodata); err != nil {
 		return nil, err
 	}
 	return kept, nil
+}
+
+// isRpmPkgidIndex reports whether a repomd data type's per-package entries are
+// keyed by pkgid, so the index must be rewritten alongside a filtered primary —
+// otherwise it would keep a stale packages="N" count and orphan entries for
+// every dropped package.
+func isRpmPkgidIndex(typ string) bool {
+	switch typ {
+	case "filelists", "filelists_ext", "other":
+		return true
+	}
+	return false
+}
+
+// restagePkgidIndexes rewrites the staged filelists/other indexes to match a
+// filtered primary, dropping the entries of filtered-out packages and updating
+// each index's packages count. Indexes the repo does not carry are simply
+// absent from repodata.
+func restagePkgidIndexes(stageRoot, name string, keep map[string]bool, files []ManifestFile, repodata []RpmData) error {
+	for _, d := range repodata {
+		if !isRpmPkgidIndex(d.Type) {
+			continue
+		}
+		plain, err := readStagedMetadata(stageRoot, name, d.Href)
+		if err != nil {
+			return fmt.Errorf("filter %s: %w", d.Type, err)
+		}
+		filtered := filterIndexXML(plain, keep, listPkgid)
+		if err := restageIndex(stageRoot, name, d.Type, d.Href, filtered, files, repodata); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // filterRpmArch keeps only packages whose architecture is in arches, preserving
@@ -507,22 +566,22 @@ func defaultRpmArches(arches []string) []string {
 	return arches
 }
 
-// restagePrimary overwrites the staged primary index with the rewritten XML
+// restageIndex overwrites one staged metadata index with the rewritten XML
 // (recompressed to match the original href) and updates the matching manifest
-// file and the primary <data> entry to the rewritten file's checksums/sizes, so
+// file and the typ <data> entry to the rewritten file's checksums/sizes, so
 // the bundle manifest and the high side's regenerated repomd stay consistent.
-func restagePrimary(stageRoot, name, primaryRel string, newPlain []byte, files []ManifestFile, repodata []RpmData) error {
-	compressed, err := compressByExt(primaryRel, newPlain)
+func restageIndex(stageRoot, name, typ, href string, newPlain []byte, files []ManifestFile, repodata []RpmData) error {
+	compressed, err := compressByExt(href, newPlain)
 	if err != nil {
 		return err
 	}
-	rel := rpmFileRel(name, primaryRel)
+	rel := rpmFileRel(name, href)
 	if err := validateRelPath(rel); err != nil {
 		return fmt.Errorf("unsafe staging path %q: %w", rel, err)
 	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
 	if err := os.WriteFile(abs, compressed, 0o644); err != nil {
-		return fmt.Errorf("write rewritten primary: %w", err)
+		return fmt.Errorf("write rewritten %s: %w", typ, err)
 	}
 	sum, size := sha256Hex(compressed), int64(len(compressed))
 	openSum, openSize := sha256Hex(newPlain), int64(len(newPlain))
@@ -532,7 +591,7 @@ func restagePrimary(stageRoot, name, primaryRel string, newPlain []byte, files [
 		}
 	}
 	for i := range repodata {
-		if repodata[i].Type == "primary" {
+		if repodata[i].Type == typ {
 			repodata[i].ChecksumType, repodata[i].Checksum = "sha256", sum
 			repodata[i].OpenChecksumType, repodata[i].OpenChecksum = "sha256", openSum
 			if repodata[i].Size > 0 {

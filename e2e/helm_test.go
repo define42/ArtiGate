@@ -31,10 +31,10 @@ func TestHelm(t *testing.T) {
 	stack.WaitImported(t, "helm", res.Sequence)
 
 	// The regenerated index is rebuilt from the chart's own Chart.yaml and
-	// links the archive relatively.
+	// links the archive relatively (under the collision-safe "_" stem).
 	code, body := httpGet(t, stack.HighURL+"/helm/jetstack/index.yaml")
 	if code != 200 || !strings.Contains(string(body), "cert-manager") ||
-		!strings.Contains(string(body), "charts/cert-manager-"+certManagerVersion+".tgz") {
+		!strings.Contains(string(body), "charts/cert-manager_"+certManagerVersion+".tgz") {
 		t.Fatalf("regenerated index.yaml = %d %s", code, body)
 	}
 
@@ -48,9 +48,10 @@ func TestHelm(t *testing.T) {
 	run(t, tmp, helmEnv, helm, "repo", "update")
 
 	// helm pull fetches the archive through the repo index; template renders
-	// it — proof the mirrored chart is intact and usable.
+	// it — proof the mirrored chart is intact and usable. helm saves the file
+	// under the index URL's basename, so glob both separator shapes.
 	run(t, tmp, helmEnv, helm, "pull", "mirror/cert-manager", "--version", certManagerVersion, "-d", tmp)
-	if matches, err := filepath.Glob(filepath.Join(tmp, "cert-manager-*.tgz")); err != nil || len(matches) != 1 {
+	if matches, err := filepath.Glob(filepath.Join(tmp, "cert-manager*.tgz")); err != nil || len(matches) != 1 {
 		t.Fatalf("helm pull left %v (err %v), want one chart archive", matches, err)
 	}
 	out := run(t, tmp, helmEnv, helm, "template", "test-release", "mirror/cert-manager",
