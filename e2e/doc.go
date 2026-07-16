@@ -30,9 +30,18 @@
 //   - the scheduled-collect subsystem (watch_test.go), the low-side session
 //     login (auth_test.go), and the low/high dashboards (ui_test.go).
 //
-// The built-in UDP data-diode transport (pitcher/catcher) is covered by unit
-// tests rather than here: a real transfer needs a multicast-capable one-way
-// NIC, which the loopback-only CI environment does not provide.
+// The built-in UDP data-diode transport (pitcher/catcher) is covered by the
+// integration tests in cmd/artigate (diode_udp_test.go) rather than by this
+// suite. TestLowToHighOverUDPDiode runs the whole loop over the real
+// pitcher/catcher socket path — the low side collects and pitches, the catcher
+// listening on loopback lands the bundle and kicks the import, and the high
+// side verifies (signature, sequence, hashes) and serves it;
+// TestPitcherToCatcherOverLoopback sends a full three-file bundle the same way.
+// Link-local multicast cannot route across loopback (no fe80 source address
+// there), so those tests carry the identical datagram path over ::1 unicast,
+// with the multicast group join itself covered separately
+// (TestJoinDiodeGroupOnLoopback) and on real fiber. They run wherever an IPv6
+// loopback is available and skip only where the kernel has no IPv6 stack.
 //
 // Everything except this file is behind the "e2e" build tag, so the default
 // `go build ./...`, `go vet ./...`, `go test ./...`, and golangci-lint runs
