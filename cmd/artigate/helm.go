@@ -97,7 +97,9 @@ func validateHelmChartName(name string) error {
 }
 
 // helmVersionRE matches a chart version: semver, optionally "v"-prefixed like
-// many repos publish. Always starts alphanumeric, so it is path-safe.
+// many repos publish. Always starts alphanumeric, so it is path-safe. The
+// charset deliberately excludes '_' — helmChartStem depends on versions never
+// carrying one.
 var helmVersionRE = regexp.MustCompile(`^v?[0-9][0-9A-Za-z.+-]*$`)
 
 func validateHelmVersion(v string) error {
@@ -107,10 +109,21 @@ func validateHelmVersion(v string) error {
 	return nil
 }
 
+// helmChartStem is the canonical "<name>_<version>" stem a mirrored chart's
+// artifacts (archive and regenerated metadata) are stored under. Names and
+// versions both routinely contain '-', so a '-'-joined key would collide for
+// adversarial pairs (chart "a-1" at 1.0.0 vs chart "a" at 1-1.0.0) and let one
+// chart silently overwrite the other; '_' can never appear in a version
+// (helmVersionRE), so this key maps distinct chart identities to distinct
+// stems.
+func helmChartStem(name, version string) string {
+	return name + "_" + version
+}
+
 // helmChartFilename is the canonical archive name a mirrored chart is stored
 // under, whatever the upstream download URL looked like.
 func helmChartFilename(name, version string) string {
-	return name + "-" + version + ".tgz"
+	return helmChartStem(name, version) + ".tgz"
 }
 
 // helmChartRel is the repository-relative path of one chart archive.
@@ -281,7 +294,7 @@ func (s *HighServer) publishHelmChart(mirror string, c HelmChart) error {
 		return err
 	}
 	st := helmStoredChart{Filename: c.Filename, Digest: digest, Metadata: meta}
-	out := filepath.Join(s.helmDir(), mirror, "metadata", c.Name+"-"+c.Version+".json")
+	out := filepath.Join(s.helmDir(), mirror, "metadata", helmChartStem(c.Name, c.Version)+".json")
 	if !safeJoin(s.helmDir(), out) {
 		return fmt.Errorf("unsafe metadata path for %s@%s", c.Name, c.Version)
 	}
@@ -486,8 +499,8 @@ func (s *HighServer) collectHelmMirrorCharts(mirror string, byChart map[string][
 	}
 }
 
-// readHelmStored loads one chart's stored metadata by its "<name>-<version>"
-// stem and checks the archive is still present.
+// readHelmStored loads one chart's stored metadata by its stem (see
+// helmChartStem) and checks the archive is still present.
 func (s *HighServer) readHelmStored(mirror, stem string) (helmStoredChart, error) {
 	p := filepath.Join(s.helmDir(), mirror, "metadata", stem+".json")
 	if !safeJoin(s.helmDir(), p) {
@@ -511,6 +524,28 @@ func (s *HighServer) readHelmStored(mirror, stem string) (helmStoredChart, error
 	return st, nil
 }
 
+// loadHelmStoredVersion resolves one chart version's stored metadata: the
+// canonical stem first, then the legacy "<name>-<version>" stem written by
+// imports that predate the collision-safe naming. The legacy key is ambiguous
+// (chart "a-1" at 1.0.0 and chart "a" at 1-1.0.0 share it), so a legacy hit
+// must prove its embedded identity before it may answer.
+func (s *HighServer) loadHelmStoredVersion(mirror, chart, version string) (helmStoredChart, error) {
+	st, err := s.readHelmStored(mirror, helmChartStem(chart, version))
+	if err == nil {
+		return st, nil
+	}
+	st, err = s.readHelmStored(mirror, chart+"-"+version)
+	if err != nil {
+		return helmStoredChart{}, err
+	}
+	name, _ := st.Metadata["name"].(string)
+	ver, _ := st.Metadata["version"].(string)
+	if name != chart || ver != version {
+		return helmStoredChart{}, errors.New("legacy metadata is a different chart")
+	}
+	return st, nil
+}
+
 // helmDetail describes one mirrored chart version for the dashboard detail
 // panel. spec is "<mirror>/<chart>@<version>".
 func (s *HighServer) helmDetail(spec string) (UIDetail, error) {
@@ -520,7 +555,7 @@ func (s *HighServer) helmDetail(spec string) (UIDetail, error) {
 		validateHelmChartName(chart) != nil || validateHelmVersion(version) != nil {
 		return UIDetail{}, errors.New("invalid mirror/chart@version")
 	}
-	st, err := s.readHelmStored(mirror, chart+"-"+version)
+	st, err := s.loadHelmStoredVersion(mirror, chart, version)
 	if err != nil {
 		return UIDetail{}, errors.New("version not found")
 	}

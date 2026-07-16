@@ -195,7 +195,7 @@ func TestFilterPrimaryXML(t *testing.T) {
 		`<package type="rpm"><name>code</name><arch>x86_64</arch><version epoch="0" ver="1.101.2" rel="1"/>` +
 		`<checksum type="sha256" pkgid="YES">bbb222</checksum><location href="Packages/code-1.101.2-1.x86_64.rpm"/></package>` + "\n" +
 		`</metadata>` + "\n"
-	got := string(filterPrimaryXML([]byte(primary), map[string]bool{"bbb222": true}))
+	got := string(filterIndexXML([]byte(primary), map[string]bool{"bbb222": true}, primaryPkgid))
 	if strings.Contains(got, "aaa111") || strings.Contains(got, "1.100.0") {
 		t.Errorf("filtered primary still contains the dropped version:\n%s", got)
 	}
@@ -210,11 +210,65 @@ func TestFilterPrimaryXML(t *testing.T) {
 	}
 }
 
+// TestFilterPkgidIndexXML covers the filelists/other shape, where the pkgid is
+// an attribute of <package> rather than a checksum element: dropped packages
+// must lose their (multi-line) blocks and the root count must follow.
+func TestFilterPkgidIndexXML(t *testing.T) {
+	docs := map[string]string{
+		"filelists": `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+			`<filelists xmlns="http://linux.duke.edu/metadata/filelists" packages="2">` + "\n" +
+			`<package pkgid="aaa111" name="code" arch="x86_64"><version epoch="0" ver="1.100.0" rel="1"/>` + "\n" +
+			`  <file>/usr/bin/code</file>` + "\n</package>\n" +
+			`<package pkgid="bbb222" name="code" arch="x86_64"><version epoch="0" ver="1.101.2" rel="1"/>` + "\n" +
+			`  <file>/usr/bin/code</file>` + "\n</package>\n" +
+			`</filelists>` + "\n",
+		"other": `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+			`<otherdata xmlns="http://linux.duke.edu/metadata/other" packages="2">` + "\n" +
+			`<package pkgid="aaa111" name="code" arch="x86_64"><version epoch="0" ver="1.100.0" rel="1"/>` +
+			`<changelog author="dev">old fix</changelog></package>` + "\n" +
+			`<package pkgid="bbb222" name="code" arch="x86_64"><version epoch="0" ver="1.101.2" rel="1"/>` +
+			`<changelog author="dev">new fix</changelog></package>` + "\n" +
+			`</otherdata>` + "\n",
+	}
+	for typ, doc := range docs {
+		got := string(filterIndexXML([]byte(doc), map[string]bool{"bbb222": true}, listPkgid))
+		if strings.Contains(got, "aaa111") || strings.Contains(got, "1.100.0") {
+			t.Errorf("filtered %s still contains the dropped package:\n%s", typ, got)
+		}
+		if !strings.Contains(got, "bbb222") {
+			t.Errorf("filtered %s missing the kept package:\n%s", typ, got)
+		}
+		if !strings.Contains(got, `packages="1"`) {
+			t.Errorf("%s packages count not updated to 1:\n%s", typ, got)
+		}
+	}
+	if !isRpmPkgidIndex("filelists") || !isRpmPkgidIndex("filelists_ext") || !isRpmPkgidIndex("other") {
+		t.Error("filelists/filelists_ext/other must be recognized as pkgid-keyed indexes")
+	}
+	// updateinfo/comps/zchunk variants are not pkgid-keyed <package> lists and
+	// must be left verbatim (the zchunk ones could not be recompressed anyway).
+	for _, typ := range []string{"updateinfo", "group", "primary", "filelists_zck", "other_db"} {
+		if isRpmPkgidIndex(typ) {
+			t.Errorf("%s must not be rewritten as a pkgid-keyed index", typ)
+		}
+	}
+}
+
+// rpmPkgidBlocks renders the filelists and other <package> blocks for one
+// package, keyed by its pkgid like createrepo_c writes them.
+func rpmPkgidBlocks(sha, pkg, arch, ver, rel string) (fl, ol string) {
+	fl = fmt.Sprintf(`<package pkgid="%s" name="%s" arch="%s"><version epoch="0" ver="%s" rel="%s"/>`+
+		`<file>/usr/bin/%s</file></package>`, sha, pkg, arch, ver, rel, pkg)
+	ol = fmt.Sprintf(`<package pkgid="%s" name="%s" arch="%s"><version epoch="0" ver="%s" rel="%s"/>`+
+		`<changelog author="dev">- update to %s-%s</changelog></package>`, sha, pkg, arch, ver, rel, ver, rel)
+	return fl, ol
+}
+
 // registerRpmRepoVersions serves a repo whose primary lists several versions of
 // one package, each with its own .rpm — for newest-only tests.
 func registerRpmRepoVersions(t *testing.T, mux *http.ServeMux, prefix, pkg string, vers [][2]string) {
 	t.Helper()
-	var pkgBlocks, flBlocks []string
+	var pkgBlocks, flBlocks, olBlocks []string
 	for _, vr := range vers {
 		ver, rel := vr[0], vr[1]
 		body := []byte("FAKE-RPM-" + pkg + "-" + ver + "-" + rel)
@@ -223,15 +277,18 @@ func registerRpmRepoVersions(t *testing.T, mux *http.ServeMux, prefix, pkg strin
 		pkgBlocks = append(pkgBlocks, fmt.Sprintf(`<package type="rpm"><name>%s</name><arch>x86_64</arch>`+
 			`<version epoch="0" ver="%s" rel="%s"/><checksum type="sha256" pkgid="YES">%s</checksum>`+
 			`<size package="%d"/><location href="%s"/></package>`, pkg, ver, rel, sha, len(body), loc))
-		flBlocks = append(flBlocks, fmt.Sprintf(`<package pkgid="%s" name="%s" arch="x86_64"><version epoch="0" ver="%s" rel="%s"/></package>`, sha, pkg, ver, rel))
+		fl, ol := rpmPkgidBlocks(sha, pkg, "x86_64", ver, rel)
+		flBlocks = append(flBlocks, fl)
+		olBlocks = append(olBlocks, ol)
 		mux.HandleFunc(prefix+"/"+loc, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
 	}
-	serveRpmRepodata(t, mux, prefix, len(vers), pkgBlocks, flBlocks)
+	serveRpmRepodata(t, mux, prefix, len(vers), pkgBlocks, flBlocks, olBlocks)
 }
 
-// serveRpmRepodata assembles primary/filelists XML from per-package blocks and
-// serves them (gzipped) with a matching repomd.xml under prefix/repodata.
-func serveRpmRepodata(t *testing.T, mux *http.ServeMux, prefix string, n int, pkgBlocks, flBlocks []string) {
+// serveRpmRepodata assembles primary/filelists/other XML from per-package
+// blocks and serves them (gzipped) with a matching repomd.xml under
+// prefix/repodata.
+func serveRpmRepodata(t *testing.T, mux *http.ServeMux, prefix string, n int, pkgBlocks, flBlocks, olBlocks []string) {
 	t.Helper()
 	primary := []byte(fmt.Sprintf(
 		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"+
@@ -241,6 +298,10 @@ func serveRpmRepodata(t *testing.T, mux *http.ServeMux, prefix string, n int, pk
 		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"+
 			"<filelists xmlns=\"http://linux.duke.edu/metadata/filelists\" packages=\"%d\">\n%s\n</filelists>\n",
 		n, strings.Join(flBlocks, "\n")))
+	other := []byte(fmt.Sprintf(
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"+
+			"<otherdata xmlns=\"http://linux.duke.edu/metadata/other\" packages=\"%d\">\n%s\n</otherdata>\n",
+		n, strings.Join(olBlocks, "\n")))
 	data := func(typ string, plain []byte) string {
 		gz, err := gzipBytes(plain)
 		if err != nil {
@@ -254,7 +315,7 @@ func serveRpmRepodata(t *testing.T, mux *http.ServeMux, prefix string, n int, pk
 			typ, aptSHA256(gz), aptSHA256(plain), href, len(gz), len(plain))
 	}
 	repomd := `<?xml version="1.0" encoding="UTF-8"?>` + "\n<repomd xmlns=\"http://linux.duke.edu/metadata/repo\">\n  <revision>1</revision>\n" +
-		data("primary", primary) + data("filelists", filelists) + "</repomd>\n"
+		data("primary", primary) + data("filelists", filelists) + data("other", other) + "</repomd>\n"
 	mux.HandleFunc(prefix+"/repodata/repomd.xml", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(repomd)) })
 }
 
@@ -262,7 +323,7 @@ func serveRpmRepodata(t *testing.T, mux *http.ServeMux, prefix string, n int, pk
 // package per architecture — for architecture-filter tests.
 func registerRpmRepoArches(t *testing.T, mux *http.ServeMux, prefix, pkg string, arches []string) {
 	t.Helper()
-	var pkgBlocks, flBlocks []string
+	var pkgBlocks, flBlocks, olBlocks []string
 	for _, arch := range arches {
 		body := []byte("FAKE-RPM-" + pkg + "-" + arch)
 		sha := aptSHA256(body)
@@ -270,10 +331,12 @@ func registerRpmRepoArches(t *testing.T, mux *http.ServeMux, prefix, pkg string,
 		pkgBlocks = append(pkgBlocks, fmt.Sprintf(`<package type="rpm"><name>%s</name><arch>%s</arch>`+
 			`<version epoch="0" ver="1.0" rel="1"/><checksum type="sha256" pkgid="YES">%s</checksum>`+
 			`<size package="%d"/><location href="%s"/></package>`, pkg, arch, sha, len(body), loc))
-		flBlocks = append(flBlocks, fmt.Sprintf(`<package pkgid="%s" name="%s" arch="%s"><version epoch="0" ver="1.0" rel="1"/></package>`, sha, pkg, arch))
+		fl, ol := rpmPkgidBlocks(sha, pkg, arch, "1.0", "1")
+		flBlocks = append(flBlocks, fl)
+		olBlocks = append(olBlocks, ol)
 		mux.HandleFunc(prefix+"/"+loc, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
 	}
-	serveRpmRepodata(t, mux, prefix, len(arches), pkgBlocks, flBlocks)
+	serveRpmRepodata(t, mux, prefix, len(arches), pkgBlocks, flBlocks, olBlocks)
 }
 
 // TestCollectRpmNewestOnly mirrors a repo that lists two versions of one package
@@ -318,6 +381,35 @@ func TestCollectRpmNewestOnly(t *testing.T) {
 	assertServed(t, base+"/Packages/code-1.101.2-1.x86_64.rpm", "FAKE-RPM-code-1.101.2-1")
 	if code, _ := httpGet(t, base+"/Packages/code-1.100.0-1.x86_64.rpm"); code == http.StatusOK {
 		t.Error("old version should not be mirrored under newest-only")
+	}
+
+	// The pkgid-keyed indexes were rewritten alongside primary: filelists and
+	// other must not keep orphan entries (or a stale count) for the dropped
+	// build, and the regenerated repomd must advertise the rewritten files'
+	// checksums or dnf would reject them.
+	droppedSHA := aptSHA256([]byte("FAKE-RPM-code-1.100.0-1"))
+	keptSHA := aptSHA256([]byte("FAKE-RPM-code-1.101.2-1"))
+	_, repomd := httpGet(t, base+"/repodata/repomd.xml")
+	for _, typ := range []string{"primary", "filelists", "other"} {
+		_, gz := httpGet(t, base+"/repodata/"+typ+".xml.gz")
+		plain, err := gunzip([]byte(gz), maxIndexPlainBytes)
+		if err != nil {
+			t.Fatalf("gunzip %s: %v", typ, err)
+		}
+		if strings.Contains(string(plain), droppedSHA) {
+			t.Errorf("served %s still lists the dropped build's pkgid", typ)
+		}
+		if !strings.Contains(string(plain), keptSHA) {
+			t.Errorf("served %s is missing the kept build's pkgid:\n%s", typ, plain)
+		}
+		if !strings.Contains(string(plain), `packages="1"`) {
+			t.Errorf("served %s packages count was not rewritten to 1:\n%s", typ, plain)
+		}
+		for _, sum := range []string{aptSHA256([]byte(gz)), aptSHA256(plain)} {
+			if !strings.Contains(repomd, sum) {
+				t.Errorf("repomd.xml does not carry the rewritten %s checksum %s:\n%s", typ, sum, repomd)
+			}
+		}
 	}
 
 	// With newest-only disabled, every version is mirrored.

@@ -501,11 +501,24 @@ func TestCov3B_PrimaryPkgid(t *testing.T) {
 	}
 }
 
-func TestCov3B_RestagePrimaryZchunk(t *testing.T) {
+func TestCov3B_ListPkgid(t *testing.T) {
+	// filelists/other carry the pkgid as an attribute of <package> itself.
+	if id := listPkgid(`<package pkgid="ABC123" name="x" arch="noarch"></package>`); id != "abc123" {
+		t.Errorf("listPkgid = %q, want lowercased abc123", id)
+	}
+	if id := listPkgid(`<package name="x" arch="noarch"></package>`); id != "" {
+		t.Errorf("listPkgid without pkgid = %q, want empty", id)
+	}
+	if id := listPkgid(`<package pkgid="abc`); id != "" {
+		t.Errorf("listPkgid on a truncated attribute = %q, want empty", id)
+	}
+}
+
+func TestCov3B_RestageIndexZchunk(t *testing.T) {
 	// A zchunk primary cannot be recompressed after filtering.
-	err := restagePrimary(t.TempDir(), "mirror", "repodata/primary.xml.zck", []byte("<metadata/>"), nil, nil)
+	err := restageIndex(t.TempDir(), "mirror", "primary", "repodata/primary.xml.zck", []byte("<metadata/>"), nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "zchunk") {
-		t.Errorf("restagePrimary(.zck) = %v, want a zchunk error", err)
+		t.Errorf("restageIndex(.zck) = %v, want a zchunk error", err)
 	}
 }
 
