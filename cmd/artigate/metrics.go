@@ -519,7 +519,8 @@ func (s *HighServer) serveMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 // collectImportMetrics reports per-stream sequence progress, import lag, gap
-// state, and quarantine depth from the live import status.
+// state, quarantine depth, and the diode-heartbeat view from the live import
+// status.
 func (s *HighServer) collectImportMetrics(p *promWriter) {
 	status, err := s.importStatusReadOnly()
 	if err != nil {
@@ -527,6 +528,7 @@ func (s *HighServer) collectImportMetrics(p *promWriter) {
 			"1 when import status could not be computed for metrics.", 1)
 		return
 	}
+	writeDiodeHeartbeatMetrics(p, status.DiodeHeartbeat)
 	for _, st := range status.Streams {
 		lag := st.HighestSeenSequence - st.LastImportedSequence
 		if lag < 0 {
@@ -548,7 +550,40 @@ func (s *HighServer) collectImportMetrics(p *promWriter) {
 			"The missing bundle sequence blocking a stream, 0 when none.", float64(st.BlockingMissing), "stream", st.Stream)
 		p.metric("artigate_high_quarantined_bundles", "gauge",
 			"Complete future bundles held in quarantine for a stream.", float64(len(st.QuarantinedSequences)), "stream", st.Stream)
+		writeStreamHeartbeatMetrics(p, st)
 	}
+}
+
+// writeDiodeHeartbeatMetrics reports the last verified low-side heartbeat
+// (built-in UDP diode); no samples until one has been received, so their
+// absence distinguishes "no heartbeats here" from "heartbeat long ago".
+func writeDiodeHeartbeatMetrics(p *promWriter, hb *DiodeHeartbeatStatus) {
+	if hb == nil {
+		return
+	}
+	p.metric("artigate_high_diode_heartbeat_timestamp_seconds", "gauge",
+		"Unix time the last verified low-side diode heartbeat was received.", float64(hb.ReceivedAt.Unix()))
+	p.metric("artigate_high_diode_heartbeat_age_seconds", "gauge",
+		"Seconds since the last verified low-side diode heartbeat was received.", float64(hb.AgeSeconds))
+}
+
+// writeStreamHeartbeatMetrics reports a stream's heartbeat-derived view: the
+// low side's newest committed sequence and how many of its bundles have not
+// arrived here — the gauge to alert on (with a for: clause riding out bundles
+// legitimately still in transit) for diode loss the disk-derived gap metrics
+// cannot see. Samples appear only for streams the heartbeat mentions.
+func writeStreamHeartbeatMetrics(p *promWriter, st StreamImportStatus) {
+	if st.LowLastSequence <= 0 {
+		return
+	}
+	awaiting := st.LowLastSequence - st.HighestSeenSequence
+	if awaiting < 0 {
+		awaiting = 0
+	}
+	p.metric("artigate_high_low_last_sequence", "gauge",
+		"Newest committed bundle sequence the low side reports for a stream (diode heartbeat).", float64(st.LowLastSequence), "stream", st.Stream)
+	p.metric("artigate_high_bundles_awaiting_from_low", "gauge",
+		"Bundles the low side reports exported that have not arrived here (in transit or lost on the diode).", float64(awaiting), "stream", st.Stream)
 }
 
 // collectQuotaMetrics reports the shared unverified-transport quota usage.

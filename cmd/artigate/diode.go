@@ -23,6 +23,11 @@ package main
 // exactly as from a landing folder, and the importer still verifies the
 // Ed25519 signature, per-stream sequencing, and every file hash. The token
 // only guards the high side's disk against unauthenticated uploads.
+//
+// Besides bundle files the endpoint accepts the low side's signed
+// stream-index heartbeat (PUT /diode/artigate.heartbeat, every
+// ARTIGATE_DIODE_HEARTBEAT interval — see diodeheartbeat.go), which is
+// verified and recorded in memory rather than stored.
 
 import (
 	"context"
@@ -176,6 +181,10 @@ func (s *HighServer) handleDiodeUpload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if name == diodeHeartbeatFileName {
+		s.handleDiodeHeartbeatUpload(w, r)
+		return
+	}
 	s.ingestMu.Lock()
 	defer s.ingestMu.Unlock()
 	n, status, err := s.storeDiodeUpload(name, r, fileLimit)
@@ -192,6 +201,33 @@ func (s *HighServer) handleDiodeUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"stored": name, "size": n})
 }
 
+// handleDiodeHeartbeatUpload verifies and records a heartbeat PUT to the
+// ingest endpoint. Nothing touches disk: a heartbeat is monitoring state, not
+// content, so it never occupies the unverified-transport quota. A verified
+// heartbeat that is older than the recorded one still answers 200 — the
+// transfer worked; the record just kept the newer information.
+func (s *HighServer) handleDiodeHeartbeatUpload(w http.ResponseWriter, r *http.Request) {
+	b, err := io.ReadAll(io.LimitReader(r.Body, diodeMaxHeartbeatPacketBytes+1))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read heartbeat: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if int64(len(b)) > diodeMaxHeartbeatPacketBytes {
+		http.Error(w, fmt.Sprintf("heartbeat exceeds %s limit", formatBytes(diodeMaxHeartbeatPacketBytes)), http.StatusRequestEntityTooLarge)
+		return
+	}
+	hb, err := parseDiodeHeartbeatPacket(s.publicKey, b)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result := "recorded"
+	if !s.recordDiodeHeartbeat(hb, time.Now().UTC(), "the HTTP diode ingest") {
+		result = "ignored (not newer than the recorded heartbeat)"
+	}
+	writeJSON(w, map[string]any{"heartbeat": result})
+}
+
 func (s *HighServer) validateDiodeUpload(w http.ResponseWriter, r *http.Request) (string, int64, bool) {
 	if !s.cfg.DiodeIngest {
 		http.Error(w, "diode ingest is disabled; set ARTIGATE_DIODE_INGEST=on", http.StatusForbidden)
@@ -206,11 +242,14 @@ func (s *HighServer) validateDiodeUpload(w http.ResponseWriter, r *http.Request)
 		return "", 0, false
 	}
 	name := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/diode"), "/")
-	if !validBundleFileName(name) {
+	if name != diodeHeartbeatFileName && !validBundleFileName(name) {
 		http.Error(w, "not a bundle file name (want <stream>-bundle-<seq>{.tar.gz,.manifest.json,.manifest.json.sig})", http.StatusBadRequest)
 		return "", 0, false
 	}
-	fileLimit, _ := bundleFileSizeLimit(name)
+	fileLimit := diodeMaxHeartbeatPacketBytes
+	if name != diodeHeartbeatFileName {
+		fileLimit, _ = bundleFileSizeLimit(name)
+	}
 	if r.ContentLength > fileLimit {
 		http.Error(w, fmt.Sprintf("diode upload exceeds %s limit for this file type", formatBytes(fileLimit)), http.StatusRequestEntityTooLarge)
 		return "", 0, false

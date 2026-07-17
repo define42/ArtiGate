@@ -113,6 +113,10 @@ type LowConfig struct {
 	// flow. DiodeToken is its required bearer token (ARTIGATE_DIODE_TOKEN).
 	DiodeURL   string
 	DiodeToken string
+	// DiodeHeartbeat is how often the signed stream-index heartbeat is sent
+	// over whichever diode transport is configured (ARTIGATE_DIODE_HEARTBEAT);
+	// 0 disables it. See diodeheartbeat.go.
+	DiodeHeartbeat time.Duration
 }
 
 type LowState struct {
@@ -215,6 +219,9 @@ func runLow(args []string) {
 	if cfg.DiodeURL != "" {
 		must(validateDiodeToken(cfg.DiodeToken))
 	}
+	heartbeat, err := envHeartbeatInterval("ARTIGATE_DIODE_HEARTBEAT")
+	must(err)
+	cfg.DiodeHeartbeat = heartbeat
 	pitcherCfg := mustPitcherConfig(cfg.DiodeURL)
 
 	if cfg.PrivateKeyPath == "" {
@@ -265,6 +272,9 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 	if cfg.WatchInterval > 0 {
 		go ls.watchLoop(ctx)
 	}
+	if cfg.DiodeHeartbeat > 0 {
+		go ls.runDiodeHeartbeats(ctx)
+	}
 	// Cancel queued and running jobs as soon as the stop signal arrives, so
 	// requests waiting on a job unblock and the HTTP server can drain.
 	go func() {
@@ -299,6 +309,7 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 		log.Printf("low-side diode pitcher: %s → %s at ≤ %d Mbit/s (FEC %d+%d, MTU %d; bundles transmit after export, export dir is the retry spool)",
 			p.cfg.Interface, p.target(), p.cfg.RateMbit, p.cfg.DataShards, p.cfg.ParityShards, p.cfg.MTU)
 	}
+	log.Printf("low-side diode heartbeat: %s", ls.diodeHeartbeatLogLine())
 	must(listenAndServe(ctx, tc, cfg.Listen, cfg.Root, logHTTP(handler)))
 }
 

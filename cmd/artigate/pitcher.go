@@ -24,6 +24,10 @@ package main
 //	                             link-local, link up; needs CAP_NET_ADMIN);
 //	                             off expects a pre-configured interface
 //
+// The pitcher also carries the periodic signed stream-index heartbeat, which
+// is transport-independent and configured by ARTIGATE_DIODE_HEARTBEAT — see
+// diodeheartbeat.go.
+//
 // Multicast is not an implementation detail: the fiber is one-way, so the
 // pitcher can never resolve the catcher's MAC address (NDP needs an answer).
 // An IPv6 multicast destination maps directly onto an Ethernet group MAC and
@@ -292,6 +296,16 @@ func (p *diodePitcher) SendBundle(ctx context.Context, dir, bundleID string) err
 		}
 	}
 	return nil
+}
+
+// sendHeartbeat transmits one already-marshalled heartbeat datagram
+// immediately. It deliberately takes neither the bundle lock (a heartbeat must
+// not wait hours behind a large transfer — reporting indexes while a bundle
+// crosses is half its point) nor the pacer (one datagram every interval is
+// noise next to the configured rate, and the pacer is not safe for concurrent
+// use); the socket itself is safe for concurrent writes.
+func (p *diodePitcher) sendHeartbeat(pkt []byte) error {
+	return p.writeRetry(pkt)
 }
 
 // sendFile transmits one file: a hashing pass (the wire header carries the

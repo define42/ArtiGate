@@ -24,7 +24,11 @@ package main
 //
 // The wire carries zero trust, like every other diode transport: only
 // strictly valid bundle file names can land, and the importer still verifies
-// the Ed25519 signature, per-stream sequencing, and every file hash.
+// the Ed25519 signature, per-stream sequencing, and every file hash. Besides
+// bundle datagrams the catcher also receives the pitcher's signed stream-index
+// heartbeats (diodeheartbeat.go), verified against the same public key the
+// manifests are, so the dashboard and /metrics can report bundles that left
+// the low side but never arrived.
 
 import (
 	"errors"
@@ -99,7 +103,8 @@ func startCatcherIfConfigured(hs *HighServer) {
 		return
 	}
 	_, err = startCatcher(cfg, hs.cfg.Landing, hs.onDiodeFileLanded,
-		func() (int64, error) { return hs.unverifiedTransportBytesExcept(isUDPActiveTempName) })
+		func() (int64, error) { return hs.unverifiedTransportBytesExcept(isUDPActiveTempName) },
+		hs.diodeHeartbeatReceiver())
 	must(err)
 	log.Printf("high-side diode catcher: %s ← [%s%%%s]:%d (MTU %d, receive buffer %d MiB) into %s",
 		cfg.Interface, cfg.Group, cfg.Interface, cfg.Port, cfg.MTU, cfg.RcvBufMB, hs.cfg.Landing)
@@ -110,13 +115,16 @@ type diodeCatcher struct {
 	cfg  CatcherConfig
 	conn *net.UDPConn
 	asm  *diodeAssembler
+	// hb verifies and records the pitcher's heartbeat datagrams; nil (as in
+	// transport-only tests) treats them like any other unknown datagram.
+	hb *diodeHeartbeatReceiver
 }
 
 // startCatcher configures the diode interface (unless the host already did),
 // joins the multicast group, and starts the receive loop. Reassembled files
 // land in dir; onComplete runs for each (the high server uses it to kick an
-// import as soon as a bundle is whole).
-func startCatcher(cfg CatcherConfig, dir string, onComplete func(name string), measureStored func() (int64, error)) (*diodeCatcher, error) {
+// import as soon as a bundle is whole); hb receives verified heartbeats.
+func startCatcher(cfg CatcherConfig, dir string, onComplete func(name string), measureStored func() (int64, error), hb *diodeHeartbeatReceiver) (*diodeCatcher, error) {
 	if cfg.NetSetup {
 		if err := setupCatcherIface(cfg); err != nil {
 			return nil, err
@@ -138,7 +146,7 @@ func startCatcher(cfg CatcherConfig, dir string, onComplete func(name string), m
 	}
 	asm := newDiodeAssembler(dir, validBundleFileName, onComplete)
 	asm.measureStored = measureStored
-	c := &diodeCatcher{cfg: cfg, conn: conn, asm: asm}
+	c := &diodeCatcher{cfg: cfg, conn: conn, asm: asm, hb: hb}
 	go c.run()
 	return c, nil
 }
@@ -206,7 +214,7 @@ func (c *diodeCatcher) receiveOne(buf []byte, nextSweep *time.Time) (closed bool
 	now := time.Now()
 	switch {
 	case err == nil:
-		c.asm.handleDatagram(buf[:n], now)
+		c.handleDatagram(buf[:n], now)
 	case errors.Is(err, os.ErrDeadlineExceeded):
 		// idle: sweep below
 	case errors.Is(err, net.ErrClosed):
@@ -220,6 +228,24 @@ func (c *diodeCatcher) receiveOne(buf []byte, nextSweep *time.Time) (closed bool
 		*nextSweep = now.Add(diodeSweepEvery)
 	}
 	return false
+}
+
+// handleDatagram routes one received datagram: heartbeat control packets go to
+// the verifier, everything else to the file reassembler.
+func (c *diodeCatcher) handleDatagram(b []byte, now time.Time) {
+	if c.hb != nil && isDiodeHeartbeatDatagram(b) {
+		c.hb.handle(b, now)
+		return
+	}
+	c.asm.handleDatagram(b, now)
+}
+
+// diodeHeartbeatReceiver wires the catcher's heartbeat verification to this
+// server's public key and last-heartbeat record.
+func (s *HighServer) diodeHeartbeatReceiver() *diodeHeartbeatReceiver {
+	return &diodeHeartbeatReceiver{pub: s.publicKey, record: func(hb diodeHeartbeat, now time.Time) bool {
+		return s.recordDiodeHeartbeat(hb, now, "the UDP diode")
+	}}
 }
 
 // onDiodeFileLanded is the catcher→importer bridge: when a landed file

@@ -97,6 +97,7 @@ function renderStatus(status) {
     const banner = byId("banner");
     const streams = status.streams ?? [];
     const blocked = streams.filter((s) => (s.missing_ranges ?? []).length > 0);
+    const awaiting = streams.filter((s) => (s.awaiting_from_low ?? []).length > 0);
     if (streams.length === 0) {
         banner.className = "banner ok";
         banner.textContent = "No bundles imported yet.";
@@ -108,27 +109,76 @@ function renderStatus(status) {
             `&#9888; Waiting on missing bundles in: ${esc(names)} ` +
                 "&mdash; those streams pause until the gaps arrive; the rest keep importing independently.";
     }
+    else if (awaiting.length > 0) {
+        banner.className = "banner ok";
+        const names = awaiting.map((s) => streamLabel(s.stream)).join(", ");
+        banner.innerHTML =
+            `&#10003; No gaps. Awaiting bundles from the low side in: ${esc(names)} ` +
+                "&mdash; still crossing the diode, or lost and needing a low-side re-export.";
+    }
     else {
         banner.className = "banner ok";
         banner.textContent = "✓ All streams up to date.";
     }
+    renderHeartbeat(status.diode_heartbeat);
     renderStreamTable(streams);
 }
-function statusPill(ok) {
-    return ok
-        ? '<span class="pill ok">up to date</span>'
-        : '<span class="pill warn">waiting</span>';
+// HEARTBEAT_STALE_SECONDS is when a once-seen heartbeat counts as overdue: ten
+// default broadcast intervals — a dark diode link or a stopped low side.
+const HEARTBEAT_STALE_SECONDS = 300;
+function formatAge(seconds) {
+    if (seconds < 90) {
+        return `${seconds}s`;
+    }
+    if (seconds < 90 * 60) {
+        return `${Math.round(seconds / 60)}m`;
+    }
+    return `${Math.round(seconds / 3600)}h`;
+}
+// renderHeartbeat shows when the low side last reported its stream indexes
+// over the diode. Hidden until a heartbeat has been received (an older low
+// side, heartbeats disabled, or a diode dark since startup).
+function renderHeartbeat(hb) {
+    const el = byId("heartbeat");
+    if (!hb) {
+        el.hidden = true;
+        el.textContent = "";
+        return;
+    }
+    el.hidden = false;
+    const stale = hb.age_seconds > HEARTBEAT_STALE_SECONDS;
+    el.className = stale ? "heartbeat warn" : "heartbeat";
+    const version = hb.low_version ? ` (low side ${hb.low_version})` : "";
+    el.textContent = stale
+        ? `⚠ No diode heartbeat for ${formatAge(hb.age_seconds)}${version} — check the diode link and the low side.`
+        : `Diode heartbeat: ${formatAge(hb.age_seconds)} ago${version}.`;
+}
+// streamPill summarizes one stream: a gap blocks importing (warn); bundles the
+// heartbeat says are still on their way are expected traffic (info); otherwise
+// the stream is current.
+function streamPill(s) {
+    if ((s.missing_ranges ?? []).length > 0) {
+        return '<span class="pill warn">waiting</span>';
+    }
+    if ((s.awaiting_from_low ?? []).length > 0) {
+        return '<span class="pill info">receiving</span>';
+    }
+    return '<span class="pill ok">up to date</span>';
 }
 function streamRow(s) {
     const missing = s.missing_ranges ?? [];
+    const awaiting = s.awaiting_from_low ?? [];
     const quarantined = s.quarantined_sequences ?? [];
+    const lowAt = s.low_last_sequence ? `#${esc(s.low_last_sequence)}` : "&mdash;";
     return ("<tr>" +
         `<td class="s-name">${esc(streamLabel(s.stream))}</td>` +
         `<td>#${esc(s.last_imported_sequence)}</td>` +
         `<td>#${esc(s.next_expected_sequence)}</td>` +
+        `<td>${lowAt}</td>` +
         `<td>${missing.length ? esc(missing.join(", ")) : "&mdash;"}</td>` +
+        `<td>${awaiting.length ? esc(awaiting.join(", ")) : "&mdash;"}</td>` +
         `<td>${quarantined.length ? esc(quarantined.join(", ")) : "&mdash;"}</td>` +
-        `<td>${statusPill(missing.length === 0)}</td>` +
+        `<td>${streamPill(s)}</td>` +
         "</tr>");
 }
 function renderStreamTable(streams) {
@@ -140,7 +190,10 @@ function renderStreamTable(streams) {
     meta.innerHTML =
         '<table class="streams"><thead><tr>' +
             "<th>Stream</th><th>Last imported</th><th>Next expected</th>" +
-            "<th>Missing</th><th>Quarantined</th><th>Status</th>" +
+            '<th title="Newest bundle the low side reports exported (diode heartbeat)">Low side</th>' +
+            "<th>Missing</th>" +
+            '<th title="Exported by the low side but not arrived here yet">Awaiting</th>' +
+            "<th>Quarantined</th><th>Status</th>" +
             "</tr></thead><tbody>" +
             streams.map(streamRow).join("") +
             "</tbody></table>";

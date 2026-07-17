@@ -35,6 +35,8 @@
   .banner { padding: .9rem 1.1rem; border-radius: 8px; margin-bottom: 1.5rem; font-weight: 600; }
   .banner.ok { background: #10281a; border: 1px solid #1f6f43; color: #7ee2a8; }
   .banner.warn { background: #2e1416; border: 1px solid #7f2a30; color: #ff9ea3; }
+  .heartbeat { color: #8b93a5; font-size: .82rem; margin: -.9rem 0 1.4rem; padding-left: .15rem; }
+  .heartbeat.warn { color: #ff9ea3; }
   .meta { margin-bottom: 1.75rem; overflow-x: auto; }
   .streams { border-collapse: collapse; font-size: .85rem; color: #a9b2c3; }
   .streams th, .streams td { text-align: left; padding: .35rem 1.1rem .35rem 0; border-bottom: 1px solid #232833; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -43,6 +45,7 @@
   .pill { display: inline-block; border-radius: 999px; padding: .05rem .55rem; font-size: .75rem; font-weight: 600; }
   .pill.ok { background: #10281a; border: 1px solid #1f6f43; color: #7ee2a8; }
   .pill.warn { background: #2e1416; border: 1px solid #7f2a30; color: #ff9ea3; }
+  .pill.info { background: #131f33; border: 1px solid #2a4a7f; color: #9dc1ff; }
   section h2 { font-size: 1rem; border-bottom: 1px solid #2a2f3a; padding-bottom: .4rem; }
   .tree-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; border-bottom: 1px solid #2a2f3a; margin-bottom: .5rem; }
   .tree-head h2 { border-bottom: none; margin: 0; padding-bottom: .4rem; }
@@ -168,6 +171,7 @@
   <section id="view-overview">
     <h2>Import status</h2>
     <div id="banner" class="banner">Loading&hellip;</div>
+    <div id="heartbeat" class="heartbeat" hidden></div>
     <div id="meta" class="meta"></div>
   </section>
   <div class="layout" id="view-tree" hidden>
