@@ -52,7 +52,11 @@ type LowConfig struct {
 	GoToolchain     string
 	PipBinary       string
 	MavenBinary     string
-	NpmBinary       string
+	// MavenSignatureURL is the repository base .asc PGP signatures are
+	// fetched from after mvn resolves the closure (mvn itself never downloads
+	// them); empty uses Maven Central.
+	MavenSignatureURL string
+	NpmBinary         string
 	// NpmRegistry optionally overrides the registry npm resolves against
 	// (passed as --registry); empty uses npm's configured default.
 	NpmRegistry string

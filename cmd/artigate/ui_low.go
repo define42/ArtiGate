@@ -273,7 +273,7 @@ const lowUIHTML = `<!DOCTYPE html>
   <section class="view" id="view-python" hidden>
   <div class="card">
     <h2>Mirror Python packages (requirements)</h2>
-    <p class="hint">List packages to mirror &mdash; one requirement per line, requirements.txt format (e.g. <code>requests==2.32.4</code>). ArtiGate runs <code>pip download</code> and writes the wheels into a signed bundle, the same as POSTing to <code>/admin/python/collect</code>. Lines starting with <code>#</code> are ignored; pip option lines (<code>-r</code>, <code>--hash</code>, &hellip;) are skipped.</p>
+    <p class="hint">List packages to mirror &mdash; one requirement per line, requirements.txt format (e.g. <code>requests==2.32.4</code>). ArtiGate runs <code>pip download</code> and writes the wheels into a signed bundle, the same as POSTing to <code>/admin/python/collect</code>. Lines starting with <code>#</code> are ignored; pip option lines (<code>-r</code>, <code>--hash</code>, &hellip;) are skipped. <b>PEP 740 provenance</b> published by the index mirrors automatically and serves via <code>/integrity/&hellip;</code>.</p>
     <form class="gomod-form" onsubmit="collectPython(event)">
       <label class="filelabel">Requirements <span class="opt">&mdash; one per line</span>
         <textarea id="pyreqs" rows="5" placeholder="requests==2.32.4" autocomplete="off"></textarea>
@@ -312,7 +312,7 @@ const lowUIHTML = `<!DOCTYPE html>
   <section class="view" id="view-maven" hidden>
   <div class="card">
     <h2>Mirror Maven artifacts</h2>
-    <p class="hint">List Maven coordinates (one <code>groupId:artifactId:version</code> per line) or upload a <code>pom.xml</code>. Only the pom's dependency information is used (parent as a BOM import, properties, dependencies, dependencyManagement) &mdash; <code>&lt;build&gt;</code>, <code>&lt;profiles&gt;</code>, and <code>&lt;repositories&gt;</code> are rejected, so a pom can never execute code through Maven. ArtiGate runs <code>mvn dependency:go-offline</code> on the sanitized project to resolve the full closure and writes it to a signed bundle, the same as POSTing to <code>/admin/maven/collect</code>. Release versions only &mdash; SNAPSHOTs and version ranges are rejected.</p>
+    <p class="hint">List Maven coordinates (one <code>groupId:artifactId:version</code> per line) or upload a <code>pom.xml</code>. Only the pom's dependency information is used (parent as a BOM import, properties, dependencies, dependencyManagement) &mdash; <code>&lt;build&gt;</code>, <code>&lt;profiles&gt;</code>, and <code>&lt;repositories&gt;</code> are rejected, so a pom can never execute code through Maven. ArtiGate runs <code>mvn dependency:go-offline</code> on the sanitized project to resolve the full closure and writes it to a signed bundle, the same as POSTing to <code>/admin/maven/collect</code>. Release versions only &mdash; SNAPSHOTs and version ranges are rejected. Detached <b>.asc PGP signatures</b> are mirrored from Maven Central alongside every artifact (best-effort), so Gradle dependency verification works against the mirror.</p>
     <form class="gomod-form" onsubmit="collectMaven(event)">
       <label class="filelabel">Coordinates <span class="opt">&mdash; groupId:artifactId:version, one per line</span>
         <textarea id="mvncoords" rows="4" placeholder="org.slf4j:slf4j-api:2.0.16" autocomplete="off"></textarea>
@@ -340,7 +340,7 @@ const lowUIHTML = `<!DOCTYPE html>
   <section class="view" id="view-npm" hidden>
   <div class="card">
     <h2>Mirror NPM packages</h2>
-    <p class="hint">List packages to mirror &mdash; one per line: <code>lodash@4.17.21</code> to pin, a bare <code>lodash</code> (or <code>lodash@latest</code>) for the newest version, or a semver range like <code>react@^18.2</code>; scoped names (<code>@types/node</code>) work too. The full dependency graph is resolved with <code>npm</code> (scripts never run) and every registry tarball is bundled. <em>Or</em> upload a project's <code>package.json</code> to mirror exactly what that project resolves. Same as POSTing to <code>/admin/npm/collect</code>.</p>
+    <p class="hint">List packages to mirror &mdash; one per line: <code>lodash@4.17.21</code> to pin, a bare <code>lodash</code> (or <code>lodash@latest</code>) for the newest version, or a semver range like <code>react@^18.2</code>; scoped names (<code>@types/node</code>) work too. The full dependency graph is resolved with <code>npm</code> (scripts never run) and every registry tarball is bundled. <em>Or</em> upload a project's <code>package.json</code> to mirror exactly what that project resolves. <b>Registry signatures, provenance attestations, and signing keys</b> mirror with the packages, so <code>npm audit signatures</code> verifies against the mirror. Same as POSTing to <code>/admin/npm/collect</code>.</p>
     <form class="gomod-form" onsubmit="collectNpm(event)">
       <label class="filelabel">Packages <span class="opt">&mdash; one per line; name, name@version, or name@range</span>
         <textarea id="npmpkgs" rows="4" placeholder="lodash@4.17.21&#10;@types/node&#10;react@^18.2" autocomplete="off"></textarea>
@@ -583,7 +583,7 @@ const lowUIHTML = `<!DOCTYPE html>
   <section class="view" id="view-helm" hidden>
   <div class="card">
     <h2>Mirror Helm charts</h2>
-    <p class="hint">Give the upstream chart repository URL (what <code>helm repo add</code> takes) and list charts &mdash; one per line: <code>nginx@21.1.0</code> to pin, or a bare <code>nginx</code> for the newest version. Each chart archive is verified against the repository index digest. The high side regenerates <code>index.yaml</code> from the charts' own embedded <code>Chart.yaml</code> and serves the repo at <code>&lt;high&gt;/helm/&lt;mirror&gt;</code>. Same as POSTing to <code>/admin/helm/collect</code>.</p>
+    <p class="hint">Give the upstream chart repository URL (what <code>helm repo add</code> takes) and list charts &mdash; one per line: <code>nginx@21.1.0</code> to pin, or a bare <code>nginx</code> for the newest version. Each chart archive is verified against the repository index digest. The high side regenerates <code>index.yaml</code> from the charts' own embedded <code>Chart.yaml</code> and serves the repo at <code>&lt;high&gt;/helm/&lt;mirror&gt;</code>; signed charts' <b>.prov provenance files</b> mirror too, so <code>helm pull --verify</code> passes. Same as POSTing to <code>/admin/helm/collect</code>.</p>
     <form class="gomod-form" onsubmit="collectHelm(event)">
       <label class="filelabel">Repository URL
         <input id="helmurl" type="text" placeholder="https://charts.bitnami.com/bitnami" autocomplete="off">

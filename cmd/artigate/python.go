@@ -86,6 +86,10 @@ type PythonFile struct {
 	SHA256         string `json:"sha256"`
 	RequiresPython string `json:"requires_python,omitempty"`
 	Yanked         bool   `json:"yanked"`
+	// ProvenancePath is the file's mirrored PEP 740 provenance document
+	// (always Path+".provenance" when present), served back through the
+	// integrity API and the simple JSON page's provenance key.
+	ProvenancePath string `json:"provenance_path,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -274,10 +278,28 @@ func validatePythonProjects(projects []PythonProject, seen map[string]bool) erro
 			return fmt.Errorf("python project %s has no files", p.NormalizedName)
 		}
 		for _, f := range p.Files {
-			if !seen[f.Path] {
-				return fmt.Errorf("python project %s references file not listed in manifest.files: %s", p.NormalizedName, f.Path)
+			if err := validatePythonFileRef(p.NormalizedName, f, seen); err != nil {
+				return err
 			}
 		}
+	}
+	return nil
+}
+
+// validatePythonFileRef checks one project file reference and its optional
+// provenance document against the manifest's verified file set.
+func validatePythonFileRef(project string, f PythonFile, seen map[string]bool) error {
+	if !seen[f.Path] {
+		return fmt.Errorf("python project %s references file not listed in manifest.files: %s", project, f.Path)
+	}
+	if f.ProvenancePath == "" {
+		return nil
+	}
+	if f.ProvenancePath != f.Path+".provenance" {
+		return fmt.Errorf("python project %s has non-canonical provenance path %s", project, f.ProvenancePath)
+	}
+	if !seen[f.ProvenancePath] {
+		return fmt.Errorf("python project %s references provenance not listed in manifest.files: %s", project, f.ProvenancePath)
 	}
 	return nil
 }
@@ -369,13 +391,16 @@ type pySimpleRoot struct {
 	Projects []pySimpleProjectRef `json:"projects"`
 }
 
-// pySimpleFile is one file entry of a PEP 691 JSON project page. Yanked is
+// pySimpleFile is one file entry of a PEP 691 JSON project page, with the
+// PEP 740 provenance URL when the file's provenance document is mirrored.
+// Yanked is
 // omitted deliberately: ArtiGate never yanks a mirrored wheel.
 type pySimpleFile struct {
 	Filename       string            `json:"filename"`
 	URL            string            `json:"url"`
 	Hashes         map[string]string `json:"hashes"`
 	RequiresPython string            `json:"requires-python,omitempty"`
+	Provenance     string            `json:"provenance,omitempty"`
 }
 
 // pySimpleProject is the PEP 691 JSON project page.
@@ -420,7 +445,8 @@ func (s *HighServer) scanPyFiles() ([]pyFileEntry, error) {
 // wrote a response for the request.
 func (s *HighServer) servePython(w http.ResponseWriter, r *http.Request) bool {
 	p := r.URL.Path
-	if p != "/simple" && !strings.HasPrefix(p, "/simple/") && !strings.HasPrefix(p, "/packages/") {
+	if p != "/simple" && !strings.HasPrefix(p, "/simple/") && !strings.HasPrefix(p, "/packages/") &&
+		!strings.HasPrefix(p, "/integrity/") {
 		return false
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -432,10 +458,53 @@ func (s *HighServer) servePython(w http.ResponseWriter, r *http.Request) bool {
 		s.handlePySimpleRoot(w, r)
 	case strings.HasPrefix(p, "/simple/"):
 		s.handlePySimpleProject(w, r, p)
+	case strings.HasPrefix(p, "/integrity/"):
+		s.handlePyIntegrity(w, r, p)
 	default:
 		s.handlePyPackage(w, r, p)
 	}
 	return true
+}
+
+// handlePyIntegrity serves the PEP 740 integrity API:
+// GET /integrity/<project>/<version>/<filename>/provenance answers with the
+// mirrored provenance document. The named identity must match the one parsed
+// from the filename, so a document can never be addressed under another
+// project's name.
+func (s *HighServer) handlePyIntegrity(w http.ResponseWriter, r *http.Request, urlPath string) {
+	segs := strings.Split(strings.TrimPrefix(urlPath, "/integrity/"), "/")
+	if len(segs) != 4 || segs[3] != "provenance" || strings.ContainsRune(segs[2], '/') {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	project, version, filename := normalizePyName(segs[0]), segs[1], segs[2]
+	if !pyProvenanceIdentityMatches(project, version, filename) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	abs := filepath.Join(s.pythonDir(), filename+".provenance")
+	if !safeJoin(s.pythonDir(), abs) {
+		http.Error(w, "unsafe path", http.StatusBadRequest)
+		return
+	}
+	if !fileExists(abs) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", pyIntegrityJSONType)
+	serveFile(w, r, abs)
+}
+
+// pyProvenanceIdentityMatches reports whether a distribution filename's
+// embedded identity matches the project/version the integrity URL names.
+func pyProvenanceIdentityMatches(project, version, filename string) bool {
+	if p, v, ok := parseWheelFilename(filename); ok {
+		return p == project && v == version
+	}
+	if p, v, ok := parseSdistFilename(filename); ok {
+		return p == project && v == version
+	}
+	return false
 }
 
 func (s *HighServer) handlePySimpleRoot(w http.ResponseWriter, r *http.Request) {
@@ -478,8 +547,10 @@ func (s *HighServer) handlePySimpleRoot(w http.ResponseWriter, r *http.Request) 
 // own embedded metadata — never from transferred index data.
 type pyProjectFile struct {
 	filename       string
+	version        string
 	sha256         string
 	requiresPython string
+	provenance     bool
 }
 
 // pyDigestCache memoizes each wheel's SHA-256 and Requires-Python. The
@@ -547,7 +618,10 @@ func (s *HighServer) pyProjectFiles(project string) ([]pyProjectFile, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, pyProjectFile{filename: f.filename, sha256: sum, requiresPython: rp})
+		out = append(out, pyProjectFile{
+			filename: f.filename, version: f.version, sha256: sum, requiresPython: rp,
+			provenance: fileExists(abs + ".provenance"),
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].filename < out[j].filename })
 	return out, nil
@@ -566,28 +640,39 @@ func (s *HighServer) handlePySimpleProject(w http.ResponseWriter, r *http.Reques
 	}
 	contentType := negotiatePySimple(r.Header.Get("Accept"))
 	if contentType == pySimpleJSONType {
-		writePySimpleJSON(w, pySimpleProjectJSON(project, matched))
+		writePySimpleJSON(w, pySimpleProjectJSON(project, matched, npmBaseURL(r)))
 		return
 	}
 	writeHTMLAs(w, contentType, pySimpleProjectHTML(project, matched))
 }
 
-// pySimpleProjectJSON renders a project's PEP 691 JSON page.
-func pySimpleProjectJSON(project string, files []pyProjectFile) pySimpleProject {
+// pySimpleProjectJSON renders a project's PEP 691 JSON page. baseURL makes
+// the PEP 740 provenance links absolute, as the spec requires of them.
+func pySimpleProjectJSON(project string, files []pyProjectFile, baseURL string) pySimpleProject {
 	out := pySimpleProject{
 		Meta:  pySimpleMeta{APIVersion: pySimpleAPIVersion},
 		Name:  project,
 		Files: make([]pySimpleFile, 0, len(files)),
 	}
 	for _, f := range files {
-		out.Files = append(out.Files, pySimpleFile{
+		entry := pySimpleFile{
 			Filename:       f.filename,
 			URL:            "/packages/" + url.PathEscape(f.filename),
 			Hashes:         map[string]string{"sha256": f.sha256},
 			RequiresPython: f.requiresPython,
-		})
+		}
+		if f.provenance && f.version != "" {
+			entry.Provenance = baseURL + pyIntegrityPath(project, f.version, f.filename)
+		}
+		out.Files = append(out.Files, entry)
 	}
 	return out
+}
+
+// pyIntegrityPath renders the host-relative PEP 740 provenance URL for one
+// distribution file.
+func pyIntegrityPath(project, version, filename string) string {
+	return "/integrity/" + url.PathEscape(project) + "/" + url.PathEscape(version) + "/" + url.PathEscape(filename) + "/provenance"
 }
 
 // pySimpleProjectHTML renders a project's PEP 503 HTML page, carrying each
@@ -873,6 +958,7 @@ func (s *LowServer) CollectPython(ctx context.Context, req PythonCollectRequest)
 		return ExportResult{}, err
 	}
 	files, projects, skipped = s.collectPythonSDists(ctx, dest, req.SDists, files, projects, skipped)
+	files = s.fetchPythonProvenance(ctx, dest, files, projects)
 	emitProgress(ctx, "Packing %d distribution file(s) into a signed bundle…", len(files))
 	if len(files) == 0 {
 		if len(skipped) > 0 {
@@ -927,6 +1013,113 @@ func (s *LowServer) pypiJSONBase() string {
 		return defaultPyPIJSON
 	}
 	return base
+}
+
+// -----------------------------------------------------------------------------
+// Low side: PEP 740 provenance mirroring
+// -----------------------------------------------------------------------------
+
+// pyIntegrityJSONType is the PEP 740 provenance media type.
+const pyIntegrityJSONType = "application/vnd.pypi.integrity.v1+json"
+
+// pyMaxProvenanceBytes caps one provenance document (sigstore bundles are
+// tens of KB; generous headroom).
+const pyMaxProvenanceBytes = 8 << 20
+
+// pyIntegrityBase derives the index's integrity (PEP 740) API base from the
+// JSON API base: "https://pypi.org/pypi" -> "https://pypi.org".
+func (s *LowServer) pyIntegrityBase() string {
+	return strings.TrimSuffix(s.pypiJSONBase(), "/pypi")
+}
+
+// fetchPythonProvenance mirrors each distribution file's PEP 740 provenance
+// document when the index publishes one (attested trusted-publisher uploads),
+// so verifiers work against the mirror. Best-effort like the other
+// passthrough material: unattested files (the majority) skip silently, and
+// nothing here ever fails the collect.
+func (s *LowServer) fetchPythonProvenance(ctx context.Context, dest string, files []ManifestFile, projects []PythonProject) []ManifestFile {
+	base := s.pyIntegrityBase()
+	mirrored := 0
+	for pi := range projects {
+		p := &projects[pi]
+		for fi := range p.Files {
+			mf, ok := s.fetchOnePyProvenance(ctx, base, dest, p.NormalizedName, p.Version, &p.Files[fi])
+			if !ok {
+				continue
+			}
+			files = append(files, mf)
+			mirrored++
+		}
+	}
+	if mirrored > 0 {
+		emitProgress(ctx, "⊕ %d PEP 740 provenance document(s) mirrored", mirrored)
+	}
+	return files
+}
+
+// fetchOnePyProvenance fetches one file's provenance and stages it beside the
+// artifact, recording the path on the file entry.
+func (s *LowServer) fetchOnePyProvenance(ctx context.Context, base, dest, name, version string, f *PythonFile) (ManifestFile, bool) {
+	rawURL := base + "/integrity/" + url.PathEscape(name) + "/" + url.PathEscape(version) + "/" + url.PathEscape(f.Filename) + "/provenance"
+	body, found, err := fetchPyProvenanceBody(ctx, rawURL)
+	if err != nil {
+		emitProgress(ctx, "  ⚠ provenance %s: %s", f.Filename, err)
+		return ManifestFile{}, false
+	}
+	if !found {
+		return ManifestFile{}, false
+	}
+	abs := filepath.Join(dest, f.Filename+".provenance")
+	if err := os.WriteFile(abs, body, 0o644); err != nil {
+		emitProgress(ctx, "  ⚠ provenance %s: %s", f.Filename, err)
+		return ManifestFile{}, false
+	}
+	mf, err := hashManifestFile(abs, f.Path+".provenance")
+	if err != nil {
+		return ManifestFile{}, false
+	}
+	emitProgress(ctx, "  ⊕ provenance %s", f.Filename)
+	f.ProvenancePath = mf.Path
+	return mf, true
+}
+
+// fetchPyProvenanceBody downloads one provenance document, requiring the
+// PEP 740 shape (attestation bundles present) so an error page served with a
+// 200 is never stored. found=false with nil error is a clean 404 — an
+// unattested file, the normal case.
+func fetchPyProvenanceBody(ctx context.Context, rawURL string) (body []byte, found bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	req.Header.Set("Accept", pyIntegrityJSONType+", application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotAcceptable {
+		return nil, false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err = io.ReadAll(io.LimitReader(resp.Body, pyMaxProvenanceBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(body) > pyMaxProvenanceBytes {
+		return nil, false, fmt.Errorf("provenance exceeds %d bytes", pyMaxProvenanceBytes)
+	}
+	var doc struct {
+		AttestationBundles []json.RawMessage `json:"attestation_bundles"`
+	}
+	if json.Unmarshal(body, &doc) != nil || len(doc.AttestationBundles) == 0 {
+		return nil, false, errors.New("response is not a provenance document")
+	}
+	return body, true, nil
 }
 
 // collectPythonSDists fetches every opted-in sdist and folds it into the

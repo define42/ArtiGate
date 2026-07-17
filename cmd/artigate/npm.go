@@ -61,7 +61,10 @@ func npmEcosystem() ecosystem {
 			if err := validateNpmPackages(m.Npm.Packages, seen); err != nil {
 				return err
 			}
-			return validateNpmDistTags(m.Npm.DistTags)
+			if err := validateNpmDistTags(m.Npm.DistTags); err != nil {
+				return err
+			}
+			return validateNpmKeys(m.Npm.Keys)
 		},
 		contentDesc: "npm packages",
 		publish:     func(s *HighServer, m BundleManifest) error { return s.publishNpm(m.Npm) },
@@ -85,6 +88,30 @@ type NpmManifest struct {
 	// change the mirrored file set, so refreshing tags for an unchanged
 	// package set needs a force collect.
 	DistTags map[string]map[string]string `json:"dist_tags,omitempty"`
+	// Keys carries each upstream registry's published signing keys
+	// (GET /-/npm/v1/keys) observed at collect time, keyed by registry host.
+	// The high side serves the merged set at its own keys endpoint, so
+	// `npm audit signatures` verifies mirrored packages against the mirror.
+	Keys map[string][]NpmRegistryKey `json:"keys,omitempty"`
+}
+
+// NpmRegistryKey is one entry of a registry's /-/npm/v1/keys document, passed
+// through verbatim — the fields are what npm matches dist.signatures against.
+type NpmRegistryKey struct {
+	Expires *string `json:"expires"`
+	KeyID   string  `json:"keyid"`
+	KeyType string  `json:"keytype"`
+	Scheme  string  `json:"scheme"`
+	Key     string  `json:"key"`
+}
+
+// NpmRegistrySignature is one upstream dist.signatures entry: an ECDSA
+// signature over "<name>@<version>:<integrity>". The mirror serves the same
+// bytes, so the recomputed integrity — and therefore the signature — verifies
+// unchanged.
+type NpmRegistrySignature struct {
+	KeyID string `json:"keyid"`
+	Sig   string `json:"sig"`
 }
 
 type NpmPackage struct {
@@ -96,6 +123,21 @@ type NpmPackage struct {
 	// Integrity is the SRI string from the resolving lockfile, kept for audit;
 	// the high side recomputes integrity from the artifact itself.
 	Integrity string `json:"integrity,omitempty"`
+	// Signatures are the upstream registry's dist.signatures for this exact
+	// version, served back in the mirrored packument.
+	Signatures []NpmRegistrySignature `json:"signatures,omitempty"`
+	// AttestationsPath is the mirrored attestations document
+	// (/-/npm/v1/attestations/<name>@<version>) for this version, with the
+	// provenance predicate type dist.attestations advertises. Both are set
+	// together or not at all.
+	AttestationsPath          string `json:"attestations_path,omitempty"`
+	AttestationsPredicateType string `json:"attestations_predicate_type,omitempty"`
+}
+
+// npmAttestationsRel is the bundle path of one version's mirrored
+// attestations document.
+func npmAttestationsRel(name, version string) string {
+	return path.Join("npm", "attestations", name, version+".json")
 }
 
 // -----------------------------------------------------------------------------
@@ -203,8 +245,68 @@ func validateNpmPackages(pkgs []NpmPackage, seen map[string]bool) error {
 		if !seen[p.Path] {
 			return fmt.Errorf("npm package %s@%s references file not listed in manifest.files: %s", p.Name, p.Version, p.Path)
 		}
+		if err := validateNpmPackageProvenance(p, seen); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// validateNpmPackageProvenance checks one package's passthrough verification
+// material: bounded, well-formed signatures, and an attestations reference
+// that names exactly its own canonical path in the verified file set.
+func validateNpmPackageProvenance(p NpmPackage, seen map[string]bool) error {
+	if len(p.Signatures) > 16 {
+		return fmt.Errorf("npm package %s@%s carries %d signatures (max 16)", p.Name, p.Version, len(p.Signatures))
+	}
+	for _, sig := range p.Signatures {
+		if sig.KeyID == "" || len(sig.KeyID) > 256 || sig.Sig == "" || len(sig.Sig) > 8192 {
+			return fmt.Errorf("npm package %s@%s has a malformed registry signature", p.Name, p.Version)
+		}
+	}
+	if p.AttestationsPath == "" && p.AttestationsPredicateType == "" {
+		return nil
+	}
+	if p.AttestationsPath != npmAttestationsRel(p.Name, p.Version) {
+		return fmt.Errorf("npm package %s@%s has non-canonical attestations path %s", p.Name, p.Version, p.AttestationsPath)
+	}
+	if !seen[p.AttestationsPath] {
+		return fmt.Errorf("npm package %s@%s references attestations not listed in manifest.files: %s", p.Name, p.Version, p.AttestationsPath)
+	}
+	if p.AttestationsPredicateType == "" || len(p.AttestationsPredicateType) > 256 {
+		return fmt.Errorf("npm package %s@%s has a malformed attestations predicate type", p.Name, p.Version)
+	}
+	return nil
+}
+
+// npmRegistryHostRE matches a registry host key in the manifest's keys map:
+// a lowercase hostname with an optional port.
+var npmRegistryHostRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$`)
+
+// validateNpmKeys checks a manifest's per-registry signing-key snapshots:
+// path-safe host keys and bounded, well-formed key records — these are served
+// back verbatim at the mirror's own keys endpoint.
+func validateNpmKeys(keys map[string][]NpmRegistryKey) error {
+	for host, list := range keys {
+		if !npmRegistryHostRE.MatchString(host) || len(host) > 255 {
+			return fmt.Errorf("invalid npm registry host %q in keys", host)
+		}
+		if len(list) > 64 {
+			return fmt.Errorf("npm registry %s publishes %d keys (max 64)", host, len(list))
+		}
+		for _, k := range list {
+			if !wellFormedNpmRegistryKey(k) {
+				return fmt.Errorf("npm registry %s has a malformed signing key", host)
+			}
+		}
+	}
+	return nil
+}
+
+// wellFormedNpmRegistryKey bounds one key record's fields.
+func wellFormedNpmRegistryKey(k NpmRegistryKey) bool {
+	return k.KeyID != "" && len(k.KeyID) <= 256 && k.Key != "" && len(k.Key) <= 4096 &&
+		len(k.KeyType) <= 128 && len(k.Scheme) <= 128 && (k.Expires == nil || len(*k.Expires) <= 64)
 }
 
 // -----------------------------------------------------------------------------
@@ -222,11 +324,20 @@ func (s *HighServer) npmMetadataDir() string {
 // npmStoredManifest is the per-version metadata the high side regenerates at
 // import time from the tarball's own embedded package.json (plus the digests it
 // computes from the artifact bytes). It is what packuments are assembled from.
+// Signatures and the attestations predicate are the one passthrough exception:
+// they come from the signed bundle manifest (upstream verification material
+// cannot be regenerated locally — that is its point) and are validated there.
 type npmStoredManifest struct {
 	Filename  string          `json:"filename"`
 	Shasum    string          `json:"shasum"`
 	Integrity string          `json:"integrity"`
 	Manifest  json.RawMessage `json:"manifest"`
+	// Signatures are the upstream registry's dist.signatures for this version.
+	Signatures []NpmRegistrySignature `json:"signatures,omitempty"`
+	// AttestationsPredicateType marks a version whose attestations document is
+	// mirrored (npm/attestations/<name>/<version>.json) and names the
+	// provenance predicate dist.attestations advertises.
+	AttestationsPredicateType string `json:"attestations_predicate_type,omitempty"`
 }
 
 // serveNpm handles the npm registry routes under /npm/: packument
@@ -248,6 +359,16 @@ func (s *HighServer) serveNpm(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if !isReadMethod(r) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return true
+	}
+	// The registry meta endpoints npm's signature verification uses; both live
+	// under "-/npm/v1/", which can never be a package path (names cannot be "-").
+	if rest == "-/npm/v1/keys" {
+		s.handleNpmKeys(w)
+		return true
+	}
+	if spec, ok := strings.CutPrefix(rest, "-/npm/v1/attestations/"); ok {
+		s.handleNpmAttestations(w, r, spec)
 		return true
 	}
 	if name, file, ok := splitNpmTarballPath(rest); ok {
@@ -377,6 +498,66 @@ func (s *HighServer) npmResolveTag(name, tag string) string {
 	return version
 }
 
+// handleNpmKeys serves the merged signing keys of every mirrored upstream
+// registry at the endpoint npm expects of the configured registry
+// (/-/npm/v1/keys). Like an upstream registry that signs nothing, it 404s
+// until a collect has captured keys.
+func (s *HighServer) handleNpmKeys(w http.ResponseWriter) {
+	keys := s.mergedNpmKeys()
+	if len(keys) == 0 {
+		http.Error(w, "no registry signing keys mirrored", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]any{"keys": keys})
+}
+
+// mergedNpmKeys flattens the stored per-registry key snapshots into one list,
+// de-duplicated by key identity and sorted for stable output.
+func (s *HighServer) mergedNpmKeys() []NpmRegistryKey {
+	stored := s.readNpmStoredKeys()
+	hosts := make([]string, 0, len(stored.Hosts))
+	for host := range stored.Hosts {
+		hosts = append(hosts, host)
+	}
+	sort.Strings(hosts)
+	seen := map[string]bool{}
+	var out []NpmRegistryKey
+	for _, host := range hosts {
+		for _, k := range stored.Hosts[host] {
+			id := k.KeyID + "\x00" + k.Key
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			out = append(out, k)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].KeyID < out[j].KeyID })
+	return out
+}
+
+// handleNpmAttestations serves one version's mirrored attestations document
+// (/-/npm/v1/attestations/<name>@<version>), the URL dist.attestations points
+// at and `npm audit signatures` fetches to verify provenance.
+func (s *HighServer) handleNpmAttestations(w http.ResponseWriter, r *http.Request, spec string) {
+	i := strings.LastIndex(spec, "@")
+	if i <= 0 || i == len(spec)-1 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	name, version := spec[:i], spec[i+1:]
+	if validateNpmName(name) != nil || validateNpmVersion(version) != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	abs := filepath.Join(s.downloadDir, filepath.FromSlash(npmAttestationsRel(name, version)))
+	if !safeJoin(filepath.Join(s.downloadDir, "npm", "attestations"), abs) {
+		http.Error(w, "unsafe path", http.StatusBadRequest)
+		return
+	}
+	serveFile(w, r, abs)
+}
+
 func (s *HighServer) handleNpmTarball(w http.ResponseWriter, r *http.Request, name, file string) {
 	if validateNpmName(name) != nil || !strings.HasSuffix(file, ".tgz") {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -447,7 +628,9 @@ func (s *HighServer) readNpmStoredManifest(name, version string) (npmStoredManif
 
 // npmVersionObject renders one packument versions[] entry: the embedded
 // package.json patched with the identity the mirror serves it under and a dist
-// section pointing back at this server.
+// section pointing back at this server. Upstream registry signatures and the
+// attestations pointer pass through — the integrity they sign is recomputed
+// from the same bytes, so npm verifies them against the mirror unchanged.
 func npmVersionObject(st npmStoredManifest, name, version, baseURL string) map[string]any {
 	obj := map[string]any{}
 	if len(st.Manifest) > 0 {
@@ -455,11 +638,21 @@ func npmVersionObject(st npmStoredManifest, name, version, baseURL string) map[s
 	}
 	obj["name"] = name
 	obj["version"] = version
-	obj["dist"] = map[string]string{
+	dist := map[string]any{
 		"tarball":   baseURL + "/npm/" + name + "/-/" + st.Filename,
 		"shasum":    st.Shasum,
 		"integrity": st.Integrity,
 	}
+	if len(st.Signatures) > 0 {
+		dist["signatures"] = st.Signatures
+	}
+	if st.AttestationsPredicateType != "" {
+		dist["attestations"] = map[string]any{
+			"url":        baseURL + "/npm/-/npm/v1/attestations/" + name + "@" + version,
+			"provenance": map[string]string{"predicateType": st.AttestationsPredicateType},
+		}
+	}
+	obj["dist"] = dist
 	if npmHasInstallScript(obj) {
 		obj["hasInstallScript"] = true
 	}
@@ -527,7 +720,49 @@ func (s *HighServer) publishNpm(m *NpmManifest) error {
 			log.Printf("npm publish dist-tags %s: %v", name, err)
 		}
 	}
+	if err := s.publishNpmKeys(m.Keys); err != nil {
+		log.Printf("npm publish registry keys: %v", err)
+	}
 	return nil
+}
+
+// npmStoredKeys is the accumulated per-registry signing-key store backing the
+// keys endpoint. The "_keys.json" stem at the metadata root can never collide
+// with a package directory: names may not start with "_".
+type npmStoredKeys struct {
+	Hosts map[string][]NpmRegistryKey `json:"hosts"`
+}
+
+// publishNpmKeys merges one bundle's per-registry key snapshots into the
+// store: each named host's set is replaced whole (keys are upstream state,
+// rotated upstream), hosts the bundle does not mention keep their last
+// snapshot. Imports are serialized, so read-merge-write is race-free.
+func (s *HighServer) publishNpmKeys(keys map[string][]NpmRegistryKey) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if err := validateNpmKeys(keys); err != nil {
+		return err
+	}
+	stored := s.readNpmStoredKeys()
+	if stored.Hosts == nil {
+		stored.Hosts = map[string][]NpmRegistryKey{}
+	}
+	for host, list := range keys {
+		stored.Hosts[host] = list
+	}
+	return writeJSONAtomic(filepath.Join(s.npmMetadataDir(), "_keys.json"), stored, 0o644)
+}
+
+// readNpmStoredKeys loads the accumulated key store; missing or unreadable
+// means no keys captured yet.
+func (s *HighServer) readNpmStoredKeys() npmStoredKeys {
+	var st npmStoredKeys
+	b, err := os.ReadFile(filepath.Join(s.npmMetadataDir(), "_keys.json"))
+	if err != nil || json.Unmarshal(b, &st) != nil {
+		return npmStoredKeys{}
+	}
+	return st
 }
 
 // npmStoredTags is the per-package dist-tag snapshot stored beside the
@@ -592,7 +827,16 @@ func (s *HighServer) publishNpmPackage(p NpmPackage) error {
 	if err != nil {
 		return err
 	}
-	st := npmStoredManifest{Filename: path.Base(p.Path), Shasum: shasum, Integrity: integrity, Manifest: manifest}
+	st := npmStoredManifest{
+		Filename: path.Base(p.Path), Shasum: shasum, Integrity: integrity, Manifest: manifest,
+		Signatures: p.Signatures,
+	}
+	// The attestations pointer is stored only when the mirrored document is
+	// actually installed, so dist.attestations never advertises a 404.
+	if p.AttestationsPredicateType != "" &&
+		fileExists(filepath.Join(s.downloadDir, filepath.FromSlash(npmAttestationsRel(p.Name, p.Version)))) {
+		st.AttestationsPredicateType = p.AttestationsPredicateType
+	}
 	out := filepath.Join(s.npmMetadataDir(), filepath.FromSlash(p.Name), p.Version+".json")
 	if !safeJoin(s.npmMetadataDir(), out) {
 		return fmt.Errorf("unsafe metadata path for %s@%s", p.Name, p.Version)
@@ -904,8 +1148,12 @@ func (s *LowServer) CollectNpm(ctx context.Context, req NpmCollectRequest) (Expo
 	if err != nil {
 		return ExportResult{}, err
 	}
+	// Upstream metadata (dist-tags, registry signatures, attestation pointers,
+	// signing keys) is fetched before the tarballs so each package record can
+	// carry its verification material.
+	meta := fetchNpmUpstreamMeta(ctx, entries)
 	emitProgress(ctx, "Downloading %d tarball(s)…", len(entries))
-	pkgs, files, failed, err := s.downloadNpmPackages(ctx, stageRoot, entries)
+	pkgs, files, failed, err := s.downloadNpmPackages(ctx, stageRoot, entries, meta)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -913,14 +1161,13 @@ func (s *LowServer) CollectNpm(ctx context.Context, req NpmCollectRequest) (Expo
 	if len(pkgs) == 0 {
 		return ExportResult{}, fmt.Errorf("no npm packages could be fetched: %s", summarizeFailures(failed))
 	}
-	tags := fetchNpmDistTags(ctx, entries)
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 
 	// exportIfNew peeks/commits the sequence around the write (so a failed
 	// collection never burns a number) and skips entirely when every tarball was
 	// already forwarded.
 	res, err := s.exportIfNew(ctx, streamNpm, stageRoot, files, req.Force, func(seq int64) (ExportResult, error) {
-		return s.writeNpmBundle(ctx, seq, stageRoot, files, pkgs, tags)
+		return s.writeNpmBundle(ctx, seq, stageRoot, files, pkgs, meta)
 	})
 	if err != nil {
 		return ExportResult{}, err
@@ -1111,11 +1358,18 @@ func npmLockEntryFor(name string, p npmLockPackage) (npmLockEntry, *FailedModule
 }
 
 // -----------------------------------------------------------------------------
-// Dist-tag collection
+// Upstream metadata collection (dist-tags, signatures, attestations, keys)
 // -----------------------------------------------------------------------------
 
 // npmMaxPackumentBytes caps one abbreviated packument fetched for dist-tags.
 const npmMaxPackumentBytes = 32 << 20
+
+// npmMaxAttestationsBytes caps one version's attestations document (sigstore
+// bundles are tens of KB; the cap is generous headroom).
+const npmMaxAttestationsBytes = 8 << 20
+
+// npmMaxKeysBytes caps one registry's /-/npm/v1/keys document.
+const npmMaxKeysBytes = 1 << 20
 
 // npmAbbreviatedType is the registry media type for the abbreviated
 // (install-oriented) packument, a fraction of the full document.
@@ -1133,49 +1387,166 @@ func npmRegistryBaseFor(name, resolved string) string {
 	return resolved[:i]
 }
 
-// fetchNpmDistTags fetches each mirrored package's upstream dist-tags. Tags
-// are polish, not payload: any failure skips that package's tags with a
-// progress note and never fails the collect. Invalid tag names or versions
-// are dropped here so the signed manifest only ever carries records the high
-// side's strict validation accepts.
-func fetchNpmDistTags(ctx context.Context, entries []npmLockEntry) map[string]map[string]string {
-	bases := map[string]string{}
-	for _, e := range entries {
-		if _, ok := bases[e.Name]; !ok {
-			bases[e.Name] = npmRegistryBaseFor(e.Name, e.Resolved)
-		}
+// npmUpstreamMeta is what one collect learns from the upstream registries
+// beyond the tarballs themselves: dist-tags per package, registry signatures
+// and attestation pointers per exact version, and each registry's signing
+// keys. All of it is verification material or polish — fetched best-effort,
+// never failing the collect; a package without it simply mirrors bare.
+type npmUpstreamMeta struct {
+	tags map[string]map[string]string
+	sigs map[string][]NpmRegistrySignature // "name@version" ->
+	atts map[string]npmAttestationsRef     // "name@version" ->
+	keys map[string][]NpmRegistryKey       // registry host ->
+	// bases records each package's registry base for the attestation fetch.
+	bases map[string]string
+}
+
+// npmAttestationsRef is a version's dist.attestations pointer as upstream
+// published it.
+type npmAttestationsRef struct {
+	PredicateType string
+}
+
+// fetchNpmUpstreamMeta fetches each mirrored package's upstream metadata and
+// each involved registry's signing keys. Any failure skips that piece with a
+// progress note and never fails the collect. Invalid records are dropped here
+// so the signed manifest only ever carries what the high side's strict
+// validation accepts.
+func fetchNpmUpstreamMeta(ctx context.Context, entries []npmLockEntry) npmUpstreamMeta {
+	meta := npmUpstreamMeta{
+		tags: map[string]map[string]string{}, sigs: map[string][]NpmRegistrySignature{},
+		atts: map[string]npmAttestationsRef{}, keys: map[string][]NpmRegistryKey{}, bases: map[string]string{},
 	}
-	emitProgress(ctx, "Fetching dist-tags for %d package(s)…", len(bases))
-	out := map[string]map[string]string{}
-	for name, base := range bases {
+	versionsByName := map[string][]string{}
+	for _, e := range entries {
+		if _, ok := meta.bases[e.Name]; !ok {
+			meta.bases[e.Name] = npmRegistryBaseFor(e.Name, e.Resolved)
+		}
+		versionsByName[e.Name] = append(versionsByName[e.Name], e.Version)
+	}
+	emitProgress(ctx, "Fetching upstream metadata (dist-tags, signatures) for %d package(s)…", len(meta.bases))
+	for name, base := range meta.bases {
 		if base == "" {
 			continue
 		}
-		tags, err := npmFetchPackumentTags(ctx, base, name)
-		if err != nil {
-			emitProgress(ctx, "  ✗ dist-tags %s: %s", name, err)
-			continue
-		}
-		if cleaned := cleanNpmDistTags(tags); len(cleaned) > 0 {
-			out[name] = cleaned
+		if err := fetchNpmPackumentMeta(ctx, base, name, versionsByName[name], &meta); err != nil {
+			emitProgress(ctx, "  ✗ metadata %s: %s", name, err)
 		}
 	}
-	if len(out) == 0 {
-		return nil
+	fetchNpmRegistryKeys(ctx, &meta)
+	return meta
+}
+
+// fetchNpmPackumentMeta reads one package's abbreviated packument and records
+// its dist-tags plus the registry signatures and attestation pointers of the
+// versions this collect mirrors.
+func fetchNpmPackumentMeta(ctx context.Context, base, name string, versions []string, meta *npmUpstreamMeta) error {
+	b, err := npmRegistryGet(ctx, base+"/"+url.PathEscape(name), npmAbbreviatedType, npmMaxPackumentBytes)
+	if err != nil {
+		return err
+	}
+	var doc struct {
+		DistTags map[string]string `json:"dist-tags"`
+		Versions map[string]struct {
+			Dist struct {
+				Signatures   []NpmRegistrySignature `json:"signatures"`
+				Attestations struct {
+					URL        string `json:"url"`
+					Provenance struct {
+						PredicateType string `json:"predicateType"`
+					} `json:"provenance"`
+				} `json:"attestations"`
+			} `json:"dist"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("parse packument: %w", err)
+	}
+	if cleaned := cleanNpmDistTags(doc.DistTags); len(cleaned) > 0 {
+		meta.tags[name] = cleaned
+	}
+	for _, version := range versions {
+		v, ok := doc.Versions[version]
+		if !ok {
+			continue
+		}
+		key := name + "@" + version
+		if sigs := cleanNpmSignatures(v.Dist.Signatures); len(sigs) > 0 {
+			meta.sigs[key] = sigs
+		}
+		if pt := v.Dist.Attestations.Provenance.PredicateType; pt != "" && len(pt) <= 256 {
+			meta.atts[key] = npmAttestationsRef{PredicateType: pt}
+		}
+	}
+	return nil
+}
+
+// cleanNpmSignatures keeps only the well-formed, bounded signature entries of
+// an upstream dist.signatures list.
+func cleanNpmSignatures(sigs []NpmRegistrySignature) []NpmRegistrySignature {
+	var out []NpmRegistrySignature
+	for _, s := range sigs {
+		if s.KeyID == "" || len(s.KeyID) > 256 || s.Sig == "" || len(s.Sig) > 8192 {
+			continue
+		}
+		out = append(out, s)
+		if len(out) == 16 {
+			break
+		}
 	}
 	return out
 }
 
-// npmFetchPackumentTags reads one package's dist-tags from its registry's
-// abbreviated packument.
-func npmFetchPackumentTags(ctx context.Context, base, name string) (map[string]string, error) {
+// fetchNpmRegistryKeys fetches /-/npm/v1/keys once per distinct registry
+// base. A registry that publishes no keys (404) is simply skipped.
+func fetchNpmRegistryKeys(ctx context.Context, meta *npmUpstreamMeta) {
+	seen := map[string]bool{}
+	for _, base := range meta.bases {
+		host := npmRegistryHost(base)
+		if base == "" || host == "" || seen[base] {
+			continue
+		}
+		seen[base] = true
+		b, err := npmRegistryGet(ctx, base+"/-/npm/v1/keys", "application/json", npmMaxKeysBytes)
+		if err != nil {
+			continue // registries without signing keys are the normal case
+		}
+		var doc struct {
+			Keys []NpmRegistryKey `json:"keys"`
+		}
+		if json.Unmarshal(b, &doc) != nil || len(doc.Keys) == 0 {
+			continue
+		}
+		if keys := map[string][]NpmRegistryKey{host: doc.Keys}; validateNpmKeys(keys) == nil {
+			meta.keys[host] = doc.Keys
+			emitProgress(ctx, "  ⊕ %d signing key(s) from %s", len(doc.Keys), host)
+		}
+	}
+}
+
+// npmRegistryHost extracts the lowercased host (with any port) of a registry
+// base URL, the key the signed manifest carries its key snapshot under.
+func npmRegistryHost(base string) string {
+	u, err := url.Parse(base)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Host)
+	if !npmRegistryHostRE.MatchString(host) {
+		return ""
+	}
+	return host
+}
+
+// npmRegistryGet performs one bounded registry metadata request.
+func npmRegistryGet(ctx context.Context, rawURL, accept string, limit int64) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/"+url.PathEscape(name), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", npmAbbreviatedType)
+	req.Header.Set("Accept", accept)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -1184,17 +1555,39 @@ func npmFetchPackumentTags(ctx context.Context, base, name string) (map[string]s
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, npmMaxPackumentBytes))
+	return io.ReadAll(io.LimitReader(resp.Body, limit))
+}
+
+// stageNpmAttestations mirrors one version's attestations document into the
+// staging tree, returning its manifest file. found=false with nil error means
+// upstream advertises attestations but the document could not be fetched —
+// the version then serves without dist.attestations rather than advertising
+// a dead URL.
+func stageNpmAttestations(ctx context.Context, stageRoot, base string, e npmLockEntry) (ManifestFile, bool, error) {
+	b, err := npmRegistryGet(ctx, base+"/-/npm/v1/attestations/"+url.PathEscape(e.Name)+"@"+url.PathEscape(e.Version),
+		"application/json", npmMaxAttestationsBytes)
 	if err != nil {
-		return nil, err
+		return ManifestFile{}, false, err
 	}
 	var doc struct {
-		DistTags map[string]string `json:"dist-tags"`
+		Attestations []json.RawMessage `json:"attestations"`
 	}
-	if err := json.Unmarshal(b, &doc); err != nil {
-		return nil, fmt.Errorf("parse packument: %w", err)
+	if json.Unmarshal(b, &doc) != nil || len(doc.Attestations) == 0 {
+		return ManifestFile{}, false, errors.New("attestations document is empty or malformed")
 	}
-	return doc.DistTags, nil
+	rel := npmAttestationsRel(e.Name, e.Version)
+	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return ManifestFile{}, false, err
+	}
+	if err := os.WriteFile(abs, b, 0o644); err != nil {
+		return ManifestFile{}, false, err
+	}
+	mf, err := hashManifestFile(abs, rel)
+	if err != nil {
+		return ManifestFile{}, false, err
+	}
+	return mf, true, nil
 }
 
 // cleanNpmDistTags keeps only the well-formed tag entries of an upstream
@@ -1214,9 +1607,10 @@ func cleanNpmDistTags(tags map[string]string) map[string]string {
 // -----------------------------------------------------------------------------
 
 // downloadNpmPackages fetches every resolved tarball into the staging tree,
-// verifying each against the lockfile's integrity. A failed download is
-// collected rather than aborting the batch.
-func (s *LowServer) downloadNpmPackages(ctx context.Context, stageRoot string, entries []npmLockEntry) ([]NpmPackage, []ManifestFile, []FailedModule, error) {
+// verifying each against the lockfile's integrity, and attaches each
+// package's upstream verification material. A failed download is collected
+// rather than aborting the batch.
+func (s *LowServer) downloadNpmPackages(ctx context.Context, stageRoot string, entries []npmLockEntry, meta npmUpstreamMeta) ([]NpmPackage, []ManifestFile, []FailedModule, error) {
 	var pkgs []NpmPackage
 	var files []ManifestFile
 	var failed []FailedModule
@@ -1237,12 +1631,41 @@ func (s *LowServer) downloadNpmPackages(ctx context.Context, stageRoot string, e
 			return nil, nil, nil, err
 		}
 		files = append(files, mf)
-		pkgs = append(pkgs, NpmPackage{
+		pkg := NpmPackage{
 			Name: e.Name, Version: e.Version, Filename: path.Base(rel),
 			Path: rel, SHA256: mf.SHA256, Integrity: e.Integrity,
-		})
+			Signatures: meta.sigs[e.Name+"@"+e.Version],
+		}
+		if attFile, ok := attachNpmAttestations(ctx, stageRoot, e, meta, &pkg); ok {
+			files = append(files, attFile)
+		}
+		pkgs = append(pkgs, pkg)
 	}
 	return pkgs, files, failed, nil
+}
+
+// attachNpmAttestations mirrors a version's attestations document when
+// upstream advertises one, recording it on the package. Failures warn and
+// leave the package without dist.attestations — never advertising a document
+// the mirror does not hold.
+func attachNpmAttestations(ctx context.Context, stageRoot string, e npmLockEntry, meta npmUpstreamMeta, pkg *NpmPackage) (ManifestFile, bool) {
+	att, ok := meta.atts[e.Name+"@"+e.Version]
+	base := meta.bases[e.Name]
+	if !ok || base == "" {
+		return ManifestFile{}, false
+	}
+	mf, found, err := stageNpmAttestations(ctx, stageRoot, base, e)
+	if err != nil || !found {
+		if err == nil {
+			err = errors.New("document missing upstream")
+		}
+		emitProgress(ctx, "  ⚠ attestations %s@%s: %s", e.Name, e.Version, err)
+		return ManifestFile{}, false
+	}
+	emitProgress(ctx, "  ⊕ attestations %s@%s (%s)", e.Name, e.Version, att.PredicateType)
+	pkg.AttestationsPath = mf.Path
+	pkg.AttestationsPredicateType = att.PredicateType
+	return mf, true
 }
 
 // downloadNpmTarball streams one tarball to dest, verifying the SRI integrity
@@ -1352,7 +1775,7 @@ func (v *sriVerifier) verify() error {
 // Bundle writing
 // -----------------------------------------------------------------------------
 
-func (s *LowServer) writeNpmBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, pkgs []NpmPackage, tags map[string]map[string]string) (ExportResult, error) {
+func (s *LowServer) writeNpmBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, pkgs []NpmPackage, meta npmUpstreamMeta) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	sort.Slice(pkgs, func(i, j int) bool {
 		if pkgs[i].Name == pkgs[j].Name {
@@ -1360,6 +1783,14 @@ func (s *LowServer) writeNpmBundle(ctx context.Context, seq int64, stageRoot str
 		}
 		return pkgs[i].Name < pkgs[j].Name
 	})
+	tags := meta.tags
+	if len(tags) == 0 {
+		tags = nil
+	}
+	keys := meta.keys
+	if len(keys) == 0 {
+		keys = nil
+	}
 	id := bundleIDFor(streamNpm, seq)
 	manifest := BundleManifest{
 		Type:             manifestType,
@@ -1370,7 +1801,7 @@ func (s *LowServer) writeNpmBundle(ctx context.Context, seq int64, stageRoot str
 		Generator:        hostnameOrDefault(),
 		BundleID:         id,
 		Ecosystems:       []string{"npm"},
-		Npm:              &NpmManifest{Packages: pkgs, DistTags: tags},
+		Npm:              &NpmManifest{Packages: pkgs, DistTags: tags, Keys: keys},
 		Files:            files,
 	}
 	manifestBytes, err := marshalManifest(manifest)

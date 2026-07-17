@@ -53,6 +53,7 @@ func mavenEcosystem() ecosystem {
 		watchCollect: watchAdapter((*LowServer).CollectMaven),
 		flags: func(fs *flag.FlagSet, cfg *LowConfig) {
 			fs.StringVar(&cfg.MavenBinary, "maven", "mvn", "maven command used to resolve Java/Maven artifacts")
+			fs.StringVar(&cfg.MavenSignatureURL, "maven-signatures", "", "repository base URL .asc PGP signatures are mirrored from (default "+defaultMavenSignatureBase+"; empty path segment layout must match Maven 2)")
 		},
 		manifestContent: func(m BundleManifest) bool { return m.Maven != nil && len(m.Maven.Artifacts) > 0 },
 		validateContent: func(m BundleManifest, seen map[string]bool) error {
@@ -539,6 +540,7 @@ func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (
 	if err := rejectMavenSnapshots(artifacts); err != nil {
 		return ExportResult{}, err
 	}
+	files = s.fetchMavenSignatures(ctx, localRepo, files, artifacts)
 
 	emitProgress(ctx, "Packing %d artifact file(s) into a signed bundle…", len(files))
 	return s.exportIfNew(ctx, streamMaven, stageRoot, files, req.Force, func(seq int64) (ExportResult, error) {
@@ -1175,6 +1177,117 @@ func collectMavenRepo(repoRoot string) ([]ManifestFile, []MavenArtifact, error) 
 		artifacts = append(artifacts, *byGAV[k])
 	}
 	return files, artifacts, nil
+}
+
+// -----------------------------------------------------------------------------
+// PGP signature (.asc) mirroring
+// -----------------------------------------------------------------------------
+
+// defaultMavenSignatureBase is Maven Central, where every deployed file has a
+// detached PGP signature next to it. mvn itself never downloads .asc files,
+// so the collector fetches them separately after resolution.
+const defaultMavenSignatureBase = "https://repo.maven.apache.org/maven2"
+
+// mavenMaxSignatureBytes bounds one detached .asc signature (typically well
+// under 1 KB; the bound mostly rejects error pages served with a 200).
+const mavenMaxSignatureBytes = 64 << 10
+
+// mavenSignatureBase resolves the configured signature repository base.
+func (s *LowServer) mavenSignatureBase() string {
+	base := strings.TrimRight(strings.TrimSpace(s.cfg.MavenSignatureURL), "/")
+	if base == "" {
+		return defaultMavenSignatureBase
+	}
+	return base
+}
+
+// fetchMavenSignatures mirrors the detached .asc PGP signature of every
+// resolved primary artifact (jar/pom/module/...), so Gradle dependency
+// verification and manual `gpg --verify` work against the mirror. Signatures
+// are best-effort: an artifact without one upstream simply mirrors bare, and
+// no failure here ever fails the collect. Fetched signatures ride the same
+// signed bundle as the artifacts they cover; the static /maven/ tree serves
+// them at their conventional <file>.asc paths automatically.
+func (s *LowServer) fetchMavenSignatures(ctx context.Context, localRepo string, files []ManifestFile, artifacts []MavenArtifact) []ManifestFile {
+	base := s.mavenSignatureBase()
+	mirrored := 0
+	for i := range artifacts {
+		for _, f := range artifacts[i].Files {
+			mf, ok := s.fetchMavenSignature(ctx, base, localRepo, f)
+			if !ok {
+				continue
+			}
+			files = append(files, mf)
+			artifacts[i].Files = append(artifacts[i].Files, mf.Path)
+			mirrored++
+		}
+	}
+	if mirrored > 0 {
+		emitProgress(ctx, "⊕ %d PGP signature(s) mirrored from %s", mirrored, base)
+	}
+	return files
+}
+
+// fetchMavenSignature fetches one file's .asc signature. A 404 (an unsigned
+// file) is silent; other failures warn.
+func (s *LowServer) fetchMavenSignature(ctx context.Context, base, localRepo, manifestPath string) (ManifestFile, bool) {
+	rel, ok := strings.CutPrefix(manifestPath, "maven/")
+	if !ok || isMavenChecksum(rel) || strings.HasSuffix(rel, ".asc") {
+		return ManifestFile{}, false
+	}
+	body, found, err := fetchMavenSignatureBody(ctx, base+"/"+rel+".asc")
+	if err != nil {
+		emitProgress(ctx, "  ⚠ signature %s.asc: %s", rel, err)
+		return ManifestFile{}, false
+	}
+	if !found {
+		return ManifestFile{}, false
+	}
+	abs := filepath.Join(localRepo, filepath.FromSlash(rel)+".asc")
+	if err := os.WriteFile(abs, body, 0o644); err != nil {
+		emitProgress(ctx, "  ⚠ signature %s.asc: %s", rel, err)
+		return ManifestFile{}, false
+	}
+	mf, err := hashManifestFile(abs, manifestPath+".asc")
+	if err != nil {
+		emitProgress(ctx, "  ⚠ signature %s.asc: %s", rel, err)
+		return ManifestFile{}, false
+	}
+	return mf, true
+}
+
+// fetchMavenSignatureBody downloads one .asc document, requiring the armored
+// PGP shape so an error page served with a 200 is never stored as a
+// signature. found=false with nil error is a clean 404 — an unsigned file.
+func fetchMavenSignatureBody(ctx context.Context, rawURL string) (body []byte, found bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err = io.ReadAll(io.LimitReader(resp.Body, mavenMaxSignatureBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(body) > mavenMaxSignatureBytes {
+		return nil, false, fmt.Errorf("signature exceeds %d bytes", mavenMaxSignatureBytes)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(body)), "-----BEGIN PGP SIGNATURE-----") {
+		return nil, false, errors.New("response is not an armored PGP signature")
+	}
+	return body, true, nil
 }
 
 // skipMavenFile reports whether a local-repo file is Maven bookkeeping rather
