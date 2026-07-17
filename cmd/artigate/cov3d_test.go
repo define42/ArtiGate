@@ -85,7 +85,7 @@ func TestCov3D_JoinDiodeGroupBadInterface(t *testing.T) {
 // refuses the multicast join.
 func TestCov3D_StartCatcherLoopback(t *testing.T) {
 	cfg := CatcherConfig{Interface: "lo", Group: diodeDefaultGroup, Port: 0, RcvBufMB: 4, NetSetup: false}
-	c, err := startCatcher(cfg, t.TempDir(), func(string) {}, nil)
+	c, err := startCatcher(cfg, t.TempDir(), func(string) {}, nil, nil)
 	if err != nil {
 		t.Skipf("startCatcher on loopback unavailable here: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestCov3D_SetupPitcherNoNetsetup(t *testing.T) {
 // TestCov3D_SendBundleMissingFile covers the sendFile/SendBundle open-error
 // path: a bundle whose files are absent fails before any datagram is sent.
 func TestCov3D_SendBundleMissingFile(t *testing.T) {
-	p, _ := newLoopbackDiodePair(t, t.TempDir(), func(string) {})
+	p, _ := newLoopbackDiodePair(t, t.TempDir(), func(string) {}, nil)
 	if err := p.SendBundle(context.Background(), t.TempDir(), "go-bundle-000001"); err == nil {
 		t.Fatal("SendBundle with no staged files should error")
 	}
@@ -150,7 +150,7 @@ func TestCov3D_SendBundleMissingFile(t *testing.T) {
 // export-flow hook.
 func TestCov3D_PitchBundle(t *testing.T) {
 	ls := newBareLowServer(t)
-	p, _ := newLoopbackDiodePair(t, t.TempDir(), func(string) {})
+	p, _ := newLoopbackDiodePair(t, t.TempDir(), func(string) {}, nil)
 	ls.pitcher = p
 
 	// Failure: no staged files → DiodeError reported, nothing cleared.

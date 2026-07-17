@@ -472,7 +472,7 @@ func TestCovS2_MustPitcherConfigDisabled(t *testing.T) {
 // TestCovS2_NewDiodePitcherLoopback constructs a real pitcher over IPv6
 // loopback via the shared helper, covering newDiodePitcher's success path.
 func TestCovS2_NewDiodePitcherLoopback(t *testing.T) {
-	p, _ := newLoopbackDiodePair(t, t.TempDir(), func(string) {})
+	p, _ := newLoopbackDiodePair(t, t.TempDir(), func(string) {}, nil)
 	if got := p.target(); !strings.Contains(got, "::1") {
 		t.Errorf("pitcher target = %q, want a loopback address", got)
 	}

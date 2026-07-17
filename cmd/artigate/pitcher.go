@@ -23,6 +23,10 @@ package main
 //	                             interface itself (MTU, queues, EUI-64
 //	                             link-local, link up; needs CAP_NET_ADMIN);
 //	                             off expects a pre-configured interface
+//	ARTIGATE_PITCHER_HEARTBEAT   how often the signed stream-index heartbeat
+//	                             is broadcast (diodeheartbeat.go), a Go
+//	                             duration like 30s or 5m; default 30s, "off"
+//	                             disables
 //
 // Multicast is not an implementation detail: the fiber is one-way, so the
 // pitcher can never resolve the catcher's MAC address (NDP needs an answer).
@@ -86,6 +90,9 @@ type PitcherConfig struct {
 	DataShards   int
 	ParityShards int
 	NetSetup     bool
+	// Heartbeat is how often the signed stream-index heartbeat is broadcast;
+	// 0 disables it.
+	Heartbeat time.Duration
 }
 
 // pitcherConfigFromEnv reads and validates the pitcher's environment
@@ -121,10 +128,33 @@ func pitcherConfigFromEnv() (PitcherConfig, error) {
 	if cfg.NetSetup, err = envOnOffDefault("ARTIGATE_PITCHER_NETSETUP", true); err != nil {
 		return PitcherConfig{}, err
 	}
+	if cfg.Heartbeat, err = envHeartbeatInterval("ARTIGATE_PITCHER_HEARTBEAT"); err != nil {
+		return PitcherConfig{}, err
+	}
 	if _, err := newDiodePlan(cfg.MTU, cfg.DataShards, cfg.ParityShards); err != nil {
 		return PitcherConfig{}, err
 	}
 	return cfg, nil
+}
+
+// envHeartbeatInterval reads the heartbeat broadcast interval: a Go duration
+// of at least a second, or "off"/"0" to disable; empty means the default.
+func envHeartbeatInterval(name string) (time.Duration, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	switch strings.ToLower(v) {
+	case "":
+		return diodeDefaultHeartbeatInterval, nil
+	case "0", "off", "false", "no":
+		return 0, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %q is not a duration (like 30s or 5m; \"off\" disables)", name, v)
+	}
+	if d < time.Second {
+		return 0, fmt.Errorf("%s must be at least 1s, got %s", name, d)
+	}
+	return d, nil
 }
 
 func envIntInRange(name string, def, minV, maxV int) (int, error) {
@@ -292,6 +322,16 @@ func (p *diodePitcher) SendBundle(ctx context.Context, dir, bundleID string) err
 		}
 	}
 	return nil
+}
+
+// sendHeartbeat transmits one already-marshalled heartbeat datagram
+// immediately. It deliberately takes neither the bundle lock (a heartbeat must
+// not wait hours behind a large transfer — reporting indexes while a bundle
+// crosses is half its point) nor the pacer (one datagram every interval is
+// noise next to the configured rate, and the pacer is not safe for concurrent
+// use); the socket itself is safe for concurrent writes.
+func (p *diodePitcher) sendHeartbeat(pkt []byte) error {
+	return p.writeRetry(pkt)
 }
 
 // sendFile transmits one file: a hashing pass (the wire header carries the

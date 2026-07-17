@@ -393,9 +393,26 @@ func TestDiodeEnvConfigs(t *testing.T) {
 			Interface: "eth1", MTU: diodeDefaultMTU, TxQueueLen: diodeDefaultTxQueueLen,
 			RateMbit: 2500, Group: diodeDefaultGroup, Port: diodeDefaultPort,
 			DataShards: diodeDefaultDataShards, ParityShards: diodeDefaultParityShards, NetSetup: true,
+			Heartbeat: diodeDefaultHeartbeatInterval,
 		}
 		if cfg != want {
 			t.Fatalf("cfg = %+v, want %+v", cfg, want)
+		}
+	})
+
+	t.Run("heartbeat override and off", func(t *testing.T) {
+		t.Setenv("ARTIGATE_PITCHER_INTERFACE", "eth1")
+		t.Setenv("ARTIGATE_PITCHER_HEARTBEAT", "2m")
+		cfg, err := pitcherConfigFromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Heartbeat != 2*time.Minute {
+			t.Fatalf("Heartbeat = %s, want 2m", cfg.Heartbeat)
+		}
+		t.Setenv("ARTIGATE_PITCHER_HEARTBEAT", "off")
+		if cfg, err = pitcherConfigFromEnv(); err != nil || cfg.Heartbeat != 0 {
+			t.Fatalf("off: Heartbeat = %s, err = %v, want disabled", cfg.Heartbeat, err)
 		}
 	})
 
@@ -417,12 +434,14 @@ func TestDiodeEnvConfigs(t *testing.T) {
 	})
 
 	for name, set := range map[string]func(*testing.T){
-		"rate not a number":  func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_RATE_MBIT", "fast") },
-		"MTU out of range":   func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_MTU", "900") },
-		"group not v6":       func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_GROUP", "224.0.0.1") },
-		"group not mcast":    func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_GROUP", "2001:db8::1") },
-		"netsetup gibberish": func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_NETSETUP", "maybe") },
-		"FEC too wide":       func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_FEC_DATA", "255") },
+		"rate not a number":   func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_RATE_MBIT", "fast") },
+		"MTU out of range":    func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_MTU", "900") },
+		"group not v6":        func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_GROUP", "224.0.0.1") },
+		"group not mcast":     func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_GROUP", "2001:db8::1") },
+		"netsetup gibberish":  func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_NETSETUP", "maybe") },
+		"FEC too wide":        func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_FEC_DATA", "255") },
+		"heartbeat gibberish": func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_HEARTBEAT", "soonish") },
+		"heartbeat too fast":  func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_HEARTBEAT", "100ms") },
 	} {
 		t.Run("rejects "+name, func(t *testing.T) {
 			t.Setenv("ARTIGATE_PITCHER_INTERFACE", "eth1")
@@ -448,7 +467,9 @@ func TestJoinDiodeGroupOnLoopback(t *testing.T) {
 // newLoopbackDiodePair wires a real pitcher socket to a real catcher socket
 // over ::1. Link-local multicast cannot route across loopback (no fe80 source
 // address there), so the transport tests run the identical datagram path over
-// unicast; the group join itself is covered above and on real fiber.
+// unicast; the group join itself is covered above and on real fiber. hb, when
+// non-nil, receives the pitcher's heartbeat datagrams like a production
+// catcher does.
 //
 // The second result reports a constrained environment: without CAP_NET_ADMIN,
 // SO_RCVBUFFORCE fails and rmem_max caps the receive buffer far below one
@@ -458,7 +479,7 @@ func TestJoinDiodeGroupOnLoopback(t *testing.T) {
 // the same "stay below what the catcher can absorb" rule the production rate
 // limit exists for — and callers may re-pitch once on loss beyond parity,
 // mirroring the documented re-export remedy.
-func newLoopbackDiodePair(t *testing.T, landing string, onComplete func(string)) (*diodePitcher, bool) {
+func newLoopbackDiodePair(t *testing.T, landing string, onComplete func(string), hb *diodeHeartbeatReceiver) (*diodePitcher, bool) {
 	t.Helper()
 	rc, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.ParseIP("::1"), Port: 0})
 	if err != nil {
@@ -472,7 +493,7 @@ func newLoopbackDiodePair(t *testing.T, landing string, onComplete func(string))
 		rateMbit = 16
 		t.Logf("receive buffer %d of %d bytes (%v): pacing at %d Mbit/s and tolerating one re-pitch", granted, wantRcvBuf, err, rateMbit)
 	}
-	catcher := &diodeCatcher{conn: rc, asm: newDiodeAssembler(landing, validBundleFileName, onComplete)}
+	catcher := &diodeCatcher{conn: rc, asm: newDiodeAssembler(landing, validBundleFileName, onComplete), hb: hb}
 	go catcher.run()
 	t.Cleanup(func() { _ = catcher.Close() })
 
@@ -495,7 +516,7 @@ func TestPitcherToCatcherOverLoopback(t *testing.T) {
 	outDir, landing := t.TempDir(), t.TempDir()
 	var mu sync.Mutex
 	var landed []string
-	p, constrained := newLoopbackDiodePair(t, landing, func(n string) { mu.Lock(); landed = append(landed, n); mu.Unlock() })
+	p, constrained := newLoopbackDiodePair(t, landing, func(n string) { mu.Lock(); landed = append(landed, n); mu.Unlock() }, nil)
 
 	const bundleID = "go-bundle-000042"
 	files := map[string][]byte{
@@ -577,7 +598,7 @@ func TestLowToHighOverUDPDiode(t *testing.T) {
 	high := httptest.NewServer(hs)
 	t.Cleanup(high.Close)
 
-	ls.pitcher, _ = newLoopbackDiodePair(t, hs.cfg.Landing, hs.onDiodeFileLanded)
+	ls.pitcher, _ = newLoopbackDiodePair(t, hs.cfg.Landing, hs.onDiodeFileLanded, hs.diodeHeartbeatReceiver())
 
 	res, err := ls.CollectHF(context.Background(), HFCollectRequest{Models: []string{"unsloth/gpt-oss-20b-GGUF:Q4_0"}})
 	if err != nil {
@@ -617,6 +638,30 @@ func TestLowToHighOverUDPDiode(t *testing.T) {
 		t.Fatalf("hf stream not imported over the UDP diode: %+v", st.Stream(streamHF))
 	}
 	assertHTTPBody(t, high.URL+"/v2/unsloth/gpt-oss-20b-GGUF/manifests/Q4_0", string(model.manifest))
+
+	// The pitcher's signed heartbeat crosses the same socket: the catcher
+	// verifies it and the import status reports the low side's indexes.
+	// Heartbeats are periodic by design, so the poll re-sends until one is
+	// seen rather than betting the test on a single UDP datagram.
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		if err := ls.sendDiodeHeartbeat(time.Now().UTC()); err != nil {
+			t.Fatalf("sendDiodeHeartbeat: %v", err)
+		}
+		if st, err = hs.ImportStatus(); err != nil {
+			t.Fatal(err)
+		}
+		if st.DiodeHeartbeat != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("heartbeat never reached the high side's import status")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if hf := st.Stream(streamHF); hf.LowLastSequence != 1 || len(hf.AwaitingFromLow) != 0 {
+		t.Fatalf("hf stream after heartbeat = %+v, want low_last_sequence 1 and nothing awaiting", hf)
+	}
 }
 
 // -----------------------------------------------------------------------------

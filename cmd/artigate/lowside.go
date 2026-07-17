@@ -265,6 +265,9 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 	if cfg.WatchInterval > 0 {
 		go ls.watchLoop(ctx)
 	}
+	if ls.pitcher != nil && ls.pitcher.cfg.Heartbeat > 0 {
+		go ls.runDiodeHeartbeats(ctx)
+	}
 	// Cancel queued and running jobs as soon as the stop signal arrives, so
 	// requests waiting on a job unblock and the HTTP server can drain.
 	go func() {
@@ -298,6 +301,7 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 		p := ls.pitcher
 		log.Printf("low-side diode pitcher: %s → %s at ≤ %d Mbit/s (FEC %d+%d, MTU %d; bundles transmit after export, export dir is the retry spool)",
 			p.cfg.Interface, p.target(), p.cfg.RateMbit, p.cfg.DataShards, p.cfg.ParityShards, p.cfg.MTU)
+		log.Printf("low-side diode heartbeat: %s", heartbeatIntervalStatus(p.cfg.Heartbeat))
 	}
 	must(listenAndServe(ctx, tc, cfg.Listen, cfg.Root, logHTTP(handler)))
 }

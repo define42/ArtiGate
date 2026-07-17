@@ -69,6 +69,7 @@ mutually exclusive.
 | `ARTIGATE_PITCHER_FEC_DATA` | `32` | Data shards per block |
 | `ARTIGATE_PITCHER_FEC_PARITY` | `8` | Parity shards per block — the per-block loss budget |
 | `ARTIGATE_PITCHER_NETSETUP` | `on` | `on`: ArtiGate configures the NIC (link bounce, eui64, MTU, txqueuelen, TX rings, link up, waits for DAD). `off`: the host pre-configured it |
+| `ARTIGATE_PITCHER_HEARTBEAT` | `30s` | How often the signed stream-index heartbeat is broadcast (`off` disables) |
 
 ### High side (catcher)
 
@@ -127,6 +128,23 @@ parity budget the catcher also evicts stuck half-received blocks instead of
 stalling, so one pass completes every block the link let through. Together
 these make a multi-gigabyte model bundle converge in a couple of re-sends on
 a lossy link, instead of demanding one perfect pass.
+
+`/admin/missing` can only report gaps behind bundles that *did* arrive; a
+bundle lost in its entirety — or a low side that silently stopped exporting —
+leaves no gap to see. The **heartbeat** closes that blind spot: every
+`ARTIGATE_PITCHER_HEARTBEAT` interval (default 30s) the pitcher broadcasts
+each stream's newest committed sequence number, signed with the low side's
+key under a dedicated context so it can never be mistaken for a manifest
+signature. The catcher verifies it, and the high side then knows what it
+*should* have: the dashboard's overview shows the low side's index per
+stream, an **Awaiting** column for bundles that left the low side but have
+not arrived (still in transit, or lost and needing a re-export), and how
+fresh the last heartbeat is — a stale heartbeat means the link, or the low
+side, is down. `/metrics` exposes the same as
+`artigate_high_low_last_sequence`, `artigate_high_bundles_awaiting_from_low`,
+and `artigate_high_diode_heartbeat_{timestamp,age}_seconds`; alert on
+awaiting with a `for:` clause long enough to ride out your largest bundle's
+transfer time.
 
 The catcher logs one summary line whenever something happened: datagrams and
 bytes received, drops, **blocks repaired** (parity actually used), files

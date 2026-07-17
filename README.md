@@ -557,9 +557,24 @@ interface is what enables each side — ArtiGate configures the NIC itself
 | `ARTIGATE_PITCHER_RATE_MBIT` | low | max wire rate, default `800` — a one-way link has no congestion control, so stay below what the catcher absorbs |
 | `ARTIGATE_PITCHER_FEC_DATA` / `_FEC_PARITY` | low | Reed-Solomon geometry, default `32`+`8`: any 8 of every 40 datagrams may be lost harmlessly |
 | `ARTIGATE_PITCHER_TXQUEUELEN` | low | TX NIC queue length, default `10000` — raise if the driver drops on bursts |
+| `ARTIGATE_PITCHER_HEARTBEAT` | low | how often the signed stream-index heartbeat is broadcast, default `30s` (`off` disables) |
 | `ARTIGATE_CATCHER_INTERFACE` | high | dedicated diode RX NIC; enables the catcher |
 | `ARTIGATE_CATCHER_RCVBUF_MB` | high | receive buffer (MiB), default `64`, set via `SO_RCVBUFFORCE` |
 | `ARTIGATE_{PITCHER,CATCHER}_{MTU,GROUP,PORT,NETSETUP}` | both | MTU `9000`, group `ff02::4147`, port `4147`; `NETSETUP=off` when the host pre-configures the NIC |
+
+The pitcher also broadcasts a periodic **heartbeat** carrying every stream's
+newest committed sequence number, signed with the low side's key (a dedicated
+signature context, so it can never be confused with a manifest signature). A
+one-way link gives the high side no other way to learn what it *should* have:
+`/admin/missing` can only report gaps behind bundles that did arrive, so a
+bundle lost in its entirety — or a low side that stopped exporting — would
+otherwise be invisible. With heartbeats, the high side's dashboard shows the
+low side's index per stream and an **Awaiting** column for bundles that left
+the low side but have not arrived (still in transit, or lost and needing a
+re-export), plus how fresh the last heartbeat is; `/metrics` exposes the same
+as `artigate_high_low_last_sequence`, `artigate_high_bundles_awaiting_from_low`,
+and `artigate_high_diode_heartbeat_{timestamp,age}_seconds` (alert on awaiting
+with a `for:` clause long enough to ride out a large bundle's transfer).
 
 Loss beyond the parity budget expires the transfer on the catcher (nothing
 partial ever lands) and is recovered the usual way: the gap shows on the high

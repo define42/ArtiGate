@@ -110,6 +110,11 @@ type HighServer struct {
 	// endpoint reports; notifier posts failure webhooks (nil when unconfigured).
 	metrics  *highMetrics
 	notifier *webhookNotifier
+	// heartbeat records the last verified low-side stream-index heartbeat
+	// received over the built-in UDP diode (diodeheartbeat.go); the import
+	// status reads it to report bundles that left the low side but never
+	// arrived. Its zero value is a server that has received none.
+	heartbeat diodeHeartbeatState
 	// npmAudit memoizes the regenerated npm bulk-audit index (see
 	// osvnpmaudit.go) so audit requests do not re-parse it from disk.
 	npmAudit npmAuditCache
@@ -595,9 +600,24 @@ type ImportStatus struct {
 	// Version and ManifestFormat identify the serving binary — what this
 	// air-gapped high side runs and the newest bundle wire format it can
 	// import — so /admin/status answers a fleet-upgrade check remotely.
-	Version        string               `json:"version"`
-	ManifestFormat int                  `json:"manifest_format"`
-	Streams        []StreamImportStatus `json:"streams"`
+	Version        string `json:"version"`
+	ManifestFormat int    `json:"manifest_format"`
+	// DiodeHeartbeat describes the last verified low-side heartbeat received
+	// over the built-in UDP diode; nil until one arrives (a folder or HTTP
+	// transport, an older low side, or a diode link that has been dark since
+	// startup).
+	DiodeHeartbeat *DiodeHeartbeatStatus `json:"diode_heartbeat,omitempty"`
+	Streams        []StreamImportStatus  `json:"streams"`
+}
+
+// DiodeHeartbeatStatus summarizes the last verified low-side heartbeat.
+// ReceivedAt and AgeSeconds are by this side's clock; Created is the low
+// side's own send-time stamp.
+type DiodeHeartbeatStatus struct {
+	ReceivedAt time.Time `json:"received_at"`
+	AgeSeconds int64     `json:"age_seconds"`
+	Created    time.Time `json:"created"`
+	LowVersion string    `json:"low_version,omitempty"`
 }
 
 type StreamImportStatus struct {
@@ -609,6 +629,16 @@ type StreamImportStatus struct {
 	MissingRanges        []string `json:"missing_ranges"`
 	QuarantinedSequences []int64  `json:"quarantined_sequences"`
 	ReadyToImport        bool     `json:"ready_to_import"`
+	// LowLastSequence is the newest committed sequence the low side reports
+	// for this stream in its diode heartbeat; 0 until a heartbeat mentions
+	// the stream.
+	LowLastSequence int64 `json:"low_last_sequence,omitempty"`
+	// AwaitingFromLow lists the sequences beyond HighestSeenSequence that the
+	// heartbeat says were exported but that are neither imported nor present
+	// here — still crossing the diode, or lost on it and needing a low-side
+	// re-export. (Gaps behind an already-arrived bundle stay in
+	// MissingRanges.)
+	AwaitingFromLow []string `json:"awaiting_from_low,omitempty"`
 }
 
 // Stream returns the import status for the named stream, or a zero value with
@@ -1388,18 +1418,23 @@ func (s *HighServer) importStatusLocked() (ImportStatus, error) {
 	if err != nil {
 		return ImportStatus{}, err
 	}
+	// The heartbeat may name streams nothing has arrived for — every bundle
+	// still crossing (or lost on) the diode — which must show as awaiting.
+	hb := s.heartbeat.snapshot()
+	streams = withHeartbeatStreams(streams, hb.hb.Streams)
 	out := ImportStatus{
 		Version:        versionString(),
 		ManifestFormat: manifestFormatCurrent,
+		DiodeHeartbeat: hb.status(time.Now().UTC()),
 		Streams:        make([]StreamImportStatus, 0, len(streams)),
 	}
 	for _, stream := range streams {
-		out.Streams = append(out.Streams, s.streamStatusLocked(stream, landing[stream], quarantined[stream]))
+		out.Streams = append(out.Streams, s.streamStatusLocked(stream, landing[stream], quarantined[stream], hb.hb.Streams[stream]))
 	}
 	return out, nil
 }
 
-func (s *HighServer) streamStatusLocked(stream string, landing, quarantined []int64) StreamImportStatus {
+func (s *HighServer) streamStatusLocked(stream string, landing, quarantined []int64, lowLast int64) StreamImportStatus {
 	present := map[int64]bool{}
 	maxSeen := s.state.Imported[stream]
 	maxSeen = markPresentComplete(s.cfg.Landing, stream, landing, present, maxSeen)
@@ -1415,9 +1450,16 @@ func (s *HighServer) streamStatusLocked(stream string, landing, quarantined []in
 		MissingRanges:        rangesToStrings(missing),
 		QuarantinedSequences: filterCompleteSequences(s.cfg.Quarantine, stream, quarantined),
 		ReadyToImport:        present[next],
+		LowLastSequence:      lowLast,
 	}
 	if !present[next] && maxSeen >= next {
 		st.BlockingMissing = next
+	}
+	// Everything above the highest bundle seen here, up to the low side's
+	// reported index, has left the low side but not arrived. (A lowLast below
+	// maxSeen just means the heartbeat predates the newest arrival.)
+	if lowLast > maxSeen {
+		st.AwaitingFromLow = rangesToStrings([]SequenceRange{{Start: maxSeen + 1, End: lowLast}})
 	}
 	return st
 }
