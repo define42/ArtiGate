@@ -1574,9 +1574,24 @@ func (a *artifactCollector) list() []ContainerArtifact {
 	return out
 }
 
+// capReached reports whether the per-image artifact cap is hit, warning
+// once. Every discovery path checks it before fetching anything, so a noisy
+// or hostile registry listing thousands of referrers cannot drive manifest
+// GETs past the cap — the guard bounds the requests, not just the records.
+func (a *artifactCollector) capReached(ctx context.Context) bool {
+	if len(a.found) < containerMaxImageArtifacts {
+		return false
+	}
+	a.warnCapped(ctx)
+	return true
+}
+
 // addByTag mirrors the artifact at one cosign tag-scheme tag. A missing tag
 // is the normal case and silent.
 func (a *artifactCollector) addByTag(ctx context.Context, subject, tag string) {
+	if a.capReached(ctx) {
+		return
+	}
 	body, mediaType, digest, found, err := a.c.fetchArtifactManifest(ctx, a.ref, tag)
 	if err != nil {
 		emitProgress(ctx, "    ⚠ artifact %s: %v", tag, err)
@@ -1593,6 +1608,9 @@ func (a *artifactCollector) addByTag(ctx context.Context, subject, tag string) {
 // manifest by digest.
 func (a *artifactCollector) addReferrer(ctx context.Context, subject string, desc ociDescriptor) {
 	if !containerDigestRE.MatchString(desc.Digest) || a.skip[desc.Digest] || a.found[desc.Digest] != nil {
+		return
+	}
+	if a.capReached(ctx) {
 		return
 	}
 	body, mediaType, digest, found, err := a.c.fetchArtifactManifest(ctx, a.ref, desc.Digest)
@@ -1618,8 +1636,7 @@ func (a *artifactCollector) record(ctx context.Context, subject, tag string, bod
 		}
 		return
 	}
-	if len(a.found) >= containerMaxImageArtifacts {
-		a.warnCapped(ctx)
+	if a.capReached(ctx) {
 		return
 	}
 	art, files, err := a.stageArtifact(ctx, subject, tag, body, mediaType, digest, desc)
@@ -1949,6 +1966,18 @@ func (s *HighServer) publishContainers(m *ContainerManifest) error {
 	return nil
 }
 
+// containerImageServedDigest is the digest a client resolves for an image:
+// the preserved index digest when the mirrored reference was one, else the
+// manifest digest. It is the identity of an untagged (digest-pinned) record —
+// two pins of different indexes stay distinct even when they share one
+// linux/amd64 manifest.
+func containerImageServedDigest(img ContainerImage) string {
+	if img.Index != nil {
+		return img.Index.Digest
+	}
+	return img.Digest
+}
+
 // mergeContainerRepo merges newly imported images into the repo's index: a
 // re-imported tag moves to its new digest, and digest-pinned images accumulate.
 func (s *HighServer) mergeContainerRepo(repo ContainerRepo) error {
@@ -1963,7 +1992,7 @@ func (s *HighServer) mergeContainerRepo(repo ContainerRepo) error {
 		if img.Tag != "" {
 			return "tag:" + img.Tag
 		}
-		return "digest:" + img.Digest
+		return "digest:" + containerImageServedDigest(img)
 	}
 	byKey := map[string]int{}
 	for i, img := range merged.Images {
@@ -1981,7 +2010,11 @@ func (s *HighServer) mergeContainerRepo(repo ContainerRepo) error {
 		if merged.Images[i].Tag != merged.Images[j].Tag {
 			return merged.Images[i].Tag < merged.Images[j].Tag
 		}
-		return merged.Images[i].Digest < merged.Images[j].Digest
+		if merged.Images[i].Digest != merged.Images[j].Digest {
+			return merged.Images[i].Digest < merged.Images[j].Digest
+		}
+		// Distinct index pins can share one amd64 manifest digest.
+		return containerImageServedDigest(merged.Images[i]) < containerImageServedDigest(merged.Images[j])
 	})
 	return writeJSONAtomic(s.containerRepoIndexPath(name), merged, 0o644)
 }
@@ -2242,13 +2275,14 @@ func containerImageDoc(img ContainerImage) containerManifestDoc {
 	return containerManifestDoc{Digest: img.Digest, MediaType: img.MediaType}
 }
 
-// findContainerImage resolves a tag or digest against a repo's index. The
-// dashboard's detail view keys on the image record; registry serving resolves
-// through findContainerManifestDoc instead.
+// findContainerImage resolves a tag or digest against a repo's index — for a
+// digest, the linux/amd64 manifest or the preserved index digest a pin
+// resolves through. The dashboard's detail view keys on the image record;
+// registry serving resolves through findContainerManifestDoc instead.
 func findContainerImage(repo ContainerRepo, ref string) (ContainerImage, bool) {
 	byDigest := containerDigestRE.MatchString(ref)
 	for _, img := range repo.Images {
-		if byDigest && img.Digest == ref {
+		if byDigest && (img.Digest == ref || (img.Index != nil && img.Index.Digest == ref)) {
 			return img, true
 		}
 		if !byDigest && img.Tag == ref {
@@ -2407,7 +2441,8 @@ func (s *HighServer) listContainerRepos() ([]UIModule, error) {
 			if img.Tag != "" {
 				versions = append(versions, img.Tag)
 			} else {
-				versions = append(versions, img.Digest)
+				// The digest the pin was collected by (and pulls resolve).
+				versions = append(versions, containerImageServedDigest(img))
 			}
 		}
 		sort.Strings(versions)
@@ -2462,7 +2497,7 @@ func (s *HighServer) containerDetail(spec string) (UIDetail, error) {
 	}
 	subtitle := img.Tag
 	if subtitle == "" {
-		subtitle = img.Digest
+		subtitle = containerImageServedDigest(img)
 	}
 	// CopyRef is the host-relative pull reference (<registry>/<repository>:<tag>);
 	// the dashboard prepends its own host and renders it as a prominent
@@ -2533,12 +2568,13 @@ func summarizeContainerArtifacts(arts []ContainerArtifact) string {
 	return strings.Join(parts, ", ")
 }
 
-// refSuffix renders how a client appends the reference: ":tag" or "@digest".
+// refSuffix renders how a client appends the reference: ":tag" or "@digest"
+// (the digest the pin resolves — the index digest when one was preserved).
 func refSuffix(img ContainerImage) string {
 	if img.Tag != "" {
 		return ":" + img.Tag
 	}
-	return "@" + img.Digest
+	return "@" + containerImageServedDigest(img)
 }
 
 // ociHistory is one entry of an image config's build history.

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1458,6 +1459,88 @@ func TestContainerArtifactKind(t *testing.T) {
 	}
 	if got := summarizeContainerArtifacts(nil); got != "" {
 		t.Errorf("empty summary = %q", got)
+	}
+}
+
+// TestMergeContainerRepoDigestPinnedIndexes pins two different multi-platform
+// indexes that share one linux/amd64 manifest and checks they keep distinct
+// records — identity is the digest a pull resolves (the preserved index), not
+// the shared amd64 manifest — while re-importing the same pin replaces its
+// record in place.
+func TestMergeContainerRepoDigestPinnedIndexes(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	amd := containerSHA([]byte("shared-amd64-manifest"))
+	idx1, idx2 := containerSHA([]byte("index-1")), containerSHA([]byte("index-2"))
+	pin := func(idx string, size int64) ContainerImage {
+		return ContainerImage{
+			Digest: amd, MediaType: mtDockerManifest, Size: size,
+			Index: &ContainerIndex{Digest: idx, MediaType: mtOCIIndex, Size: 1},
+		}
+	}
+	repo := func(imgs ...ContainerImage) ContainerRepo {
+		return ContainerRepo{Registry: "docker.io", Repository: "library/pinned", Images: imgs}
+	}
+	if err := hs.mergeContainerRepo(repo(pin(idx1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	if err := hs.mergeContainerRepo(repo(pin(idx2, 1))); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := hs.loadContainerRepoIndex("docker.io/library/pinned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Images) != 2 {
+		t.Fatalf("images = %+v, want both index pins retained", merged.Images)
+	}
+	for _, idx := range []string{idx1, idx2} {
+		if doc, ok := findContainerManifestDoc(merged, idx); !ok || doc.Digest != idx {
+			t.Errorf("manifest doc for %s = %+v (ok=%v)", idx, doc, ok)
+		}
+		if img, ok := findContainerImage(merged, idx); !ok || img.Index == nil || img.Index.Digest != idx {
+			t.Errorf("findContainerImage(%s) = %+v (ok=%v)", idx, img, ok)
+		}
+	}
+	// Re-importing one pin replaces its record instead of appending a third.
+	if err := hs.mergeContainerRepo(repo(pin(idx2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	merged, err = hs.loadContainerRepoIndex("docker.io/library/pinned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Images) != 2 {
+		t.Fatalf("re-import duplicated the pin: %+v", merged.Images)
+	}
+}
+
+// TestArtifactCollectorCapStopsFetching fills the collector to the artifact
+// cap and checks further discovery performs no upstream requests at all —
+// the cap bounds the fetches, not just the recorded artifacts.
+func TestArtifactCollectorCapStopsFetching(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("capped collector reached upstream: %s", r.URL.Path)
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	ls, _ := newContainerLowServer(t, map[string]string{"docker.io": srv.URL})
+	col := &artifactCollector{
+		c: ls.newContainerClient(), ref: imageRef{Registry: "docker.io", Repository: "library/alpine"},
+		stageRoot: t.TempDir(), seenFile: map[string]bool{}, skip: map[string]bool{},
+		found: map[string]*ContainerArtifact{},
+	}
+	for i := 0; i < containerMaxImageArtifacts; i++ {
+		col.found[containerSHA([]byte(fmt.Sprintf("artifact-%d", i)))] = &ContainerArtifact{}
+	}
+	subject := containerSHA([]byte("subject"))
+	col.addByTag(context.Background(), subject, cosignArtifactTag(subject, ".sig"))
+	col.addReferrer(context.Background(), subject, ociDescriptor{Digest: containerSHA([]byte("extra-referrer"))})
+	if !col.capped {
+		t.Error("cap warning never emitted")
+	}
+	if len(col.order) != 0 {
+		t.Errorf("capped collector recorded artifacts: %v", col.order)
 	}
 }
 
