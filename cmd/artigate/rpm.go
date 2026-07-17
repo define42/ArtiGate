@@ -39,6 +39,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // rpmEcosystem is the RPM mirror stream's registry entry (see ecosystems in
@@ -927,14 +929,17 @@ func (s *LowServer) writeRpmBundle(ctx context.Context, seq int64, stageRoot str
 // -----------------------------------------------------------------------------
 
 // decompressByExt decompresses by href extension: .gz via the standard library,
-// .xz by shelling to xz, and plain otherwise. Output is capped at
-// maxIndexPlainBytes (the result is parsed in memory).
+// .xz by shelling to xz, .zst via the klauspost/compress zstd decoder, and plain
+// otherwise. Output is capped at maxIndexPlainBytes (the result is parsed in
+// memory).
 func decompressByExt(href string, data []byte) ([]byte, error) {
 	switch {
 	case strings.HasSuffix(href, ".gz"):
 		return gunzip(data, maxIndexPlainBytes)
 	case strings.HasSuffix(href, ".xz"):
 		return xzDecompress(data)
+	case strings.HasSuffix(href, ".zst"):
+		return zstdDecompress(data, maxIndexPlainBytes)
 	case strings.HasSuffix(href, ".zck"):
 		return nil, fmt.Errorf("zchunk (.zck) index cannot be parsed: %s", href)
 	default:
@@ -946,16 +951,38 @@ func xzDecompress(data []byte) ([]byte, error) {
 	return runXZ(data, maxIndexPlainBytes, "--decompress", "--stdout")
 }
 
+// zstdDecompress inflates a zstd-compressed index (as Docker CE's EL9 repos
+// publish) using the in-process klauspost/compress decoder — no external binary
+// — streaming through a limit so a decompression bomb cannot expand past limit,
+// the same guard gunzip applies to .gz.
+func zstdDecompress(data []byte, limit int64) ([]byte, error) {
+	zr, err := zstd.NewReader(bytes.NewReader(data), zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	out, err := io.ReadAll(io.LimitReader(zr, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("zstd decompress: %w", err)
+	}
+	if int64(len(out)) > limit {
+		return nil, fmt.Errorf("zstd decompress: decompressed data exceeds the %s cap", formatBytes(limit))
+	}
+	return out, nil
+}
+
 // compressByExt recompresses plain to match an href's extension: .gz via the
-// standard library, .xz by shelling to xz, plain otherwise. Zchunk (.zck)
-// cannot be produced, so filtered (arch/newest-only) rewriting is unsupported
-// for a zchunk-only index.
+// standard library, .xz by shelling to xz, .zst via the klauspost/compress zstd
+// encoder, plain otherwise. Zchunk (.zck) cannot be produced, so filtered
+// (arch/newest-only) rewriting is unsupported for a zchunk-only index.
 func compressByExt(href string, plain []byte) ([]byte, error) {
 	switch {
 	case strings.HasSuffix(href, ".gz"):
 		return gzipBytes(plain)
 	case strings.HasSuffix(href, ".xz"):
 		return xzCompress(plain)
+	case strings.HasSuffix(href, ".zst"):
+		return zstdCompress(plain)
 	case strings.HasSuffix(href, ".zck"):
 		return nil, fmt.Errorf("cannot rewrite zchunk (.zck) index %s after filtering; disable newest_only and list every architecture the repo carries", href)
 	default:
@@ -965,6 +992,25 @@ func compressByExt(href string, plain []byte) ([]byte, error) {
 
 func xzCompress(data []byte) ([]byte, error) {
 	return runXZ(data, maxMirroredFileBytes, "--compress", "--stdout")
+}
+
+// zstdCompress recompresses a filtered index to zstd with the in-process
+// klauspost/compress encoder, mirroring gzipBytes. It is only reached when
+// newest-only/arch filtering rewrites a .zst index the low side must re-serve.
+func zstdCompress(plain []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := zw.Write(plain); err != nil {
+		_ = zw.Close()
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // runXZ pipes data through the xz binary.

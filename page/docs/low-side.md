@@ -196,7 +196,7 @@ The low side deliberately **delegates fetching to the tools already installed on
 | Maven | `mvn` |
 | npm | `npm` |
 | APT | `gpgv` (to verify the upstream `Release` against a supplied keyring) |
-| RPM | `gpgv` (optional, for repo signature verification), `xz` (for `.xz`-compressed indexes) |
+| RPM | `gpgv` (optional, for repo signature verification), `xz` (for `.xz`-compressed indexes; `.zst` is decompressed in-process) |
 | Terraform | `git` (only for modules with `git::` sources; `--git` selects the binary) |
 | Containers, AI models, crates, Helm, NuGet, Alpine | none — fetched over HTTP with the Go standard library |
 
