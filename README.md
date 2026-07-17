@@ -186,6 +186,18 @@ and environment variable.
   `ghcr.io/...` content never mixes. Layers are content-addressed, so a base
   layer shared by several images is bundled and stored once.
 
+  **Signatures and attestations cross the diode too.** Each collect also
+  mirrors whatever is attached to the image upstream — cosign/sigstore
+  signatures, in-toto/SLSA provenance, SBOMs — discovered via the OCI 1.1
+  referrers API (and its tag fallback), cosign's `sha256-<digest>.sig`/
+  `.att`/`.sbom` tag scheme, and buildkit's attestation entries in the image
+  index. A multi-platform tag serves its original **index** document on the
+  high side, so the digest a client resolves is exactly upstream's and
+  signatures over it verify unchanged; `cosign verify`, Kyverno, and Ratify
+  work against the mirror with the same keys/identities they use online.
+  (Artifacts that fail to fetch are skipped with a warning — the image still
+  mirrors, and verification simply fails closed for it.)
+
   The tag position also takes a **version constraint**, resolved against the
   upstream tag list at collect time to the newest matching version:
 
@@ -670,6 +682,12 @@ apk update   # add --allow-untrusted instead when the index is served unsigned
 # Containers — the pull name embeds the upstream registry
 docker pull artigate-high.local/docker.io/library/alpine:3.20
 docker pull artigate-high.local/ghcr.io/org/app:v1
+
+# Signatures/attestations mirrored with the image verify offline: cosign's
+# tag scheme and the OCI referrers API both answer on the high side
+cosign verify --key cosign.pub artigate-high.local/ghcr.io/org/app:v1
+cosign verify-attestation --type slsaprovenance --key cosign.pub \
+  artigate-high.local/ghcr.io/org/app:v1
 ```
 
 ```bash
@@ -988,7 +1006,13 @@ edge-triggered (one notification per gap; the gap then ages via
   (`host=user:password`, comma-separated) — scheduled pulls use only the
   latter. `--container-registry host=baseURL` on the low side redirects a
   registry's API to a private mirror/proxy. The high-side registry is
-  read-only (no push).
+  read-only (no push). Attached artifacts (cosign signatures, attestations,
+  SBOMs) mirror automatically and are served back through cosign's tag
+  scheme and `GET /v2/<name>/referrers/<digest>`; a multi-platform tag
+  resolves to its preserved upstream index digest, so policy engines verify
+  the mirror's content byte for byte. Only artifacts attached to the pulled
+  image (or its index) at collect time cross — re-signing upstream later
+  needs a re-collect to propagate.
 - **OSV**: databases are TLS-trusted at collect time (the OSV bucket
   publishes no digests for its zips) and hash-locked into the signed bundle
   from there. Advisory *contents* are served verbatim from the verified zip;

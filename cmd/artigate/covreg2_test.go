@@ -423,12 +423,13 @@ func TestCovR2_HandleContainerManifestAndResource(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = headResp.Body.Close()
-	if headResp.StatusCode != http.StatusOK || headResp.Header.Get("Docker-Content-Digest") != alpine.manifestDigest {
+	// The tag resolves to the preserved upstream index, digest included.
+	if headResp.StatusCode != http.StatusOK || headResp.Header.Get("Docker-Content-Digest") != containerSHA(alpine.index) {
 		t.Fatalf("HEAD manifest = %d %q", headResp.StatusCode, headResp.Header.Get("Docker-Content-Digest"))
 	}
 
-	// A repository whose manifest blob was removed reports a missing blob.
-	_ = os.Remove(hs.containerBlobPath(alpine.manifestDigest))
+	// A repository whose index blob was removed reports a missing blob.
+	_ = os.Remove(hs.containerBlobPath(containerSHA(alpine.index)))
 	assertHTTPStatus(t, srv.URL+"/v2/docker.io/library/alpine/manifests/3.20", http.StatusNotFound)
 
 	// handleContainerResource routing edge cases.

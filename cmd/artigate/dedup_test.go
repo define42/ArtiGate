@@ -643,7 +643,8 @@ func registerSharedLayerImage(mux *http.ServeMux, repo, tag string, img fakeImag
 
 // TestContainerDeltaSharedLayerSkipped collects two tags sharing a layer in
 // two separate collects: the second collect must not download the shared
-// layer again, and its bundle must carry only the new config and manifest.
+// layer again, and its bundle must carry only the new config, manifest, and
+// index.
 func TestContainerDeltaSharedLayerSkipped(t *testing.T) {
 	v1 := fakeImageVariant("layer-shared-bytes", "/v1")
 	v2 := fakeImageVariant("layer-shared-bytes", "/v2")
@@ -677,9 +678,13 @@ func TestContainerDeltaSharedLayerSkipped(t *testing.T) {
 		t.Errorf("shared layer downloaded %d time(s) across both collects, want 1", n)
 	}
 	got := listArchiveEntries(t, ls.cfg.ExportDir, res2.BundleID)
-	want := []string{containerBlobRel(containerSHA(v2.config)), containerBlobRel(v2.manifestDigest)}
+	want := []string{
+		containerBlobRel(containerSHA(v2.config)),
+		containerBlobRel(v2.manifestDigest),
+		containerBlobRel(containerSHA(v2.index)),
+	}
 	sort.Strings(want)
-	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("delta archive = %v, want %v", got, want)
 	}
 }

@@ -13,6 +13,15 @@ package main
 // Blobs are stored content-addressed, so layers shared between images are
 // bundled once.
 //
+// Attached artifacts cross the diode with each image: cosign/sigstore
+// signatures, in-toto/SLSA attestations, and SBOMs are discovered via the
+// OCI 1.1 referrers API (with its sha256-<hex> tag fallback), cosign's tag
+// scheme (sha256-<hex>.sig/.att/.sbom), and buildkit's attestation-manifest
+// index entries, then bundled like any other manifest and blobs. When a
+// reference resolves through a multi-platform index, the index document
+// itself is preserved and served for the tag, so the digest a client
+// resolves — and any signature over it — is exactly upstream's.
+//
 // High side: images from different upstream registries are kept in separate
 // namespaces — the served repository name is "<registry>/<repository>"
 // (e.g. docker.io/library/alpine), so docker.io and ghcr.io content never
@@ -20,6 +29,10 @@ package main
 // /v2/, enough for docker/podman/containerd to pull:
 //
 //	docker pull <high-host>/docker.io/library/alpine:3.20
+//
+// It also answers GET /v2/<name>/referrers/<digest> (OCI 1.1) and serves the
+// mirrored cosign tags, so air-gapped policy engines (Kyverno, Ratify) and
+// cosign verify signatures and attestations against the mirror.
 
 import (
 	"context"
@@ -32,6 +45,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -96,6 +110,42 @@ type ContainerImage struct {
 	MediaType string          `json:"media_type"`
 	Size      int64           `json:"size"`
 	Blobs     []ContainerBlob `json:"blobs"`
+	// Index preserves the multi-platform index the reference resolved
+	// through, when there was one. The high side serves these exact bytes for
+	// the tag, so the digest a client resolves — and any cosign signature
+	// over it — matches upstream byte for byte.
+	Index *ContainerIndex `json:"index,omitempty"`
+	// Artifacts are the attached signatures, attestations, and SBOMs
+	// mirrored with this image.
+	Artifacts []ContainerArtifact `json:"artifacts,omitempty"`
+}
+
+// ContainerIndex references a stored multi-platform index document.
+type ContainerIndex struct {
+	Digest    string `json:"digest"`
+	MediaType string `json:"media_type"`
+	Size      int64  `json:"size"`
+}
+
+// ContainerArtifact is one attached artifact mirrored alongside an image: a
+// cosign/sigstore signature, an in-toto/SLSA attestation, or an SBOM. It is
+// an OCI image manifest stored like any other (content-addressed, with its
+// config and layer blobs); Subject is the digest of the manifest or index it
+// refers to, which is how the high side's referrers endpoint indexes it.
+type ContainerArtifact struct {
+	Subject string `json:"subject"`
+	// Tag is cosign's tag-scheme name (sha256-<hex>.sig / .att / .sbom) when
+	// the artifact was discovered — and is served back — under one; artifacts
+	// found through the referrers API have none.
+	Tag       string `json:"tag,omitempty"`
+	Digest    string `json:"digest"`
+	MediaType string `json:"media_type"`
+	// ArtifactType is what the referrers response advertises for filtering:
+	// the manifest's own artifactType, else its config media type.
+	ArtifactType string            `json:"artifact_type,omitempty"`
+	Size         int64             `json:"size"`
+	Annotations  map[string]string `json:"annotations,omitempty"`
+	Blobs        []ContainerBlob   `json:"blobs,omitempty"`
 }
 
 type ContainerBlob struct {
@@ -406,19 +456,23 @@ type ociPlatform struct {
 }
 
 type ociDescriptor struct {
-	MediaType string       `json:"mediaType"`
-	Digest    string       `json:"digest"`
-	Size      int64        `json:"size"`
-	Platform  *ociPlatform `json:"platform,omitempty"`
+	MediaType    string            `json:"mediaType"`
+	Digest       string            `json:"digest"`
+	Size         int64             `json:"size"`
+	Platform     *ociPlatform      `json:"platform,omitempty"`
+	ArtifactType string            `json:"artifactType,omitempty"`
+	Annotations  map[string]string `json:"annotations,omitempty"`
 }
 
 // ociManifest covers both an image manifest (Config/Layers) and an index
 // (Manifests); the media type says which fields are meaningful.
 type ociManifest struct {
-	MediaType string          `json:"mediaType"`
-	Config    ociDescriptor   `json:"config"`
-	Layers    []ociDescriptor `json:"layers"`
-	Manifests []ociDescriptor `json:"manifests"`
+	MediaType    string            `json:"mediaType"`
+	ArtifactType string            `json:"artifactType"`
+	Config       ociDescriptor     `json:"config"`
+	Layers       []ociDescriptor   `json:"layers"`
+	Manifests    []ociDescriptor   `json:"manifests"`
+	Annotations  map[string]string `json:"annotations"`
 }
 
 func isContainerIndexType(mt string) bool {
@@ -430,7 +484,9 @@ func isContainerManifestType(mt string) bool {
 }
 
 // pickAmd64Manifest returns the linux/amd64 entry of a multi-platform index.
-// Attestation entries (platform "unknown/unknown") simply never match.
+// Attestation entries (platform "unknown/unknown") never match here; the ones
+// referencing the picked manifest are mirrored separately as attached
+// artifacts (see indexAttestationEntries).
 func pickAmd64Manifest(entries []ociDescriptor) (ociDescriptor, error) {
 	for _, d := range entries {
 		if d.Platform != nil && d.Platform.OS == "linux" && d.Platform.Architecture == "amd64" {
@@ -438,6 +494,21 @@ func pickAmd64Manifest(entries []ociDescriptor) (ociDescriptor, error) {
 		}
 	}
 	return ociDescriptor{}, errors.New("image has no linux/amd64 manifest")
+}
+
+// indexAttestationEntries returns an index's buildkit-style attestation
+// manifests — entries annotated "vnd.docker.reference.type":
+// "attestation-manifest" — that reference the mirrored linux/amd64 manifest.
+// Attestations for platforms ArtiGate does not mirror are left behind.
+func indexAttestationEntries(entries []ociDescriptor, amd64Digest string) []ociDescriptor {
+	var out []ociDescriptor
+	for _, d := range entries {
+		if d.Annotations["vnd.docker.reference.type"] == "attestation-manifest" &&
+			d.Annotations["vnd.docker.reference.digest"] == amd64Digest {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // -----------------------------------------------------------------------------
@@ -699,33 +770,56 @@ func parseBearerChallenge(challenge string) (realm string, params map[string]str
 	return realm, params, nil
 }
 
+// resolvedImage is fetchContainerManifest's result: the linux/amd64 image
+// manifest plus, when the reference named a multi-platform index, the index
+// document it was picked from — preserved so the high side can serve the
+// exact bytes (and digest) the upstream tag resolves to.
+type resolvedImage struct {
+	Manifest  []byte
+	MediaType string
+	Digest    string
+	// Index* are zero when the reference resolved straight to an image
+	// manifest; Entries holds the index's manifest list (platform images and
+	// buildkit attestation entries alike).
+	Index          []byte
+	IndexMediaType string
+	IndexDigest    string
+	Entries        []ociDescriptor
+}
+
 // fetchContainerManifest downloads a manifest by tag or digest, verifies its
 // digest, and — when it is a multi-platform index — follows it down to the
-// linux/amd64 image manifest. It returns the image manifest's raw bytes,
-// media type, and digest.
-func (c *containerClient) fetchContainerManifest(ctx context.Context, ref imageRef) (body []byte, mediaType, digest string, err error) {
+// linux/amd64 image manifest, keeping the index document too.
+func (c *containerClient) fetchContainerManifest(ctx context.Context, ref imageRef) (resolvedImage, error) {
 	reference := ref.Digest
 	if reference == "" {
 		reference = ref.Tag
 	}
-	body, mediaType, digest, err = c.fetchManifestRaw(ctx, ref, reference)
+	body, mediaType, digest, err := c.fetchManifestRaw(ctx, ref, reference)
 	if err != nil {
-		return nil, "", "", err
+		return resolvedImage{}, err
 	}
 	if !isContainerIndexType(mediaType) {
-		return body, mediaType, digest, nil
+		return resolvedImage{Manifest: body, MediaType: mediaType, Digest: digest}, nil
 	}
 	var index ociManifest
 	if err := json.Unmarshal(body, &index); err != nil {
-		return nil, "", "", fmt.Errorf("%s: parse manifest index: %w", ref, err)
+		return resolvedImage{}, fmt.Errorf("%s: parse manifest index: %w", ref, err)
 	}
 	desc, err := pickAmd64Manifest(index.Manifests)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("%s: %w", ref, err)
+		return resolvedImage{}, fmt.Errorf("%s: %w", ref, err)
 	}
 	sub := ref
 	sub.Digest, sub.Tag = desc.Digest, ""
-	return c.fetchManifestRaw(ctx, sub, desc.Digest)
+	mBody, mType, mDigest, err := c.fetchManifestRaw(ctx, sub, desc.Digest)
+	if err != nil {
+		return resolvedImage{}, err
+	}
+	return resolvedImage{
+		Manifest: mBody, MediaType: mType, Digest: mDigest,
+		Index: body, IndexMediaType: mediaType, IndexDigest: digest, Entries: index.Manifests,
+	}, nil
 }
 
 // fetchManifestRaw fetches one manifest document and verifies its content
@@ -745,26 +839,129 @@ func (c *containerClient) fetchManifestRaw(ctx context.Context, ref imageRef, re
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", "", fmt.Errorf("%s: manifest %s: HTTP %d", ref, reference, resp.StatusCode)
 	}
+	mediaType, digest, err = containerManifestIdentity(body, ref, reference, resp.Header.Get("Content-Type"))
+	if err != nil {
+		return nil, "", "", err
+	}
+	return body, mediaType, digest, nil
+}
+
+// containerManifestIdentity computes a fetched manifest's digest — verified
+// against the reference when fetching by digest — and resolves its media type
+// from the Content-Type header, falling back to the document's own mediaType
+// field for registries that omit or mangle the header.
+func containerManifestIdentity(body []byte, ref imageRef, reference, contentType string) (mediaType, digest string, err error) {
 	sum := sha256.Sum256(body)
 	digest = "sha256:" + hex.EncodeToString(sum[:])
 	if containerDigestRE.MatchString(reference) && digest != reference {
-		return nil, "", "", fmt.Errorf("%s: manifest digest mismatch: got %s want %s", ref, digest, reference)
+		return "", "", fmt.Errorf("%s: manifest digest mismatch: got %s want %s", ref, digest, reference)
 	}
-	mediaType = resp.Header.Get("Content-Type")
+	mediaType = contentType
 	if i := strings.IndexByte(mediaType, ';'); i >= 0 {
 		mediaType = strings.TrimSpace(mediaType[:i])
 	}
-	if !isContainerManifestType(mediaType) && !isContainerIndexType(mediaType) {
-		// Some registries omit or mangle the Content-Type; fall back to the
-		// document's own mediaType field.
-		var m ociManifest
-		if json.Unmarshal(body, &m) == nil && (isContainerManifestType(m.MediaType) || isContainerIndexType(m.MediaType)) {
-			mediaType = m.MediaType
-		} else {
-			return nil, "", "", fmt.Errorf("%s: unsupported manifest media type %q", ref, mediaType)
-		}
+	if isContainerManifestType(mediaType) || isContainerIndexType(mediaType) {
+		return mediaType, digest, nil
 	}
-	return body, mediaType, digest, nil
+	var m ociManifest
+	if json.Unmarshal(body, &m) == nil && (isContainerManifestType(m.MediaType) || isContainerIndexType(m.MediaType)) {
+		return m.MediaType, digest, nil
+	}
+	return "", "", fmt.Errorf("%s: unsupported manifest media type %q", ref, mediaType)
+}
+
+// fetchArtifactManifest fetches one manifest by tag or digest for attached-
+// artifact discovery. found=false with a nil error reports a clean 404 —
+// absent cosign tags are the normal case, not a fault. The read is capped at
+// maxServedManifestBytes so every mirrored artifact stays servable by the
+// high side's manifest handler.
+func (c *containerClient) fetchArtifactManifest(ctx context.Context, ref imageRef, reference string) (body []byte, mediaType, digest string, found bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	resp, err := c.get(ctx, ref, "manifests/"+reference, containerManifestAccept)
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, "", "", false, nil
+	}
+	body, err = io.ReadAll(io.LimitReader(resp.Body, maxServedManifestBytes+1))
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", "", false, fmt.Errorf("manifest %s: HTTP %d", reference, resp.StatusCode)
+	}
+	if len(body) > maxServedManifestBytes {
+		return nil, "", "", false, fmt.Errorf("manifest %s exceeds %d bytes", reference, maxServedManifestBytes)
+	}
+	mediaType, digest, err = containerManifestIdentity(body, ref, reference, resp.Header.Get("Content-Type"))
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	return body, mediaType, digest, true, nil
+}
+
+// cosignArtifactTag renders cosign's tag-scheme name for a subject digest:
+// "sha256-<hex>" plus a kind suffix (".sig", ".att", ".sbom" — or none for
+// the OCI referrers fallback tag).
+func cosignArtifactTag(subject, suffix string) string {
+	return strings.Replace(subject, ":", "-", 1) + suffix
+}
+
+// fetchReferrers lists the referrer descriptors upstream holds for a subject
+// digest: the OCI 1.1 referrers API where the registry has it, else the
+// fallback referrers tag clients maintain where it does not. Discovery
+// failures return nil — attached artifacts are best-effort extras on top of
+// the image pull.
+func (c *containerClient) fetchReferrers(ctx context.Context, ref imageRef, subject string) []ociDescriptor {
+	if descs, ok := c.fetchReferrersAPI(ctx, ref, subject); ok {
+		return descs
+	}
+	return c.fetchReferrersFallbackTag(ctx, ref, subject)
+}
+
+// fetchReferrersAPI queries GET /v2/<repo>/referrers/<digest>. ok reports
+// whether the registry answered the API at all — a 200 with an empty index
+// still ends discovery, matching the spec's client flow.
+func (c *containerClient) fetchReferrersAPI(ctx context.Context, ref imageRef, subject string) ([]ociDescriptor, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	resp, err := c.get(ctx, ref, "referrers/"+subject, mtOCIIndex)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, mtOCIIndex) {
+		return nil, false
+	}
+	var index ociManifest
+	if json.Unmarshal(body, &index) != nil {
+		return nil, false
+	}
+	return index.Manifests, true
+}
+
+// fetchReferrersFallbackTag reads the sha256-<hex> fallback tag — an index of
+// referrer descriptors — that OCI 1.1 clients maintain on registries without
+// the referrers API. Each listed manifest is later fetched and verified by
+// its own digest, so a stale fallback index can only omit or add entries,
+// never alter content.
+func (c *containerClient) fetchReferrersFallbackTag(ctx context.Context, ref imageRef, subject string) []ociDescriptor {
+	body, mediaType, _, found, err := c.fetchArtifactManifest(ctx, ref, cosignArtifactTag(subject, ""))
+	if err != nil || !found || !isContainerIndexType(mediaType) {
+		return nil
+	}
+	var index ociManifest
+	if json.Unmarshal(body, &index) != nil {
+		return nil
+	}
+	return index.Manifests
 }
 
 // resolveConstraintTag resolves a version-constraint reference to the newest
@@ -1186,22 +1383,24 @@ func (c *containerClient) resolveAndMirrorImage(ctx context.Context, ref imageRe
 }
 
 // mirrorContainerImage resolves one reference to its linux/amd64 manifest and
-// downloads the manifest, config, and layer blobs into the staging store. It
-// returns the image record plus the manifest files it references.
+// downloads the manifest, config, and layer blobs into the staging store —
+// plus the multi-platform index it resolved through and any attached
+// signatures, attestations, and SBOMs. It returns the image record plus the
+// manifest files it references.
 func (c *containerClient) mirrorContainerImage(ctx context.Context, ref imageRef, stageRoot string, seenFile map[string]bool) (ContainerImage, []ManifestFile, error) {
-	manifestBytes, mediaType, digest, err := c.fetchContainerManifest(ctx, ref)
+	resolved, err := c.fetchContainerManifest(ctx, ref)
 	if err != nil {
 		return ContainerImage{}, nil, err
 	}
 	var m ociManifest
-	if err := json.Unmarshal(manifestBytes, &m); err != nil {
+	if err := json.Unmarshal(resolved.Manifest, &m); err != nil {
 		return ContainerImage{}, nil, fmt.Errorf("%s: parse image manifest: %w", ref, err)
 	}
 	if m.Config.Digest == "" || len(m.Layers) == 0 {
 		return ContainerImage{}, nil, fmt.Errorf("%s: image manifest has no config or layers", ref)
 	}
 
-	img := ContainerImage{Tag: ref.Tag, Digest: digest, MediaType: mediaType, Size: int64(len(manifestBytes))}
+	img := ContainerImage{Tag: ref.Tag, Digest: resolved.Digest, MediaType: resolved.MediaType, Size: int64(len(resolved.Manifest))}
 	blobs, files, err := c.downloadImageBlobs(ctx, ref, m, stageRoot, seenFile)
 	if err != nil {
 		return ContainerImage{}, nil, err
@@ -1210,11 +1409,34 @@ func (c *containerClient) mirrorContainerImage(ctx context.Context, ref imageRef
 	if err := verifyContainerConfigPlatform(stageRoot, ref, m.Config.Digest); err != nil {
 		return ContainerImage{}, nil, err
 	}
-	manifestFile, err := stageContainerManifestBlob(stageRoot, digest, manifestBytes, seenFile)
+	manifestFile, err := stageContainerManifestBlob(stageRoot, resolved.Digest, resolved.Manifest, seenFile)
 	if err != nil {
 		return ContainerImage{}, nil, err
 	}
-	return img, append(files, manifestFile), nil
+	files = append(files, manifestFile)
+	files, err = stageResolvedIndex(&img, resolved, stageRoot, seenFile, files)
+	if err != nil {
+		return ContainerImage{}, nil, err
+	}
+	arts, artFiles := c.collectImageArtifacts(ctx, ref, resolved, stageRoot, seenFile)
+	img.Artifacts = arts
+	return img, append(files, artFiles...), nil
+}
+
+// stageResolvedIndex stores the multi-platform index a reference resolved
+// through as a content-addressed blob and records it on the image, so the
+// high side can serve the tag under its upstream digest. A reference that
+// named an image manifest directly stages nothing.
+func stageResolvedIndex(img *ContainerImage, resolved resolvedImage, stageRoot string, seenFile map[string]bool, files []ManifestFile) ([]ManifestFile, error) {
+	if resolved.IndexDigest == "" {
+		return files, nil
+	}
+	indexFile, err := stageContainerManifestBlob(stageRoot, resolved.IndexDigest, resolved.Index, seenFile)
+	if err != nil {
+		return nil, err
+	}
+	img.Index = &ContainerIndex{Digest: resolved.IndexDigest, MediaType: resolved.IndexMediaType, Size: int64(len(resolved.Index))}
+	return append(files, indexFile), nil
 }
 
 // downloadImageBlobs stages an image's config and layer blobs, returning the
@@ -1276,6 +1498,277 @@ func verifyContainerConfigPlatform(stageRoot string, ref imageRef, configDigest 
 		return fmt.Errorf("%s: image is %s/%s; only linux/amd64 is mirrored", ref, cfg.OS, cfg.Architecture)
 	}
 	return nil
+}
+
+// -----------------------------------------------------------------------------
+// Low side: attached artifacts (signatures, attestations, SBOMs)
+// -----------------------------------------------------------------------------
+
+// containerMaxImageArtifacts bounds how many attached artifacts one image
+// mirrors; past it the rest are skipped with a warning. Real images carry a
+// handful; the cap only stops a hostile upstream from turning one collect
+// into thousands of fetches.
+const containerMaxImageArtifacts = 64
+
+// collectImageArtifacts discovers and mirrors the artifacts attached to a
+// resolved image: buildkit attestation-manifest index entries, cosign's tag
+// scheme, and the OCI referrers API — for both the digest a tag pull serves
+// (the index, when there is one) and the linux/amd64 manifest.
+func (c *containerClient) collectImageArtifacts(ctx context.Context, ref imageRef, resolved resolvedImage, stageRoot string, seenFile map[string]bool) ([]ContainerArtifact, []ManifestFile) {
+	col := &artifactCollector{
+		c: c, ref: ref, stageRoot: stageRoot, seenFile: seenFile,
+		skip:  map[string]bool{resolved.Digest: true},
+		found: map[string]*ContainerArtifact{},
+	}
+	if resolved.IndexDigest != "" {
+		col.skip[resolved.IndexDigest] = true
+	}
+	for _, entry := range indexAttestationEntries(resolved.Entries, resolved.Digest) {
+		col.addReferrer(ctx, resolved.Digest, entry)
+	}
+	for _, subject := range artifactSubjects(resolved) {
+		for _, suffix := range []string{".sig", ".att", ".sbom"} {
+			col.addByTag(ctx, subject, cosignArtifactTag(subject, suffix))
+		}
+		for _, desc := range c.fetchReferrers(ctx, ref, subject) {
+			col.addReferrer(ctx, subject, desc)
+		}
+	}
+	return col.list(), col.files
+}
+
+// artifactSubjects lists the digests whose attached artifacts matter for a
+// resolved image: the digest a tag pull resolves (the index, when there is
+// one — what cosign signs for a multi-platform image) and the linux/amd64
+// manifest digest buildkit attestations reference.
+func artifactSubjects(resolved resolvedImage) []string {
+	if resolved.IndexDigest != "" {
+		return []string{resolved.IndexDigest, resolved.Digest}
+	}
+	return []string{resolved.Digest}
+}
+
+// artifactCollector accumulates one image's attached artifacts across the
+// discovery schemes, de-duplicated by artifact digest. Per-artifact trouble
+// becomes a progress warning, never a collect failure: an image whose
+// signature cannot be fetched still mirrors, and verification on the high
+// side fails closed.
+type artifactCollector struct {
+	c         *containerClient
+	ref       imageRef
+	stageRoot string
+	seenFile  map[string]bool
+	skip      map[string]bool // the image and index digests themselves
+	found     map[string]*ContainerArtifact
+	order     []string
+	files     []ManifestFile
+	capped    bool
+}
+
+// list returns the collected artifacts in discovery order.
+func (a *artifactCollector) list() []ContainerArtifact {
+	out := make([]ContainerArtifact, 0, len(a.order))
+	for _, digest := range a.order {
+		out = append(out, *a.found[digest])
+	}
+	return out
+}
+
+// addByTag mirrors the artifact at one cosign tag-scheme tag. A missing tag
+// is the normal case and silent.
+func (a *artifactCollector) addByTag(ctx context.Context, subject, tag string) {
+	body, mediaType, digest, found, err := a.c.fetchArtifactManifest(ctx, a.ref, tag)
+	if err != nil {
+		emitProgress(ctx, "    ⚠ artifact %s: %v", tag, err)
+		return
+	}
+	if !found {
+		return
+	}
+	a.record(ctx, subject, tag, body, mediaType, digest, nil)
+}
+
+// addReferrer mirrors one referrer descriptor (from the referrers API, its
+// fallback tag, or a buildkit attestation index entry), fetching its
+// manifest by digest.
+func (a *artifactCollector) addReferrer(ctx context.Context, subject string, desc ociDescriptor) {
+	if !containerDigestRE.MatchString(desc.Digest) || a.skip[desc.Digest] || a.found[desc.Digest] != nil {
+		return
+	}
+	body, mediaType, digest, found, err := a.c.fetchArtifactManifest(ctx, a.ref, desc.Digest)
+	if err != nil || !found {
+		if err == nil {
+			err = errors.New("listed as a referrer but missing upstream")
+		}
+		emitProgress(ctx, "    ⚠ artifact %s: %v", shortDigest(desc.Digest), err)
+		return
+	}
+	a.record(ctx, subject, "", body, mediaType, digest, &desc)
+}
+
+// record stages a fetched artifact manifest with its blobs and appends the
+// artifact record; a digest already mirrored only backfills its cosign tag.
+func (a *artifactCollector) record(ctx context.Context, subject, tag string, body []byte, mediaType, digest string, desc *ociDescriptor) {
+	if a.skip[digest] {
+		return
+	}
+	if prev := a.found[digest]; prev != nil {
+		if prev.Tag == "" {
+			prev.Tag = tag
+		}
+		return
+	}
+	if len(a.found) >= containerMaxImageArtifacts {
+		a.warnCapped(ctx)
+		return
+	}
+	art, files, err := a.stageArtifact(ctx, subject, tag, body, mediaType, digest, desc)
+	if err != nil {
+		emitProgress(ctx, "    ⚠ artifact %s: %v", artifactLabel(tag, digest), err)
+		return
+	}
+	a.files = append(a.files, files...)
+	a.found[digest] = &art
+	a.order = append(a.order, digest)
+	emitProgress(ctx, "    ⊕ %s %s (%d blob(s))", containerArtifactKind(art), artifactLabel(tag, digest), len(art.Blobs))
+}
+
+// stageArtifact parses one fetched artifact manifest and stages it with its
+// config and layer blobs, returning the record and the staged files.
+func (a *artifactCollector) stageArtifact(ctx context.Context, subject, tag string, body []byte, mediaType, digest string, desc *ociDescriptor) (ContainerArtifact, []ManifestFile, error) {
+	if !isContainerManifestType(mediaType) {
+		return ContainerArtifact{}, nil, fmt.Errorf("unsupported artifact media type %q", mediaType)
+	}
+	var m ociManifest
+	if err := json.Unmarshal(body, &m); err != nil {
+		return ContainerArtifact{}, nil, fmt.Errorf("parse artifact manifest: %w", err)
+	}
+	blobs, files, err := a.c.downloadArtifactBlobs(ctx, a.ref, m, a.stageRoot, a.seenFile)
+	if err != nil {
+		return ContainerArtifact{}, nil, err
+	}
+	manifestFile, err := stageContainerManifestBlob(a.stageRoot, digest, body, a.seenFile)
+	if err != nil {
+		return ContainerArtifact{}, nil, err
+	}
+	return ContainerArtifact{
+		Subject: subject, Tag: tag, Digest: digest, MediaType: mediaType,
+		ArtifactType: containerArtifactType(m, desc), Size: int64(len(body)),
+		Annotations: containerArtifactAnnotations(m, desc), Blobs: blobs,
+	}, append(files, manifestFile), nil
+}
+
+// warnCapped reports once that further attached artifacts are being skipped.
+func (a *artifactCollector) warnCapped(ctx context.Context) {
+	if !a.capped {
+		a.capped = true
+		emitProgress(ctx, "    ⚠ more than %d attached artifacts; skipping the rest", containerMaxImageArtifacts)
+	}
+}
+
+// artifactLabel names an artifact in progress lines: its cosign tag when it
+// has one, else its abbreviated digest.
+func artifactLabel(tag, digest string) string {
+	if tag != "" {
+		return tag
+	}
+	return shortDigest(digest)
+}
+
+// downloadArtifactBlobs stages an artifact manifest's config and layer
+// blobs. Unlike an image's, an artifact's config is opaque (no platform
+// check — cosign configs are empty JSON) and its layer list may be empty.
+func (c *containerClient) downloadArtifactBlobs(ctx context.Context, ref imageRef, m ociManifest, stageRoot string, seenFile map[string]bool) ([]ContainerBlob, []ManifestFile, error) {
+	descs := m.Layers
+	if m.Config.Digest != "" {
+		descs = append([]ociDescriptor{m.Config}, m.Layers...)
+	}
+	var blobs []ContainerBlob
+	var files []ManifestFile
+	inArtifact := map[string]bool{}
+	for _, desc := range descs {
+		mf, err := c.downloadContainerBlob(ctx, ref, desc, stageRoot, seenFile, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !inArtifact[mf.Path] {
+			inArtifact[mf.Path] = true
+			files = append(files, mf)
+		}
+		blobs = append(blobs, ContainerBlob{Digest: desc.Digest, Size: desc.Size})
+	}
+	return blobs, files, nil
+}
+
+// containerArtifactType resolves the artifact type the referrers response
+// advertises, per the OCI spec: the manifest's own artifactType, else its
+// config media type, else whatever the discovering descriptor claimed.
+func containerArtifactType(m ociManifest, desc *ociDescriptor) string {
+	if m.ArtifactType != "" {
+		return m.ArtifactType
+	}
+	if m.Config.MediaType != "" {
+		return m.Config.MediaType
+	}
+	if desc != nil {
+		return desc.ArtifactType
+	}
+	return ""
+}
+
+// containerArtifactAnnotations merges the annotations the referrers response
+// carries: the manifest's own, overlaid with the discovering descriptor's
+// (buildkit's vnd.docker.reference.* markers live on the index entry, not in
+// the attestation manifest itself).
+func containerArtifactAnnotations(m ociManifest, desc *ociDescriptor) map[string]string {
+	if desc == nil || len(desc.Annotations) == 0 {
+		return m.Annotations
+	}
+	out := make(map[string]string, len(m.Annotations)+len(desc.Annotations))
+	maps.Copy(out, m.Annotations)
+	maps.Copy(out, desc.Annotations)
+	return out
+}
+
+// containerArtifactKind classifies an artifact for progress lines and the
+// dashboard summary: "signature", "attestation", "sbom", or the generic
+// "artifact".
+func containerArtifactKind(a ContainerArtifact) string {
+	if kind, ok := cosignTagKind(a.Tag); ok {
+		return kind
+	}
+	if a.Annotations["vnd.docker.reference.type"] == "attestation-manifest" {
+		return "attestation"
+	}
+	t := strings.ToLower(a.ArtifactType)
+	for _, k := range []struct{ needle, kind string }{
+		{"in-toto", "attestation"},
+		{"dsse", "attestation"},
+		{"spdx", "sbom"},
+		{"cyclonedx", "sbom"},
+		{"sbom", "sbom"},
+		{"cosign", "signature"},
+		{"signature", "signature"},
+		{"sigstore", "signature"},
+	} {
+		if strings.Contains(t, k.needle) {
+			return k.kind
+		}
+	}
+	return "artifact"
+}
+
+// cosignTagKind maps a cosign tag-scheme suffix to its artifact kind.
+func cosignTagKind(tag string) (string, bool) {
+	switch {
+	case strings.HasSuffix(tag, ".sig"):
+		return "signature", true
+	case strings.HasSuffix(tag, ".att"):
+		return "attestation", true
+	case strings.HasSuffix(tag, ".sbom"):
+		return "sbom", true
+	}
+	return "", false
 }
 
 func (s *LowServer) writeContainerBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, repos []ContainerRepo) (ExportResult, error) {
@@ -1354,6 +1847,51 @@ func validateContainerImage(img ContainerImage, seen map[string]bool, shaByPath 
 		return err
 	}
 	for _, b := range img.Blobs {
+		if err := requireContainerBlobListed(b.Digest, seen, shaByPath); err != nil {
+			return err
+		}
+	}
+	if err := validateContainerIndexRef(img.Index, seen, shaByPath); err != nil {
+		return err
+	}
+	for _, a := range img.Artifacts {
+		if err := validateContainerArtifact(a, seen, shaByPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateContainerIndexRef checks a preserved multi-platform index record:
+// an index media type, and a stored blob whose hash matches its digest.
+func validateContainerIndexRef(idx *ContainerIndex, seen map[string]bool, shaByPath map[string]string) error {
+	if idx == nil {
+		return nil
+	}
+	if !isContainerIndexType(idx.MediaType) {
+		return fmt.Errorf("invalid container index media type %q", idx.MediaType)
+	}
+	return requireContainerBlobListed(idx.Digest, seen, shaByPath)
+}
+
+// validateContainerArtifact checks an attached artifact exactly as strictly
+// as an image: identity shapes, and every referenced blob present in the
+// verified file set. These manifests are served back verbatim (by cosign tag
+// and through the referrers endpoint), so nothing unverified may slip in.
+func validateContainerArtifact(a ContainerArtifact, seen map[string]bool, shaByPath map[string]string) error {
+	if a.Tag != "" && !containerTagRE.MatchString(a.Tag) {
+		return fmt.Errorf("invalid container artifact tag %q", a.Tag)
+	}
+	if !containerDigestRE.MatchString(a.Subject) {
+		return fmt.Errorf("invalid container artifact subject %q", a.Subject)
+	}
+	if !isContainerManifestType(a.MediaType) {
+		return fmt.Errorf("invalid container artifact media type %q", a.MediaType)
+	}
+	if err := requireContainerBlobListed(a.Digest, seen, shaByPath); err != nil {
+		return err
+	}
+	for _, b := range a.Blobs {
 		if err := requireContainerBlobListed(b.Digest, seen, shaByPath); err != nil {
 			return err
 		}
@@ -1541,7 +2079,8 @@ func (s *HighServer) handleContainerCatalog(w http.ResponseWriter) {
 	writeJSON(w, map[string][]string{"repositories": names})
 }
 
-// handleContainerResource routes /v2/<name>/{tags/list,manifests/<ref>,blobs/<digest>}.
+// handleContainerResource routes
+// /v2/<name>/{tags/list,manifests/<ref>,blobs/<digest>,referrers/<digest>}.
 // The repository name itself contains slashes, so the route keyword is found
 // from the right.
 func (s *HighServer) handleContainerResource(w http.ResponseWriter, r *http.Request, rest string) {
@@ -1553,7 +2092,7 @@ func (s *HighServer) handleContainerResource(w http.ResponseWriter, r *http.Requ
 		s.handleContainerTags(w, name)
 		return
 	}
-	for _, route := range []string{"/manifests/", "/blobs/"} {
+	for _, route := range []string{"/manifests/", "/blobs/", "/referrers/"} {
 		i := strings.LastIndex(rest, route)
 		if i <= 0 {
 			continue
@@ -1563,14 +2102,22 @@ func (s *HighServer) handleContainerResource(w http.ResponseWriter, r *http.Requ
 			registryError(w, http.StatusNotFound, "NAME_INVALID", "invalid repository name")
 			return
 		}
-		if route == "/manifests/" {
-			s.handleContainerManifest(w, r, name, ref)
-		} else {
-			s.handleContainerBlob(w, r, name, ref)
-		}
+		s.serveContainerRepoResource(w, r, route, name, ref)
 		return
 	}
 	registryError(w, http.StatusNotFound, "UNSUPPORTED", "unknown registry path")
+}
+
+// serveContainerRepoResource dispatches one repository-scoped registry route.
+func (s *HighServer) serveContainerRepoResource(w http.ResponseWriter, r *http.Request, route, name, ref string) {
+	switch route {
+	case "/manifests/":
+		s.handleContainerManifest(w, r, name, ref)
+	case "/blobs/":
+		s.handleContainerBlob(w, r, name, ref)
+	default:
+		s.handleContainerReferrers(w, r, name, ref)
+	}
 }
 
 // validContainerName accepts "<registry>/<repository>" names: at least two
@@ -1625,18 +2172,18 @@ func (s *HighServer) handleContainerManifest(w http.ResponseWriter, r *http.Requ
 		registryError(w, http.StatusNotFound, "NAME_UNKNOWN", "repository not found")
 		return
 	}
-	img, ok := findContainerImage(repo, ref)
+	doc, ok := findContainerManifestDoc(repo, ref)
 	if !ok {
 		registryError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest not found")
 		return
 	}
-	b, err := readFileLimit(s.containerBlobPath(img.Digest), maxServedManifestBytes)
+	b, err := readFileLimit(s.containerBlobPath(doc.Digest), maxServedManifestBytes)
 	if err != nil {
 		registryError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest blob missing or oversized")
 		return
 	}
-	w.Header().Set("Content-Type", img.MediaType)
-	w.Header().Set("Docker-Content-Digest", img.Digest)
+	w.Header().Set("Content-Type", doc.MediaType)
+	w.Header().Set("Docker-Content-Digest", doc.Digest)
 	w.Header().Set("Content-Length", fmt.Sprint(len(b)))
 	if r.Method == http.MethodHead {
 		return
@@ -1644,7 +2191,60 @@ func (s *HighServer) handleContainerManifest(w http.ResponseWriter, r *http.Requ
 	_, _ = w.Write(b)
 }
 
-// findContainerImage resolves a tag or digest against a repo's index.
+// containerManifestDoc names one servable manifest document: the blob digest
+// holding its bytes and the media type to serve it under.
+type containerManifestDoc struct {
+	Digest    string
+	MediaType string
+}
+
+// findContainerManifestDoc resolves a manifests/<reference> request against a
+// repo's index: image tags and digests, the preserved multi-platform index by
+// digest, and attached artifacts by digest or cosign tag (sha256-*.sig and
+// friends).
+func findContainerManifestDoc(repo ContainerRepo, ref string) (containerManifestDoc, bool) {
+	byDigest := containerDigestRE.MatchString(ref)
+	for _, img := range repo.Images {
+		if doc, ok := containerImageManifestDoc(img, ref, byDigest); ok {
+			return doc, true
+		}
+	}
+	return containerManifestDoc{}, false
+}
+
+// containerImageManifestDoc resolves a reference against one image record and
+// its attached artifacts.
+func containerImageManifestDoc(img ContainerImage, ref string, byDigest bool) (containerManifestDoc, bool) {
+	switch {
+	case byDigest && img.Digest == ref:
+		return containerManifestDoc{Digest: img.Digest, MediaType: img.MediaType}, true
+	case byDigest && img.Index != nil && img.Index.Digest == ref:
+		return containerManifestDoc{Digest: img.Index.Digest, MediaType: img.Index.MediaType}, true
+	case !byDigest && img.Tag == ref:
+		return containerImageDoc(img), true
+	}
+	for _, a := range img.Artifacts {
+		if (byDigest && a.Digest == ref) || (!byDigest && a.Tag != "" && a.Tag == ref) {
+			return containerManifestDoc{Digest: a.Digest, MediaType: a.MediaType}, true
+		}
+	}
+	return containerManifestDoc{}, false
+}
+
+// containerImageDoc is the document a tag pull serves: the preserved
+// multi-platform index when the mirrored reference was one — so the digest a
+// client resolves, and any cosign signature over it, matches upstream — else
+// the image manifest itself.
+func containerImageDoc(img ContainerImage) containerManifestDoc {
+	if img.Index != nil {
+		return containerManifestDoc{Digest: img.Index.Digest, MediaType: img.Index.MediaType}
+	}
+	return containerManifestDoc{Digest: img.Digest, MediaType: img.MediaType}
+}
+
+// findContainerImage resolves a tag or digest against a repo's index. The
+// dashboard's detail view keys on the image record; registry serving resolves
+// through findContainerManifestDoc instead.
 func findContainerImage(repo ContainerRepo, ref string) (ContainerImage, bool) {
 	byDigest := containerDigestRE.MatchString(ref)
 	for _, img := range repo.Images {
@@ -1656,6 +2256,69 @@ func findContainerImage(repo ContainerRepo, ref string) (ContainerImage, bool) {
 		}
 	}
 	return ContainerImage{}, false
+}
+
+// ociReferrersIndex is the referrers API response: an OCI image index whose
+// manifests are the subject's referrer descriptors.
+type ociReferrersIndex struct {
+	SchemaVersion int             `json:"schemaVersion"`
+	MediaType     string          `json:"mediaType"`
+	Manifests     []ociDescriptor `json:"manifests"`
+}
+
+// handleContainerReferrers answers the OCI 1.1 referrers API from the repo's
+// mirrored artifacts, so policy engines (Kyverno, Ratify) and cosign discover
+// signatures and attestations on the high side exactly as they would
+// upstream. A subject with nothing attached gets an empty index (the spec's
+// "supported but none" answer), and ?artifactType= filters as specced.
+func (s *HighServer) handleContainerReferrers(w http.ResponseWriter, r *http.Request, name, digest string) {
+	if !containerDigestRE.MatchString(digest) {
+		registryError(w, http.StatusBadRequest, "DIGEST_INVALID", "invalid digest")
+		return
+	}
+	repo, err := s.loadContainerRepoIndex(name)
+	if err != nil {
+		registryError(w, http.StatusNotFound, "NAME_UNKNOWN", "repository not found")
+		return
+	}
+	filter := r.URL.Query().Get("artifactType")
+	index := ociReferrersIndex{
+		SchemaVersion: 2,
+		MediaType:     mtOCIIndex,
+		Manifests:     containerReferrerDescriptors(repo, digest, filter),
+	}
+	b, err := json.Marshal(index)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if filter != "" {
+		w.Header().Set("OCI-Filters-Applied", "artifactType")
+	}
+	w.Header().Set("Content-Type", mtOCIIndex)
+	w.Header().Set("Content-Length", fmt.Sprint(len(b)))
+	_, _ = w.Write(b)
+}
+
+// containerReferrerDescriptors lists the mirrored artifacts attached to a
+// subject digest, de-duplicated across image records and optionally filtered
+// by artifact type.
+func containerReferrerDescriptors(repo ContainerRepo, subject, filter string) []ociDescriptor {
+	seen := map[string]bool{}
+	descs := []ociDescriptor{}
+	for _, img := range repo.Images {
+		for _, a := range img.Artifacts {
+			if a.Subject != subject || seen[a.Digest] || (filter != "" && a.ArtifactType != filter) {
+				continue
+			}
+			seen[a.Digest] = true
+			descs = append(descs, ociDescriptor{
+				MediaType: a.MediaType, Digest: a.Digest, Size: a.Size,
+				ArtifactType: a.ArtifactType, Annotations: a.Annotations,
+			})
+		}
+	}
+	return descs
 }
 
 // handleContainerBlob serves a config/layer blob, but only when the requesting
@@ -1686,13 +2349,35 @@ func (s *HighServer) handleContainerBlob(w http.ResponseWriter, r *http.Request,
 
 func containerRepoReferencesBlob(repo ContainerRepo, digest string) bool {
 	for _, img := range repo.Images {
-		if img.Digest == digest {
+		if containerImageReferencesBlob(img, digest) {
 			return true
 		}
-		for _, b := range img.Blobs {
-			if b.Digest == digest {
-				return true
-			}
+	}
+	return false
+}
+
+// containerImageReferencesBlob reports whether one image record references a
+// digest: its manifest, preserved index, config/layer blobs, or any attached
+// artifact's manifest and blobs.
+func containerImageReferencesBlob(img ContainerImage, digest string) bool {
+	if img.Digest == digest || (img.Index != nil && img.Index.Digest == digest) {
+		return true
+	}
+	if containerBlobsInclude(img.Blobs, digest) {
+		return true
+	}
+	for _, a := range img.Artifacts {
+		if a.Digest == digest || containerBlobsInclude(a.Blobs, digest) {
+			return true
+		}
+	}
+	return false
+}
+
+func containerBlobsInclude(blobs []ContainerBlob, digest string) bool {
+	for _, b := range blobs {
+		if b.Digest == digest {
+			return true
 		}
 	}
 	return false
@@ -1775,6 +2460,25 @@ func (s *HighServer) containerDetail(spec string) (UIDetail, error) {
 	if !ok {
 		return UIDetail{}, errors.New("image not found")
 	}
+	subtitle := img.Tag
+	if subtitle == "" {
+		subtitle = img.Digest
+	}
+	// CopyRef is the host-relative pull reference (<registry>/<repository>:<tag>);
+	// the dashboard prepends its own host and renders it as a prominent
+	// click-to-copy button, so the operator copies exactly what `docker pull`
+	// needs for this ArtiGate.
+	return UIDetail{
+		Title:    name,
+		Subtitle: subtitle,
+		Fields:   containerDetailFields(repo, img),
+		CopyRef:  name + refSuffix(img),
+		Layers:   s.containerImageLayers(img),
+	}, nil
+}
+
+// containerDetailFields builds the detail panel's field list for one image.
+func containerDetailFields(repo ContainerRepo, img ContainerImage) []UIDetailField {
 	var total int64
 	for _, b := range img.Blobs {
 		total += b.Size
@@ -1793,21 +2497,40 @@ func (s *HighServer) containerDetail(spec string) (UIDetail, error) {
 		UIDetailField{Label: "Layers", Value: fmt.Sprint(max(0, len(img.Blobs)-1))},
 		UIDetailField{Label: "Total blob size", Value: formatBytes(total)},
 	)
-	subtitle := img.Tag
-	if subtitle == "" {
-		subtitle = img.Digest
+	if img.Index != nil {
+		// The digest a tag pull actually resolves: the preserved upstream index.
+		fields = append(fields, UIDetailField{Label: "Index digest", Value: img.Index.Digest, Mono: true})
 	}
-	// CopyRef is the host-relative pull reference (<registry>/<repository>:<tag>);
-	// the dashboard prepends its own host and renders it as a prominent
-	// click-to-copy button, so the operator copies exactly what `docker pull`
-	// needs for this ArtiGate.
-	return UIDetail{
-		Title:    name,
-		Subtitle: subtitle,
-		Fields:   fields,
-		CopyRef:  name + refSuffix(img),
-		Layers:   s.containerImageLayers(img),
-	}, nil
+	if summary := summarizeContainerArtifacts(img.Artifacts); summary != "" {
+		fields = append(fields, UIDetailField{Label: "Attached artifacts", Value: summary})
+	}
+	return fields
+}
+
+// summarizeContainerArtifacts renders "1 signature, 2 attestations" for the
+// dashboard; empty when nothing is attached.
+func summarizeContainerArtifacts(arts []ContainerArtifact) string {
+	if len(arts) == 0 {
+		return ""
+	}
+	counts := map[string]int{}
+	var order []string
+	for _, a := range arts {
+		kind := containerArtifactKind(a)
+		if counts[kind] == 0 {
+			order = append(order, kind)
+		}
+		counts[kind]++
+	}
+	parts := make([]string, 0, len(order))
+	for _, kind := range order {
+		label := kind
+		if counts[kind] != 1 {
+			label += "s"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", counts[kind], label))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // refSuffix renders how a client appends the reference: ":tag" or "@digest".

@@ -769,12 +769,20 @@ func TestCov3C_ContainerManifestBlobMissing(t *testing.T) {
 	hs, alpine, _ := collectAndImportContainers(t)
 	srv := httptest.NewServer(hs)
 	defer srv.Close()
-	// The index still references the manifest, but its blob file is gone.
+	// The repo index still references the documents, but their blob files are
+	// gone: the amd64 manifest (fetched by digest) and the preserved
+	// multi-platform index (served for the tag).
 	if err := os.Remove(hs.containerBlobPath(alpine.manifestDigest)); err != nil {
 		t.Fatal(err)
 	}
-	if code, _ := httpGet(t, srv.URL+"/v2/docker.io/library/alpine/manifests/3.20"); code != http.StatusNotFound {
+	if code, _ := httpGet(t, srv.URL+"/v2/docker.io/library/alpine/manifests/"+alpine.manifestDigest); code != http.StatusNotFound {
 		t.Errorf("manifest with a missing blob = %d, want 404", code)
+	}
+	if err := os.Remove(hs.containerBlobPath(containerSHA(alpine.index))); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := httpGet(t, srv.URL+"/v2/docker.io/library/alpine/manifests/3.20"); code != http.StatusNotFound {
+		t.Errorf("tag with a missing index blob = %d, want 404", code)
 	}
 }
 
