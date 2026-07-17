@@ -8,7 +8,7 @@ ArtiGate is a single binary with two roles that never share routes: `artigate lo
 ## Conventions
 
 - **Bundle IDs** are `<stream>-bundle-%06d`, e.g. `go-bundle-000042`, `python-bundle-000007`. Each bundle is three files: `<id>.tar.gz`, `<id>.manifest.json`, `<id>.manifest.json.sig`.
-- **Streams** are the thirteen ecosystems, each independently sequenced: `go`, `python`, `maven`, `apt`, `rpm`, `containers`, `npm`, `hf`, `crates`, `terraform`, `helm`, `nuget`, `apk`. The `go` stream keeps the legacy single-stream numbering.
+- **Streams** are the twenty-two ecosystems, each independently sequenced: `go`, `python`, `maven`, `apt`, `rpm`, `hf`, `containers`, `npm`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `conda`, `rubygems`, `composer`, `vsx`, `galaxy`, `cran`, `git`, `osv`, `uploads`. The `go` stream keeps the legacy single-stream numbering.
 - **Error codes**: collect and re-export errors are `400`; watch validation `400`, watch store failures `500`; high-side import/status failures `500`; UI `detail` not-found `404`; `repos` for a wrong ecosystem `400`. Non-read methods on serving/UI routes return `405`.
 - **Auth**: only the low dashboard can require login (`ARTIGATE_LOW_AUTH`). The high side is never authenticated. See [Security & trust](security.md) and [TLS / HTTPS](tls.md).
 
@@ -74,7 +74,7 @@ Every collect request additionally accepts one shared field:
     A dedup skip writes no bundle and burns no sequence number. The [high side](high-side.md) must not wait on a sequence that was never produced.
 
 !!! note "Which collectors populate `skipped_modules`"
-    **Go**, **containers**, **AI models**, **Python** (source-only distributions that cannot be mirrored under the wheels-only policy), **NPM** (git-URL / otherwise-unfetchable packages), **crates**, **Terraform**, **Helm**, **NuGet**, and **apk** report per-item failures here. **APT**, **RPM**, and **Maven** never populate the field — they either fully succeed or return a single top-level error. If *all* items fail, the whole request errors at 400 (e.g. Go `"no modules could be fetched: …"`, containers `"no images could be fetched: …"`) rather than writing an empty bundle.
+    **Go**, **containers**, **AI models**, **Python** (failed sdist opt-ins and source-only packages the pip run cannot mirror), **NPM** (git-URL / otherwise-unfetchable packages), **crates**, **Terraform**, **Helm**, **NuGet**, **apk**, **conda**, **RubyGems**, **Composer**, **VS Code**, **Galaxy**, **CRAN**, and **OSV** report per-item failures here. **APT**, **RPM**, **Maven**, **git**, and **uploads** never populate the field — they either fully succeed or return a single top-level error. If *all* items fail, the whole request errors at 400 (e.g. Go `"no modules could be fetched: …"`, containers `"no images could be fetched: …"`) rather than writing an empty bundle.
 
 ---
 
@@ -115,6 +115,7 @@ Content-Type: application/json
 ```json
 {
   "requirements": ["requests==2.31.0", "flask>=3"],
+  "sdists": ["some-source-only-pkg", "another==1.2.3"],
   "target": {
     "python_version": "3.11",
     "implementation": "cp",
@@ -127,16 +128,17 @@ Content-Type: application/json
 
 | Field | Type | Notes |
 |---|---|---|
-| `requirements` | `[]string` | **Required** — empty → error `"no python requirements provided"`. Passed to `python -m pip download` |
+| `requirements` | `[]string` | Passed to `python -m pip download` (wheels only). At least one of `requirements`/`sdists` must be non-empty — else error `"no python requirements provided"` |
+| `sdists` | `[]string` | omitempty; per-package [sdist opt-in](ecosystems/python.md#opt-in-sdists-for-packages-that-publish-no-wheel): `name` or `name==1.2.3`. Resolved via the index JSON API (`--pypi-json`), never through pip; requires an API-declared SHA-256. Failures are skipped into `skipped_modules` |
 | `target` | `*PythonTarget` | Optional cross-target selector |
 | `target.python_version` | string | omitempty |
 | `target.implementation` | string | omitempty, e.g. `cp` |
 | `target.abi` | string | omitempty, e.g. `cp311` |
 | `target.platforms` | `[]string` | e.g. `manylinux2014_x86_64` |
-| `target.only_binary` | bool | Compatibility field: omit it or set `true`; `false` is rejected because wheels-only collection is mandatory |
+| `target.only_binary` | bool | Compatibility field: omit it or set `true`; `false` is rejected because wheels-only pip collection is mandatory |
 
-!!! warning "Wheels only is mandatory"
-    Every collect adds `--only-binary=:all:`, with or without a target selector. This prevents pip from invoking source-package build backends in the signing process.
+!!! warning "pip runs wheels-only, always"
+    Every pip invocation adds `--only-binary=:all:`, with or without a target selector — pip never invokes a source-package build backend in the signing process. Opted-in sdists bypass pip entirely (plain verified download), so no build hook runs for them either; clients build those at install time.
 
 ---
 
@@ -394,9 +396,136 @@ Each `.apk` is verified against the `APKINDEX`-declared size and `Q1` control ch
 
 ---
 
+#### Conda — `POST /admin/conda/collect`
+
+`CondaCollectRequest`. Body limit **1 MiB**. See [Conda channels](ecosystems/conda.md).
+
+```json
+{
+  "channel": "conda-forge",
+  "name": "",
+  "subdirs": ["linux-64"],
+  "packages": ["numpy", "scipy==1.13.1", "pandas>=2.0,<3"],
+  "no_deps": false
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `channel` | string | **Required.** A bare channel name resolved under the channel base (`--conda-channel-base`, default `https://conda.anaconda.org`) or a full http(s) channel URL |
+| `name` | string | Mirror name (`/conda/<name>` on the high side); defaults to the bare channel name, else a slug of the URL |
+| `subdirs` | `[]string` | Platform subdirs; `noarch` is always searched too. Empty means just `noarch` |
+| `packages` | `[]string` | **Required.** Specs: `numpy`, `numpy==1.26.4`, `numpy=1.26`, `1.26.*`, `pandas>=2.0,<3` |
+| `no_deps` | bool | Skip the `depends` closure |
+| `auth` | `*object` | optional one-time HTTP Basic login for a private channel: `{"username","password"}`. Never stored, rejected inside watch specs — standing credentials go in `ARTIGATE_UPSTREAM_AUTH` |
+
+Each package file is verified against its repodata-declared SHA-256 (an entry without one is refused); per-package failures are skipped and reported in `skipped_modules`.
+
+---
+
+#### RubyGems — `POST /admin/rubygems/collect`
+
+`RubyGemsCollectRequest`. Body limit **1 MiB**. See [RubyGems](ecosystems/rubygems.md).
+
+```json
+{
+  "gems": ["rake@13.2.1", "rails"],
+  "platforms": ["x86_64-linux"],
+  "no_deps": false
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `gems` | `[]string` | **Required.** `name` for the newest release, `name@1.2.3` to pin |
+| `platforms` | `[]string` | Optional platform variants fetched beside the pure-Ruby gem when upstream publishes them |
+| `no_deps` | bool | Skip the runtime dependency closure |
+
+Every `.gem` is verified against its compact-index-declared SHA-256; the verbatim `/info` lines travel in the manifest. Per-gem failures are reported in `skipped_modules`.
+
+---
+
+#### Composer — `POST /admin/composer/collect`
+
+`ComposerCollectRequest`. Body limit **1 MiB**. See [PHP Composer](ecosystems/composer.md).
+
+```json
+{
+  "packages": ["monolog/monolog", "psr/container:2.0.2"],
+  "no_deps": false
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `packages` | `[]string` | **Required.** `vendor/project` for the newest stable release, `vendor/project:2.0.2` to pin |
+| `no_deps` | bool | Skip the require closure |
+
+Dist zips are TLS-trusted (Composer metadata declares no usable digest) and hash-locked into the bundle; each release's version object travels with `dist`/`source` stripped. Per-package failures (including unsupported constraint forms) are reported in `skipped_modules`.
+
+---
+
+#### VS Code extensions — `POST /admin/vsx/collect`
+
+`VSXCollectRequest`. Body limit **1 MiB**. See [VS Code extensions](ecosystems/vsx.md).
+
+```json
+{
+  "extensions": ["golang.Go", "redhat.vscode-yaml@1.14.0"],
+  "no_deps": false
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `extensions` | `[]string` | **Required.** `publisher.name` for the newest version, `publisher.name@1.14.0` to pin |
+| `no_deps` | bool | Skip dependencies and extension packs (which otherwise ride along at newest) |
+
+The `.vsix` is verified against the registry-published SHA-256 when one exists, else TLS-trusted; per-extension failures are reported in `skipped_modules`.
+
+---
+
+#### Ansible Galaxy — `POST /admin/galaxy/collect`
+
+`GalaxyCollectRequest`. Body limit **1 MiB**. See [Ansible Galaxy](ecosystems/galaxy.md).
+
+```json
+{
+  "collections": ["ansible.posix", "community.general@8.5.0"],
+  "no_deps": false
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `collections` | `[]string` | **Required.** `namespace.name` for the newest version, `namespace.name@8.5.0` to pin (full three-part semver) |
+| `no_deps` | bool | Skip collection dependencies |
+
+Each artifact is verified against the v3-API-declared SHA-256 **and** size; per-collection failures are reported in `skipped_modules`.
+
+---
+
+#### CRAN — `POST /admin/cran/collect`
+
+`CRANCollectRequest`. Body limit **1 MiB**. See [R packages (CRAN)](ecosystems/cran.md).
+
+```json
+{
+  "packages": ["jsonlite", "data.table@1.15.4"]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `packages` | `[]string` | **Required.** `name` for the mirror's current version, `name@1.15.4` to pin (superseded pins fetch from `Archive/`) |
+
+Tarballs are verified against the index-declared MD5 when present (Archive downloads are TLS-trusted); dependency resolution follows `Depends`/`Imports`/`LinkingTo` at current versions, skipping base packages. Unresolvable items are reported in `skipped_modules`.
+
+---
+
 #### Git — `POST /admin/git/collect`
 
-`GitCollectRequest`. Body limit **1 MiB**.
+`GitCollectRequest`. Body limit **1 MiB**. See [Git repositories](ecosystems/git.md).
 
 ```json
 {
@@ -430,6 +559,24 @@ Each `.apk` is verified against the `APKINDEX`-declared size and `Q1` control ch
 | `ecosystems` | `[]string` | **Required.** OSV ecosystem names exactly as [osv.dev](https://osv.dev) spells them (`npm`, `PyPI`, `crates.io`, `Debian:12`, …); each name's current `all.zip` database is fetched |
 
 The OSV bucket publishes no digests, so downloads are TLS-trusted, then checked to be readable advisory archives before signing; failed ecosystems are skipped and reported in `skipped_modules`. An unchanged database dedups to a no-op export.
+
+---
+
+#### Uploads — `POST /admin/uploads/collect`
+
+**`multipart/form-data`**, not JSON — the one collect endpoint that differs. See [Uploads](ecosystems/uploads.md).
+
+```bash
+curl -fsS -X POST -F "folder=tools" -F "file=@installer.run" \
+  http://low:8080/admin/uploads/collect
+```
+
+| Form field | Notes |
+|---|---|
+| `folder` | **Required.** Target folder (one path segment, ≤ 128 chars, no leading `.`, no separators or control chars). Field value capped at 4 KiB |
+| `file` | One or more file parts (up to 10,000). Names are reduced to their base name and validated like `folder`; a duplicate name in one upload is rejected. **No per-file size cap** — parts stream to disk while being hashed |
+
+The shared `force` field does not apply: uploads always ship in full (the export-dedup index is deliberately never consulted), so `prior_files` is always `0`. `?dry_run=1` works; `?stream=1` is recommended for multi-gigabyte files.
 
 ---
 
@@ -674,6 +821,11 @@ Both return the identical `LowBundleStatus` payload.
 | `/admin/import` | POST | `ImportResult` JSON (imports the next in-order bundle), or 500 |
 | `/admin/status` | GET | `ImportStatus` JSON |
 | `/admin/missing` | GET | `ImportStatus` JSON (an alias of `/admin/status`) |
+| `/admin/uploads` | GET | JSON listing of the [uploads](ecosystems/uploads.md) tree: folders with each file's name, size, and modification time |
+| `/admin/uploads/delete` | POST | Delete one uploaded file — JSON body `{"folder":"…","name":"…"}` → `{"status":"ok"}`, `404` if absent |
+
+!!! note "The mutating admin routes are loopback-gated"
+    `POST /admin/import` and `POST /admin/uploads/delete` answer only loopback callers unless `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN=on` — other callers get `403`. The read-only routes are open like everything else on the high side.
 
 `ImportResult`:
 
@@ -802,8 +954,8 @@ Client: `npm config set registry <base>/npm/`. See [NPM](ecosystems/npm.md).
 
 | URL | Returns |
 |---|---|
-| `/npm/<name>` or `/npm/@scope/pkg` | Packument (full package metadata document) |
-| `/npm/<name>/<version>` or `/npm/@scope/pkg/<version>` | Single version manifest |
+| `/npm/<name>` or `/npm/@scope/pkg` | Packument (full package metadata document; `dist-tags` are the mirrored upstream tags filtered to versions present, with `latest` regenerated when the upstream tag is absent or unmirrored) |
+| `/npm/<name>/<version>` or `/npm/@scope/pkg/<version>` | Single version manifest — `<version>` may also be a served dist-tag (`latest`, `beta`, …) |
 | `/npm/<name>/-/<file>` or `/npm/@scope/pkg/-/<file>` | Tarball (`<file>` must contain no slash) |
 | `POST /npm/-/npm/v1/security/advisories/bulk` | `npm audit` bulk advisories, answered from the mirrored [OSV](ecosystems/osv.md) `npm` database (gzip request bodies supported); **404** until that database is imported, so npm reports audit unavailable rather than a false all-clear |
 
@@ -879,6 +1031,82 @@ Client `/etc/apk/repositories` line: `<base>/apk/<mirror>/<branch>/<repo>`. See 
 | `/apk/<mirror>/<branch>/<repo>/<arch>/<pkg>-<ver>.apk` | The package |
 | `/apk/keys/<key-name>` | The PEM public key matching `--apk-rsa-key` (only when signing is configured) |
 
+#### Conda — prefix `/conda`
+
+Client: `conda`/`mamba`/`micromamba` with `--override-channels -c <base>/conda/<mirror>`. See [Conda channels](ecosystems/conda.md).
+
+| URL | Returns |
+|---|---|
+| `/conda/<mirror>/<subdir>/repodata.json` | The regenerated subdir index (`application/json`; `noarch` always exists, even empty) |
+| `/conda/<mirror>/<subdir>/<file>.conda` / `….tar.bz2` | The package file |
+
+#### RubyGems (compact index) — prefix `/rubygems`
+
+Client Gemfile: `source "<base>/rubygems"`. See [RubyGems](ecosystems/rubygems.md).
+
+| URL | Returns |
+|---|---|
+| `/rubygems/versions` | `created_at` header + one `<name> <versions> <md5>` line per gem |
+| `/rubygems/info/<gem>` | The verbatim upstream info lines whose `.gem` is present |
+| `/rubygems/names` | One gem name per line |
+| `/rubygems/gems/<name>-<version>[-<platform>].gem` | The gem file |
+
+The legacy Marshal endpoints (`specs.4.8.gz`, `quick/`, `api/v1/dependencies`) are deliberately not served.
+
+#### Composer (p2) — prefix `/composer`
+
+Client `composer.json`: repository `{"type":"composer","url":"<base>/composer"}` plus `"packagist.org": false`. See [PHP Composer](ecosystems/composer.md).
+
+| URL | Returns |
+|---|---|
+| `/composer/packages.json` | `{"metadata-url": "/composer/p2/%package%.json", "available-packages": […]}` |
+| `/composer/p2/<vendor>/<project>.json` | Full version objects, newest first, dist re-pointed at the mirror |
+| `/composer/p2/<vendor>/<project>~dev.json` | Always an empty list for known packages (no dev versions) |
+| `/composer/dist/<vendor>/<project>/<version_normalized>.zip` | The dist zip |
+
+#### VS Code extensions — prefix `/vsx`
+
+Client: `VSCODE_GALLERY_SERVICE_URL=<base>/vsx/gallery`. See [VS Code extensions](ecosystems/vsx.md).
+
+| URL | Returns |
+|---|---|
+| `POST /vsx/gallery/extensionquery` | The VS Code gallery query API (exact-id and free-text filters, paginated) |
+| `/vsx/assets/<publisher>/<name>/<version>/<assetType>` | Gallery assets: the `.vsix` (`…Services.VSIXPackage`) and the manifest (`…Code.Manifest`) |
+| `/vsx/files/<publisher>/<name>/<publisher>.<name>-<version>.vsix` | Direct `.vsix` download |
+
+#### Ansible Galaxy (v3) — prefix `/galaxy`
+
+Client: `ansible-galaxy collection install ns.name -s <base>/galaxy/`. See [Ansible Galaxy](ecosystems/galaxy.md).
+
+| URL | Returns |
+|---|---|
+| `/galaxy/api/` | Discovery: `{"available_versions": {"v3": "v3/"}}` |
+| `/galaxy/api/v3/collections/<ns>/<name>/` | Collection page with `highest_version` |
+| `/galaxy/api/v3/collections/<ns>/<name>/versions/` | Version list, newest first (single page) |
+| `/galaxy/api/v3/collections/<ns>/<name>/versions/<version>/` | Version detail: `artifact{filename,sha256,size}`, absolute `download_url`, `metadata.dependencies` |
+| `/galaxy/download/<ns>-<name>-<version>.tar.gz` | The collection artifact |
+
+#### CRAN — prefix `/cran`
+
+Client: `install.packages("pkg", repos = "<base>/cran")`. See [R packages (CRAN)](ecosystems/cran.md).
+
+| URL | Returns |
+|---|---|
+| `/cran/src/contrib/PACKAGES` and `PACKAGES.gz` | The regenerated index (newest present release per package, recomputed `MD5sum`) |
+| `/cran/src/contrib/<name>_<version>.tar.gz` | The source package |
+| `/cran/src/contrib/Archive/<name>/<name>_<version>.tar.gz` | Superseded releases |
+
+#### Git (dumb HTTP) — prefix `/git`
+
+Client: `git clone <base>/git/<mirror>.git`. See [Git repositories](ecosystems/git.md).
+
+| URL | Returns |
+|---|---|
+| `/git/<mirror>[.git]/HEAD` | `ref: refs/heads/<default>` |
+| `/git/<mirror>[.git]/info/refs` | The ref list (`<sha>\t<refname>` lines; the smart probe `?service=git-upload-pack` gets the same plain text, pushing git onto the dumb protocol) |
+| `/git/<mirror>[.git]/objects/info/packs` | `P pack-<sha1>.pack` — only the newest pack is advertised |
+| `/git/<mirror>[.git]/objects/pack/pack-<sha1>.{pack,idx}` | The verified pack and its regenerated index |
+
 #### OSV advisories — prefix `/osv`
 
 The upstream bucket's own layout, for offline scanners. Ecosystem names may be given verbatim (URL-encoded where needed) or as their storage slug (lowercased, non-`[a-z0-9._-]` characters → `-`: `Alpine:v3.20` ↔ `alpine-v3.20`). See [OSV advisories](ecosystems/osv.md).
@@ -888,6 +1116,14 @@ The upstream bucket's own layout, for offline scanners. Ecosystem names may be g
 | `/osv/ecosystems.txt` | Mirrored ecosystem names, one per line (404 while nothing is mirrored) |
 | `/osv/<ecosystem>/all.zip` | The ecosystem's database snapshot (`application/zip`) |
 | `/osv/<ecosystem>/<ID>.json` | One advisory (`GHSA-…`, `CVE-…`, `MAL-…`), streamed straight out of the verified zip |
+
+#### Uploads — prefix `/uploads`
+
+Plain file serving; the listing and delete admin routes are under [Admin & health](#admin-health). See [Uploads](ecosystems/uploads.md).
+
+| URL | Returns |
+|---|---|
+| `/uploads/<folder>/<name>` | The file bytes (range and conditional requests supported) |
 
 ---
 
@@ -905,7 +1141,7 @@ Just the import status; the package trees are fetched lazily.
 
 #### `GET /ui/api/tree?eco=<eco>&path=<path>`
 
-`eco` ∈ `go` (default), `python`, `maven`, `apt`, `rpm`, `containers`, `npm`, `hf`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `osv`. `path` is the parent node path (empty for root); children are returned one level at a time.
+`eco` ∈ `go` (default), `python`, `maven`, `apt`, `rpm`, `hf`, `containers`, `npm`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `conda`, `rubygems`, `composer`, `vsx`, `galaxy`, `cran`, `git`, `osv`, `uploads`. `path` is the parent node path (empty for root); children are returned one level at a time.
 
 ```json
 { "nodes": [
@@ -915,9 +1151,9 @@ Just the import status; the package trees are fetched lazily.
 
 `UITreeNode` fields: `label`, `path`, `kind` (`dir | module | version | project | file`), `expandable` (bool), `count` (omitempty).
 
-- Go / Maven / APT / RPM / containers / AI models / Terraform / Helm / apk use a slash-segment tree: root yields first path segments; an exact module's children are its `version` leaves (`path` = `module@version`).
-- Python uses a two-level tree: root → `project` nodes; a project expands to `file` (wheel filename) leaves.
-- NPM, crates, and NuGet use a flat package → versions tree (an npm scope is part of the name).
+- Go / Maven / APT / RPM / containers / AI models / Terraform / Helm / apk / conda / Galaxy use a slash-segment tree: root yields first path segments; an exact module's children are its `version` leaves (`path` = `module@version`).
+- Python uses a two-level tree: root → `project` nodes; a project expands to `file` (distribution filename) leaves. Uploads use the same shape: folder → file leaves.
+- NPM, crates, NuGet, RubyGems, Composer, VS Code, CRAN, git, and OSV use a flat name → versions tree (an npm scope is part of the name; a git repo's "versions" are its short refs).
 
 Inventory is memoized for **3 seconds**, so freshly imported content appears within that window.
 
@@ -973,5 +1209,5 @@ Valid only for `eco` ∈ `apt | rpm | containers | hf | apk`; anything else → 
 - [Low side](low-side.md) and [High side](high-side.md) — operating each role.
 - [Scheduling (watches)](scheduling.md) — the recurring-pull model behind `/admin/watches*`.
 - [Configuration reference](configuration.md) — every flag and environment variable.
-- [Ecosystems](ecosystems/index.md) — the thirteen ecosystem pages linked above.
+- [Ecosystems](ecosystems/index.md) — the per-ecosystem pages linked above.
 - [Troubleshooting & limitations](troubleshooting.md) — error codes and known edges.

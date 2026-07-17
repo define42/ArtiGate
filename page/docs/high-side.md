@@ -140,6 +140,13 @@ The high side treats the **verified artifacts themselves** as the only source of
 - **Helm** `index.yaml` is regenerated per mirror from each chart's own embedded `Chart.yaml`, with digests recomputed from the artifacts.
 - **NuGet** feed metadata (versions, registration, search) is regenerated from each package's own embedded `.nuspec`.
 - **Alpine** `APKINDEX.tar.gz` is regenerated per branch/repo/arch from the accumulated stanzas of the `.apk` files present; signed only if `--apk-rsa-key` is set.
+- **Conda** `repodata.json` is regenerated per subdir from the manifest-carried repodata entries whose package files are present.
+- **RubyGems** compact-index files (`/versions`, `/info/<gem>`, `/names`) are regenerated from the verbatim info lines whose `.gem` is present.
+- **Composer** `packages.json` and p2 metadata are re-rendered from the verified (dist/source-stripped) version objects, with dist URLs pointing back at the mirror and shasums recomputed.
+- **VS Code** gallery metadata is regenerated from each `.vsix`'s own embedded `package.json`.
+- **Ansible Galaxy** v3 API documents are regenerated from each artifact's own embedded `MANIFEST.json`, with SHA-256 and size recomputed from the file.
+- **CRAN** `PACKAGES(.gz)` is regenerated from each tarball's own embedded `DESCRIPTION`, listing only the newest present release per package.
+- **Git** pack indexes (`.idx`), `info/refs`, and `HEAD` are rebuilt after re-verifying the pack object by object; refs whose objects are missing are dropped rather than served dangling.
 
 The high side therefore **serves only complete versions** of fully verified content. Optional repo signing (`--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`) lets you re-sign the regenerated APT/RPM/Alpine metadata with a key clients on the trusted network already trust; leaving them unset serves those repositories unsigned.
 
@@ -154,7 +161,7 @@ Once the high side is serving, configure clients against its base URL. Each ecos
 
 | Ecosystem | Client setup |
 |-----------|--------------|
-| Go modules | `GOPROXY=<base>/go,off` and `GOSUMDB=off` — see [Go modules](ecosystems/go.md) |
+| Go modules | `GOPROXY=<base>/go,off`, `GOSUMDB` stays on (served from `/go/sumdb/`) — see [Go modules](ecosystems/go.md) |
 | Python (PyPI) | index URL `<base>/simple/` — see [Python (PyPI)](ecosystems/python.md) |
 | Java (Maven) | mirror `<base>/maven/` — see [Java (Maven)](ecosystems/maven.md) |
 | NPM | registry `<base>/npm/` — see [NPM](ecosystems/npm.md) |
@@ -167,5 +174,14 @@ Once the high side is serving, configure clients against its base URL. Each ecos
 | Helm | `helm repo add artigate <base>/helm/<mirror>` — see [Helm charts](ecosystems/helm.md) |
 | NuGet | `nuget.config` source `<base>/nuget/v3/index.json` with `<clear />` — see [NuGet](ecosystems/nuget.md) |
 | Alpine (apk) | `/etc/apk/repositories` line `<base>/apk/<mirror>/<branch>/<repo>`, key from `/apk/keys/<name>` — see [Alpine (apk)](ecosystems/apk.md) |
+| Conda | `conda`/`mamba`/`micromamba` with `--override-channels -c <base>/conda/<mirror>` — see [Conda channels](ecosystems/conda.md) |
+| RubyGems | Gemfile `source "<base>/rubygems"` — see [RubyGems](ecosystems/rubygems.md) |
+| PHP Composer | `composer.json` repository `<base>/composer` with `"packagist.org": false` — see [PHP Composer](ecosystems/composer.md) |
+| VS Code extensions | `VSCODE_GALLERY_SERVICE_URL=<base>/vsx/gallery` (or product.json `extensionsGallery.serviceUrl`) — see [VS Code extensions](ecosystems/vsx.md) |
+| Ansible Galaxy | `ansible-galaxy collection install ns.name -s <base>/galaxy/` — see [Ansible Galaxy](ecosystems/galaxy.md) |
+| R (CRAN) | `install.packages("pkg", repos = "<base>/cran")` — see [R packages (CRAN)](ecosystems/cran.md) |
+| Git | `git clone <base>/git/<mirror>.git` — see [Git repositories](ecosystems/git.md) |
+| OSV advisories | `curl <base>/osv/<ecosystem>/all.zip` for `osv-scanner --offline`; `npm audit` answers from the npm registry — see [OSV advisories](ecosystems/osv.md) |
+| Uploads | `curl <base>/uploads/<folder>/<name>` — see [Uploads](ecosystems/uploads.md) |
 
-For the overview of all thirteen ecosystems see [Ecosystems](ecosystems/index.md). For production hardening and layout see [Deployment](deployment.md).
+For the overview of all twenty-two streams see [Ecosystems](ecosystems/index.md). For production hardening and layout see [Deployment](deployment.md).

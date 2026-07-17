@@ -938,15 +938,23 @@ edge-triggered (one notification per gap; the gap then ages via
   those clients need `GOSUMDB=off`. Private modules follow the low side's
   `GONOSUMDB`/`GOPRIVATE` and are never looked up; with `--gosumdb off` nothing
   is captured and clients use `GOSUMDB=off` as before.
-- **Python**: wheels only (no sdists), always enforced. A package with no
-  compatible wheel fails the collect; pin a wheel-bearing version or exclude it.
+- **Python**: wheels by default — every pip run is forced to `--only-binary=:all:`,
+  and a *requirement* with no compatible wheel fails the collect (pin a
+  wheel-bearing version, or exclude it). Packages that publish no wheel can be
+  opted into source distributions via the collect's `sdists` list: those are
+  fetched from the index's JSON API (never through pip, so no build hooks run
+  on the low side), verified against the API-declared SHA-256, and built by
+  clients at install time.
 - **Java/Maven**: release versions only; SNAPSHOT and dynamic/range versions are
   rejected.
 - **NPM**: registry tarballs only — dependencies resolved to git or file URLs
   are skipped (and reported). Resolution needs npm 7 or newer on the low side
   (lockfile v2+). The high side regenerates all packument metadata from each
-  tarball's own embedded `package.json`; `dist-tags` carries only `latest`
-  (the highest mirrored release). `npm audit` works once the OSV `npm`
+  tarball's own embedded `package.json`; each collect also snapshots the
+  upstream `dist-tags`, and the served packument carries every mirrored tag
+  whose target version is present, regenerating `latest` from the versions
+  actually served when the upstream tag is absent or unmirrored (installs by
+  tag, e.g. `pkg@beta`, resolve too). `npm audit` works once the OSV `npm`
   database is mirrored (npm 7+, the bulk-advisory protocol); without it the
   advisory endpoint answers 404, so set `audit=false` — yarn classic's older
   `audits` protocol is not served either way.

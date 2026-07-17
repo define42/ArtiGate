@@ -224,16 +224,17 @@ The packument is regenerated on the fly:
 ```json
 {
   "name": "<name>",
-  "dist-tags": { "latest": "<computed>" },
+  "dist-tags": { "latest": "<upstream or computed>", "next": "<if mirrored>" },
   "versions": {
     "<version>": { "…version object…": true }
   }
 }
 ```
 
-- **`dist-tags` carries only `latest`** — no `next`, `beta`, or custom tags are synthesized.
+- **`dist-tags` are the mirrored upstream tags, filtered to versions actually served.** Each collect snapshots the package's upstream `dist-tags` (best-effort, from the registry the package came from; well-formed entries travel in the signed manifest), and the packument carries every snapshotted tag — `next`, `beta`, custom tags — whose target version is present on the mirror. A tag pointing at an unmirrored version is dropped rather than served dangling.
+- **`latest` is always present**: the mirrored upstream `latest` when its target is served, otherwise regenerated as the highest non-prerelease version present (or the highest overall if only prereleases are mirrored), computed with the shared semver helpers.
 - Only versions whose **tarball is actually present** are included; an empty version set returns `404 not found`.
-- `latest` is the highest non-prerelease version (or the highest overall if only prereleases are mirrored), computed with the shared semver helpers.
+- `GET /npm/<name>/<tag>` resolves a served dist-tag to its version object too, so `npm install <name>@beta` works when that tag's target is mirrored.
 
 ### Version object
 

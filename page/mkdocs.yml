@@ -73,7 +73,15 @@ nav:
       - Helm charts: ecosystems/helm.md
       - NuGet: ecosystems/nuget.md
       - Alpine (apk): ecosystems/apk.md
+      - Conda channels: ecosystems/conda.md
+      - RubyGems: ecosystems/rubygems.md
+      - PHP Composer: ecosystems/composer.md
+      - VS Code extensions: ecosystems/vsx.md
+      - Ansible Galaxy: ecosystems/galaxy.md
+      - R packages (CRAN): ecosystems/cran.md
+      - Git repositories: ecosystems/git.md
       - OSV advisories: ecosystems/osv.md
+      - Uploads (arbitrary files): ecosystems/uploads.md
   - Security & trust: security.md
   - TLS / HTTPS: tls.md
   - Configuration reference: configuration.md

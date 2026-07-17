@@ -352,4 +352,4 @@ The shard key is `containerBlobShardHex(hex)` — the first 3 hex characters of 
 - [Scheduling (watches)](scheduling.md) — recurring collects on a stored spec.
 - [Built-in UDP diode](data-diode.md) — the pitcher/catcher transport.
 - [Security &amp; trust](security.md) — the full trust argument and hardening.
-- [Ecosystems](ecosystems/index.md) — the thirteen streams and their per-ecosystem details.
+- [Ecosystems](ecosystems/index.md) — the twenty-two streams and their per-ecosystem details.

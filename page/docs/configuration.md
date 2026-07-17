@@ -88,6 +88,7 @@ artigate low \
 | `--go` | `go` | `go` command path |
 | `--gotoolchain` | `auto` | GOTOOLCHAIN for the fetcher; `auto` lets `go` download a newer toolchain when a module requires one, `local` pins the installed toolchain |
 | `--python` | `python3` | Python interpreter used for `pip download` |
+| `--pypi-json` | `""` (→ `https://pypi.org/pypi`) | Index JSON API base that opted-in [sdists](ecosystems/python.md#opt-in-sdists-for-packages-that-publish-no-wheel) are resolved from |
 | `--maven` | `mvn` | Maven command used to resolve Java/Maven artifacts |
 | `--npm` | `npm` | npm command used to resolve NPM package graphs |
 | `--npm-registry` | `""` | Registry URL npm resolves against (passed as `--registry`; empty uses npm's own config) |
@@ -97,6 +98,12 @@ artigate low \
 | `--terraform-registry` | `""` (→ `https://registry.terraform.io`) | Registry Terraform providers/modules are fetched from; use `https://registry.opentofu.org` for OpenTofu |
 | `--nuget-source` | `""` (→ `https://api.nuget.org/v3/index.json`) | NuGet v3 service index packages are resolved from |
 | `--osv-upstream` | `""` (→ `https://osv-vulnerabilities.storage.googleapis.com`) | Base URL OSV vulnerability databases (per-ecosystem `all.zip` archives) are fetched from |
+| `--conda-channel-base` | `""` (→ `https://conda.anaconda.org`) | Base URL bare conda channel names resolve under (a full channel URL in the collect bypasses it) |
+| `--rubygems-url` | `""` (→ `https://rubygems.org`) | Gem server gems and their compact index are fetched from |
+| `--composer-repo` | `""` (→ `https://repo.packagist.org`) | Composer repository package metadata and dists are resolved from |
+| `--vsx-registry` | `""` (→ `https://open-vsx.org`) | Open VSX registry VS Code extensions are fetched from |
+| `--galaxy-server` | `""` (→ `https://galaxy.ansible.com`) | Galaxy server Ansible collections are fetched from |
+| `--cran-mirror` | `""` (→ `https://cloud.r-project.org`) | CRAN mirror R packages are fetched from |
 | `--git` | `git` | git command used to fetch Terraform modules from `git::` sources |
 | `--watch-interval` | `60s` | How often the scheduler checks for due watches; `0` disables scheduled watches |
 
@@ -107,7 +114,7 @@ artigate low \
 
 ### Routes
 
-- `POST /admin/{go,python,maven,apt,rpm,containers,npm,hf,crates,terraform,helm,nuget,apk}/collect` (add `?stream=1` for streamed progress; every body accepts `"force": true` to bypass export dedup)
+- `POST /admin/{go,python,maven,apt,rpm,hf,containers,npm,crates,terraform,helm,nuget,apk,conda,rubygems,composer,vsx,galaxy,cran,git,osv,uploads}/collect` — one endpoint per stream (add `?stream=1` for streamed progress, `?dry_run=1` for an estimate; every JSON body accepts `"force": true` to bypass export dedup). `uploads` takes `multipart/form-data` instead of JSON
 - `POST /admin/reexport?stream=go&sequences=42,45-47` (`stream` defaults to `go`; also accepts a JSON body `{"stream":"go","sequences":"42,45-47"}`)
 - `GET /admin/bundles`
 - `GET /admin/watches`, `POST /admin/watches`, `POST /admin/watches/{update,run,enable,disable,delete}` — the [watch scheduler](scheduling.md)
@@ -151,7 +158,8 @@ artigate high \
 
 ### Routes
 
-- `POST /admin/import`
+- `POST /admin/import` (loopback callers only unless `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN` is on)
+- `POST /admin/uploads/delete` — remove one mirrored [upload](ecosystems/uploads.md) (same loopback restriction)
 - `GET /admin/missing`
 - `GET /admin/status`
 - `GET /healthz` (liveness)
@@ -163,7 +171,7 @@ artigate high \
 
 ## Environment variables
 
-There are **no** environment variables for `keygen` or `hashpw`. The TLS variables apply to **both** `low` and `high` (both call the same `tlsConfigFromEnv`). The auth and cookie variables apply to the **low side only** — the high side has no auth. The diode-transport variables split by side (`ARTIGATE_DIODE_URL` low, `ARTIGATE_DIODE_INGEST` high, the token both; `ARTIGATE_PITCHER_*` low, `ARTIGATE_CATCHER_*` high), and `ARTIGATE_HF_TOKEN` is low-side only.
+There are **no** environment variables for `keygen` or `hashpw`. The TLS variables and the failure-webhook variables apply to **both** `low` and `high` (both call the same `tlsConfigFromEnv` / webhook setup). The auth and cookie variables apply to the **low side only** — the high side has no auth. The diode-transport variables split by side (`ARTIGATE_DIODE_URL` low, `ARTIGATE_DIODE_INGEST` high, the token both; `ARTIGATE_PITCHER_*` low, `ARTIGATE_CATCHER_*` high), `ARTIGATE_HF_TOKEN` is low-side only, and `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN` is high-side only.
 
 ### Low-side authentication
 
@@ -171,6 +179,7 @@ There are **no** environment variables for `keygen` or `hashpw`. The TLS variabl
 |---|---|---|
 | `ARTIGATE_LOW_AUTH` | unset (auth disabled) | One or more `username:<argon2id-hash>` credentials, separated by `;` or newlines (`\n`/`\r`) — **not commas** |
 | `ARTIGATE_LOW_COOKIE_SECURE` | `auto` | Session cookie `Secure` attribute: `auto` follows ArtiGate's own TLS; `true`/`false` override |
+| `ARTIGATE_LOW_ALLOW_UNAUTHENTICATED` | `off` | Without `ARTIGATE_LOW_AUTH`, the low side **refuses to start on a non-loopback `--listen` address**; setting `1`/`true`/`on`/`yes` acknowledges a trusted authenticating reverse proxy in front and starts anyway (with a startup warning). Any other value is fatal |
 
 When `ARTIGATE_LOW_AUTH` yields at least one credential, the dashboard requires a form login and sessions are carried in an encrypted, signed cookie (`artigate_session`, 12 hours, `HttpOnly`, `SameSite=Lax`). Keys persist in `<root>/session.key` (`0o600`, 96 bytes) so sessions survive a restart. `/healthz`, `/readyz`, and `/metrics` stay open and a **Log out** button appears.
 
@@ -244,6 +253,41 @@ The direct one-way-fiber transport — see [Built-in UDP diode](data-diode.md) f
 | `ARTIGATE_UPSTREAM_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private git, APT, RPM, Alpine, and Conda upstreams; the key is the upstream's exact host, `host:port` included (e.g. `git.example.com=bot:token,apt.example.com=bot:secret`). Sent as HTTP Basic to the mirror host it is keyed to. Read at collect time, so it rotates without a restart, and the only credential source scheduled watches use |
 | `ARTIGATE_GO_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private Go module hosts (the key is the VCS host, e.g. `gitlab.example.com=bot:token`); injected into the `go`/`git` subprocesses via a per-collect netrc + git credential helper, and each host is treated as private (`GOPRIVATE`/`GONOSUMDB`/`GONOPROXY`) for that collect — which is why Go has its own variable instead of sharing `ARTIGATE_UPSTREAM_AUTH`. Same rotation and scheduled-watch role |
 
+### Failure webhooks
+
+Both sides can POST a small JSON document to an HTTP(S) endpoint when something goes wrong, so an alert reaches a channel without polling `/metrics`. Unset means disabled; a malformed URL is fatal at startup.
+
+| Variable | Side | Default | Meaning |
+|---|---|---|---|
+| `ARTIGATE_WEBHOOK_URL` | both | unset (disabled) | HTTP(S) endpoint failure events are POSTed to (`Content-Type: application/json`) |
+| `ARTIGATE_WEBHOOK_TOKEN` | both | unset | Optional bearer token, sent as `Authorization: Bearer …` on every delivery |
+
+| Event | Side | Fires when |
+|---|---|---|
+| `schedule_failed` | low | a [scheduled collect](scheduling.md) run fails (upstream error, panic, cancel) |
+| `bundle_rejected` | high | a bundle is rejected on import or sorting (bad signature/hash, unsupported, too far ahead) |
+| `gap_detected` | high | a stream becomes blocked because a later bundle arrived before the next expected one |
+
+Every payload carries `event`, `side` (`low`/`high`), and an RFC 3339 `time`, plus event-specific fields — `schedule_failed` adds `stream`, `watch_id`, `label`, `error`; `bundle_rejected` adds `stream`, `bundle`, `reason`; `gap_detected` adds `stream`, `blocking_sequence`:
+
+```json
+{
+  "event": "gap_detected",
+  "side": "high",
+  "time": "2026-07-14T12:00:00Z",
+  "stream": "go",
+  "blocking_sequence": 42
+}
+```
+
+Delivery is **best-effort and fire-and-forget**: each event is one background POST with a 10-second overall timeout, a slow or unreachable receiver never blocks an import or a scheduler tick, and failures are logged rather than retried — the `/metrics` counters remain the durable record. `gap_detected` is edge-triggered (one notification per gap; the gap then ages via `artigate_high_gap_age_seconds` until it fills).
+
+### High-side admin endpoints
+
+| Variable | Side | Default | Meaning |
+|---|---|---|---|
+| `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN` | high | `off` | The high side's state-changing admin endpoints (`POST /admin/import`, `POST /admin/uploads/delete`) answer only **loopback** callers by default; other callers get `403 admin endpoint restricted to local callers`. Set `1`/`true`/`on`/`yes` to permit remote callers when a published-port or reverse-proxy hop makes local admin appear non-loopback — and keep the listener itself restricted at the host. Any other value is fatal |
+
 ### TLS
 
 `ARTIGATE_TLS_MODE` is lowercased and defaults to `unencrypted`. All string values are trimmed; `ARTIGATE_TLS_DOMAINS` is comma-split with empty parts dropped. Full mode-by-mode behaviour is in [TLS / HTTPS](tls.md).
@@ -274,7 +318,7 @@ Validation (all fatal at startup):
 
 The file paths, listen addresses, and behaviour toggles are **flag-only**; TLS and low-side auth are **env-only**. There is deliberately no flag for TLS and no env var for paths/listen addresses.
 
-- **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags (including `--git`), `--hf-endpoint`, `--crates-index`, `--terraform-registry`, `--nuget-source`, `--osv-upstream`, `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`, `--apk-key-name`.
-- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`, `ARTIGATE_CONTAINER_AUTH`, `ARTIGATE_GO_AUTH`, `ARTIGATE_UPSTREAM_AUTH`.
+- **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags (including `--git`), the upstream overrides (`--pypi-json`, `--hf-endpoint`, `--crates-index`, `--terraform-registry`, `--nuget-source`, `--osv-upstream`, `--conda-channel-base`, `--rubygems-url`, `--composer-repo`, `--vsx-registry`, `--galaxy-server`, `--cran-mirror`, `--npm-registry`, `--container-registry`), `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`, `--apk-key-name`.
+- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_LOW_ALLOW_UNAUTHENTICATED`, `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`, `ARTIGATE_CONTAINER_AUTH`, `ARTIGATE_GO_AUTH`, `ARTIGATE_UPSTREAM_AUTH`, `ARTIGATE_WEBHOOK_URL`, `ARTIGATE_WEBHOOK_TOKEN`.
 
 See also: [Deployment](deployment.md) for production topologies, [Security & trust](security.md) for the trust model, and [TLS / HTTPS](tls.md) for the full TLS matrix.
