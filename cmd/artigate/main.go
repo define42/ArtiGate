@@ -42,6 +42,8 @@ func main() {
 		runHigh(os.Args[2:])
 	case "hashpw":
 		runHashpw(os.Args[2:])
+	case "version", "--version", "-version":
+		fmt.Println("artigate " + versionSummary())
 	default:
 		usage()
 		os.Exit(2)
@@ -53,6 +55,8 @@ func usage() {
 }
 
 const usageText = `Usage:
+  artigate version                    # print the binary's version and bundle manifest format
+
   artigate keygen --private low.ed25519 --public high.ed25519.pub
 
   artigate hashpw --user alice        # argon2id hash for ARTIGATE_LOW_AUTH (reads password from stdin)

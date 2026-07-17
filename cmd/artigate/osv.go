@@ -786,7 +786,7 @@ func (s *LowServer) writeOsvBundle(ctx context.Context, seq int64, stageRoot str
 		Osv:              &OsvManifest{Databases: records},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

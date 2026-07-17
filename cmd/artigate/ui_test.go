@@ -458,10 +458,16 @@ func TestHighServerUIPage(t *testing.T) {
 		`<dialog id="guide"`,
 		`id="guideClose"`,
 		`src="/ui/app.js"`,
+		// The header names the running binary's version, so an operator can
+		// read what the air-gapped box runs straight from the dashboard.
+		"high-side repository &middot; " + versionString(),
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index page missing %q", want)
 		}
+	}
+	if strings.Contains(body, "{{VERSION}}") {
+		t.Error("index page still contains the {{VERSION}} placeholder")
 	}
 }
 

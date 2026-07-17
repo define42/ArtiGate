@@ -1360,7 +1360,7 @@ func (s *LowServer) writeGalaxyBundle(ctx context.Context, seq int64, stageRoot 
 		Galaxy:           &GalaxyManifest{Collections: cols},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

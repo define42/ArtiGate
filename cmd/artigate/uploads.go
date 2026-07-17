@@ -336,7 +336,7 @@ func (s *LowServer) writeUploadsBundle(ctx context.Context, seq int64, stageRoot
 		Uploads:          &UploadsManifest{Files: entries},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

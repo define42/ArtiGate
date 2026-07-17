@@ -6,6 +6,11 @@ GOBIN                  := $(shell go env GOPATH)/bin
 GOLANGCI_LINT         := $(GOBIN)/golangci-lint
 GO_VERSION             := $(shell go env GOVERSION)
 
+# Version stamp reported by `artigate version`, the startup logs, and both
+# dashboards. Defaults to git describe; release builds override it, e.g.
+# `make build VERSION=v1.2.3`.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 # docker compose v2 (`docker compose`) with a fallback to the legacy binary.
 COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo 'docker compose' || echo 'docker-compose')
 
@@ -13,7 +18,7 @@ COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo 'docker compos
 
 .PHONY: build
 build: ## Build the artigate binary
-	go build -o artigate ./cmd/artigate
+	go build -ldflags "-X main.version=$(VERSION)" -o artigate ./cmd/artigate
 
 .PHONY: test
 test: ## Run unit tests with the race detector and coverage

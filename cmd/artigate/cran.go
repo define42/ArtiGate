@@ -924,7 +924,7 @@ func (s *LowServer) writeCRANBundle(ctx context.Context, seq int64, stageRoot st
 		CRAN:             &CRANManifest{Packages: pkgs},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

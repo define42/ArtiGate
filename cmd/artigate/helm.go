@@ -985,7 +985,7 @@ func (s *LowServer) writeHelmBundle(ctx context.Context, seq int64, stageRoot st
 		Helm:             &HelmManifest{Repos: []HelmRepo{repo}},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

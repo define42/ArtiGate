@@ -105,6 +105,16 @@ type diskTarget struct {
 	path  string
 }
 
+// writeBuildInfoMetric reports the running binary's identity in the standard
+// *_build_info shape (constant 1; the facts ride in the labels), so a fleet
+// dashboard can read every air-gapped node's version and bundle wire format
+// from Prometheus alone.
+func writeBuildInfoMetric(p *promWriter, side string) {
+	p.metric("artigate_build_info", "gauge",
+		"ArtiGate build metadata: the binary's version and the newest bundle manifest format it supports. Value is always 1.",
+		1, "side", side, "version", versionString(), "manifest_format", strconv.Itoa(manifestFormatCurrent))
+}
+
 // writeDiskMetrics reports free/total bytes for each target whose filesystem can
 // be measured (Linux only; elsewhere the samples are omitted).
 func writeDiskMetrics(p *promWriter, targets []diskTarget) {
@@ -388,6 +398,7 @@ func (s *LowServer) serveMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	p := newPromWriter()
 	p.metric("artigate_up", "gauge", "1 when the ArtiGate process is serving.", 1, "side", "low")
+	writeBuildInfoMetric(p, "low")
 	s.collectBundleMetrics(p)
 	s.collectScheduleMetrics(p)
 	s.collectJobMetrics(p)
@@ -496,6 +507,7 @@ func (s *HighServer) serveMetrics(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	p := newPromWriter()
 	p.metric("artigate_up", "gauge", "1 when the ArtiGate process is serving.", 1, "side", "high")
+	writeBuildInfoMetric(p, "high")
 	s.collectImportMetrics(p)
 	s.collectQuotaMetrics(p)
 	s.collectEventMetrics(p, now)

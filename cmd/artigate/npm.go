@@ -1373,7 +1373,7 @@ func (s *LowServer) writeNpmBundle(ctx context.Context, seq int64, stageRoot str
 		Npm:              &NpmManifest{Packages: pkgs, DistTags: tags},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

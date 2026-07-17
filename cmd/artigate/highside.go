@@ -161,6 +161,9 @@ func runHigh(args []string) {
 	fs.StringVar(&cfg.ApkRSAKey, "apk-rsa-key", "", "PEM RSA private key path used to sign regenerated Alpine APKINDEX files; unset serves them unsigned")
 	fs.StringVar(&cfg.ApkKeyName, "apk-key-name", "artigate.rsa.pub", "filename Alpine clients install the APK signing public key under (/etc/apk/keys/<name>)")
 	_ = fs.Parse(args)
+	// Identity first, before anything can fatal: on an air-gapped box the log
+	// is often the only place an operator can read what this binary is.
+	log.Printf("artigate high %s", versionSummary())
 	if cfg.PublicKeyPath == "" {
 		log.Fatal("--public-key is required")
 	}
@@ -589,7 +592,12 @@ type ImportResult struct {
 // ImportStatus reports import progress per stream; each stream sequences,
 // quarantines, and reports missing bundles independently of the others.
 type ImportStatus struct {
-	Streams []StreamImportStatus `json:"streams"`
+	// Version and ManifestFormat identify the serving binary — what this
+	// air-gapped high side runs and the newest bundle wire format it can
+	// import — so /admin/status answers a fleet-upgrade check remotely.
+	Version        string               `json:"version"`
+	ManifestFormat int                  `json:"manifest_format"`
+	Streams        []StreamImportStatus `json:"streams"`
 }
 
 type StreamImportStatus struct {
@@ -787,6 +795,35 @@ func invalidBundle(err error) error {
 	return &invalidBundleError{err: err}
 }
 
+// manifestTooNewError marks a validly signed manifest whose wire format is
+// newer than this binary understands — a newer low side is exporting to an
+// older high side. The bytes are not invalid: the same bundle imports as soon
+// as the high side is upgraded, so it must stay in landing as a retryable
+// condition (blocking its stream, and surfacing through the import-pass error
+// on /readyz) rather than be terminally rejected, whose only recovery would
+// be a low-side re-export across the diode.
+type manifestTooNewError struct {
+	bundleID string
+	format   int
+}
+
+func (e *manifestTooNewError) Error() string {
+	return fmt.Sprintf("bundle %s uses manifest format %d, but this high side (version %s) understands only formats up to %d: "+
+		"upgrade the ArtiGate high side; the bundle stays in landing and imports after the upgrade",
+		e.bundleID, e.format, versionString(), manifestFormatCurrent)
+}
+
+// classifyManifestError keeps a too-new-format manifest retryable — the
+// signed bytes become importable the moment the binary is upgraded — while
+// every other manifest failure stays terminal for these bytes.
+func classifyManifestError(err error) error {
+	var tooNew *manifestTooNewError
+	if errors.As(err, &tooNew) {
+		return err
+	}
+	return invalidBundle(err)
+}
+
 // classifyExtractError decides whether a bundle extraction failure means the
 // bundle is content-invalid (→ rejected) or was merely an operational local-I/O
 // fault such as a full staging disk (→ retryable, left in place). Marking a
@@ -830,7 +867,7 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 
 	manifest, err := s.loadVerifiedManifest(manifestPath, sigPath, stream, bundleID, expectedSeq)
 	if err != nil {
-		return BundleManifest{}, invalidBundle(err)
+		return BundleManifest{}, classifyManifestError(err)
 	}
 
 	staging := filepath.Join(s.cfg.Root, "tmp", bundleID)
@@ -898,47 +935,21 @@ func (s *HighServer) commitImportedStateLocked(stream, bundleID string, sequence
 	return nil
 }
 
-// loadVerifiedManifest verifies new Ed25519ph manifests from a streaming SHA-512
-// digest before loading their bounded JSON. Raw Ed25519 signatures remain
-// readable so bundles archived by older ArtiGate versions can still be replayed.
+// loadVerifiedManifest returns a bundle's manifest after its signature, wire
+// format, and identity fields all check out, in that order.
 func (s *HighServer) loadVerifiedManifest(manifestPath, sigPath, stream, bundleID string, expectedSeq int64) (BundleManifest, error) {
-	sigB64, err := readFileLimit(sigPath, diodeMaxSignatureBytes)
+	manifestBytes, err := s.readVerifiedManifestBytes(manifestPath, sigPath, bundleID)
 	if err != nil {
 		return BundleManifest{}, err
 	}
-	sigText := strings.TrimSpace(string(sigB64))
-	prehashed := strings.HasPrefix(sigText, manifestSignaturePHPrefix)
-	if prehashed {
-		sigText = strings.TrimPrefix(sigText, manifestSignaturePHPrefix)
-	}
-	sig, err := base64.StdEncoding.DecodeString(sigText)
-	if err != nil {
-		return BundleManifest{}, fmt.Errorf("decode signature: %w", err)
-	}
-	var verifiedDigest []byte
-	if prehashed {
-		verifiedDigest, err = hashFileLimitSHA512(manifestPath, diodeMaxManifestBytes)
-		if err != nil {
-			return BundleManifest{}, err
-		}
-		if err := ed25519.VerifyWithOptions(s.publicKey, verifiedDigest, sig, &ed25519.Options{Hash: crypto.SHA512}); err != nil {
-			return BundleManifest{}, fmt.Errorf("signature verification failed for %s", bundleID)
-		}
-	}
-
-	manifestBytes, err := readFileLimit(manifestPath, diodeMaxManifestBytes)
-	if err != nil {
+	// The wire-format probe must precede the full unmarshal: a newer format
+	// may legitimately change the JSON shape of fields this binary already
+	// knows (that is what a format bump is for), so decoding into the current
+	// BundleManifest schema first would fail on them and terminally reject a
+	// bundle that only needs a high-side upgrade.
+	if err := checkManifestWireFormat(manifestBytes, bundleID); err != nil {
 		return BundleManifest{}, err
 	}
-	if prehashed {
-		got := sha512.Sum512(manifestBytes)
-		if !bytes.Equal(got[:], verifiedDigest) {
-			return BundleManifest{}, fmt.Errorf("manifest %s changed while it was being verified", bundleID)
-		}
-	} else if !ed25519.Verify(s.publicKey, manifestBytes, sig) {
-		return BundleManifest{}, fmt.Errorf("signature verification failed for %s", bundleID)
-	}
-
 	var manifest BundleManifest
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		return BundleManifest{}, err
@@ -947,6 +958,70 @@ func (s *HighServer) loadVerifiedManifest(manifestPath, sigPath, stream, bundleI
 		return BundleManifest{}, err
 	}
 	return manifest, nil
+}
+
+// readVerifiedManifestBytes reads the bounded manifest file and returns its
+// bytes only once the Ed25519 signature checks out. New Ed25519ph manifests
+// are verified from a streaming SHA-512 digest before the JSON is loaded; raw
+// Ed25519 signatures remain readable so bundles archived by older ArtiGate
+// versions can still be replayed.
+func (s *HighServer) readVerifiedManifestBytes(manifestPath, sigPath, bundleID string) ([]byte, error) {
+	sigB64, err := readFileLimit(sigPath, diodeMaxSignatureBytes)
+	if err != nil {
+		return nil, err
+	}
+	sigText := strings.TrimSpace(string(sigB64))
+	prehashed := strings.HasPrefix(sigText, manifestSignaturePHPrefix)
+	if prehashed {
+		sigText = strings.TrimPrefix(sigText, manifestSignaturePHPrefix)
+	}
+	sig, err := base64.StdEncoding.DecodeString(sigText)
+	if err != nil {
+		return nil, fmt.Errorf("decode signature: %w", err)
+	}
+	var verifiedDigest []byte
+	if prehashed {
+		verifiedDigest, err = hashFileLimitSHA512(manifestPath, diodeMaxManifestBytes)
+		if err != nil {
+			return nil, err
+		}
+		if err := ed25519.VerifyWithOptions(s.publicKey, verifiedDigest, sig, &ed25519.Options{Hash: crypto.SHA512}); err != nil {
+			return nil, fmt.Errorf("signature verification failed for %s", bundleID)
+		}
+	}
+
+	manifestBytes, err := readFileLimit(manifestPath, diodeMaxManifestBytes)
+	if err != nil {
+		return nil, err
+	}
+	if prehashed {
+		got := sha512.Sum512(manifestBytes)
+		if !bytes.Equal(got[:], verifiedDigest) {
+			return nil, fmt.Errorf("manifest %s changed while it was being verified", bundleID)
+		}
+	} else if !ed25519.Verify(s.publicKey, manifestBytes, sig) {
+		return nil, fmt.Errorf("signature verification failed for %s", bundleID)
+	}
+	return manifestBytes, nil
+}
+
+// checkManifestWireFormat probes only the "format" member of the verified
+// manifest bytes and refuses formats newer than this binary understands. The
+// probe ignores every other member's shape, so it works on manifests whose
+// other fields no longer decode into this binary's schema. Bytes that fail
+// even the probe are not a newer format but malformed JSON: the error is left
+// to the full decode, which classifies them invalid → rejected.
+func checkManifestWireFormat(manifestBytes []byte, bundleID string) error {
+	var probe struct {
+		Format int `json:"format"`
+	}
+	if json.Unmarshal(manifestBytes, &probe) != nil {
+		return nil
+	}
+	if probe.Format > manifestFormatCurrent {
+		return &manifestTooNewError{bundleID: bundleID, format: probe.Format}
+	}
+	return nil
 }
 
 func hashFileLimitSHA512(name string, limit int64) ([]byte, error) {
@@ -991,9 +1066,16 @@ func manifestStream(m BundleManifest) string {
 	return m.Stream
 }
 
-// checkManifestFields validates the manifest's type, stream, sequencing, and
-// identity against what the importer expects next for that stream.
+// checkManifestFields validates the manifest's wire format, type, stream,
+// sequencing, and identity against what the importer expects next for that
+// stream. The format check runs first — on a newer format none of the other
+// fields can be trusted to mean what this binary thinks they mean. It is a
+// backstop: the authoritative refusal is checkManifestWireFormat, which
+// probes the verified bytes before they are decoded into this schema at all.
 func (s *HighServer) checkManifestFields(manifest BundleManifest, stream, bundleID string, expectedSeq int64) error {
+	if manifest.Format > manifestFormatCurrent {
+		return &manifestTooNewError{bundleID: bundleID, format: manifest.Format}
+	}
 	gotStream := manifestStream(manifest)
 	switch {
 	case manifest.Type != manifestType:
@@ -1306,7 +1388,11 @@ func (s *HighServer) importStatusLocked() (ImportStatus, error) {
 	if err != nil {
 		return ImportStatus{}, err
 	}
-	out := ImportStatus{Streams: make([]StreamImportStatus, 0, len(streams))}
+	out := ImportStatus{
+		Version:        versionString(),
+		ManifestFormat: manifestFormatCurrent,
+		Streams:        make([]StreamImportStatus, 0, len(streams)),
+	}
 	for _, stream := range streams {
 		out.Streams = append(out.Streams, s.streamStatusLocked(stream, landing[stream], quarantined[stream]))
 	}

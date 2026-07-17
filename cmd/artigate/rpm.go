@@ -906,7 +906,7 @@ func (s *LowServer) writeRpmBundle(ctx context.Context, seq int64, stageRoot str
 		Rpm:              &RpmManifest{Mirrors: mirrors},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

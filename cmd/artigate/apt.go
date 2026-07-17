@@ -676,7 +676,7 @@ func (s *LowServer) writeAptBundle(ctx context.Context, seq int64, stageRoot str
 		Apt:              &AptManifest{Mirrors: mirrors},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

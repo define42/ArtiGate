@@ -98,7 +98,9 @@ func buildModuleFiles(t *testing.T, src string, m moduleSpec) (ManifestMod, []Ma
 }
 
 // writeSignedStreamBundle writes a valid signed bundle tagged for an arbitrary
-// stream. The payload is a single go-module unit keyed off the bundle ID so it
+// stream, stamped with the current manifest format (writeSignedBundle keeps
+// format 0, so both the stamped and the legacy accept paths stay exercised).
+// The payload is a single go-module unit keyed off the bundle ID so it
 // never collides across streams or sequences; the stream field, not the payload
 // type, is what drives per-stream sequencing, so this is enough to exercise
 // per-stream import isolation without a real adapter.
@@ -110,6 +112,7 @@ func writeSignedStreamBundle(t *testing.T, landing string, priv ed25519.PrivateK
 
 	manifest := BundleManifest{
 		Type:             manifestType,
+		Format:           manifestFormatCurrent,
 		Stream:           stream,
 		Sequence:         seq,
 		PreviousSequence: prevSeq,
@@ -119,6 +122,14 @@ func writeSignedStreamBundle(t *testing.T, landing string, priv ed25519.PrivateK
 		Modules:          []ManifestMod{mod},
 		Files:            files,
 	}
+	signAndWriteBundle(t, landing, priv, manifest, src)
+}
+
+// signAndWriteBundle signs the manifest exactly as given and writes the three
+// bundle files (archive built from src, manifest, signature) into landing, so
+// tests can craft bundles with arbitrary manifest fields.
+func signAndWriteBundle(t *testing.T, landing string, priv ed25519.PrivateKey, manifest BundleManifest, src string) {
+	t.Helper()
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -128,11 +139,11 @@ func writeSignedStreamBundle(t *testing.T, landing string, priv ed25519.PrivateK
 	if err := os.MkdirAll(landing, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := createTarGzAtomic(context.Background(), filepath.Join(landing, bundleID+".tar.gz"), src, files); err != nil {
+	if err := createTarGzAtomic(context.Background(), filepath.Join(landing, manifest.BundleID+".tar.gz"), src, manifest.Files); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(landing, bundleID+".manifest.json"), manifestBytes)
-	writeFile(t, filepath.Join(landing, bundleID+".manifest.json.sig"),
+	writeFile(t, filepath.Join(landing, manifest.BundleID+".manifest.json"), manifestBytes)
+	writeFile(t, filepath.Join(landing, manifest.BundleID+".manifest.json.sig"),
 		[]byte(base64.StdEncoding.EncodeToString(sig)+"\n"))
 }
 

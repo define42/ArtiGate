@@ -1207,7 +1207,7 @@ func (s *LowServer) writeCratesBundle(ctx context.Context, seq int64, stageRoot 
 		Crates:           &CratesManifest{Crates: records},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}
