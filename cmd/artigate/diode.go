@@ -223,7 +223,7 @@ func (s *HighServer) handleDiodeHeartbeatUpload(w http.ResponseWriter, r *http.R
 	}
 	result := "recorded"
 	if !s.recordDiodeHeartbeat(hb, time.Now().UTC(), "the HTTP diode ingest") {
-		result = "ignored (older than the recorded heartbeat)"
+		result = "ignored (not newer than the recorded heartbeat)"
 	}
 	writeJSON(w, map[string]any{"heartbeat": result})
 }

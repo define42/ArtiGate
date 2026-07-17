@@ -121,7 +121,9 @@ func marshalDiodeHeartbeatPacket(priv ed25519.PrivateKey, hb diodeHeartbeat) ([]
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(payload)) > diodeMaxHeartbeatBytes {
+	// The bound is checked on len(payload) itself — the same expression the
+	// allocation below adds to — keeping the size arithmetic provably small.
+	if len(payload) > diodeMaxHeartbeatBytes {
 		return nil, fmt.Errorf("heartbeat payload is %d bytes, above the %d-byte wire limit", len(payload), diodeMaxHeartbeatBytes)
 	}
 	digest := sha512.Sum512(payload)
@@ -158,7 +160,7 @@ func parseDiodeHeartbeatPacket(pub ed25519.PublicKey, b []byte) (diodeHeartbeat,
 		return diodeHeartbeat{}, fmt.Errorf("unsupported heartbeat wire version %d", b[4])
 	}
 	payload := b[diodeHeartbeatHeaderSize:]
-	if int64(len(payload)) > diodeMaxHeartbeatBytes {
+	if len(payload) > diodeMaxHeartbeatBytes {
 		return diodeHeartbeat{}, fmt.Errorf("heartbeat payload is %d bytes, above the %d-byte wire limit", len(payload), diodeMaxHeartbeatBytes)
 	}
 	digest := sha512.Sum512(payload)
@@ -345,7 +347,7 @@ type diodeHeartbeatReceiver struct {
 func (r *diodeHeartbeatReceiver) handle(b []byte, now time.Time) {
 	hb, err := parseDiodeHeartbeatPacket(r.pub, b)
 	if err == nil && !r.record(hb, now) {
-		err = errors.New("older than the already-recorded heartbeat (replay?)")
+		err = errors.New("not newer than the already-recorded heartbeat (replay?)")
 	}
 	if err != nil {
 		r.dropped++
@@ -369,13 +371,17 @@ type diodeHeartbeatState struct {
 
 // recordHeartbeat stores a verified heartbeat and reports whether it was
 // accepted, and whether it was the first ever accepted (for one startup-style
-// log line however the heartbeat arrived). One created earlier than the
-// stored heartbeat is a replay and is refused while the stored one is fresh
-// (diodeHeartbeatReplayWindow).
+// log line however the heartbeat arrived). While the stored heartbeat is
+// fresh (diodeHeartbeatReplayWindow), only a strictly newer created time is
+// accepted: an older one is a replay, and an equal one is a duplicate
+// delivery (a re-copied folder file, an HTTP retry, a replayed datagram)
+// that must not refresh the record's age — the low side stamps every real
+// heartbeat with a new created time, so a repeated timestamp can never be
+// fresh information about the link.
 func (h *diodeHeartbeatState) recordHeartbeat(hb diodeHeartbeat, now time.Time) (accepted, first bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.received && hb.Created.Before(h.hb.Created) && now.Sub(h.receivedAt) < diodeHeartbeatReplayWindow {
+	if h.received && !hb.Created.After(h.hb.Created) && now.Sub(h.receivedAt) < diodeHeartbeatReplayWindow {
 		return false, false
 	}
 	first = !h.received

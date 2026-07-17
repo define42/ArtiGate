@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha512"
 	"encoding/binary"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -133,7 +136,9 @@ func TestDiodeHeartbeatPayloadValidation(t *testing.T) {
 }
 
 // TestDiodeHeartbeatReplayGuard covers the created-time monotonicity rule and
-// its staleness override.
+// its staleness override: while the record is fresh only strictly newer
+// heartbeats are taken, so neither an older replay nor an exact duplicate can
+// keep the heartbeat's age looking fresh after the low side stops.
 func TestDiodeHeartbeatReplayGuard(t *testing.T) {
 	var st diodeHeartbeatState
 	now := time.Now().UTC()
@@ -142,6 +147,14 @@ func TestDiodeHeartbeatReplayGuard(t *testing.T) {
 
 	if accepted, first := st.recordHeartbeat(initial, now); !accepted || !first {
 		t.Fatalf("initial heartbeat: accepted=%v first=%v, want both", accepted, first)
+	}
+	// An exact duplicate (same created time — a replayed datagram, an HTTP
+	// retry, a re-copied folder file) must not refresh the record's age.
+	if accepted, _ := st.recordHeartbeat(initial, now.Add(time.Minute)); accepted {
+		t.Fatal("an exact duplicate was accepted while the stored one is fresh")
+	}
+	if snap := st.snapshot(); !snap.receivedAt.Equal(now) {
+		t.Fatal("a rejected duplicate refreshed the record's received time")
 	}
 	replay := initial
 	replay.Created = now.Add(-time.Minute)
@@ -155,10 +168,6 @@ func TestDiodeHeartbeatReplayGuard(t *testing.T) {
 	// than staying blind (a low-side clock reset must not wedge monitoring).
 	if accepted, first := st.recordHeartbeat(replay, now.Add(diodeHeartbeatReplayWindow+time.Second)); !accepted || first {
 		t.Fatalf("staleness override: accepted=%v first=%v, want accepted and not first", accepted, first)
-	}
-	same := replay
-	if accepted, _ := st.recordHeartbeat(same, now.Add(2*diodeHeartbeatReplayWindow)); !accepted {
-		t.Fatal("an equal-created heartbeat (idempotent re-delivery) was refused")
 	}
 	newer := initial
 	newer.Created = now.Add(time.Hour)
@@ -562,5 +571,203 @@ func TestConsumeLandingHeartbeat(t *testing.T) {
 	}
 	if fileExists(path) {
 		t.Fatal("an unverifiable heartbeat file survived past the grace")
+	}
+}
+
+// TestDiodeHeartbeatParseEdgeCases covers the parse refusals that need
+// hand-built packets: a wrong magic at a valid length, and a correctly signed
+// payload that is not JSON (the signature alone must not admit it).
+func TestDiodeHeartbeatParseEdgeCases(t *testing.T) {
+	pub, priv := newTestKeys(t)
+
+	pkt, err := marshalDiodeHeartbeatPacket(priv, testHeartbeat(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongMagic := append([]byte(nil), pkt...)
+	binary.BigEndian.PutUint32(wrongMagic, diodeMagic) // a data-plane magic, right length
+	if _, err := parseDiodeHeartbeatPacket(pub, wrongMagic); err == nil || !strings.Contains(err.Error(), "bad magic") {
+		t.Fatalf("wrong magic = %v, want bad-magic error", err)
+	}
+
+	payload := []byte("this is not json")
+	digest := sha512.Sum512(payload)
+	sig, err := priv.Sign(nil, digest[:], diodeHeartbeatSignOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	notJSON := make([]byte, diodeHeartbeatHeaderSize+len(payload))
+	binary.BigEndian.PutUint32(notJSON, diodeHeartbeatMagic)
+	notJSON[4] = diodeHeartbeatVersion
+	copy(notJSON[5:], sig)
+	copy(notJSON[diodeHeartbeatHeaderSize:], payload)
+	if _, err := parseDiodeHeartbeatPacket(pub, notJSON); err == nil || !strings.Contains(err.Error(), "decode heartbeat payload") {
+		t.Fatalf("signed non-JSON payload = %v, want decode error", err)
+	}
+}
+
+// TestUploadHeartbeatToHTTPDiodeErrors covers the HTTP send's failure
+// reporting: an unreachable endpoint and a non-2xx answer, both surfaced with
+// the file name and — for HTTP errors — the status and body detail.
+func TestUploadHeartbeatToHTTPDiodeErrors(t *testing.T) {
+	ls := newBareLowServer(t)
+
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	dead.Close()
+	ls.cfg.DiodeURL = dead.URL
+	err := ls.sendDiodeHeartbeat(context.Background(), time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "PUT "+diodeHeartbeatFileName) {
+		t.Fatalf("unreachable endpoint = %v, want a PUT error", err)
+	}
+
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "spool full", http.StatusInsufficientStorage)
+	}))
+	t.Cleanup(refusing.Close)
+	ls.cfg.DiodeURL = refusing.URL
+	err = ls.sendDiodeHeartbeat(context.Background(), time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "HTTP 507") || !strings.Contains(err.Error(), "spool full") {
+		t.Fatalf("refused upload = %v, want the HTTP status and detail", err)
+	}
+}
+
+// failingReader errors on every read, standing in for a client that dies
+// mid-request-body.
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("connection torn down") }
+
+// TestDiodeIngestHeartbeatBodyLimits drives the ingest handler's own body
+// bounds, which only apply when the request declares no Content-Length (a
+// declared length is rejected earlier, in validateDiodeUpload): an oversized
+// chunked body is cut off at the wire limit, and a body that dies mid-read
+// reports a server-side error.
+func TestDiodeIngestHeartbeatBodyLimits(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	token := strings.Repeat("u", minDiodeTokenBytes)
+	hs.cfg.DiodeIngest = true
+	hs.cfg.DiodeToken = token
+
+	send := func(t *testing.T, body io.Reader) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPut, "/diode/"+diodeHeartbeatFileName, body)
+		req.ContentLength = -1 // chunked: the length gate cannot apply
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		hs.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := send(t, bytes.NewReader(make([]byte, diodeMaxHeartbeatPacketBytes+1))); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized chunked heartbeat = HTTP %d, want 413", rec.Code)
+	}
+	if rec := send(t, failingReader{}); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("failing body = HTTP %d, want 500", rec.Code)
+	}
+	if snap := hs.heartbeat.snapshot(); snap.received {
+		t.Fatal("a refused upload recorded a heartbeat")
+	}
+}
+
+// TestRunDiodeHeartbeatsFolderLoop runs the sender loop against the folder
+// transport: disabled returns immediately; enabled sends once right away,
+// again on the ticker, and stops on context cancellation.
+func TestRunDiodeHeartbeatsFolderLoop(t *testing.T) {
+	ls := newBareLowServer(t)
+	ls.cfg.DiodeHeartbeat = 0
+	ls.runDiodeHeartbeats(context.Background()) // disabled: must return at once
+
+	if err := ls.commitSequence(streamGo, 1); err != nil {
+		t.Fatal(err)
+	}
+	ls.cfg.DiodeHeartbeat = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		ls.runDiodeHeartbeats(ctx)
+		close(done)
+	}()
+
+	path := filepath.Join(ls.cfg.ExportDir, diodeHeartbeatFileName)
+	waitForHeartbeatFile := func(t *testing.T, what string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for !fileExists(path) {
+			if time.Now().After(deadline) {
+				cancel()
+				t.Fatalf("no heartbeat file appeared (%s)", what)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	waitForHeartbeatFile(t, "immediate send on start")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	waitForHeartbeatFile(t, "ticker-driven re-send")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("loop did not stop on context cancellation")
+	}
+}
+
+// TestDiodeHeartbeatLogHelpers pins the startup-log wording per transport and
+// schedule.
+func TestDiodeHeartbeatLogHelpers(t *testing.T) {
+	if s := heartbeatIntervalStatus(0); !strings.Contains(s, "disabled") {
+		t.Errorf("disabled status = %q", s)
+	}
+	if s := heartbeatIntervalStatus(30 * time.Second); !strings.Contains(s, "30s") {
+		t.Errorf("interval status = %q", s)
+	}
+
+	ls := newBareLowServer(t)
+	if s := ls.diodeHeartbeatLogLine(); !strings.Contains(s, "disabled") {
+		t.Errorf("log line with heartbeats off = %q", s)
+	}
+	ls.cfg.DiodeHeartbeat = 45 * time.Second
+	if s := ls.diodeHeartbeatLogLine(); !strings.Contains(s, "45s") || !strings.Contains(s, "export dir") {
+		t.Errorf("folder log line = %q", s)
+	}
+	if d := ls.diodeHeartbeatDestination(); d != "export dir, for the folder carrier" {
+		t.Errorf("folder destination = %q", d)
+	}
+	ls.cfg.DiodeURL = "http://diode.example"
+	if d := ls.diodeHeartbeatDestination(); d != "HTTP diode endpoint" {
+		t.Errorf("HTTP destination = %q", d)
+	}
+	ls.pitcher = &diodePitcher{}
+	if d := ls.diodeHeartbeatDestination(); d != "UDP diode" {
+		t.Errorf("UDP destination = %q", d)
+	}
+	// The placeholder pitcher has no socket; drop it before the server's
+	// cleanup Close would try to close one.
+	ls.pitcher = nil
+}
+
+// TestDiodeHeartbeatStatusClamps covers the negative clamps: a snapshot aged
+// with a clock that moved backwards, and a heartbeat index behind what has
+// already arrived (awaiting must never go negative).
+func TestDiodeHeartbeatStatusClamps(t *testing.T) {
+	var st diodeHeartbeatState
+	now := time.Now().UTC()
+	st.recordHeartbeat(testHeartbeat(nil), now)
+	if s := st.snapshot().status(now.Add(-time.Minute)); s == nil || s.AgeSeconds != 0 {
+		t.Fatalf("status with a backwards clock = %+v, want age clamped to 0", s)
+	}
+
+	p := newPromWriter()
+	writeStreamHeartbeatMetrics(p, StreamImportStatus{Stream: streamGo, LowLastSequence: 2, HighestSeenSequence: 5})
+	out := p.String()
+	if !strings.Contains(out, `artigate_high_bundles_awaiting_from_low{stream="go"} 0`) {
+		t.Fatalf("awaiting not clamped to 0:\n%s", out)
+	}
+	writeStreamHeartbeatMetrics(p, StreamImportStatus{Stream: streamHF})
+	if strings.Contains(p.String(), `stream="hf"`) {
+		t.Fatal("a stream without heartbeat data produced samples")
 	}
 }
