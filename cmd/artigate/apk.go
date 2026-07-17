@@ -1404,7 +1404,7 @@ func (s *LowServer) writeApkBundle(ctx context.Context, seq int64, stageRoot str
 		Apk:              &ApkManifest{Mirrors: []ApkMirror{mirror}},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

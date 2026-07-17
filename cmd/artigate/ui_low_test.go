@@ -30,6 +30,12 @@ func TestLowServerUIStatus(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &st); err != nil {
 		t.Fatalf("decode status: %v", err)
 	}
+	// The status JSON identifies the exporting binary, so a remote fleet check
+	// can read the air-gapped low side's version and wire format.
+	if st.Version != versionString() || st.ManifestFormat != manifestFormatCurrent {
+		t.Errorf("status identity = %q format %d, want %q format %d",
+			st.Version, st.ManifestFormat, versionString(), manifestFormatCurrent)
+	}
 	goStream := st.Stream(streamGo)
 	if len(goStream.ExportedSequences) != 1 || goStream.ExportedSequences[0].Sequence != 1 {
 		t.Fatalf("go exported sequences = %+v", goStream.ExportedSequences)
@@ -40,6 +46,21 @@ func TestLowServerUIStatus(t *testing.T) {
 	}
 	if seq0.SizeBytes <= 0 {
 		t.Errorf("exported bundle should report a nonzero size, got %d", seq0.SizeBytes)
+	}
+
+	// The manifest a real collect wrote to disk must carry the wire-format and
+	// generator-version stamps — the high side's upgrade error relies on them.
+	manifestBytes, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, seq0.BundleID+".manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m BundleManifest
+	if err := json.Unmarshal(manifestBytes, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Format != manifestFormatCurrent || m.GeneratorVersion != versionString() {
+		t.Errorf("exported manifest stamps = format %d version %q, want format %d version %q",
+			m.Format, m.GeneratorVersion, manifestFormatCurrent, versionString())
 	}
 
 	// Simulate forwarding across the diode: the transfer moves the bundle files
@@ -126,6 +147,9 @@ func TestLowServerUIPage(t *testing.T) {
 		// XHR, so the modal can show real upload progress.
 		`data-view="uploads"`, "Upload files", `id="upfolder"`, `id="upfiles"`,
 		"collectUploads", "/admin/uploads/collect", "function uploadCollect", "xhr.upload",
+		// The header names the running binary's version, so an operator can
+		// read what the air-gapped box runs straight from the dashboard.
+		"low-side exporter &middot; " + versionString(),
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("low-side index page missing %q", want)
@@ -133,6 +157,9 @@ func TestLowServerUIPage(t *testing.T) {
 		if strings.Contains(body, `id="pyonly"`) {
 			t.Error("low-side UI still exposes a switch that can disable mandatory wheels-only collection")
 		}
+	}
+	if strings.Contains(body, "{{VERSION}}") {
+		t.Error("rendered page still contains the {{VERSION}} placeholder")
 	}
 }
 

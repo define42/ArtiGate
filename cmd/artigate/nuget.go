@@ -1463,7 +1463,7 @@ func (s *LowServer) writeNugetBundle(ctx context.Context, seq int64, stageRoot s
 		Nuget:            &NugetManifest{Packages: pkgs},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

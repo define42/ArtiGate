@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"os"
@@ -84,6 +85,13 @@ func (c *treeCache) invalidate() {
 	c.expiry = time.Time{}
 }
 
+// renderHighUI stamps the binary's version into the dashboard shell's header,
+// so an operator can read what this air-gapped high side runs straight from
+// the page.
+func renderHighUI() string {
+	return strings.Replace(uiIndexHTML, "{{VERSION}}", html.EscapeString(versionString()), 1)
+}
+
 func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
 	switch r.URL.Path {
 	case "/", "/ui", "/ui/":
@@ -94,7 +102,7 @@ func (s *HighServer) serveUI(w http.ResponseWriter, r *http.Request) bool {
 		// The dashboard shell and its script change across versions; never let
 		// a browser cache serve a stale copy of either.
 		w.Header().Set("Cache-Control", "no-store")
-		writeHTML(w, uiIndexHTML)
+		writeHTML(w, renderHighUI())
 	case "/ui/app.js":
 		if !isReadMethod(r) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -1605,7 +1605,7 @@ func (s *LowServer) writeGitBundle(ctx context.Context, seq int64, stageRoot str
 		Git:              &GitManifest{Repos: []GitRepoMirror{repo}},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

@@ -1293,7 +1293,7 @@ func (s *LowServer) writeContainerBundle(ctx context.Context, seq int64, stageRo
 		Containers:       &ContainerManifest{Repos: repos},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

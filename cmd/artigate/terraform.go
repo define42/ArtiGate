@@ -1708,7 +1708,7 @@ func (s *LowServer) writeTerraformBundle(ctx context.Context, seq int64, stageRo
 		Terraform:        m,
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

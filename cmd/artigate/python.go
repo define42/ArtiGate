@@ -1154,7 +1154,7 @@ func (s *LowServer) writePythonBundle(ctx context.Context, seq int64, stageRoot 
 		Python:           &PythonManifest{Projects: projects},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

@@ -1257,7 +1257,7 @@ func (s *LowServer) writeVSXBundle(ctx context.Context, seq int64, stageRoot str
 		VSX:              &VSXManifest{Extensions: exts},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

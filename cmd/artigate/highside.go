@@ -161,6 +161,9 @@ func runHigh(args []string) {
 	fs.StringVar(&cfg.ApkRSAKey, "apk-rsa-key", "", "PEM RSA private key path used to sign regenerated Alpine APKINDEX files; unset serves them unsigned")
 	fs.StringVar(&cfg.ApkKeyName, "apk-key-name", "artigate.rsa.pub", "filename Alpine clients install the APK signing public key under (/etc/apk/keys/<name>)")
 	_ = fs.Parse(args)
+	// Identity first, before anything can fatal: on an air-gapped box the log
+	// is often the only place an operator can read what this binary is.
+	log.Printf("artigate high %s", versionSummary())
 	if cfg.PublicKeyPath == "" {
 		log.Fatal("--public-key is required")
 	}
@@ -589,7 +592,12 @@ type ImportResult struct {
 // ImportStatus reports import progress per stream; each stream sequences,
 // quarantines, and reports missing bundles independently of the others.
 type ImportStatus struct {
-	Streams []StreamImportStatus `json:"streams"`
+	// Version and ManifestFormat identify the serving binary — what this
+	// air-gapped high side runs and the newest bundle wire format it can
+	// import — so /admin/status answers a fleet-upgrade check remotely.
+	Version        string               `json:"version"`
+	ManifestFormat int                  `json:"manifest_format"`
+	Streams        []StreamImportStatus `json:"streams"`
 }
 
 type StreamImportStatus struct {
@@ -787,6 +795,35 @@ func invalidBundle(err error) error {
 	return &invalidBundleError{err: err}
 }
 
+// manifestTooNewError marks a validly signed manifest whose wire format is
+// newer than this binary understands — a newer low side is exporting to an
+// older high side. The bytes are not invalid: the same bundle imports as soon
+// as the high side is upgraded, so it must stay in landing as a retryable
+// condition (blocking its stream, and surfacing through the import-pass error
+// on /readyz) rather than be terminally rejected, whose only recovery would
+// be a low-side re-export across the diode.
+type manifestTooNewError struct {
+	bundleID string
+	format   int
+}
+
+func (e *manifestTooNewError) Error() string {
+	return fmt.Sprintf("bundle %s uses manifest format %d, but this high side (version %s) understands only formats up to %d: "+
+		"upgrade the ArtiGate high side; the bundle stays in landing and imports after the upgrade",
+		e.bundleID, e.format, versionString(), manifestFormatCurrent)
+}
+
+// classifyManifestError keeps a too-new-format manifest retryable — the
+// signed bytes become importable the moment the binary is upgraded — while
+// every other manifest failure stays terminal for these bytes.
+func classifyManifestError(err error) error {
+	var tooNew *manifestTooNewError
+	if errors.As(err, &tooNew) {
+		return err
+	}
+	return invalidBundle(err)
+}
+
 // classifyExtractError decides whether a bundle extraction failure means the
 // bundle is content-invalid (→ rejected) or was merely an operational local-I/O
 // fault such as a full staging disk (→ retryable, left in place). Marking a
@@ -830,7 +867,7 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 
 	manifest, err := s.loadVerifiedManifest(manifestPath, sigPath, stream, bundleID, expectedSeq)
 	if err != nil {
-		return BundleManifest{}, invalidBundle(err)
+		return BundleManifest{}, classifyManifestError(err)
 	}
 
 	staging := filepath.Join(s.cfg.Root, "tmp", bundleID)
@@ -991,9 +1028,14 @@ func manifestStream(m BundleManifest) string {
 	return m.Stream
 }
 
-// checkManifestFields validates the manifest's type, stream, sequencing, and
-// identity against what the importer expects next for that stream.
+// checkManifestFields validates the manifest's wire format, type, stream,
+// sequencing, and identity against what the importer expects next for that
+// stream. The format check runs first: on a newer format none of the other
+// fields can be trusted to mean what this binary thinks they mean.
 func (s *HighServer) checkManifestFields(manifest BundleManifest, stream, bundleID string, expectedSeq int64) error {
+	if manifest.Format > manifestFormatCurrent {
+		return &manifestTooNewError{bundleID: bundleID, format: manifest.Format}
+	}
 	gotStream := manifestStream(manifest)
 	switch {
 	case manifest.Type != manifestType:
@@ -1306,7 +1348,11 @@ func (s *HighServer) importStatusLocked() (ImportStatus, error) {
 	if err != nil {
 		return ImportStatus{}, err
 	}
-	out := ImportStatus{Streams: make([]StreamImportStatus, 0, len(streams))}
+	out := ImportStatus{
+		Version:        versionString(),
+		ManifestFormat: manifestFormatCurrent,
+		Streams:        make([]StreamImportStatus, 0, len(streams)),
+	}
 	for _, stream := range streams {
 		out.Streams = append(out.Streams, s.streamStatusLocked(stream, landing[stream], quarantined[stream]))
 	}

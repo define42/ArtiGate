@@ -1260,7 +1260,7 @@ func (s *LowServer) writeRubyGemsBundle(ctx context.Context, seq int64, stageRoo
 		RubyGems:         &RubyGemsManifest{Gems: gems},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

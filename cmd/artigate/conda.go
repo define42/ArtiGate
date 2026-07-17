@@ -1429,7 +1429,7 @@ func (s *LowServer) writeCondaBundle(ctx context.Context, seq int64, stageRoot s
 		Conda:            &CondaManifest{Channels: []CondaChannel{channel}},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

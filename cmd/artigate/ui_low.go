@@ -8,6 +8,7 @@ package main
 
 import (
 	"encoding/json"
+	"html"
 	"net/http"
 	"strings"
 
@@ -38,13 +39,15 @@ func (s *LowServer) serveLowUI(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // renderLowUI fills in the dashboard's optional bits: the "Log out" button is
-// only shown when authentication is enabled.
+// only shown when authentication is enabled, and the header carries the
+// binary's version so an operator can read what this air-gapped box runs.
 func (s *LowServer) renderLowUI() string {
 	logout := ""
 	if s.authEnabled {
 		logout = `<form method="post" action="/logout" style="margin:0"><button type="submit" class="refresh">Log out</button></form>`
 	}
 	page := strings.Replace(lowUIHTML, "{{LOGOUT}}", logout, 1)
+	page = strings.Replace(page, "{{VERSION}}", html.EscapeString(versionString()), 1)
 	return strings.Replace(page, "{{BUILTIN_SOURCES}}", builtinSourcesJSON(), 1)
 }
 
@@ -178,7 +181,7 @@ const lowUIHTML = `<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>ArtiGate <span style="color:#8b93a5;font-weight:400">low-side exporter</span></h1>
+  <h1>ArtiGate <span style="color:#8b93a5;font-weight:400">low-side exporter &middot; {{VERSION}}</span></h1>
   <button type="button" class="refresh" onclick="loadStatus();loadAllWatches();loadJobs()">Refresh</button>
   {{LOGOUT}}
 </header>

@@ -200,6 +200,10 @@ func runLow(args []string) {
 	fs.DurationVar(&cfg.WatchInterval, "watch-interval", 60*time.Second, "how often the scheduler checks for due watches; 0 disables scheduled watches")
 	_ = fs.Parse(args)
 
+	// Identity first, before anything can fatal: on an air-gapped box the log
+	// is often the only place an operator can read what this binary is.
+	log.Printf("artigate low %s", versionSummary())
+
 	// The diode transport is configured by environment, like TLS and auth.
 	cfg.DiodeURL = strings.TrimSpace(os.Getenv("ARTIGATE_DIODE_URL"))
 	cfg.DiodeToken = os.Getenv("ARTIGATE_DIODE_TOKEN")
@@ -1450,7 +1454,7 @@ func (s *LowServer) writeBundlePart(ctx context.Context, stream string, seq int6
 		Part:             &BundlePartInfo{Index: index, Count: count},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -1556,7 +1560,7 @@ func (s *LowServer) writeGoBundle(ctx context.Context, stream string, seq int64,
 		Files:            files,
 	}
 
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -1861,7 +1865,12 @@ func (s *LowServer) ExportSequence(stream string, seq int64) (ExportResult, erro
 }
 
 type LowBundleStatus struct {
-	Streams []LowStreamStatus `json:"streams"`
+	// Version and ManifestFormat identify the exporting binary — what this
+	// air-gapped low side runs and the bundle wire format it writes — so the
+	// status JSON answers a fleet-upgrade check remotely.
+	Version        string            `json:"version"`
+	ManifestFormat int               `json:"manifest_format"`
+	Streams        []LowStreamStatus `json:"streams"`
 }
 
 type LowStreamStatus struct {
@@ -1928,7 +1937,7 @@ func (s *LowServer) BundleStatus() LowBundleStatus {
 	}
 	sort.Strings(streams)
 
-	out := LowBundleStatus{}
+	out := LowBundleStatus{Version: versionString(), ManifestFormat: manifestFormatCurrent}
 	for _, stream := range streams {
 		n := next[stream]
 		if n < 1 {

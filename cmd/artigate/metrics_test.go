@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +70,7 @@ func TestLowMetricsEndpoint(t *testing.T) {
 	}
 	for _, want := range []string{
 		`artigate_up{side="low"} 1`,
+		fmt.Sprintf(`artigate_build_info{side="low",version="%s",manifest_format="%d"} 1`, versionString(), manifestFormatCurrent),
 		"artigate_low_next_sequence",
 		"artigate_low_bundle_bytes",
 		"artigate_low_jobs{state=\"queued\"}",
@@ -101,6 +103,7 @@ func TestHighMetricsAfterImport(t *testing.T) {
 	body := scrapeMetrics(t, hs)
 	for _, want := range []string{
 		`artigate_up{side="high"} 1`,
+		fmt.Sprintf(`artigate_build_info{side="high",version="%s",manifest_format="%d"} 1`, versionString(), manifestFormatCurrent),
 		`artigate_high_last_imported_sequence{stream="go"} 1`,
 		`artigate_high_import_lag{stream="go"} 0`,
 		`artigate_high_stream_blocked{stream="go"} 0`,

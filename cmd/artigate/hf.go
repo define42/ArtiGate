@@ -1042,7 +1042,7 @@ func (s *LowServer) writeHFBundle(ctx context.Context, seq int64, stageRoot stri
 		HuggingFace:      &HFManifest{Models: models, Repos: repos},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

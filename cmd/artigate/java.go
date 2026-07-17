@@ -1224,7 +1224,7 @@ func (s *LowServer) writeMavenBundle(ctx context.Context, seq int64, stageRoot s
 		Maven:            &MavenManifest{Artifacts: artifacts},
 		Files:            files,
 	}
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
 		return ExportResult{}, err
 	}

@@ -297,8 +297,19 @@ func TestCovMain_ServeHighAdmin(t *testing.T) {
 	if code, body := httpGet(t, srv.URL+"/healthz"); code != http.StatusOK || !strings.Contains(body, "ok") {
 		t.Errorf("healthz = %d %q", code, body)
 	}
-	if code, _ := httpGet(t, srv.URL+"/admin/status"); code != http.StatusOK {
+	code, body := httpGet(t, srv.URL+"/admin/status")
+	if code != http.StatusOK {
 		t.Errorf("admin/status = %d", code)
+	}
+	// The status JSON identifies the serving binary, so a remote fleet check
+	// can read the air-gapped high side's version and format ceiling.
+	var status ImportStatus
+	if err := json.Unmarshal([]byte(body), &status); err != nil {
+		t.Fatalf("decode admin/status: %v", err)
+	}
+	if status.Version != versionString() || status.ManifestFormat != manifestFormatCurrent {
+		t.Errorf("status identity = %q format %d, want %q format %d",
+			status.Version, status.ManifestFormat, versionString(), manifestFormatCurrent)
 	}
 	if code, _ := httpGet(t, srv.URL+"/admin/missing"); code != http.StatusOK {
 		t.Errorf("admin/missing = %d", code)
@@ -491,8 +502,16 @@ func TestCovMain_CheckManifestFields(t *testing.T) {
 	good, _ := covMainBuildManifest(t, 1, []moduleSpec{{"m", "v1.0.0"}})
 	bundleID := good.BundleID
 
+	// A legacy manifest (format 0, from before the field existed) and one
+	// stamped with the current format must both pass; only newer formats are
+	// refused.
 	if err := hs.checkManifestFields(good, streamGo, bundleID, 1); err != nil {
-		t.Fatalf("valid manifest rejected: %v", err)
+		t.Fatalf("valid legacy (format 0) manifest rejected: %v", err)
+	}
+	current := good
+	current.Format = manifestFormatCurrent
+	if err := hs.checkManifestFields(current, streamGo, bundleID, 1); err != nil {
+		t.Fatalf("valid current-format manifest rejected: %v", err)
 	}
 
 	tests := []struct {
@@ -500,6 +519,7 @@ func TestCovMain_CheckManifestFields(t *testing.T) {
 		mutFn func(m *BundleManifest)
 		want  string
 	}{
+		{"format too new", func(m *BundleManifest) { m.Format = manifestFormatCurrent + 1 }, "upgrade the ArtiGate high side"},
 		{"wrong type", func(m *BundleManifest) { m.Type = "bogus" }, "wrong manifest type"},
 		{"stream mismatch", func(m *BundleManifest) { m.Stream = streamPython }, "stream mismatch"},
 		{"sequence mismatch", func(m *BundleManifest) { m.Sequence = 9 }, "sequence mismatch"},
@@ -515,6 +535,50 @@ func TestCovMain_CheckManifestFields(t *testing.T) {
 				t.Fatalf("err = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestCovMain_TooNewManifestFormatStaysInLanding pins the fleet-upgrade
+// contract: a validly signed bundle whose manifest format is newer than this
+// binary is a retryable operator condition (upgrade the high side, the bundle
+// then imports as-is), never a terminal rejection — a rejected bundle's only
+// recovery would be a low-side re-export across the diode.
+func TestCovMain_TooNewManifestFormatStaysInLanding(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+
+	src := t.TempDir()
+	bundleID := bundleIDFor(streamGo, 1)
+	mod, files := buildModuleFiles(t, src, moduleSpec{module: "example.com/future", version: "v1.0.0"})
+	manifest := BundleManifest{
+		Type:             manifestType,
+		Format:           manifestFormatCurrent + 1,
+		Stream:           streamGo,
+		Sequence:         1,
+		PreviousSequence: 0,
+		Created:          time.Unix(0, 0).UTC(),
+		Generator:        "future-low-side",
+		BundleID:         bundleID,
+		Modules:          []ManifestMod{mod},
+		Files:            files,
+	}
+	signAndWriteBundle(t, hs.cfg.Landing, priv, manifest, src)
+
+	res, err := hs.ImportNext()
+	if err == nil || !strings.Contains(err.Error(), "upgrade the ArtiGate high side") {
+		t.Fatalf("import err = %v, want the format upgrade guidance", err)
+	}
+	if res.Imported || len(res.RejectedBundles) != 0 {
+		t.Fatalf("result = %+v, want nothing imported and nothing rejected", res)
+	}
+	if !bundleCompleteInDir(hs.cfg.Landing, bundleID) {
+		t.Error("bundle must stay complete in landing so the upgraded binary can import it")
+	}
+	if fileExists(filepath.Join(hs.cfg.Root, "rejected", bundleID+".manifest.json")) {
+		t.Error("a too-new bundle must not be moved to rejected/")
+	}
+	if got := hs.state.Imported[streamGo]; got != 0 {
+		t.Errorf("imported sequence advanced to %d on a refused bundle", got)
 	}
 }
 

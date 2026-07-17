@@ -7,6 +7,7 @@ package main
 // used by missing-bundle reports and re-export requests.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -25,6 +26,17 @@ const (
 	completeExt   = ".complete"
 	stateFileMode = 0o600
 )
+
+// manifestFormatCurrent is the bundle wire-format version this binary stamps
+// into every manifest it exports ("format") and the newest it can import. The
+// high side refuses newer formats with an explicit upgrade error instead of
+// letting json.Unmarshal silently drop fields it does not know, and manifests
+// without the field (format 0, written before it existed) stay importable.
+// Bump it only when a manifest change would make an older high side import a
+// bundle incorrectly; purely informational additions need no bump, and a
+// brand-new ecosystem section needs none either — old high sides already
+// reject its unknown stream by name.
+const manifestFormatCurrent = 1
 
 // Bundle streams. Each ecosystem is its own independently-sequenced stream, so a
 // lost or out-of-order bundle in one stream never blocks the others. The "go"
@@ -68,12 +80,21 @@ func knownStreams() []string {
 const manifestSignaturePHPrefix = "ed25519ph:"
 
 type BundleManifest struct {
-	Type             string             `json:"type"`
-	Stream           string             `json:"stream,omitempty"`
-	Sequence         int64              `json:"sequence"`
-	PreviousSequence int64              `json:"previous_sequence"`
-	Created          time.Time          `json:"created"`
-	Generator        string             `json:"generator"`
+	Type string `json:"type"`
+	// Format is the bundle wire-format version (manifestFormatCurrent at
+	// export time; 0 in manifests written before the field existed). The
+	// high side checks it before anything else and refuses formats newer
+	// than it understands.
+	Format           int       `json:"format,omitempty"`
+	Stream           string    `json:"stream,omitempty"`
+	Sequence         int64     `json:"sequence"`
+	PreviousSequence int64     `json:"previous_sequence"`
+	Created          time.Time `json:"created"`
+	Generator        string    `json:"generator"`
+	// GeneratorVersion records the producing binary's version so operators
+	// can tell which low-side release built a bundle; it is informational
+	// and never checked.
+	GeneratorVersion string             `json:"generator_version,omitempty"`
 	BundleID         string             `json:"bundle_id"`
 	Ecosystems       []string           `json:"ecosystems,omitempty"`
 	Modules          []ManifestMod      `json:"modules,omitempty"`
@@ -136,6 +157,17 @@ type ManifestFile struct {
 type ModuleInfo struct {
 	Version string    `json:"Version"`
 	Time    time.Time `json:"Time"`
+}
+
+// marshalManifest renders the canonical manifest JSON that gets signed,
+// stamping the bundle wire-format version and the producing binary's version
+// first. Every bundle producer marshals through here (m is a copy, so the
+// caller's value is untouched), which is what guarantees no exported bundle
+// can miss the stamp.
+func marshalManifest(m BundleManifest) ([]byte, error) {
+	m.Format = manifestFormatCurrent
+	m.GeneratorVersion = versionString()
+	return json.MarshalIndent(m, "", "  ")
 }
 
 // SequenceRange is inclusive. It is used for operator-facing missing bundle
