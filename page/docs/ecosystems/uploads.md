@@ -11,7 +11,7 @@ The **uploads** stream carries arbitrary files across the diode with no package 
   folder name + files (multipart upload)
         │
         ▼
-  stream each file to disk, SHA-256 it     (no size cap per file)
+  stream each file to disk, SHA-256 it     (nothing buffered in memory)
         │
         ▼
   signed ArtiGate bundle ══ diode ══▶ high side import
@@ -40,7 +40,7 @@ curl -fsS -X POST \
 | `folder` | **Required.** The folder the files land in (one path segment, ≤ 128 chars, no leading `.`, no `/` or `\`, no control characters) |
 | `file` | One or more file parts. Names are reduced to their base name and validated by the same rules; the same name twice in one upload is rejected |
 
-Files are **streamed to disk while being hashed** — nothing is buffered in memory, so multi-gigabyte files are fine (use `?stream=1` for live progress on those). One upload may carry up to 10,000 files. The dashboard's **Uploads** card wraps the same endpoint with a folder field and a file picker.
+Files are **streamed to disk while being hashed** — nothing is buffered in memory, so multi-gigabyte files are fine (use `?stream=1` for live progress on those). Staging imposes no size limit, but a single file must still fit one diode bundle — **64 GiB** by default; check [Limitations](#limitations) before uploading anything near that. One upload may carry up to 10,000 files. The dashboard's **Uploads** card wraps the same endpoint with a folder field and a file picker.
 
 There is no `force` field — uploads always behave as if forced (full bundle, dedup bypassed), and `prior_files` is always 0.
 
@@ -71,7 +71,8 @@ The high-side dashboard's **Uploads** tree shows every folder and file with size
 - **No dedup, ever**: identical re-uploads still produce (and transfer) a full bundle. That is the price of "delete on the high side, restore by re-uploading".
 - **Replace semantics**: re-uploading a name overwrites the served file on import.
 - **Flat namespace rules**: folder and file names are single path segments (≤ 128 chars, no leading dot, no separators); browser-style paths in a file part are reduced to their base name.
-- Bounds: the folder field is capped at 4 KiB and one upload at 10,000 parts; individual files have **no** size cap (they stream to disk).
+- **A single file must fit one bundle.** The upload as a whole is unbounded — content beyond the per-bundle transport limit ships as consecutive sequenced bundles — but one file can never split across bundles: if its estimated archive (raw size plus just under 1% packing overhead) exceeds the limit, the collect fails at export, *after* the file has been streamed and hashed (cleanly — no sequence number is burned). The limit is **64 GiB**, and a small [UDP-pitcher](../data-diode.md) block geometry can lower it; the refusal then says which pitcher knob to raise.
+- Bounds: the folder field is capped at 4 KiB and one upload at 10,000 parts; staging imposes no per-file size cap (files stream to disk).
 
 ## Related pages
 

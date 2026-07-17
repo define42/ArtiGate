@@ -415,7 +415,7 @@ Each `.apk` is verified against the `APKINDEX`-declared size and `Q1` control ch
 | `channel` | string | **Required.** A bare channel name resolved under the channel base (`--conda-channel-base`, default `https://conda.anaconda.org`) or a full http(s) channel URL |
 | `name` | string | Mirror name (`/conda/<name>` on the high side); defaults to the bare channel name, else a slug of the URL |
 | `subdirs` | `[]string` | Platform subdirs; `noarch` is always searched too. Empty means just `noarch` |
-| `packages` | `[]string` | **Required.** Specs: `numpy`, `numpy==1.26.4`, `numpy=1.26`, `1.26.*`, `pandas>=2.0,<3` |
+| `packages` | `[]string` | **Required.** Specs: `numpy`, `numpy==1.26.4`, `numpy=1.26`, `numpy=1.26.*`, `pandas>=2.0,<3` — a version always attaches to a package name |
 | `no_deps` | bool | Skip the `depends` closure |
 | `auth` | `*object` | optional one-time HTTP Basic login for a private channel: `{"username","password"}`. Never stored, rejected inside watch specs — standing credentials go in `ARTIGATE_UPSTREAM_AUTH` |
 
@@ -574,7 +574,7 @@ curl -fsS -X POST -F "folder=tools" -F "file=@installer.run" \
 | Form field | Notes |
 |---|---|
 | `folder` | **Required.** Target folder (one path segment, ≤ 128 chars, no leading `.`, no separators or control chars). Field value capped at 4 KiB |
-| `file` | One or more file parts (up to 10,000). Names are reduced to their base name and validated like `folder`; a duplicate name in one upload is rejected. **No per-file size cap** — parts stream to disk while being hashed |
+| `file` | One or more file parts (up to 10,000). Names are reduced to their base name and validated like `folder`; a duplicate name in one upload is rejected. Parts stream to disk while being hashed — no staging cap, but each file must fit one bundle under the [per-bundle transport limit](ecosystems/uploads.md#limitations) (64 GiB by default) |
 
 The shared `force` field does not apply: uploads always ship in full (the export-dedup index is deliberately never consulted), so `prior_files` is always `0`. `?dry_run=1` works; `?stream=1` is recommended for multi-gigabyte files.
 

@@ -132,7 +132,7 @@ The audit companion to all of the above: collect takes **OSV ecosystem names** (
 
 ### Uploads → [uploads.md](uploads.md)
 
-The escape hatch for content no ecosystem covers: pick a folder name, upload arbitrary files (`multipart/form-data`, streamed and hashed with no per-file size cap), and the high side serves them at `/uploads/<folder>/<name>` — with a dashboard listing and, uniquely among the streams, an operator **delete** endpoint. Uploads bypass export dedup on purpose (a file deleted on the high side comes back by re-uploading it) and cannot be [scheduled](../scheduling.md) — there is no upstream to re-pull.
+The escape hatch for content no ecosystem covers: pick a folder name, upload arbitrary files (`multipart/form-data`, streamed and hashed to disk — any size up to the [per-bundle transport limit](uploads.md#limitations)), and the high side serves them at `/uploads/<folder>/<name>` — with a dashboard listing and, uniquely among the streams, an operator **delete** endpoint. Uploads bypass export dedup on purpose (a file deleted on the high side comes back by re-uploading it) and cannot be [scheduled](../scheduling.md) — there is no upstream to re-pull.
 
 ## Cross-cutting notes
 
