@@ -1,18 +1,18 @@
 # Ecosystems
 
-ArtiGate mirrors **twenty-two** streams across a one-way data diode — twenty artifact ecosystems, plus the OSV vulnerability-advisory feed that lets the air-gapped side audit them, plus an uploads stream for arbitrary files. Each is a self-contained stream with the same lifecycle — the low side *collects* upstream artifacts, packs them into a signed *bundle*, the diode carries it, and the high side *imports* and *serves* it — but the input format and the client protocol differ per ecosystem. This page is the hub; each row links to its full page.
+ArtiGate mirrors **twenty-three** streams across a one-way data diode — twenty-one artifact ecosystems, plus the OSV vulnerability-advisory feed that lets the air-gapped side audit them, plus an uploads stream for arbitrary files. Each is a self-contained stream with the same lifecycle — the low side *collects* upstream artifacts, packs them into a signed *bundle*, the diode carries it, and the high side *imports* and *serves* it — but the input format and the client protocol differ per ecosystem. This page is the hub; each row links to its full page.
 
 ## The common flow
 
 Every ecosystem follows the same **collect → bundle → import → serve** path described in [Architecture](../architecture.md):
 
-1. **Collect** — an operator (or a [watch](../scheduling.md)) sends `POST /admin/{ecosystem}/collect` to the [low side](../low-side.md). Go, Python, Maven, and NPM shell out to their *native* CLI (`go`, `pip`, `mvn`, `npm`); every other stream is fetched directly over the ecosystem's own HTTP protocol — deb822 index + `.deb` files, repodata + `.rpm` files, the OCI/Docker registry API, the Hugging Face Hub's Ollama-compatible and file APIs, the cargo sparse index, the Terraform registry protocols (plus the `git` tool for `git::` module sources), Helm's `index.yaml`, the NuGet v3 flat container, `APKINDEX` + `.apk` files, conda `repodata.json` + package files, the RubyGems compact index, Composer p2 metadata, the Open VSX API, the Galaxy v3 API, the CRAN `PACKAGES` index, git's smart HTTP protocol (as a pure-Go client), and the OSV bucket's per-ecosystem `all.zip` archives. Uploads have no upstream at all — the operator's files *are* the input.
+1. **Collect** — an operator (or a [watch](../scheduling.md)) sends `POST /admin/{ecosystem}/collect` to the [low side](../low-side.md). Go, Python, Maven, and NPM shell out to their *native* CLI (`go`, `pip`, `mvn`, `npm`); every other stream is fetched directly over the ecosystem's own HTTP protocol — deb822 index + `.deb` files, repodata + `.rpm` files, the OCI/Docker registry API, the Hugging Face Hub's Ollama-compatible and file APIs, the cargo sparse index, the Terraform registry protocols (plus the `git` tool for `git::` module sources), Helm's `index.yaml`, the NuGet v3 flat container, `APKINDEX` + `.apk` files, conda `repodata.json` + package files, the RubyGems compact index, Composer p2 metadata, the Open VSX API, the Galaxy v3 API, the CRAN `PACKAGES` index, the Snap Store API (snap info + assertion endpoints), git's smart HTTP protocol (as a pure-Go client), and the OSV bucket's per-ecosystem `all.zip` archives. Uploads have no upstream at all — the operator's files *are* the input.
 2. **Bundle** — the fetched files are packed into a signed three-file bundle (`<bundleID>.tar.gz`, `.manifest.json`, `.manifest.json.sig`) and written to the export directory. Each ecosystem is an independently-numbered [stream](../architecture.md), so a slow container mirror never blocks a Python collect.
 3. **Import** — the [high side](../high-side.md) verifies the Ed25519 signature and every SHA-256 hash, installs the artifacts immutably (advisory-database snapshots being the deliberate exception — each replaces its predecessor), and imports strictly in sequence order per stream.
 4. **Serve** — the high side **regenerates** all repository metadata from the artifacts actually present (it never trusts a transferred index) and serves clients under a per-ecosystem base path.
 
 !!! note "One manifest, one stream per ecosystem"
-    All twenty-two streams share the same [bundle format](../architecture.md). The manifest `type` field is always the legacy string `"go-module-bundle"` regardless of ecosystem — the real ecosystem is carried by the `stream` field (`go`, `python`, `maven`, `apt`, `rpm`, `hf`, `containers`, `npm`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `conda`, `rubygems`, `composer`, `vsx`, `galaxy`, `cran`, `git`, `osv`, `uploads`) and the populated sub-manifest.
+    All twenty-three streams share the same [bundle format](../architecture.md). The manifest `type` field is always the legacy string `"go-module-bundle"` regardless of ecosystem — the real ecosystem is carried by the `stream` field (`go`, `python`, `maven`, `apt`, `rpm`, `hf`, `containers`, `npm`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `conda`, `rubygems`, `composer`, `vsx`, `galaxy`, `cran`, `snap`, `git`, `osv`, `uploads`) and the populated sub-manifest.
 
 ## Comparison
 
@@ -37,6 +37,7 @@ Every ecosystem follows the same **collect → bundle → import → serve** pat
 | [VS Code extensions](vsx.md) | Extension ids (`golang.Go`, `redhat.vscode-yaml@1.14.0`), from Open VSX | VS Code gallery API + direct `.vsix` downloads | `/vsx/` | VSCodium (`VSCODE_GALLERY_SERVICE_URL`) |
 | [Ansible Galaxy](galaxy.md) | Collection specs (`ansible.posix`, `community.general@8.5.0`) | Galaxy v3 API | `/galaxy/` | `ansible-galaxy` |
 | [R packages (CRAN)](cran.md) | Package specs (`jsonlite`, `data.table@1.15.4`) | CRAN mirror (regenerated `PACKAGES`, source packages) | `/cran/` | R `install.packages()` |
+| [Snap packages](snap.md) | Snap specs (`hello`, `firefox@latest/candidate`) + one architecture | `.snap` + `.assert` download pairs for snapd's offline flow, plus a JSON revision index | `/snap/` | `snap ack` + `snap install` |
 | [Git repositories](git.md) | A clone URL (+ optional mirror name and ref list) | Read-only git repositories (dumb HTTP) | `/git/<mirror>.git` | `git` |
 | [OSV advisories](osv.md) | OSV ecosystem names (`npm`, `PyPI`, `Alpine:v3.22`, …) | OSV database feed (upstream bucket layout) + `npm audit` on the npm registry | `/osv/` | `osv-scanner --offline`, `npm audit`, `curl` |
 | [Uploads](uploads.md) | A folder name + arbitrary files (multipart form) | Plain file downloads | `/uploads/<folder>/` | `curl` / browser |
@@ -44,7 +45,7 @@ Every ecosystem follows the same **collect → bundle → import → serve** pat
 !!! tip "Client base paths are stable"
     The high side claims each URL space separately (`serveGo`, `servePython`, …); anything outside these prefixes returns `404`. Point clients at `<high-base>/go`, pip at the `<high-base>/simple` index, and so on.
 
-## The twenty-two streams
+## The twenty-three streams
 
 ### Go modules → [go.md](go.md)
 
@@ -122,6 +123,10 @@ Collect takes collection specs (`ansible.posix`, or `community.general@8.5.0` to
 
 Collect takes R package specs (`jsonlite`, or `data.table@1.15.4` for a superseded release fetched from the mirror's `Archive/`; `--cran-mirror` overrides the upstream). The **runtime closure** (`Depends`/`Imports`/`LinkingTo`, minus base packages) is mirrored as **source packages** verified against the index MD5 when declared. The high side regenerates `src/contrib/PACKAGES(.gz)` from each tarball's own `DESCRIPTION`, so `install.packages("pkg", repos = "<base>/cran")` works — clients build locally, as against real CRAN.
 
+### Snap packages → [snap.md](snap.md)
+
+Collect takes snap specs (`hello`, or `hello@edge` / `blender@4.1/stable` to pick a channel; one architecture per collect, default `amd64`; `--snap-store` overrides the upstream). Each snap's current revision is downloaded **verified against the store-declared SHA3-384 and size**, together with its signed **store assertion chain** (`.assert`) and, unless `no_bases`, the base snap it declares. The high side **recomputes every archive's SHA3-384** and refuses revisions whose assertions don't vouch for the exact bytes, then serves the `<name>_<rev>.snap` + `<name>_<rev>.assert` pairs plus a JSON revision index — on the air-gapped machine, `snap ack` + `snap install` installs with snapd's own signature verification, no `--dangerous`.
+
 ### Git repositories → [git.md](git.md)
 
 Collect takes a clone URL (plus an optional mirror name and ref list). The low side speaks the smart HTTP protocol as a **pure-Go client** — no git binary beside the signing key — fetches every selected branch and tag as **one self-contained packfile**, and fully verifies it (trailer, every object, every delta) before signing. The high side re-verifies the pack, rebuilds the `.idx` itself, and serves the repository over git's **dumb HTTP protocol**: `git clone <base>/git/<mirror>.git` with stock git. Private upstreams authenticate with a one-time login or `ARTIGATE_UPSTREAM_AUTH`; each re-collect refreshes the mirror to the current upstream refs.
@@ -152,6 +157,7 @@ Each ecosystem trades completeness for airgap-friendliness in a different way. K
 | Terraform | **Named providers for the selected platforms + named modules** — `platforms` defaults to `linux_amd64`; module dependencies are not auto-resolved |
 | Helm | **Exactly the charts you name** — chart dependencies are not auto-resolved |
 | AI models | **Exactly what you name** — one variant per reference; a repository snapshot is every file at one pinned commit (minus `repo_exclude`) |
+| Snap | **One revision per snap** — the named channel's current revision for one architecture, plus the declared base snap unless `no_bases` |
 | Git | **Exactly the refs you select** (default: every branch and tag), as one self-contained pack per collect |
 | OSV | **Whole databases, replaced on refresh** — each named ecosystem's full `all.zip`, the one mutable mirrored subtree |
 | Uploads | **Exactly the files you upload** — always shipped in full (dedup deliberately bypassed) |

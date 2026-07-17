@@ -67,6 +67,7 @@ const (
 	streamVSX        = "vsx"
 	streamGalaxy     = "galaxy"
 	streamCRAN       = "cran"
+	streamSnap       = "snap"
 	streamGit        = "git"
 	streamOsv        = "osv"
 	streamUploads    = "uploads"
@@ -122,6 +123,7 @@ type BundleManifest struct {
 	VSX              *VSXManifest       `json:"vsx,omitempty"`
 	Galaxy           *GalaxyManifest    `json:"galaxy,omitempty"`
 	CRAN             *CRANManifest      `json:"cran,omitempty"`
+	Snap             *SnapManifest      `json:"snap,omitempty"`
 	Git              *GitManifest       `json:"git,omitempty"`
 	Osv              *OsvManifest       `json:"osv,omitempty"`
 	Uploads          *UploadsManifest   `json:"uploads,omitempty"`

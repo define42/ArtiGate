@@ -133,6 +133,7 @@ type View =
   | "vsx"
   | "galaxy"
   | "cran"
+  | "snap"
   | "git"
   | "osv"
   | "uploads";
@@ -163,6 +164,7 @@ const VIEW_TITLES: Record<View, string> = {
   vsx: "VS Code extensions",
   galaxy: "Ansible collections",
   cran: "R packages (CRAN)",
+  snap: "Snap packages",
   git: "Git repositories",
   osv: "OSV advisories",
   uploads: "Uploaded files",
@@ -227,6 +229,7 @@ const STREAM_LABELS: Record<string, string> = {
   vsx: "VS Code",
   galaxy: "Ansible",
   cran: "CRAN",
+  snap: "Snap",
   git: "Git",
   osv: "OSV",
   uploads: "Uploads",
@@ -1663,6 +1666,36 @@ function cranGuideSection(base: string): GuideSection {
   };
 }
 
+function snapGuideSection(base: string): GuideSection {
+  return {
+    heading: "Snap packages",
+    body:
+      "Each mirrored snap is served as the .snap/.assert pair `snap download` " +
+      "produces, so snapd's supported offline install flow works as-is.",
+    blocks: [
+      {
+        label: "Download a revision (see the snap's detail panel for names)",
+        code:
+          `curl -fLO ${base}/snap/files/<name>/<name>_<rev>.snap\n` +
+          `curl -fLO ${base}/snap/files/<name>/<name>_<rev>.assert`,
+      },
+      {
+        label: "Acknowledge the store assertions, then install",
+        code: "snap ack <name>_<rev>.assert\nsnap install <name>_<rev>.snap",
+      },
+      {
+        label: "List a snap's mirrored revisions",
+        code: `curl -fsS ${base}/snap/info/<name>`,
+      },
+    ],
+    note:
+      "The .assert carries the store's own signatures, verified by snapd " +
+      "against its built-in root of trust — no --dangerous needed. Bases are " +
+      "mirrored with their snaps; a machine that has never installed a snap " +
+      "also needs the snapd snap itself.",
+  };
+}
+
 function gitGuideSection(base: string): GuideSection {
   return {
     heading: "Git repositories",
@@ -1733,11 +1766,13 @@ function openGuide(): void {
                               ? galaxyGuideSection(base)
                               : currentView === "cran"
                                 ? cranGuideSection(base)
-                                : currentView === "git"
-                                  ? gitGuideSection(base)
-                                  : currentView === "osv"
-                                    ? osvGuideSection(base)
-                                    : goGuideSection(base);
+                                : currentView === "snap"
+                                  ? snapGuideSection(base)
+                                  : currentView === "git"
+                                    ? gitGuideSection(base)
+                                    : currentView === "osv"
+                                      ? osvGuideSection(base)
+                                      : goGuideSection(base);
     renderGuideSections(body, [section]);
   }
   if (!dialog.open) {

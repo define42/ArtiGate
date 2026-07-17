@@ -118,13 +118,14 @@ jobs:
           ck -o /dev/null "https://api.nuget.org/v3/index.json"
           ck -I -o /dev/null "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/x86_64/APKINDEX.tar.gz"
           # ...and the second wave's upstreams (keep in sync with the pins in
-          # e2e/{conda,rubygems,composer,vsx,galaxy,cran,git}_test.go).
+          # e2e/{conda,rubygems,composer,vsx,galaxy,cran,snap,git}_test.go).
           ck -I -o /dev/null "https://conda.anaconda.org/conda-forge/noarch/repodata.json"
           ck -L -o /dev/null "https://rubygems.org/info/rake"
           ck -o /dev/null "https://repo.packagist.org/p2/psr/container.json"
           ck -o /dev/null "https://open-vsx.org/api/usernamehw/errorlens"
           ck -L -o /dev/null "https://galaxy.ansible.com/api/"
           ck -I -o /dev/null "https://cloud.r-project.org/src/contrib/PACKAGES.gz"
+          ck -o /dev/null -H "Snap-Device-Series: 16" "https://api.snapcraft.io/v2/snaps/info/hello"
           ck -o /dev/null "https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack"
 
       - name: Run end-to-end suite
