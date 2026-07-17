@@ -25,6 +25,9 @@ The primary index is parsed to enumerate packages; the `.rpm` files and all meta
 
 Drive a collect with `POST /admin/rpm/collect`. Provide **either** a full yum/dnf `.repo` file, **or** the explicit `name`/`base_url` fields:
 
+!!! tip "Built-in repo definitions"
+    The dashboard's RPM card ships ready-made `.repo` definitions for Rocky Linux 9 and 10 — BaseOS, AppStream, CRB and extras individually, or all four at once — plus Docker CE (EL9/EL10), Visual Studio Code and Google Chrome. Pick one under "…or start from a built-in repo definition" and it is pasted into the input, ready to collect once or schedule. Their remote `gpgkey=` URLs are informational (verification runs only for local keyring paths). The files ship in the source tree under `buildin/rpm/`.
+
 ```json
 {
   "name": "",

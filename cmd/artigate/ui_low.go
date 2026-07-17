@@ -7,8 +7,11 @@ package main
 // by POSTing to the existing /admin/reexport endpoint.
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
+
+	"example.com/artigate/buildin"
 )
 
 func (s *LowServer) serveLowUI(w http.ResponseWriter, r *http.Request) bool {
@@ -41,7 +44,25 @@ func (s *LowServer) renderLowUI() string {
 	if s.authEnabled {
 		logout = `<form method="post" action="/logout" style="margin:0"><button type="submit" class="refresh">Log out</button></form>`
 	}
-	return strings.Replace(lowUIHTML, "{{LOGOUT}}", logout, 1)
+	page := strings.Replace(lowUIHTML, "{{LOGOUT}}", logout, 1)
+	return strings.Replace(page, "{{BUILTIN_SOURCES}}", builtinSourcesJSON(), 1)
+}
+
+// builtinSourcesJSON renders the embedded built-in source lists as the JSON
+// object the dashboard's built-in pickers read. json.Marshal escapes <, > and
+// &, so the payload is safe to inline in the page's <script> block. Both error
+// paths are pinned unreachable by tests (the catalog/file pairing and the
+// marshal of plain strings); degrading to "{}" just hides the pickers.
+func builtinSourcesJSON() string {
+	src, err := buildin.Sources()
+	if err != nil {
+		return "{}"
+	}
+	b, err := json.Marshal(src)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
 
 const lowUIHTML = `<!DOCTYPE html>
@@ -352,6 +373,11 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">Source (deb822)
         <textarea id="aptsrc" rows="6" placeholder="Types: deb&#10;URIs: https://packages.microsoft.com/repos/code&#10;Suites: stable&#10;Components: main&#10;Architectures: amd64&#10;Signed-By: /usr/share/keyrings/microsoft.gpg" autocomplete="off"></textarea>
       </label>
+      <label class="filelabel">&hellip;or start from a built-in source list
+        <select id="aptBuiltin" class="restream" onchange="applyBuiltin('apt')">
+          <option value="">Choose a built-in source list&hellip;</option>
+        </select>
+      </label>
       <label class="filelabel">&hellip;or load a .sources file
         <input id="aptfile" type="file" accept=".sources,.list,text/plain" onchange="loadAptFile()">
       </label>
@@ -389,6 +415,11 @@ const lowUIHTML = `<!DOCTYPE html>
     <form class="gomod-form" onsubmit="collectRpm(event)">
       <label class="filelabel">Repo definition (.repo)
         <textarea id="rpmrepo" rows="6" placeholder="[code]&#10;name=Visual Studio Code&#10;baseurl=https://packages.microsoft.com/yumrepos/vscode&#10;enabled=1&#10;gpgcheck=1&#10;gpgkey=https://packages.microsoft.com/keys/microsoft.asc" autocomplete="off"></textarea>
+      </label>
+      <label class="filelabel">&hellip;or start from a built-in repo definition
+        <select id="rpmBuiltin" class="restream" onchange="applyBuiltin('rpm')">
+          <option value="">Choose a built-in repo definition&hellip;</option>
+        </select>
       </label>
       <label class="filelabel">&hellip;or load a .repo file
         <input id="rpmfile" type="file" accept=".repo,text/plain" onchange="loadRpmFile()">
@@ -1379,6 +1410,44 @@ function loadRpmFile(){
   const file=f.files && f.files[0];
   if(!file) return;
   file.text().then(t=>{ document.getElementById('rpmrepo').value=t; });
+}
+
+// BUILTIN_SOURCES is the {stream: [{label,file,content}]} object of curated
+// source lists shipped inside the binary (see the repo's buildin/ directory);
+// renderLowUI injects it server-side.
+const BUILTIN_SOURCES={{BUILTIN_SOURCES}};
+// BUILTIN_INPUT maps each stream that has built-ins to its collect input field.
+const BUILTIN_INPUT={apt:'aptsrc',rpm:'rpmrepo'};
+
+// populateBuiltins fills each ecosystem's built-in picker; a stream with no
+// entries keeps its picker row hidden.
+function populateBuiltins(){
+  for(const stream of Object.keys(BUILTIN_INPUT)){
+    const sel=document.getElementById(stream+'Builtin');
+    if(!sel) continue;
+    const list=BUILTIN_SOURCES[stream]||[];
+    if(!list.length){ sel.parentElement.hidden=true; continue; }
+    list.forEach((e,i)=>{
+      const o=document.createElement('option');
+      o.value=String(i);
+      o.textContent=e.label;
+      sel.appendChild(o);
+    });
+  }
+}
+
+// applyBuiltin pastes the chosen built-in list into the stream's input field —
+// replacing its content, exactly like loading a local file — so the very next
+// "Collect & export" or "Add schedule" uses it. The picker then snaps back to
+// its placeholder.
+function applyBuiltin(stream){
+  const sel=document.getElementById(stream+'Builtin');
+  const idx=sel.value;
+  sel.value='';
+  if(idx==='') return;
+  const entry=(BUILTIN_SOURCES[stream]||[])[Number(idx)];
+  if(!entry) return;
+  document.getElementById(BUILTIN_INPUT[stream]).value=entry.content;
 }
 
 // parseRequirements turns requirements.txt text into a list of specifiers,
@@ -2464,6 +2533,7 @@ async function saveWatchEdit(ev){
 // Block Esc/backdrop dismissal while a collect is still streaming.
 document.getElementById('collectModal').addEventListener('cancel', e=>{ if(cmRunning) e.preventDefault(); });
 
+populateBuiltins();
 loadStatus();
 loadAllWatches();
 loadJobs();

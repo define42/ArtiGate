@@ -1,0 +1,7 @@
+# Ubuntu 22.04 LTS (jammy) - security updates only
+# Just the jammy-security suite for amd64; all four components.
+Types: deb
+URIs: https://security.ubuntu.com/ubuntu
+Suites: jammy-security
+Components: main restricted universe multiverse
+Architectures: amd64

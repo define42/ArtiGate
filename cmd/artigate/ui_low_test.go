@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"example.com/artigate/buildin"
 )
 
 func TestLowServerUIStatus(t *testing.T) {
@@ -98,6 +100,9 @@ func TestLowServerUIPage(t *testing.T) {
 		`id="aptnewest" type="checkbox" checked`, "newest_only",
 		"Mirror an RPM (yum/dnf) repository", `id="rpmrepo"`, `id="rpmfile"`, "loadRpmFile", "collectRpm", "/admin/rpm/collect",
 		`id="rpmnewest" type="checkbox" checked`,
+		// APT and RPM offer built-in source lists (shipped in buildin/) that a
+		// picker pastes into the collect input, ready for a run or a schedule.
+		`id="aptBuiltin"`, `id="rpmBuiltin"`, "populateBuiltins", "applyBuiltin('apt')", "applyBuiltin('rpm')",
 		// Every ecosystem offers a one-shot "full bundle" checkbox that adds
 		// force to the immediate collect (never to a schedule).
 		"applyForce", `id="goForce"`, `id="pyForce"`, `id="mvnForce"`, `id="npmForce"`,
@@ -127,6 +132,44 @@ func TestLowServerUIPage(t *testing.T) {
 		}
 		if strings.Contains(body, `id="pyonly"`) {
 			t.Error("low-side UI still exposes a switch that can disable mandatory wheels-only collection")
+		}
+	}
+}
+
+// TestLowServerUIBuiltinSources pins the server-side injection of the built-in
+// source catalog: the rendered page must carry the real JSON (not the raw
+// placeholder), and every stream the catalog offers must be a registered
+// ecosystem so its picker has a form to fill.
+func TestLowServerUIBuiltinSources(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	srv := httptest.NewServer(ls)
+	defer srv.Close()
+
+	code, body := httpGet(t, srv.URL+"/")
+	if code != http.StatusOK {
+		t.Fatalf("index status = %d", code)
+	}
+	if strings.Contains(body, "{{BUILTIN_SOURCES}}") {
+		t.Error("rendered page still contains the {{BUILTIN_SOURCES}} placeholder")
+	}
+	for _, want := range []string{
+		`"label":"Ubuntu 24.04 LTS (noble) - full archive"`,
+		`"label":"Rocky Linux 9 - BaseOS"`,
+		"https://archive.ubuntu.com/ubuntu",
+		"https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered page missing built-in source %q", want)
+		}
+	}
+
+	src, err := buildin.Sources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for stream := range src {
+		if _, ok := ecosystemFor(stream); !ok {
+			t.Errorf("built-in sources reference unknown stream %q", stream)
 		}
 	}
 }

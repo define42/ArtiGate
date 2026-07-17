@@ -1,0 +1,7 @@
+# Ubuntu 26.04 LTS (resolute) - security updates only
+# Just the resolute-security suite for amd64; all four components.
+Types: deb
+URIs: https://security.ubuntu.com/ubuntu
+Suites: resolute-security
+Components: main restricted universe multiverse
+Architectures: amd64

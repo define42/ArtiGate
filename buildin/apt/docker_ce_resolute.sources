@@ -1,0 +1,6 @@
+# Docker CE (stable) for Ubuntu 26.04 (resolute), amd64
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: resolute
+Components: stable
+Architectures: amd64

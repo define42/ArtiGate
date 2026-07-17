@@ -1,0 +1,7 @@
+# Rocky Linux 9 - extras (x86_64)
+[rocky9-extras]
+name=Rocky Linux 9 - extras
+baseurl=https://dl.rockylinux.org/pub/rocky/9/extras/x86_64/os/
+enabled=1
+gpgcheck=1
+gpgkey=https://dl.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-9
