@@ -1,0 +1,6 @@
+# Google Chrome (stable) - Google apt repository, amd64
+Types: deb
+URIs: https://dl.google.com/linux/chrome/deb
+Suites: stable
+Components: main
+Architectures: amd64

@@ -41,6 +41,8 @@ func catalog() map[string][]Entry {
 			{Label: "Docker CE - Ubuntu 26.04 (resolute)", File: "apt/docker_ce_resolute.sources"},
 			{Label: "Docker CE - Ubuntu 24.04 (noble)", File: "apt/docker_ce_noble.sources"},
 			{Label: "Docker CE - Ubuntu 22.04 (jammy)", File: "apt/docker_ce_jammy.sources"},
+			{Label: "Visual Studio Code (stable)", File: "apt/vscode.sources"},
+			{Label: "Google Chrome (stable)", File: "apt/google_chrome.sources"},
 		},
 		"rpm": {
 			{Label: "Rocky Linux 10 - BaseOS, AppStream, CRB and extras", File: "rpm/rocky10_full.repo"},
@@ -55,6 +57,8 @@ func catalog() map[string][]Entry {
 			{Label: "Rocky Linux 9 - extras", File: "rpm/rocky9_extras.repo"},
 			{Label: "Docker CE - EL10 (Rocky/RHEL 10)", File: "rpm/docker_ce_el10.repo"},
 			{Label: "Docker CE - EL9 (Rocky/RHEL 9)", File: "rpm/docker_ce_el9.repo"},
+			{Label: "Visual Studio Code (stable)", File: "rpm/vscode.repo"},
+			{Label: "Google Chrome (stable)", File: "rpm/google_chrome.repo"},
 		},
 	}
 }

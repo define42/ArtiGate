@@ -1,0 +1,6 @@
+# Visual Studio Code (stable) - Microsoft apt repository, amd64
+Types: deb
+URIs: https://packages.microsoft.com/repos/code
+Suites: stable
+Components: main
+Architectures: amd64
