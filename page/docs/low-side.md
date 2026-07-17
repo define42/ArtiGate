@@ -36,7 +36,7 @@ On startup the server creates `<root>`, `<export-dir>`, and the Go module cache 
 | `--watch-interval` | `60s` | How often the scheduler checks for due watches; `0` disables scheduled pulls |
 
 !!! note
-    `--watch-interval` is a Go duration, so `30s`, `5m`, `2h` all work. The full set of flags — including the Go private-module knobs (`--goprivate`, `--gonoproxy`, `--gonosumdb`, `--govcs`, `--gosumdb`), `--go`, `--npm-registry`, and the upstream overrides `--crates-index`, `--terraform-registry`, `--nuget-source` (plus `--git` for Terraform `git::` module sources) — is in the [configuration reference](configuration.md).
+    `--watch-interval` is a Go duration, so `30s`, `5m`, `2h` all work. The full set of flags — including the Go private-module knobs (`--goprivate`, `--gonoproxy`, `--gonosumdb`, `--govcs`, `--gosumdb`), `--go`, `--npm-registry`, and the per-ecosystem upstream overrides (`--crates-index`, `--terraform-registry`, `--nuget-source`, `--pypi-json`, `--conda-channel-base`, `--rubygems-url`, `--composer-repo`, `--vsx-registry`, `--galaxy-server`, `--cran-mirror`, `--osv-upstream`, `--hf-endpoint`, `--container-registry`, plus `--git` for Terraform `git::` module sources) — is in the [configuration reference](configuration.md).
 
 !!! warning "Unauthenticated by default"
     When `ARTIGATE_LOW_AUTH` is unset, the dashboard **and** every mutating `/admin/*` endpoint are open. Bind the low side to localhost or a trusted network, or set `ARTIGATE_LOW_AUTH` to require a form login. See [Security &amp; trust](security.md); for HTTPS see [TLS / HTTPS](tls.md).
