@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"example.com/artigate/buildin"
 )
 
 func aptSHA256(b []byte) string {
@@ -283,6 +285,32 @@ func TestParseAptSource(t *testing.T) {
 	if len(got) != 2 || got[0].URI != "https://a.example/repo" ||
 		len(got[1].Suites) != 1 || got[1].Suites[0] != "noble" {
 		t.Fatalf("multi-stanza parse = %+v", got)
+	}
+}
+
+// TestBuiltinAptSourcesCollectable pins every built-in apt source list shipped
+// for the dashboard picker to content the collector actually accepts: each
+// file must resolve to at least one mirror, and none may set Signed-By — a
+// keyring path the low host does not have would fail every collect.
+func TestBuiltinAptSourcesCollectable(t *testing.T) {
+	src, err := buildin.Sources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(src["apt"]) == 0 {
+		t.Fatal("no built-in apt source lists shipped")
+	}
+	for _, e := range src["apt"] {
+		cfgs, err := resolveAptMirrors(AptCollectRequest{SourceList: e.Content})
+		if err != nil {
+			t.Errorf("built-in %s does not resolve: %v", e.File, err)
+			continue
+		}
+		for _, c := range cfgs {
+			if c.SignedBy != "" {
+				t.Errorf("built-in %s sets Signed-By %q; built-ins must not assume a keyring on the low host", e.File, c.SignedBy)
+			}
+		}
 	}
 }
 

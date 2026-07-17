@@ -1,0 +1,13 @@
+# Ubuntu 26.04 LTS (resolute) - full archive
+# Release, updates and security suites for amd64; all four components.
+Types: deb
+URIs: https://archive.ubuntu.com/ubuntu
+Suites: resolute resolute-updates
+Components: main restricted universe multiverse
+Architectures: amd64
+
+Types: deb
+URIs: https://security.ubuntu.com/ubuntu
+Suites: resolute-security
+Components: main restricted universe multiverse
+Architectures: amd64

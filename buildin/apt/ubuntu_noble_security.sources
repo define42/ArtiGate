@@ -1,0 +1,7 @@
+# Ubuntu 24.04 LTS (noble) - security updates only
+# Just the noble-security suite for amd64; all four components.
+Types: deb
+URIs: https://security.ubuntu.com/ubuntu
+Suites: noble-security
+Components: main restricted universe multiverse
+Architectures: amd64

@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"example.com/artigate/buildin"
 )
 
 // registerRpmRepo serves a full-metadata YUM/DNF repository (repomd.xml with
@@ -524,6 +526,33 @@ func TestResolveRpmMirrorsNames(t *testing.T) {
 	named, err := resolveRpmMirrors(RpmCollectRequest{Name: "rocky9-baseos", BaseURL: "https://x.example/repo"})
 	if err != nil || len(named) != 1 || named[0].Name != "rocky9-baseos" {
 		t.Fatalf("explicit name = %+v, err %v", named, err)
+	}
+}
+
+// TestBuiltinRpmReposCollectable pins every built-in .repo shipped for the
+// dashboard picker to content the collector actually accepts: each file must
+// resolve to at least one mirror, and its remote gpgkey URL must not resolve
+// to a local keyring path — one the low host does not have would fail every
+// collect.
+func TestBuiltinRpmReposCollectable(t *testing.T) {
+	src, err := buildin.Sources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(src["rpm"]) == 0 {
+		t.Fatal("no built-in rpm repo definitions shipped")
+	}
+	for _, e := range src["rpm"] {
+		cfgs, err := resolveRpmMirrors(RpmCollectRequest{RepoFile: e.Content})
+		if err != nil {
+			t.Errorf("built-in %s does not resolve: %v", e.File, err)
+			continue
+		}
+		for _, c := range cfgs {
+			if c.GPGKey != "" {
+				t.Errorf("built-in %s resolves gpgkey to local path %q; built-ins must not assume a keyring on the low host", e.File, c.GPGKey)
+			}
+		}
 	}
 }
 

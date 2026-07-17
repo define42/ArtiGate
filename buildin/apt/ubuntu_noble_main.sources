@@ -1,0 +1,13 @@
+# Ubuntu 24.04 LTS (noble) - main component only
+# Release, updates and security suites for amd64; Canonical-maintained packages only.
+Types: deb
+URIs: https://archive.ubuntu.com/ubuntu
+Suites: noble noble-updates
+Components: main
+Architectures: amd64
+
+Types: deb
+URIs: https://security.ubuntu.com/ubuntu
+Suites: noble-security
+Components: main
+Architectures: amd64

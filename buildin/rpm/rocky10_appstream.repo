@@ -1,0 +1,7 @@
+# Rocky Linux 10 - AppStream (x86_64)
+[rocky10-appstream]
+name=Rocky Linux 10 - AppStream
+baseurl=https://dl.rockylinux.org/pub/rocky/10/AppStream/x86_64/os/
+enabled=1
+gpgcheck=1
+gpgkey=https://dl.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-10

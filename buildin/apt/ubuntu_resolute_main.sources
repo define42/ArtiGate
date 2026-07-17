@@ -1,0 +1,13 @@
+# Ubuntu 26.04 LTS (resolute) - main component only
+# Release, updates and security suites for amd64; Canonical-maintained packages only.
+Types: deb
+URIs: https://archive.ubuntu.com/ubuntu
+Suites: resolute resolute-updates
+Components: main
+Architectures: amd64
+
+Types: deb
+URIs: https://security.ubuntu.com/ubuntu
+Suites: resolute-security
+Components: main
+Architectures: amd64

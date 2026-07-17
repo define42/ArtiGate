@@ -1,0 +1,28 @@
+# Rocky Linux 9 - BaseOS, AppStream, CRB and extras (x86_64)
+[rocky9-baseos]
+name=Rocky Linux 9 - BaseOS
+baseurl=https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/
+enabled=1
+gpgcheck=1
+gpgkey=https://dl.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-9
+
+[rocky9-appstream]
+name=Rocky Linux 9 - AppStream
+baseurl=https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/
+enabled=1
+gpgcheck=1
+gpgkey=https://dl.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-9
+
+[rocky9-crb]
+name=Rocky Linux 9 - CRB
+baseurl=https://dl.rockylinux.org/pub/rocky/9/CRB/x86_64/os/
+enabled=1
+gpgcheck=1
+gpgkey=https://dl.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-9
+
+[rocky9-extras]
+name=Rocky Linux 9 - extras
+baseurl=https://dl.rockylinux.org/pub/rocky/9/extras/x86_64/os/
+enabled=1
+gpgcheck=1
+gpgkey=https://dl.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-9
