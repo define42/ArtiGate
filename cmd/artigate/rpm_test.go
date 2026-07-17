@@ -292,6 +292,15 @@ func registerRpmRepoVersions(t *testing.T, mux *http.ServeMux, prefix, pkg strin
 // prefix/repodata.
 func serveRpmRepodata(t *testing.T, mux *http.ServeMux, prefix string, n int, pkgBlocks, flBlocks, olBlocks []string) {
 	t.Helper()
+	serveRpmRepodataExt(t, mux, prefix, n, pkgBlocks, flBlocks, olBlocks, "gz", gzipBytes)
+}
+
+// serveRpmRepodataExt is serveRpmRepodata with a caller-chosen index
+// compression (file extension + compressor), so a test can publish .gz or .zst
+// metadata through the same assembly — .zst being the form Docker CE's EL9
+// repos ship.
+func serveRpmRepodataExt(t *testing.T, mux *http.ServeMux, prefix string, n int, pkgBlocks, flBlocks, olBlocks []string, ext string, compress func([]byte) ([]byte, error)) {
+	t.Helper()
 	primary := []byte(fmt.Sprintf(
 		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"+
 			"<metadata xmlns=\"http://linux.duke.edu/metadata/common\" packages=\"%d\">\n%s\n</metadata>\n",
@@ -305,16 +314,16 @@ func serveRpmRepodata(t *testing.T, mux *http.ServeMux, prefix string, n int, pk
 			"<otherdata xmlns=\"http://linux.duke.edu/metadata/other\" packages=\"%d\">\n%s\n</otherdata>\n",
 		n, strings.Join(olBlocks, "\n")))
 	data := func(typ string, plain []byte) string {
-		gz, err := gzipBytes(plain)
+		comp, err := compress(plain)
 		if err != nil {
 			t.Fatal(err)
 		}
-		href := "repodata/" + typ + ".xml.gz"
-		mux.HandleFunc(prefix+"/"+href, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(gz) })
+		href := "repodata/" + typ + ".xml." + ext
+		mux.HandleFunc(prefix+"/"+href, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(comp) })
 		return fmt.Sprintf("  <data type=%q>\n    <checksum type=\"sha256\">%s</checksum>\n"+
 			"    <open-checksum type=\"sha256\">%s</open-checksum>\n    <location href=%q/>\n"+
 			"    <size>%d</size>\n    <open-size>%d</open-size>\n  </data>\n",
-			typ, aptSHA256(gz), aptSHA256(plain), href, len(gz), len(plain))
+			typ, aptSHA256(comp), aptSHA256(plain), href, len(comp), len(plain))
 	}
 	repomd := `<?xml version="1.0" encoding="UTF-8"?>` + "\n<repomd xmlns=\"http://linux.duke.edu/metadata/repo\">\n  <revision>1</revision>\n" +
 		data("primary", primary) + data("filelists", filelists) + data("other", other) + "</repomd>\n"
@@ -424,6 +433,81 @@ func TestCollectRpmNewestOnly(t *testing.T) {
 	}
 	if all.ExportedModules != 2 {
 		t.Errorf("all-versions bundled %d packages, want 2", all.ExportedModules)
+	}
+}
+
+// TestCollectRpmZstdMetadata mirrors a repo whose primary/filelists/other
+// indexes are zstd-compressed (.zst) — the exact shape Docker CE's EL9 repos
+// ship. Before .zst support the collect failed at parse time with
+// "parse primary.xml: XML syntax error on line 1: invalid UTF-8". It also
+// exercises the recompress path: newest-only rewrites the .zst primary and the
+// pkgid-keyed .zst indexes, and the high side must serve the survivor.
+func TestCollectRpmZstdMetadata(t *testing.T) {
+	mux := http.NewServeMux()
+	var pkgBlocks, flBlocks, olBlocks []string
+	for _, vr := range [][2]string{{"1.100.0", "1"}, {"1.101.2", "1"}} {
+		ver, rel := vr[0], vr[1]
+		body := []byte("FAKE-RPM-code-" + ver + "-" + rel)
+		sha := aptSHA256(body)
+		loc := fmt.Sprintf("Packages/code-%s-%s.x86_64.rpm", ver, rel)
+		pkgBlocks = append(pkgBlocks, fmt.Sprintf(`<package type="rpm"><name>code</name><arch>x86_64</arch>`+
+			`<version epoch="0" ver="%s" rel="%s"/><checksum type="sha256" pkgid="YES">%s</checksum>`+
+			`<size package="%d"/><location href="%s"/></package>`, ver, rel, sha, len(body), loc))
+		fl, ol := rpmPkgidBlocks(sha, "code", "x86_64", ver, rel)
+		flBlocks = append(flBlocks, fl)
+		olBlocks = append(olBlocks, ol)
+		mux.HandleFunc("/yumrepos/docker/"+loc, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
+	}
+	serveRpmRepodataExt(t, mux, "/yumrepos/docker", 2, pkgBlocks, flBlocks, olBlocks, "zst", zstdCompress)
+	up := httptest.NewServer(mux)
+	defer up.Close()
+
+	ls, priv := newRpmLowServer(t)
+	res, err := ls.CollectRpm(context.Background(), RpmCollectRequest{Name: "docker", BaseURL: up.URL + "/yumrepos/docker"})
+	if err != nil {
+		t.Fatalf("CollectRpm with .zst metadata: %v", err)
+	}
+	if res.ExportedModules != 1 { // newest-only rewrote & recompressed the .zst primary
+		t.Fatalf("newest-only bundled %d packages, want 1", res.ExportedModules)
+	}
+
+	// Import and confirm the high side serves the newest .rpm, the old build is
+	// gone, and the rewritten .zst indexes decompress back to the survivor.
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	for _, suffix := range []string{".tar.gz", ".manifest.json", ".manifest.json.sig"} {
+		name := res.BundleID + suffix
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, name), b)
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("import of .zst rpm bundle failed (rewritten .zst checksums must match manifest): %v", err)
+	}
+
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	base := srv.URL + "/rpm/docker"
+	assertServed(t, base+"/Packages/code-1.101.2-1.x86_64.rpm", "FAKE-RPM-code-1.101.2-1")
+	if code, _ := httpGet(t, base+"/Packages/code-1.100.0-1.x86_64.rpm"); code == http.StatusOK {
+		t.Error("old version should not be mirrored under newest-only")
+	}
+	keptSHA := aptSHA256([]byte("FAKE-RPM-code-1.101.2-1"))
+	droppedSHA := aptSHA256([]byte("FAKE-RPM-code-1.100.0-1"))
+	for _, typ := range []string{"primary", "filelists", "other"} {
+		_, zst := httpGet(t, base+"/repodata/"+typ+".xml.zst")
+		plain, err := zstdDecompress([]byte(zst), maxIndexPlainBytes)
+		if err != nil {
+			t.Fatalf("zstd decompress served %s: %v", typ, err)
+		}
+		if !strings.Contains(string(plain), keptSHA) {
+			t.Errorf("served %s is missing the kept build's pkgid:\n%s", typ, plain)
+		}
+		if strings.Contains(string(plain), droppedSHA) {
+			t.Errorf("served %s still lists the dropped build's pkgid", typ)
+		}
 	}
 }
 

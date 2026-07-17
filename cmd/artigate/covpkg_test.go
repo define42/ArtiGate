@@ -178,8 +178,8 @@ func TestCovPkg_FetchRepomdUnsigned(t *testing.T) {
 }
 
 // TestCovPkg_DecompressCompressByExt covers extension-driven (de)compression:
-// gzip via the stdlib, xz via the binary (skipped if absent), zchunk rejection,
-// and the plain passthrough.
+// gzip via the stdlib, xz and zstd via their binaries (each skipped if absent),
+// zchunk rejection, and the plain passthrough.
 func TestCovPkg_DecompressCompressByExt(t *testing.T) {
 	plain := []byte("index payload for extension dispatch")
 
@@ -207,6 +207,19 @@ func TestCovPkg_DecompressCompressByExt(t *testing.T) {
 	}
 	if _, err := decompressByExt("primary.xml.zck", plain); err == nil || !strings.Contains(err.Error(), "zchunk") {
 		t.Errorf("decompressByExt zck = %v, want zchunk error", err)
+	}
+
+	// zstd round-trip via the in-process klauspost/compress codec, exercising
+	// zstdDecompress — Docker CE's EL9 repos publish .zst-compressed indexes
+	// (regression: parsing them raw used to fail with "invalid UTF-8"). No
+	// external binary, so unlike xz below it never needs to skip.
+	zst, err := compressByExt("primary.xml.zst", plain)
+	if err != nil {
+		t.Fatalf("compressByExt zst: %v", err)
+	}
+	zback, err := decompressByExt("primary.xml.zst", zst)
+	if err != nil || string(zback) != string(plain) {
+		t.Fatalf("zst round-trip = %q, %v", zback, err)
 	}
 
 	// xz round-trip via the binary, exercising xzDecompress.

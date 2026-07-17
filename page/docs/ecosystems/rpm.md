@@ -240,13 +240,13 @@ dnf --disablerepo='*' --enablerepo='artigate-packages-microsoft' makecache
 
 ## Limitations
 
-- **The primary index must be `.gz`, `.xz`, or uncompressed.** ArtiGate must parse it to enumerate packages; a primary offered **only as `.zck` (zchunk)** cannot be parsed and the collect fails with `zchunk (.zck) index cannot be parsed`. Metadata files ArtiGate never parses (it only stores and re-serves them) may still be `.zck`.
+- **The primary index must be `.gz`, `.xz`, `.zst`, or uncompressed.** ArtiGate must parse it to enumerate packages; a primary offered **only as `.zck` (zchunk)** cannot be parsed and the collect fails with `zchunk (.zck) index cannot be parsed`. (Docker CE's EL9 repos publish `.zst`-compressed metadata, which is supported — `.zst` is decompressed in-process, no external tool.) Metadata files ArtiGate never parses (it only stores and re-serves them) may still be `.zck`.
 - **Newest-only cannot rewrite a `.zck` primary.** If newest-only would drop packages but the primary is zchunk-only, disable newest-only for that repo.
 - **Each collect re-syncs the metadata.** Every collect re-fetches the current `repomd.xml` and its indexes. The packages themselves are incremental: `.rpm`s already forwarded are skipped before download and ride as `prior` references in a delta bundle; an unchanged repository writes no new bundle and burns no sequence.
 - **`baseurl` variables are not expanded.** Any `$releasever`/`$basearch` (any `$`) is rejected; pin concrete URLs.
 - **Remote `gpgkey=https://…` is not used for verification.** Only `file://`/absolute local keyrings are honoured on the low side.
-- **External binaries.** `xz` must be installed on the **low** side for `.xz` metadata (parsing the primary index and recompressing it for newest-only) — the high side never decompresses or re-hashes RPM metadata, so it needs no `xz`; `gpgv` on the low side for repomd verification; `gpg` on the high side for signing.
-- **Size/time caps.** `.rpm` and metadata files **stream to disk** while being hashed (never buffered in memory), with the repo-declared size enforced exactly (8 GiB cap when none is declared) and a 30-minute timeout. In-memory reads are capped: `repomd.xml(.asc)` at 16 MiB, the compressed primary index at 1 GiB, and gzip/xz decompression refuses to expand beyond 2 GiB (decompression-bomb guard).
+- **External binaries.** `xz` must be installed on the **low** side for `.xz` metadata (parsing the primary index and recompressing it for newest-only); `.gz` (stdlib) and `.zst` (in-process, e.g. Docker CE EL9) need no external tool. The high side never decompresses or re-hashes RPM metadata, so it needs no `xz`; `gpgv` on the low side for repomd verification; `gpg` on the high side for signing.
+- **Size/time caps.** `.rpm` and metadata files **stream to disk** while being hashed (never buffered in memory), with the repo-declared size enforced exactly (8 GiB cap when none is declared) and a 30-minute timeout. In-memory reads are capped: `repomd.xml(.asc)` at 16 MiB, the compressed primary index at 1 GiB, and gzip/xz/zstd decompression refuses to expand beyond 2 GiB (decompression-bomb guard).
 
 ## Related pages
 

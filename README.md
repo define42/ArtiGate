@@ -1013,7 +1013,7 @@ edge-triggered (one notification per gap; the gap then ages via
 - **APT/RPM**: mirror the newest version of each package by default; untick
   "Newest version only" to mirror every version. RPM collects default to
   x86_64 + noarch packages. RPM `.zck`-only indexes aren't supported (use
-  `.gz`/`.xz`). Each collect re-syncs against upstream, but the export dedup
+  `.gz`/`.xz`/`.zst`). Each collect re-syncs against upstream, but the export dedup
   index keeps it from re-downloading or re-sending what already crossed.
 - **Crates**: the resolver follows normal and build dependencies (never
   dev-dependencies; optional ones only with "include optional"), picking the
