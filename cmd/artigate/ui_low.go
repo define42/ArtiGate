@@ -80,6 +80,10 @@ const lowUIHTML = `<!DOCTYPE html>
   header { padding: 1rem 1.5rem; background: #161a22; border-bottom: 1px solid #2a2f3a; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   header h1 { font-size: 1.25rem; margin: 0; }
   header .refresh { margin-left: auto; background: #2a2f3a; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 6px; padding: .4rem .8rem; cursor: pointer; font: inherit; }
+  header nav.topnav { display: flex; gap: .35rem; flex-wrap: wrap; }
+  header nav.topnav button { background: transparent; color: #c7cedb; border: 1px solid transparent; border-radius: 6px; padding: .4rem .8rem; cursor: pointer; font: inherit; }
+  header nav.topnav button:hover { background: #222835; }
+  header nav.topnav button.active { background: #1f6f43; color: #eafff2; border-color: #2b8f59; }
   .shell { display: flex; align-items: stretch; }
   .sidebar { flex: 0 0 11.5rem; background: #12151c; border-right: 1px solid #2a2f3a; }
   .sidebar nav { position: sticky; top: 0; max-height: 100dvh; overflow-y: auto; box-sizing: border-box; display: flex; flex-direction: column; gap: .2rem; padding: .9rem .7rem 1.1rem; }
@@ -87,7 +91,6 @@ const lowUIHTML = `<!DOCTYPE html>
   .sidebar nav button:hover { background: #222835; }
   .sidebar nav button.active { background: #1f6f43; color: #eafff2; border-color: #2b8f59; }
   .sidebar .nav-label { color: #8b93a5; font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; margin: .85rem 0 .15rem; padding: 0 .7rem; }
-  .sidebar nav hr { border: none; border-top: 1px solid #2a2f3a; margin: .55rem .4rem; align-self: stretch; width: auto; }
   main { flex: 1 1 auto; min-width: 0; padding: 1.5rem; max-width: 960px; }
   @media (max-width: 760px) {
     .shell { flex-direction: column; }
@@ -95,7 +98,6 @@ const lowUIHTML = `<!DOCTYPE html>
     .sidebar nav { position: static; max-height: none; flex-direction: row; flex-wrap: wrap; gap: .35rem; padding: .8rem 1rem; }
     .sidebar nav button { text-align: center; }
     .sidebar .nav-label { flex-basis: 100%; margin: .35rem 0 0; padding: 0; }
-    .sidebar nav hr { display: none; }
   }
   .card { background: #161a22; border: 1px solid #2a2f3a; border-radius: 8px; padding: 1.1rem 1.25rem; margin-bottom: 1.5rem; }
   .card h2 { font-size: 1rem; margin: 0 0 .75rem; }
@@ -182,13 +184,16 @@ const lowUIHTML = `<!DOCTYPE html>
 <body>
 <header>
   <h1>ArtiGate <span style="color:#8b93a5;font-weight:400">low-side exporter &middot; {{VERSION}}</span></h1>
+  <nav class="topnav" aria-label="Views">
+    <button type="button" data-view="overview" class="active" onclick="setView('overview')">Overview</button>
+    <button type="button" data-view="status" onclick="setView('status')">Status</button>
+  </nav>
   <button type="button" class="refresh" onclick="loadStatus();loadAllWatches();loadJobs()">Refresh</button>
   {{LOGOUT}}
 </header>
 <div class="shell">
 <aside class="sidebar">
   <nav aria-label="Mirrored streams">
-    <button type="button" data-view="overview" class="active" onclick="setView('overview')">Overview</button>
     <span class="nav-label">Streams</span>
     <button type="button" data-view="go" onclick="setView('go')">Go</button>
     <button type="button" data-view="python" onclick="setView('python')">Python</button>
@@ -212,8 +217,6 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="git" onclick="setView('git')">Git</button>
     <button type="button" data-view="osv" onclick="setView('osv')">OSV</button>
     <button type="button" data-view="uploads" onclick="setView('uploads')">Uploads</button>
-    <hr>
-    <button type="button" data-view="status" onclick="setView('status')">Status</button>
   </nav>
 </aside>
 <main>
