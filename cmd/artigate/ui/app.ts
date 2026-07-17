@@ -21,8 +21,9 @@ interface StreamStatus {
   awaiting_from_low?: string[];
 }
 
-// The last verified low-side heartbeat received over the built-in UDP diode;
-// absent until one arrives (folder/HTTP transports never produce one).
+// The last verified low-side heartbeat, however its diode transport delivered
+// it (UDP datagram, HTTP ingest, or a file through the landing directory);
+// absent until one arrives.
 interface HeartbeatStatus {
   received_at: string;
   age_seconds: number;
@@ -280,8 +281,8 @@ function formatAge(seconds: number): string {
 }
 
 // renderHeartbeat shows when the low side last reported its stream indexes
-// over the built-in UDP diode. Hidden until a heartbeat has been received, so
-// folder/HTTP deployments (which never produce one) see nothing.
+// over the diode. Hidden until a heartbeat has been received (an older low
+// side, heartbeats disabled, or a diode dark since startup).
 function renderHeartbeat(hb: HeartbeatStatus | undefined): void {
   const el = byId("heartbeat");
   if (!hb) {

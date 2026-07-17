@@ -243,7 +243,9 @@ func (c *diodeCatcher) handleDatagram(b []byte, now time.Time) {
 // diodeHeartbeatReceiver wires the catcher's heartbeat verification to this
 // server's public key and last-heartbeat record.
 func (s *HighServer) diodeHeartbeatReceiver() *diodeHeartbeatReceiver {
-	return &diodeHeartbeatReceiver{pub: s.publicKey, record: s.heartbeat.recordHeartbeat}
+	return &diodeHeartbeatReceiver{pub: s.publicKey, record: func(hb diodeHeartbeat, now time.Time) bool {
+		return s.recordDiodeHeartbeat(hb, now, "the UDP diode")
+	}}
 }
 
 // onDiodeFileLanded is the catcher→importer bridge: when a landed file

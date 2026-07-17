@@ -484,6 +484,25 @@ replays are ignored. Future gaps are capped at 10,000 sequences; unsupported,
 excessively-future, or cryptographically invalid bundles move to
 `<root>/rejected` and do not block the other streams.
 
+Whichever transport carries the bundles, the low side also emits a periodic
+**heartbeat** with every stream's newest committed sequence number, signed
+with its key under a dedicated signature context (never confusable with a
+manifest signature). A diode gives the high side no other way to learn what
+it *should* have: `/admin/missing` can only report gaps behind bundles that
+did arrive, so a bundle lost in its entirety — or a low side that stopped
+exporting — would otherwise be invisible. `ARTIGATE_DIODE_HEARTBEAT` sets the
+interval (default `30s`, `off` disables); delivery matches the transport —
+one more file in the export dir for a folder carrier
+(`artigate.heartbeat`), a `PUT` to the HTTP diode endpoint, a datagram on the
+built-in UDP diode — and the high side verifies and records it identically in
+all three cases. The dashboard then shows the low side's index per stream, an
+**Awaiting** column for bundles that left the low side but have not arrived
+(in transit, or lost and needing a re-export), and the heartbeat's freshness;
+`/metrics` exposes the same as `artigate_high_low_last_sequence`,
+`artigate_high_bundles_awaiting_from_low`, and
+`artigate_high_diode_heartbeat_{timestamp,age}_seconds` (alert on awaiting
+with a `for:` clause long enough to ride out a large bundle's transfer).
+
 ### HTTP transport (optional)
 
 For diodes (or diode proxies) that speak HTTP instead of moving files, both
@@ -495,6 +514,7 @@ variables — the folder flow stays the default:
 | `ARTIGATE_DIODE_URL` | low | endpoint bundles are uploaded to after every export and re-export (`PUT <url>/<file>`, archive first) |
 | `ARTIGATE_DIODE_INGEST` | high | `on` accepts bundle uploads at `PUT/POST /diode/<file>` into the landing directory (default `off`) |
 | `ARTIGATE_DIODE_TOKEN` | both | shared bearer token, at least 32 bytes and required whenever HTTP diode transport is enabled |
+| `ARTIGATE_DIODE_HEARTBEAT` | low | stream-index heartbeat interval for whichever transport is active (folder, HTTP, or UDP), default `30s` (`off` disables) |
 
 ```bash
 # low side — upload each bundle to the diode proxy (or directly to the high side)
@@ -557,24 +577,12 @@ interface is what enables each side — ArtiGate configures the NIC itself
 | `ARTIGATE_PITCHER_RATE_MBIT` | low | max wire rate, default `800` — a one-way link has no congestion control, so stay below what the catcher absorbs |
 | `ARTIGATE_PITCHER_FEC_DATA` / `_FEC_PARITY` | low | Reed-Solomon geometry, default `32`+`8`: any 8 of every 40 datagrams may be lost harmlessly |
 | `ARTIGATE_PITCHER_TXQUEUELEN` | low | TX NIC queue length, default `10000` — raise if the driver drops on bursts |
-| `ARTIGATE_PITCHER_HEARTBEAT` | low | how often the signed stream-index heartbeat is broadcast, default `30s` (`off` disables) |
 | `ARTIGATE_CATCHER_INTERFACE` | high | dedicated diode RX NIC; enables the catcher |
 | `ARTIGATE_CATCHER_RCVBUF_MB` | high | receive buffer (MiB), default `64`, set via `SO_RCVBUFFORCE` |
 | `ARTIGATE_{PITCHER,CATCHER}_{MTU,GROUP,PORT,NETSETUP}` | both | MTU `9000`, group `ff02::4147`, port `4147`; `NETSETUP=off` when the host pre-configures the NIC |
 
-The pitcher also broadcasts a periodic **heartbeat** carrying every stream's
-newest committed sequence number, signed with the low side's key (a dedicated
-signature context, so it can never be confused with a manifest signature). A
-one-way link gives the high side no other way to learn what it *should* have:
-`/admin/missing` can only report gaps behind bundles that did arrive, so a
-bundle lost in its entirety — or a low side that stopped exporting — would
-otherwise be invisible. With heartbeats, the high side's dashboard shows the
-low side's index per stream and an **Awaiting** column for bundles that left
-the low side but have not arrived (still in transit, or lost and needing a
-re-export), plus how fresh the last heartbeat is; `/metrics` exposes the same
-as `artigate_high_low_last_sequence`, `artigate_high_bundles_awaiting_from_low`,
-and `artigate_high_diode_heartbeat_{timestamp,age}_seconds` (alert on awaiting
-with a `for:` clause long enough to ride out a large bundle's transfer).
+The stream-index heartbeat (see above) rides this transport too: the pitcher
+broadcasts it as a signed datagram and the catcher verifies it off the wire.
 
 Loss beyond the parity budget expires the transfer on the catcher (nothing
 partial ever lands) and is recovered the usual way: the gap shows on the high

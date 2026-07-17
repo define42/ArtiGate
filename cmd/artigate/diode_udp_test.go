@@ -393,26 +393,9 @@ func TestDiodeEnvConfigs(t *testing.T) {
 			Interface: "eth1", MTU: diodeDefaultMTU, TxQueueLen: diodeDefaultTxQueueLen,
 			RateMbit: 2500, Group: diodeDefaultGroup, Port: diodeDefaultPort,
 			DataShards: diodeDefaultDataShards, ParityShards: diodeDefaultParityShards, NetSetup: true,
-			Heartbeat: diodeDefaultHeartbeatInterval,
 		}
 		if cfg != want {
 			t.Fatalf("cfg = %+v, want %+v", cfg, want)
-		}
-	})
-
-	t.Run("heartbeat override and off", func(t *testing.T) {
-		t.Setenv("ARTIGATE_PITCHER_INTERFACE", "eth1")
-		t.Setenv("ARTIGATE_PITCHER_HEARTBEAT", "2m")
-		cfg, err := pitcherConfigFromEnv()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.Heartbeat != 2*time.Minute {
-			t.Fatalf("Heartbeat = %s, want 2m", cfg.Heartbeat)
-		}
-		t.Setenv("ARTIGATE_PITCHER_HEARTBEAT", "off")
-		if cfg, err = pitcherConfigFromEnv(); err != nil || cfg.Heartbeat != 0 {
-			t.Fatalf("off: Heartbeat = %s, err = %v, want disabled", cfg.Heartbeat, err)
 		}
 	})
 
@@ -434,14 +417,12 @@ func TestDiodeEnvConfigs(t *testing.T) {
 	})
 
 	for name, set := range map[string]func(*testing.T){
-		"rate not a number":   func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_RATE_MBIT", "fast") },
-		"MTU out of range":    func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_MTU", "900") },
-		"group not v6":        func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_GROUP", "224.0.0.1") },
-		"group not mcast":     func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_GROUP", "2001:db8::1") },
-		"netsetup gibberish":  func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_NETSETUP", "maybe") },
-		"FEC too wide":        func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_FEC_DATA", "255") },
-		"heartbeat gibberish": func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_HEARTBEAT", "soonish") },
-		"heartbeat too fast":  func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_HEARTBEAT", "100ms") },
+		"rate not a number":  func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_RATE_MBIT", "fast") },
+		"MTU out of range":   func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_MTU", "900") },
+		"group not v6":       func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_GROUP", "224.0.0.1") },
+		"group not mcast":    func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_GROUP", "2001:db8::1") },
+		"netsetup gibberish": func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_NETSETUP", "maybe") },
+		"FEC too wide":       func(t *testing.T) { t.Setenv("ARTIGATE_PITCHER_FEC_DATA", "255") },
 	} {
 		t.Run("rejects "+name, func(t *testing.T) {
 			t.Setenv("ARTIGATE_PITCHER_INTERFACE", "eth1")
@@ -645,7 +626,7 @@ func TestLowToHighOverUDPDiode(t *testing.T) {
 	// seen rather than betting the test on a single UDP datagram.
 	deadline = time.Now().Add(10 * time.Second)
 	for {
-		if err := ls.sendDiodeHeartbeat(time.Now().UTC()); err != nil {
+		if err := ls.sendDiodeHeartbeat(context.Background(), time.Now().UTC()); err != nil {
 			t.Fatalf("sendDiodeHeartbeat: %v", err)
 		}
 		if st, err = hs.ImportStatus(); err != nil {

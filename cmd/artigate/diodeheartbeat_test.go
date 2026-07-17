@@ -1,8 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
 	"encoding/binary"
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -131,15 +137,15 @@ func TestDiodeHeartbeatPayloadValidation(t *testing.T) {
 func TestDiodeHeartbeatReplayGuard(t *testing.T) {
 	var st diodeHeartbeatState
 	now := time.Now().UTC()
-	first := testHeartbeat(map[string]int64{streamGo: 3})
-	first.Created = now
+	initial := testHeartbeat(map[string]int64{streamGo: 3})
+	initial.Created = now
 
-	if !st.recordHeartbeat(first, now) {
-		t.Fatal("first heartbeat refused")
+	if accepted, first := st.recordHeartbeat(initial, now); !accepted || !first {
+		t.Fatalf("initial heartbeat: accepted=%v first=%v, want both", accepted, first)
 	}
-	replay := first
+	replay := initial
 	replay.Created = now.Add(-time.Minute)
-	if st.recordHeartbeat(replay, now.Add(time.Second)) {
+	if accepted, _ := st.recordHeartbeat(replay, now.Add(time.Second)); accepted {
 		t.Fatal("an older heartbeat was accepted while the stored one is fresh")
 	}
 	if snap := st.snapshot(); !snap.hb.Created.Equal(now) {
@@ -147,16 +153,16 @@ func TestDiodeHeartbeatReplayGuard(t *testing.T) {
 	}
 	// Once the stored heartbeat is stale, even an older-stamped one is better
 	// than staying blind (a low-side clock reset must not wedge monitoring).
-	if !st.recordHeartbeat(replay, now.Add(diodeHeartbeatReplayWindow+time.Second)) {
-		t.Fatal("staleness override refused a re-send")
+	if accepted, first := st.recordHeartbeat(replay, now.Add(diodeHeartbeatReplayWindow+time.Second)); !accepted || first {
+		t.Fatalf("staleness override: accepted=%v first=%v, want accepted and not first", accepted, first)
 	}
 	same := replay
-	if !st.recordHeartbeat(same, now.Add(2*diodeHeartbeatReplayWindow)) {
+	if accepted, _ := st.recordHeartbeat(same, now.Add(2*diodeHeartbeatReplayWindow)); !accepted {
 		t.Fatal("an equal-created heartbeat (idempotent re-delivery) was refused")
 	}
-	newer := first
+	newer := initial
 	newer.Created = now.Add(time.Hour)
-	if !st.recordHeartbeat(newer, now.Add(2*diodeHeartbeatReplayWindow)) {
+	if accepted, _ := st.recordHeartbeat(newer, now.Add(2*diodeHeartbeatReplayWindow)); !accepted {
 		t.Fatal("a newer heartbeat was refused")
 	}
 }
@@ -264,7 +270,7 @@ func TestHighStatusWithHeartbeat(t *testing.T) {
 	// The low side reports go at #6 (5-6 still crossing) and npm at #2 —
 	// a stream this high side has seen nothing of.
 	hb := testHeartbeat(map[string]int64{streamGo: 6, streamNpm: 2})
-	if !hs.heartbeat.recordHeartbeat(hb, time.Now().UTC()) {
+	if accepted, _ := hs.heartbeat.recordHeartbeat(hb, time.Now().UTC()); !accepted {
 		t.Fatal("heartbeat refused")
 	}
 	if st, err = hs.ImportStatus(); err != nil {
@@ -291,7 +297,7 @@ func TestHighStatusWithHeartbeat(t *testing.T) {
 	}
 
 	// A heartbeat older than the newest arrival adds nothing: no awaiting.
-	if !hs.heartbeat.recordHeartbeat(testHeartbeat(map[string]int64{streamGo: 3}), time.Now().UTC()) {
+	if accepted, _ := hs.heartbeat.recordHeartbeat(testHeartbeat(map[string]int64{streamGo: 3}), time.Now().UTC()); !accepted {
 		t.Fatal("newer heartbeat refused")
 	}
 	if st, err = hs.ImportStatus(); err != nil {
@@ -315,7 +321,7 @@ func TestHighHeartbeatOnMonitoringEndpoints(t *testing.T) {
 		t.Fatal("heartbeat metrics present before any heartbeat")
 	}
 
-	if !hs.heartbeat.recordHeartbeat(testHeartbeat(map[string]int64{streamGo: 3}), time.Now().UTC()) {
+	if accepted, _ := hs.heartbeat.recordHeartbeat(testHeartbeat(map[string]int64{streamGo: 3}), time.Now().UTC()); !accepted {
 		t.Fatal("heartbeat refused")
 	}
 	_, metrics := httpGet(t, srv.URL+"/metrics")
@@ -335,5 +341,226 @@ func TestHighHeartbeatOnMonitoringEndpoints(t *testing.T) {
 		if !strings.Contains(status, want) {
 			t.Errorf("/admin/status is missing %q in %s", want, status)
 		}
+	}
+}
+
+// TestEnvHeartbeatInterval covers the ARTIGATE_DIODE_HEARTBEAT parsing rules.
+func TestEnvHeartbeatInterval(t *testing.T) {
+	const name = "ARTIGATE_DIODE_HEARTBEAT"
+	if d, err := envHeartbeatInterval(name); err != nil || d != diodeDefaultHeartbeatInterval {
+		t.Fatalf("unset = %s, %v; want the default", d, err)
+	}
+	t.Setenv(name, "2m")
+	if d, err := envHeartbeatInterval(name); err != nil || d != 2*time.Minute {
+		t.Fatalf("2m = %s, %v", d, err)
+	}
+	t.Setenv(name, "off")
+	if d, err := envHeartbeatInterval(name); err != nil || d != 0 {
+		t.Fatalf("off = %s, %v; want disabled", d, err)
+	}
+	for _, bad := range []string{"soonish", "100ms", "-30s"} {
+		t.Setenv(name, bad)
+		if _, err := envHeartbeatInterval(name); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+}
+
+// TestSendDiodeHeartbeatFolderMode checks the default transport: with neither
+// pitcher nor HTTP endpoint configured, the heartbeat is written into the
+// export dir as one more file for the folder carrier, and each send replaces
+// the previous one.
+func TestSendDiodeHeartbeatFolderMode(t *testing.T) {
+	ls := newBareLowServer(t)
+	if err := ls.commitSequence(streamGo, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := ls.sendDiodeHeartbeat(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("sendDiodeHeartbeat: %v", err)
+	}
+	path := filepath.Join(ls.cfg.ExportDir, diodeHeartbeatFileName)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("heartbeat file not written: %v", err)
+	}
+	pub := ls.privateKey.Public().(ed25519.PublicKey)
+	hb, err := parseDiodeHeartbeatPacket(pub, b)
+	if err != nil {
+		t.Fatalf("written heartbeat does not verify: %v", err)
+	}
+	if len(hb.Streams) != 1 || hb.Streams[streamGo] != 1 {
+		t.Fatalf("streams = %v, want go:1", hb.Streams)
+	}
+
+	// A later send overwrites in place — the spool never accumulates them.
+	if err := ls.commitSequence(streamGo, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := ls.sendDiodeHeartbeat(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if b, err = os.ReadFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if hb, err = parseDiodeHeartbeatPacket(pub, b); err != nil || hb.Streams[streamGo] != 2 {
+		t.Fatalf("second send = %v, %v; want go:2", hb.Streams, err)
+	}
+	// The heartbeat file must never look like a bundle to the spool scans.
+	if streams, err := findBundleStreams(ls.cfg.ExportDir); err != nil || len(streams) != 0 {
+		t.Fatalf("heartbeat file confused the bundle scan: %v, %v", streams, err)
+	}
+}
+
+// TestLowToHighHeartbeatOverHTTPDiode is the HTTP path end to end: the low
+// side PUTs the heartbeat to the diode endpoint, the high side verifies and
+// records it in memory — nothing lands on disk — and the import status
+// reports the low side's indexes exactly like the UDP path does.
+func TestLowToHighHeartbeatOverHTTPDiode(t *testing.T) {
+	ls := newBareLowServer(t)
+	if err := ls.commitSequence(streamGo, 2); err != nil {
+		t.Fatal(err)
+	}
+	hs := newTestHighServer(t, ls.privateKey.Public().(ed25519.PublicKey))
+	token := strings.Repeat("s", minDiodeTokenBytes)
+	hs.cfg.DiodeIngest = true
+	hs.cfg.DiodeToken = token
+	srv := httptest.NewServer(hs)
+	t.Cleanup(srv.Close)
+	ls.cfg.DiodeURL = srv.URL + "/diode"
+	ls.cfg.DiodeToken = token
+
+	if err := ls.sendDiodeHeartbeat(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("sendDiodeHeartbeat over HTTP: %v", err)
+	}
+	st, err := hs.ImportStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.DiodeHeartbeat == nil {
+		t.Fatal("heartbeat did not reach the import status")
+	}
+	if goSt := st.Stream(streamGo); goSt.LowLastSequence != 2 || strings.Join(goSt.AwaitingFromLow, ",") != "1-2" {
+		t.Fatalf("go stream = %+v, want low 2, awaiting 1-2", goSt)
+	}
+	entries, err := os.ReadDir(hs.cfg.Landing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("an HTTP heartbeat touched the landing directory: %v", entries)
+	}
+}
+
+// TestDiodeIngestHeartbeatValidation drives the ingest endpoint's heartbeat
+// branch through its refusals: the token gate still applies, unverifiable
+// bytes are 400s, oversized bodies are cut off, and a verified-but-older
+// heartbeat is acknowledged without replacing the record.
+func TestDiodeIngestHeartbeatValidation(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	token := strings.Repeat("t", minDiodeTokenBytes)
+	hs.cfg.DiodeIngest = true
+	hs.cfg.DiodeToken = token
+	srv := httptest.NewServer(hs)
+	t.Cleanup(srv.Close)
+
+	put := func(t *testing.T, body []byte, withToken bool) (int, string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, srv.URL+"/diode/"+diodeHeartbeatFileName, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if withToken {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var b bytes.Buffer
+		_, _ = b.ReadFrom(resp.Body)
+		return resp.StatusCode, b.String()
+	}
+
+	newer := testHeartbeat(map[string]int64{streamGo: 5})
+	newerPkt, err := marshalDiodeHeartbeatPacket(priv, newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code, _ := put(t, newerPkt, false); code != http.StatusUnauthorized {
+		t.Fatalf("missing token = HTTP %d, want 401", code)
+	}
+	if code, _ := put(t, []byte("junk"), true); code != http.StatusBadRequest {
+		t.Fatalf("garbage body = HTTP %d, want 400", code)
+	}
+	if code, _ := put(t, make([]byte, diodeMaxHeartbeatPacketBytes+1), true); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body = HTTP %d, want 413", code)
+	}
+	if code, body := put(t, newerPkt, true); code != http.StatusOK || !strings.Contains(body, "recorded") {
+		t.Fatalf("valid heartbeat = HTTP %d %q, want recorded", code, body)
+	}
+
+	older := testHeartbeat(map[string]int64{streamGo: 1})
+	older.Created = newer.Created.Add(-time.Hour)
+	olderPkt, err := marshalDiodeHeartbeatPacket(priv, older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, body := put(t, olderPkt, true); code != http.StatusOK || !strings.Contains(body, "ignored") {
+		t.Fatalf("replayed heartbeat = HTTP %d %q, want acknowledged but ignored", code, body)
+	}
+	if snap := hs.heartbeat.snapshot(); !snap.hb.Created.Equal(newer.Created) {
+		t.Fatal("a replayed older heartbeat replaced the record")
+	}
+}
+
+// TestConsumeLandingHeartbeat covers the folder transport's high side: a
+// heartbeat file in landing is verified, recorded, and consumed by the import
+// pass; an unverifiable file survives the grace (a carrier may still be
+// writing it) and is removed once past it.
+func TestConsumeLandingHeartbeat(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	path := filepath.Join(hs.cfg.Landing, diodeHeartbeatFileName)
+
+	pkt, err := marshalDiodeHeartbeatPacket(priv, testHeartbeat(map[string]int64{streamGo: 4}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, pkt)
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := hs.ImportStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.DiodeHeartbeat == nil || st.Stream(streamGo).LowLastSequence != 4 {
+		t.Fatalf("landing heartbeat not recorded: %+v", st.DiodeHeartbeat)
+	}
+	if fileExists(path) {
+		t.Fatal("consumed heartbeat file still in landing")
+	}
+
+	// Unverifiable bytes: kept while fresh (the carrier may still be writing),
+	// reaped once older than the grace.
+	writeFile(t, path, []byte("junk"))
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatal(err)
+	}
+	if !fileExists(path) {
+		t.Fatal("a fresh unverifiable heartbeat file was removed before the grace")
+	}
+	old := time.Now().Add(-diodeHeartbeatFileGrace - time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(path) {
+		t.Fatal("an unverifiable heartbeat file survived past the grace")
 	}
 }

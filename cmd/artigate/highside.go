@@ -110,8 +110,8 @@ type HighServer struct {
 	// endpoint reports; notifier posts failure webhooks (nil when unconfigured).
 	metrics  *highMetrics
 	notifier *webhookNotifier
-	// heartbeat records the last verified low-side stream-index heartbeat
-	// received over the built-in UDP diode (diodeheartbeat.go); the import
+	// heartbeat records the last verified low-side stream-index heartbeat,
+	// whichever diode transport delivered it (diodeheartbeat.go); the import
 	// status reads it to report bundles that left the low side but never
 	// arrived. Its zero value is a server that has received none.
 	heartbeat diodeHeartbeatState
@@ -602,9 +602,10 @@ type ImportStatus struct {
 	// import — so /admin/status answers a fleet-upgrade check remotely.
 	Version        string `json:"version"`
 	ManifestFormat int    `json:"manifest_format"`
-	// DiodeHeartbeat describes the last verified low-side heartbeat received
-	// over the built-in UDP diode; nil until one arrives (a folder or HTTP
-	// transport, an older low side, or a diode link that has been dark since
+	// DiodeHeartbeat describes the last verified low-side heartbeat, however
+	// its diode transport delivered it — UDP datagram, HTTP ingest, or a file
+	// through the landing directory; nil until one arrives (an older low
+	// side, heartbeats disabled, or a diode that has been dark since
 	// startup).
 	DiodeHeartbeat *DiodeHeartbeatStatus `json:"diode_heartbeat,omitempty"`
 	Streams        []StreamImportStatus  `json:"streams"`
@@ -714,6 +715,10 @@ func (s *HighServer) importPass() (ImportResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// A folder carrier delivers the low side's heartbeat as a landing file;
+	// consume it here — the one sweep allowed to remove files — so the status
+	// built at the end of this pass already reflects it.
+	s.consumeLandingHeartbeat(time.Now().UTC())
 	if err := s.quarantineFutureBundlesLocked(); err != nil {
 		return ImportResult{}, err
 	}

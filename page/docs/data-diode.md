@@ -69,7 +69,7 @@ mutually exclusive.
 | `ARTIGATE_PITCHER_FEC_DATA` | `32` | Data shards per block |
 | `ARTIGATE_PITCHER_FEC_PARITY` | `8` | Parity shards per block — the per-block loss budget |
 | `ARTIGATE_PITCHER_NETSETUP` | `on` | `on`: ArtiGate configures the NIC (link bounce, eui64, MTU, txqueuelen, TX rings, link up, waits for DAD). `off`: the host pre-configured it |
-| `ARTIGATE_PITCHER_HEARTBEAT` | `30s` | How often the signed stream-index heartbeat is broadcast (`off` disables) |
+| `ARTIGATE_DIODE_HEARTBEAT` | `30s` | How often the signed stream-index heartbeat is sent — on every diode transport, not just this one (`off` disables) |
 
 ### High side (catcher)
 
@@ -132,10 +132,14 @@ a lossy link, instead of demanding one perfect pass.
 `/admin/missing` can only report gaps behind bundles that *did* arrive; a
 bundle lost in its entirety — or a low side that silently stopped exporting —
 leaves no gap to see. The **heartbeat** closes that blind spot: every
-`ARTIGATE_PITCHER_HEARTBEAT` interval (default 30s) the pitcher broadcasts
-each stream's newest committed sequence number, signed with the low side's
-key under a dedicated context so it can never be mistaken for a manifest
-signature. The catcher verifies it, and the high side then knows what it
+`ARTIGATE_DIODE_HEARTBEAT` interval (default 30s) the low side emits each
+stream's newest committed sequence number, signed with its key under a
+dedicated context so it can never be mistaken for a manifest signature. It
+rides whichever transport is in use — a datagram on the built-in UDP diode, a
+`PUT` to the HTTP diode endpoint, or an `artigate.heartbeat` file in the
+export dir that the folder carrier moves across (the high side's import pass
+consumes it from the landing directory) — and the high side verifies and
+records it identically in all three cases. The high side then knows what it
 *should* have: the dashboard's overview shows the low side's index per
 stream, an **Awaiting** column for bundles that left the low side but have
 not arrived (still in transit, or lost and needing a re-export), and how

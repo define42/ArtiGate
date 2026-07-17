@@ -136,8 +136,8 @@ function formatAge(seconds) {
     return `${Math.round(seconds / 3600)}h`;
 }
 // renderHeartbeat shows when the low side last reported its stream indexes
-// over the built-in UDP diode. Hidden until a heartbeat has been received, so
-// folder/HTTP deployments (which never produce one) see nothing.
+// over the diode. Hidden until a heartbeat has been received (an older low
+// side, heartbeats disabled, or a diode dark since startup).
 function renderHeartbeat(hb) {
     const el = byId("heartbeat");
     if (!hb) {
