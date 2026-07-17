@@ -6,6 +6,8 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -579,6 +581,67 @@ func TestCovMain_TooNewManifestFormatStaysInLanding(t *testing.T) {
 	}
 	if got := hs.state.Imported[streamGo]; got != 0 {
 		t.Errorf("imported sequence advanced to %d on a refused bundle", got)
+	}
+}
+
+// TestCovMain_TooNewFormatIncompatibleShapeStaysInLanding pins the byte-level
+// half of the refusal: a format bump is allowed to change the JSON shape of
+// fields this binary already knows (here sequence became a string, which the
+// current BundleManifest schema cannot decode), so the refusal must come from
+// the format probe on the signed bytes — not from a full-decode failure,
+// which would terminally reject a bundle that only needs a binary upgrade.
+func TestCovMain_TooNewFormatIncompatibleShapeStaysInLanding(t *testing.T) {
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	bundleID := bundleIDFor(streamGo, 1)
+
+	manifestBytes := fmt.Appendf(nil, `{
+  "type": %q,
+  "format": %d,
+  "stream": "go",
+  "sequence": "1",
+  "bundle_id": %q,
+  "files": []
+}
+`, manifestType, manifestFormatCurrent+1, bundleID)
+	sig := ed25519.Sign(priv, manifestBytes)
+	writeFile(t, filepath.Join(hs.cfg.Landing, bundleID+".manifest.json"), manifestBytes)
+	writeFile(t, filepath.Join(hs.cfg.Landing, bundleID+".manifest.json.sig"),
+		[]byte(base64.StdEncoding.EncodeToString(sig)+"\n"))
+	// The archive's content is irrelevant: the manifest is refused before
+	// extraction, but the file must exist for the bundle to count as complete.
+	writeFile(t, filepath.Join(hs.cfg.Landing, bundleID+".tar.gz"), []byte("never extracted"))
+
+	_, err := hs.ImportNext()
+	if err == nil || !strings.Contains(err.Error(), "upgrade the ArtiGate high side") {
+		t.Fatalf("import err = %v, want the format upgrade guidance", err)
+	}
+	if !bundleCompleteInDir(hs.cfg.Landing, bundleID) {
+		t.Error("bundle must stay complete in landing so the upgraded binary can import it")
+	}
+	if fileExists(filepath.Join(hs.cfg.Root, "rejected", bundleID+".manifest.json")) {
+		t.Error("a too-new bundle must not be moved to rejected/")
+	}
+}
+
+func TestCheckManifestWireFormat(t *testing.T) {
+	if err := checkManifestWireFormat(fmt.Appendf(nil, `{"format": %d}`, manifestFormatCurrent), "b"); err != nil {
+		t.Errorf("current format refused: %v", err)
+	}
+	if err := checkManifestWireFormat([]byte(`{"type": "go-module-bundle"}`), "b"); err != nil {
+		t.Errorf("legacy manifest without a format field refused: %v", err)
+	}
+	// A newer format is refused off the probe alone, whatever shape the rest
+	// of the manifest takes.
+	err := checkManifestWireFormat(fmt.Appendf(nil, `{"format": %d, "sequence": "no longer a number"}`, manifestFormatCurrent+1), "b")
+	var tooNew *manifestTooNewError
+	if !errors.As(err, &tooNew) {
+		t.Errorf("err = %v, want a manifestTooNewError", err)
+	}
+	// Malformed JSON is not a newer format: the probe stays silent so the
+	// full decode reports it and the bundle is rejected as invalid.
+	if err := checkManifestWireFormat([]byte("not json"), "b"); err != nil {
+		t.Errorf("malformed bytes must defer to the full decode, got %v", err)
 	}
 }
 

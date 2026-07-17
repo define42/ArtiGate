@@ -36,6 +36,12 @@ const (
 // bundle incorrectly; purely informational additions need no bump, and a
 // brand-new ecosystem section needs none either — old high sides already
 // reject its unknown stream by name.
+//
+// One invariant every future format must keep: the manifest stays a JSON
+// object whose top-level "format" member is this plain JSON number. Old high
+// sides probe exactly that member from the signed bytes before decoding
+// anything else (checkManifestWireFormat), so it is the one part of the wire
+// format that can never change shape.
 const manifestFormatCurrent = 1
 
 // Bundle streams. Each ecosystem is its own independently-sequenced stream, so a

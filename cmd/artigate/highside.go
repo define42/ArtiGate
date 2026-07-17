@@ -935,47 +935,21 @@ func (s *HighServer) commitImportedStateLocked(stream, bundleID string, sequence
 	return nil
 }
 
-// loadVerifiedManifest verifies new Ed25519ph manifests from a streaming SHA-512
-// digest before loading their bounded JSON. Raw Ed25519 signatures remain
-// readable so bundles archived by older ArtiGate versions can still be replayed.
+// loadVerifiedManifest returns a bundle's manifest after its signature, wire
+// format, and identity fields all check out, in that order.
 func (s *HighServer) loadVerifiedManifest(manifestPath, sigPath, stream, bundleID string, expectedSeq int64) (BundleManifest, error) {
-	sigB64, err := readFileLimit(sigPath, diodeMaxSignatureBytes)
+	manifestBytes, err := s.readVerifiedManifestBytes(manifestPath, sigPath, bundleID)
 	if err != nil {
 		return BundleManifest{}, err
 	}
-	sigText := strings.TrimSpace(string(sigB64))
-	prehashed := strings.HasPrefix(sigText, manifestSignaturePHPrefix)
-	if prehashed {
-		sigText = strings.TrimPrefix(sigText, manifestSignaturePHPrefix)
-	}
-	sig, err := base64.StdEncoding.DecodeString(sigText)
-	if err != nil {
-		return BundleManifest{}, fmt.Errorf("decode signature: %w", err)
-	}
-	var verifiedDigest []byte
-	if prehashed {
-		verifiedDigest, err = hashFileLimitSHA512(manifestPath, diodeMaxManifestBytes)
-		if err != nil {
-			return BundleManifest{}, err
-		}
-		if err := ed25519.VerifyWithOptions(s.publicKey, verifiedDigest, sig, &ed25519.Options{Hash: crypto.SHA512}); err != nil {
-			return BundleManifest{}, fmt.Errorf("signature verification failed for %s", bundleID)
-		}
-	}
-
-	manifestBytes, err := readFileLimit(manifestPath, diodeMaxManifestBytes)
-	if err != nil {
+	// The wire-format probe must precede the full unmarshal: a newer format
+	// may legitimately change the JSON shape of fields this binary already
+	// knows (that is what a format bump is for), so decoding into the current
+	// BundleManifest schema first would fail on them and terminally reject a
+	// bundle that only needs a high-side upgrade.
+	if err := checkManifestWireFormat(manifestBytes, bundleID); err != nil {
 		return BundleManifest{}, err
 	}
-	if prehashed {
-		got := sha512.Sum512(manifestBytes)
-		if !bytes.Equal(got[:], verifiedDigest) {
-			return BundleManifest{}, fmt.Errorf("manifest %s changed while it was being verified", bundleID)
-		}
-	} else if !ed25519.Verify(s.publicKey, manifestBytes, sig) {
-		return BundleManifest{}, fmt.Errorf("signature verification failed for %s", bundleID)
-	}
-
 	var manifest BundleManifest
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		return BundleManifest{}, err
@@ -984,6 +958,70 @@ func (s *HighServer) loadVerifiedManifest(manifestPath, sigPath, stream, bundleI
 		return BundleManifest{}, err
 	}
 	return manifest, nil
+}
+
+// readVerifiedManifestBytes reads the bounded manifest file and returns its
+// bytes only once the Ed25519 signature checks out. New Ed25519ph manifests
+// are verified from a streaming SHA-512 digest before the JSON is loaded; raw
+// Ed25519 signatures remain readable so bundles archived by older ArtiGate
+// versions can still be replayed.
+func (s *HighServer) readVerifiedManifestBytes(manifestPath, sigPath, bundleID string) ([]byte, error) {
+	sigB64, err := readFileLimit(sigPath, diodeMaxSignatureBytes)
+	if err != nil {
+		return nil, err
+	}
+	sigText := strings.TrimSpace(string(sigB64))
+	prehashed := strings.HasPrefix(sigText, manifestSignaturePHPrefix)
+	if prehashed {
+		sigText = strings.TrimPrefix(sigText, manifestSignaturePHPrefix)
+	}
+	sig, err := base64.StdEncoding.DecodeString(sigText)
+	if err != nil {
+		return nil, fmt.Errorf("decode signature: %w", err)
+	}
+	var verifiedDigest []byte
+	if prehashed {
+		verifiedDigest, err = hashFileLimitSHA512(manifestPath, diodeMaxManifestBytes)
+		if err != nil {
+			return nil, err
+		}
+		if err := ed25519.VerifyWithOptions(s.publicKey, verifiedDigest, sig, &ed25519.Options{Hash: crypto.SHA512}); err != nil {
+			return nil, fmt.Errorf("signature verification failed for %s", bundleID)
+		}
+	}
+
+	manifestBytes, err := readFileLimit(manifestPath, diodeMaxManifestBytes)
+	if err != nil {
+		return nil, err
+	}
+	if prehashed {
+		got := sha512.Sum512(manifestBytes)
+		if !bytes.Equal(got[:], verifiedDigest) {
+			return nil, fmt.Errorf("manifest %s changed while it was being verified", bundleID)
+		}
+	} else if !ed25519.Verify(s.publicKey, manifestBytes, sig) {
+		return nil, fmt.Errorf("signature verification failed for %s", bundleID)
+	}
+	return manifestBytes, nil
+}
+
+// checkManifestWireFormat probes only the "format" member of the verified
+// manifest bytes and refuses formats newer than this binary understands. The
+// probe ignores every other member's shape, so it works on manifests whose
+// other fields no longer decode into this binary's schema. Bytes that fail
+// even the probe are not a newer format but malformed JSON: the error is left
+// to the full decode, which classifies them invalid → rejected.
+func checkManifestWireFormat(manifestBytes []byte, bundleID string) error {
+	var probe struct {
+		Format int `json:"format"`
+	}
+	if json.Unmarshal(manifestBytes, &probe) != nil {
+		return nil
+	}
+	if probe.Format > manifestFormatCurrent {
+		return &manifestTooNewError{bundleID: bundleID, format: probe.Format}
+	}
+	return nil
 }
 
 func hashFileLimitSHA512(name string, limit int64) ([]byte, error) {
@@ -1030,8 +1068,10 @@ func manifestStream(m BundleManifest) string {
 
 // checkManifestFields validates the manifest's wire format, type, stream,
 // sequencing, and identity against what the importer expects next for that
-// stream. The format check runs first: on a newer format none of the other
-// fields can be trusted to mean what this binary thinks they mean.
+// stream. The format check runs first — on a newer format none of the other
+// fields can be trusted to mean what this binary thinks they mean. It is a
+// backstop: the authoritative refusal is checkManifestWireFormat, which
+// probes the verified bytes before they are decoded into this schema at all.
 func (s *HighServer) checkManifestFields(manifest BundleManifest, stream, bundleID string, expectedSeq int64) error {
 	if manifest.Format > manifestFormatCurrent {
 		return &manifestTooNewError{bundleID: bundleID, format: manifest.Format}
