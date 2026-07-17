@@ -46,7 +46,7 @@ ArtiGate mirrors **conda channels** across a data diode. The low side fetches a 
 | `auth` | object | One-shot HTTP Basic login for a private channel (`{"username": "…", "password": "…"}`, optional `host`) — used for this collect only, never stored |
 | `force` | bool | Bypass the export-dedup index (full, self-contained bundle) |
 
-**Spec syntax** is a pragmatic MatchSpec subset: `numpy` (newest), `numpy==1.26.4` (exact — `==1.2` also matches `1.2.0`), `numpy=1.26` / `1.26.*` / `2.7*` (prefix), `pandas>=2.0,<3` (comma = AND) with operators `==`, `!=`, `>=`, `<=`, `>`, `<`, `=`, and `*` for any. `|` alternation and mid-string wildcards are rejected.
+**Spec syntax** is a pragmatic MatchSpec subset — every spec is a package name, optionally followed by version constraints: `numpy` (newest), `numpy==1.26.4` (exact — `==1.2` also matches `1.2.0`), `numpy=1.26` / `numpy=1.26.*` / `python=2.7*` (prefix), `pandas>=2.0,<3` (comma = AND) with operators `==`, `!=`, `>=`, `<=`, `>`, `<`, `=`, and `*` for any. A bare version glob without a name (`1.26.*` alone) is rejected as an invalid package name; `|` alternation and mid-string wildcards are rejected too.
 
 Scheduled [watches](../scheduling.md) re-run a stored collect; a watch spec may not embed `auth` — standing credentials for private channels go in `ARTIGATE_UPSTREAM_AUTH` (`host=user:password`, the same variable the git/APT/RPM/Alpine streams use). URLs embedding `user:pass@` are rejected.
 
