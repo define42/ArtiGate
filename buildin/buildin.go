@@ -38,6 +38,9 @@ func catalog() map[string][]Entry {
 			{Label: "Ubuntu 22.04 LTS (jammy) - full archive", File: "apt/ubuntu_jammy_full.sources"},
 			{Label: "Ubuntu 22.04 LTS (jammy) - main component only", File: "apt/ubuntu_jammy_main.sources"},
 			{Label: "Ubuntu 22.04 LTS (jammy) - security updates only", File: "apt/ubuntu_jammy_security.sources"},
+			{Label: "Docker CE - Ubuntu 26.04 (resolute)", File: "apt/docker_ce_resolute.sources"},
+			{Label: "Docker CE - Ubuntu 24.04 (noble)", File: "apt/docker_ce_noble.sources"},
+			{Label: "Docker CE - Ubuntu 22.04 (jammy)", File: "apt/docker_ce_jammy.sources"},
 		},
 		"rpm": {
 			{Label: "Rocky Linux 10 - BaseOS, AppStream, CRB and extras", File: "rpm/rocky10_full.repo"},
@@ -50,6 +53,8 @@ func catalog() map[string][]Entry {
 			{Label: "Rocky Linux 9 - AppStream", File: "rpm/rocky9_appstream.repo"},
 			{Label: "Rocky Linux 9 - CRB", File: "rpm/rocky9_crb.repo"},
 			{Label: "Rocky Linux 9 - extras", File: "rpm/rocky9_extras.repo"},
+			{Label: "Docker CE - EL10 (Rocky/RHEL 10)", File: "rpm/docker_ce_el10.repo"},
+			{Label: "Docker CE - EL9 (Rocky/RHEL 9)", File: "rpm/docker_ce_el9.repo"},
 		},
 	}
 }
