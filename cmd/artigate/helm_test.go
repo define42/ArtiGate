@@ -76,13 +76,15 @@ func helmTestChartTgzNamed(t *testing.T, dir, chartName, version string) []byte 
 
 // helmTestEntry describes one chart version to publish from a fake repository:
 // the bytes served at its URL and the digest string written into index.yaml
-// ("" omits the digest, exercising the unverified download path).
+// ("" omits the digest, exercising the unverified download path). A non-nil
+// prov is served at the chart URL's .prov sibling.
 type helmTestEntry struct {
 	name    string
 	version string
 	digest  string
 	body    []byte
 	url     string
+	prov    []byte
 }
 
 // fakeHelmRepo serves an upstream Helm chart repository: an index.yaml built by
@@ -106,6 +108,9 @@ func fakeHelmRepo(t *testing.T, entries []helmTestEntry) *httptest.Server {
 		}
 		body := e.body
 		mux.HandleFunc("/"+u, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
+		if prov := e.prov; prov != nil {
+			mux.HandleFunc("/"+u+".prov", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(prov) })
+		}
 	}
 	idx, err := yaml.Marshal(map[string]any{"apiVersion": "v1", "entries": byName})
 	if err != nil {
@@ -456,6 +461,103 @@ func TestHelmLowToHighPipeline(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("POST index.yaml status %d, want 405", resp.StatusCode)
+	}
+}
+
+// TestHelmProvenancePipeline mirrors a chart whose upstream publishes a .prov
+// provenance file and asserts the whole verify path: the prov rides the
+// bundle, the regenerated index advertises the chart under its original
+// "<name>-<version>.tgz" packaging name (the basename `helm pull --verify`
+// checks against the prov's signed file list), and both that alias and its
+// .prov sibling serve the stored bytes — alongside the canonical stem.
+func TestHelmProvenancePipeline(t *testing.T) {
+	web := helmTestChartTgz(t, "web", "1.0.0")
+	prov := []byte("-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nfiles:\n  web-1.0.0.tgz: sha256:" +
+		helmTestSHA256(web) + "\n-----BEGIN PGP SIGNATURE-----\n\nfake\n-----END PGP SIGNATURE-----\n")
+	plain := helmTestChartTgz(t, "db", "0.5.0")
+	repo := fakeHelmRepo(t, []helmTestEntry{
+		{name: "web", version: "1.0.0", digest: "sha256:" + helmTestSHA256(web), body: web, prov: prov},
+		{name: "db", version: "0.5.0", digest: "sha256:" + helmTestSHA256(plain), body: plain},
+	})
+
+	ls, priv := newHelmLowServer(t)
+	res, err := ls.CollectHelm(context.Background(), HelmCollectRequest{URL: repo.URL, Charts: []string{"web", "db"}})
+	if err != nil {
+		t.Fatalf("CollectHelm: %v", err)
+	}
+	mirror := helmMirrorFromExport(t, ls, res.BundleID)
+	m := readBundleManifest(t, ls, res.BundleID)
+	var webChart, dbChart HelmChart
+	for _, c := range m.Helm.Repos[0].Charts {
+		switch c.Name {
+		case "web":
+			webChart = c
+		case "db":
+			dbChart = c
+		}
+	}
+	wantProvPath := "helm/" + mirror + "/charts/web_1.0.0.tgz.prov"
+	if webChart.ProvPath != wantProvPath {
+		t.Fatalf("web prov path = %q, want %q", webChart.ProvPath, wantProvPath)
+	}
+	if dbChart.ProvPath != "" {
+		t.Fatalf("db must have no provenance, got %q", dbChart.ProvPath)
+	}
+
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	transferAptBundle(t, ls, hs, res.BundleID)
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	code, body := httpGet(t, srv.URL+"/helm/"+mirror+"/index.yaml")
+	if code != http.StatusOK {
+		t.Fatalf("index.yaml status %d", code)
+	}
+	var idx helmIndex
+	if err := yaml.Unmarshal([]byte(body), &idx); err != nil {
+		t.Fatal(err)
+	}
+	urls, _ := helmFindEntry(t, idx, "web", "1.0.0")["urls"].([]any)
+	if len(urls) != 1 || urls[0] != "charts/web-1.0.0.tgz" {
+		t.Fatalf("signed chart url = %v, want charts/web-1.0.0.tgz", urls)
+	}
+	dbURLs, _ := helmFindEntry(t, idx, "db", "0.5.0")["urls"].([]any)
+	if len(dbURLs) != 1 || dbURLs[0] != "charts/db_0.5.0.tgz" {
+		t.Fatalf("unsigned chart url = %v, want charts/db_0.5.0.tgz", dbURLs)
+	}
+
+	// The advertised alias and its .prov sibling serve the stored bytes; the
+	// canonical stem keeps serving too.
+	assertHTTPBody(t, srv.URL+"/helm/"+mirror+"/charts/web-1.0.0.tgz", string(web))
+	assertHTTPBody(t, srv.URL+"/helm/"+mirror+"/charts/web-1.0.0.tgz.prov", string(prov))
+	assertHTTPBody(t, srv.URL+"/helm/"+mirror+"/charts/web_1.0.0.tgz", string(web))
+	assertHTTPBody(t, srv.URL+"/helm/"+mirror+"/charts/web_1.0.0.tgz.prov", string(prov))
+	// A prov for a chart that has none 404s.
+	assertHTTPStatus(t, srv.URL+"/helm/"+mirror+"/charts/db-0.5.0.tgz.prov", http.StatusNotFound)
+}
+
+// TestValidateHelmChartProvenance covers the prov-path shape checks.
+func TestValidateHelmChartProvenance(t *testing.T) {
+	chart := HelmChart{
+		Name: "web", Version: "1.0.0", Filename: "web_1.0.0.tgz",
+		Path: "helm/up/charts/web_1.0.0.tgz", SHA256: strings.Repeat("a", 64),
+	}
+	seen := map[string]bool{chart.Path: true, chart.Path + ".prov": true}
+	chart.ProvPath = chart.Path + ".prov"
+	if err := validateHelmChart("up", chart, seen); err != nil {
+		t.Fatalf("valid prov rejected: %v", err)
+	}
+	bad := chart
+	bad.ProvPath = "helm/up/charts/other.tgz.prov"
+	if err := validateHelmChart("up", bad, seen); err == nil {
+		t.Error("non-canonical prov path accepted")
+	}
+	if err := validateHelmChart("up", chart, map[string]bool{chart.Path: true}); err == nil {
+		t.Error("unlisted prov file accepted")
 	}
 }
 

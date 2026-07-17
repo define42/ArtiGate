@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -380,6 +381,168 @@ func newContainerLowServer(t *testing.T, registryBases map[string]string) (*LowS
 }
 
 // -----------------------------------------------------------------------------
+// Fake attached artifacts (cosign signatures, attestations, referrers)
+// -----------------------------------------------------------------------------
+
+// fakeArtifact is one attached artifact: an opaque config, one payload layer,
+// and the OCI image manifest referencing them — the shape cosign signatures,
+// in-toto attestations, and SBOMs all share.
+type fakeArtifact struct {
+	config, layer, manifest []byte
+	digest                  string
+}
+
+// makeFakeArtifact builds an attached-artifact manifest. The config content
+// embeds the layer content so distinct artifacts never share a config blob
+// (http.ServeMux rejects duplicate handler patterns).
+func makeFakeArtifact(layerMediaType, layerContent, artifactType string, annotations map[string]string) fakeArtifact {
+	art := fakeArtifact{
+		config: []byte(`{"artifact-config-for":"` + layerContent + `"}`),
+		layer:  []byte(layerContent),
+	}
+	manifest := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     mtOCIManifest,
+		"config": map[string]any{
+			"mediaType": "application/vnd.oci.image.config.v1+json",
+			"digest":    containerSHA(art.config),
+			"size":      len(art.config),
+		},
+		"layers": []map[string]any{{
+			"mediaType": layerMediaType,
+			"digest":    containerSHA(art.layer),
+			"size":      len(art.layer),
+		}},
+	}
+	if artifactType != "" {
+		manifest["artifactType"] = artifactType
+	}
+	if len(annotations) > 0 {
+		manifest["annotations"] = annotations
+	}
+	art.manifest, _ = json.Marshal(manifest)
+	art.digest = containerSHA(art.manifest)
+	return art
+}
+
+// fakeRegistryServe wraps a static body behind the fake token check.
+func fakeRegistryServe(body []byte, contentType string, requireToken func(*http.Request) bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireToken(r) {
+			w.Header().Set("Www-Authenticate", `Bearer realm="/token-not-set",service="test"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		_, _ = w.Write(body)
+	}
+}
+
+// registerFakeArtifact serves an artifact's manifest (by digest and, when tag
+// is non-empty, by tag) plus its config and layer blobs.
+func registerFakeArtifact(mux *http.ServeMux, repo, tag string, art fakeArtifact, requireToken func(*http.Request) bool) {
+	if tag != "" {
+		mux.HandleFunc("/v2/"+repo+"/manifests/"+tag, fakeRegistryServe(art.manifest, mtOCIManifest, requireToken))
+	}
+	mux.HandleFunc("/v2/"+repo+"/manifests/"+art.digest, fakeRegistryServe(art.manifest, mtOCIManifest, requireToken))
+	mux.HandleFunc("/v2/"+repo+"/blobs/"+containerSHA(art.config), fakeRegistryServe(art.config, "application/octet-stream", requireToken))
+	mux.HandleFunc("/v2/"+repo+"/blobs/"+containerSHA(art.layer), fakeRegistryServe(art.layer, "application/octet-stream", requireToken))
+}
+
+// makeFakeSignedImage builds a fake image whose index also carries a
+// buildkit-style attestation entry (platform unknown/unknown, annotated with
+// vnd.docker.reference.*) pointing at the amd64 manifest.
+func makeFakeSignedImage(layerContent string) (fakeImage, fakeArtifact) {
+	img := makeFakeImage(layerContent)
+	att := makeFakeArtifact("application/vnd.in-toto+json", "in-toto-provenance-"+layerContent, "", nil)
+	index := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     mtOCIIndex,
+		"manifests": []map[string]any{
+			{
+				"mediaType": mtDockerManifest,
+				"digest":    img.manifestDigest,
+				"size":      len(img.manifest),
+				"platform":  map[string]string{"architecture": "amd64", "os": "linux"},
+			},
+			{
+				"mediaType": mtOCIManifest,
+				"digest":    att.digest,
+				"size":      len(att.manifest),
+				"platform":  map[string]string{"architecture": "unknown", "os": "unknown"},
+				"annotations": map[string]string{
+					"vnd.docker.reference.type":   "attestation-manifest",
+					"vnd.docker.reference.digest": img.manifestDigest,
+				},
+			},
+		},
+	}
+	img.index, _ = json.Marshal(index)
+	return img, att
+}
+
+// newFakeRegistry returns a hand-wired fake registry: a mux with the
+// anonymous token flow installed, the token check for registering handlers,
+// and the running server.
+func newFakeRegistry(t *testing.T) (*http.ServeMux, func(*http.Request) bool, *httptest.Server) {
+	t.Helper()
+	const token = "fake-pull-token"
+	mux := http.NewServeMux()
+	requireToken := func(r *http.Request) bool { return r.Header.Get("Authorization") == "Bearer "+token }
+	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]string{"token": token})
+	})
+	var srv *httptest.Server
+	srv = httptest.NewServer(rewriteChallengeRealm(mux, func() string { return srv.URL }))
+	t.Cleanup(srv.Close)
+	return mux, requireToken, srv
+}
+
+// signedImageFixture is everything the artifact tests need: the image, its
+// buildkit attestation, the cosign tag-scheme signature on the index digest,
+// and a referrers-API attestation on the amd64 manifest digest.
+type signedImageFixture struct {
+	img         fakeImage
+	indexDigest string
+	att         fakeArtifact // buildkit attestation (index entry, subject amd64)
+	sig         fakeArtifact // cosign .sig tag on the index digest
+	refAtt      fakeArtifact // referrers-API artifact on the amd64 digest
+}
+
+// newSignedImageRegistry wires a fake registry serving library/signed:1.0
+// with all three artifact discovery schemes populated.
+func newSignedImageRegistry(t *testing.T) (signedImageFixture, *httptest.Server) {
+	t.Helper()
+	img, att := makeFakeSignedImage("layer-signed")
+	fix := signedImageFixture{
+		img:         img,
+		indexDigest: containerSHA(img.index),
+		att:         att,
+		sig:         makeFakeArtifact("application/vnd.dev.cosign.simplesigning.v1+json", "cosign-signature-payload", "", nil),
+		refAtt:      makeFakeArtifact("application/vnd.dsse.envelope.v1+json", "dsse-attestation-payload", "application/vnd.in-toto+json", nil),
+	}
+	mux, requireToken, srv := newFakeRegistry(t)
+	const repo = "library/signed"
+	registerFakeImage(mux, repo, "1.0", img, requireToken)
+	registerFakeArtifact(mux, repo, "", att, requireToken)
+	registerFakeArtifact(mux, repo, cosignArtifactTag(fix.indexDigest, ".sig"), fix.sig, requireToken)
+	registerFakeArtifact(mux, repo, "", fix.refAtt, requireToken)
+	referrers := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     mtOCIIndex,
+		"manifests": []map[string]any{{
+			"mediaType":    mtOCIManifest,
+			"digest":       fix.refAtt.digest,
+			"size":         len(fix.refAtt.manifest),
+			"artifactType": "application/vnd.in-toto+json",
+		}},
+	}
+	referrersBody, _ := json.Marshal(referrers)
+	mux.HandleFunc("/v2/"+repo+"/referrers/"+img.manifestDigest, fakeRegistryServe(referrersBody, mtOCIIndex, requireToken))
+	return fix, srv
+}
+
+// -----------------------------------------------------------------------------
 // Low side: collect
 // -----------------------------------------------------------------------------
 
@@ -407,7 +570,13 @@ func TestCollectContainers(t *testing.T) {
 	if len(repo.Images) != 1 || repo.Images[0].Tag != "3.20" || repo.Images[0].Digest != img.manifestDigest {
 		t.Fatalf("image record = %+v", repo.Images)
 	}
-	assertContentAddressedFiles(t, m.Files, 3) // manifest + config + layer
+	// The multi-platform index the tag resolved through is preserved, so the
+	// high side can serve the tag under its upstream digest.
+	idx := repo.Images[0].Index
+	if idx == nil || idx.Digest != containerSHA(img.index) || idx.MediaType != mtDockerList {
+		t.Fatalf("index record = %+v, want digest %s", idx, containerSHA(img.index))
+	}
+	assertContentAddressedFiles(t, m.Files, 4) // manifest + config + layer + index
 }
 
 func readBundleManifest(t *testing.T, ls *LowServer, bundleID string) BundleManifest {
@@ -632,12 +801,14 @@ func TestLowToHighContainerPipeline(t *testing.T) {
 	}
 	assertManifestByTag(t, srv.URL, alpine)
 
-	// Manifest by digest, blob by digest.
+	// Manifest by digest (amd64 image and preserved index), blob by digest.
 	assertHTTPBody(t, srv.URL+"/v2/docker.io/library/alpine/manifests/"+alpine.manifestDigest, string(alpine.manifest))
+	assertHTTPBody(t, srv.URL+"/v2/docker.io/library/alpine/manifests/"+containerSHA(alpine.index), string(alpine.index))
 	assertHTTPBody(t, srv.URL+"/v2/docker.io/library/alpine/blobs/"+containerSHA(alpine.layer), string(alpine.layer))
 
 	// The second upstream lives in its own namespace.
-	assertHTTPBody(t, srv.URL+"/v2/ghcr.io/org/app/manifests/v1", string(app.manifest))
+	assertHTTPBody(t, srv.URL+"/v2/ghcr.io/org/app/manifests/v1", string(app.index))
+	assertHTTPBody(t, srv.URL+"/v2/ghcr.io/org/app/manifests/"+app.manifestDigest, string(app.manifest))
 
 	// Namespaces do not mix: alpine is not visible under ghcr.io, and one
 	// repo cannot read another's blobs even though the store is shared.
@@ -657,7 +828,10 @@ func TestLowToHighContainerPipeline(t *testing.T) {
 }
 
 // assertManifestByTag pulls a manifest by tag and checks the body and the
-// Docker-Content-Digest / Content-Type headers docker relies on.
+// Docker-Content-Digest / Content-Type headers docker relies on. A tag whose
+// upstream reference was a multi-platform index serves the preserved index
+// bytes, so the digest a client resolves — and any cosign signature over it —
+// matches upstream; docker follows it to the amd64 manifest by digest.
 func assertManifestByTag(t *testing.T, base string, img fakeImage) {
 	t.Helper()
 	resp, err := http.Get(base + "/v2/docker.io/library/alpine/manifests/3.20") //nolint:noctx // test request
@@ -665,13 +839,13 @@ func assertManifestByTag(t *testing.T, base string, img fakeImage) {
 		t.Fatal(err)
 	}
 	body := readAllString(t, resp)
-	if resp.StatusCode != http.StatusOK || body != string(img.manifest) {
+	if resp.StatusCode != http.StatusOK || body != string(img.index) {
 		t.Fatalf("manifest by tag: %d %q", resp.StatusCode, body)
 	}
-	if got := resp.Header.Get("Docker-Content-Digest"); got != img.manifestDigest {
-		t.Errorf("Docker-Content-Digest = %q, want %q", got, img.manifestDigest)
+	if got := resp.Header.Get("Docker-Content-Digest"); got != containerSHA(img.index) {
+		t.Errorf("Docker-Content-Digest = %q, want %q", got, containerSHA(img.index))
 	}
-	if got := resp.Header.Get("Content-Type"); got != mtDockerManifest {
+	if got := resp.Header.Get("Content-Type"); got != mtDockerList {
 		t.Errorf("Content-Type = %q", got)
 	}
 }
@@ -972,6 +1146,401 @@ func TestValidateContainerRepos(t *testing.T) {
 	tampered := []ManifestFile{files[0], {Path: files[1].Path, SHA256: strings.Repeat("00", 32), Size: 1}}
 	if err := validateContainerRepos(repos, seen, tampered); err == nil {
 		t.Error("mismatched blob sha256 should be rejected")
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Attached artifacts: collect, serve, referrers API
+// -----------------------------------------------------------------------------
+
+// TestCollectContainersMirrorsAttachedArtifacts collects an image carrying a
+// buildkit attestation (index entry), a cosign tag-scheme signature on the
+// index digest, and a referrers-API attestation on the amd64 manifest, and
+// checks all three land in the bundle with the right subjects.
+func TestCollectContainersMirrorsAttachedArtifacts(t *testing.T) {
+	fix, srv := newSignedImageRegistry(t)
+	ls, _ := newContainerLowServer(t, map[string]string{"docker.io": srv.URL})
+
+	res, err := ls.CollectContainers(context.Background(), ContainerCollectRequest{Images: []string{"signed:1.0"}})
+	if err != nil {
+		t.Fatalf("CollectContainers: %v", err)
+	}
+	m := readBundleManifest(t, ls, res.BundleID)
+	img := m.Containers.Repos[0].Images[0]
+	if img.Index == nil || img.Index.Digest != fix.indexDigest {
+		t.Fatalf("index record = %+v, want digest %s", img.Index, fix.indexDigest)
+	}
+	if len(img.Artifacts) != 3 {
+		t.Fatalf("artifacts = %+v, want 3", img.Artifacts)
+	}
+	byDigest := map[string]ContainerArtifact{}
+	for _, a := range img.Artifacts {
+		byDigest[a.Digest] = a
+	}
+
+	att := byDigest[fix.att.digest]
+	if att.Subject != fix.img.manifestDigest || att.Tag != "" || att.MediaType != mtOCIManifest {
+		t.Errorf("buildkit attestation record = %+v", att)
+	}
+	if att.Annotations["vnd.docker.reference.type"] != "attestation-manifest" {
+		t.Errorf("attestation annotations lost the index entry's markers: %+v", att.Annotations)
+	}
+	if containerArtifactKind(att) != "attestation" {
+		t.Errorf("attestation classified as %q", containerArtifactKind(att))
+	}
+
+	sig := byDigest[fix.sig.digest]
+	if sig.Subject != fix.indexDigest || sig.Tag != cosignArtifactTag(fix.indexDigest, ".sig") {
+		t.Errorf("cosign signature record = %+v", sig)
+	}
+	if len(sig.Blobs) != 2 { // config + payload layer
+		t.Errorf("signature blobs = %+v", sig.Blobs)
+	}
+
+	refAtt := byDigest[fix.refAtt.digest]
+	if refAtt.Subject != fix.img.manifestDigest || refAtt.ArtifactType != "application/vnd.in-toto+json" {
+		t.Errorf("referrers artifact record = %+v", refAtt)
+	}
+
+	// image manifest+config+layer+index, plus 3 artifacts × (manifest+config+layer).
+	assertContentAddressedFiles(t, m.Files, 13)
+}
+
+// collectAndImportSignedContainer runs the signed-image fixture through the
+// full pipeline onto a fresh high server.
+func collectAndImportSignedContainer(t *testing.T) (*HighServer, signedImageFixture) {
+	t.Helper()
+	fix, srv := newSignedImageRegistry(t)
+	ls, priv := newContainerLowServer(t, map[string]string{"docker.io": srv.URL})
+	res, err := ls.CollectContainers(context.Background(), ContainerCollectRequest{Images: []string{"signed:1.0"}})
+	if err != nil {
+		t.Fatalf("CollectContainers: %v", err)
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	for _, suffix := range bundleSuffixes() {
+		name := res.BundleID + suffix
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, name), b)
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("high import of signed container bundle failed: %v", err)
+	}
+	return hs, fix
+}
+
+// TestContainerArtifactServing pulls the mirrored artifacts back out of the
+// high side the way clients do: the tag resolves to the preserved index,
+// cosign's tag scheme serves the signature, and buildkit attestations are
+// fetchable by digest with their blobs.
+func TestContainerArtifactServing(t *testing.T) {
+	hs, fix := collectAndImportSignedContainer(t)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	base := srv.URL + "/v2/docker.io/library/signed"
+
+	// The tag serves the preserved index — upstream's digest, byte for byte.
+	assertHTTPBody(t, base+"/manifests/1.0", string(fix.img.index))
+	// Cosign's default (tag-scheme) discovery finds the signature.
+	assertHTTPBody(t, base+"/manifests/"+cosignArtifactTag(fix.indexDigest, ".sig"), string(fix.sig.manifest))
+	// The buildkit attestation and the referrers artifact resolve by digest.
+	assertHTTPBody(t, base+"/manifests/"+fix.att.digest, string(fix.att.manifest))
+	assertHTTPBody(t, base+"/manifests/"+fix.refAtt.digest, string(fix.refAtt.manifest))
+	// Artifact payload blobs pass the per-repo blob ACL.
+	assertHTTPBody(t, base+"/blobs/"+containerSHA(fix.sig.layer), string(fix.sig.layer))
+	assertHTTPBody(t, base+"/blobs/"+containerSHA(fix.att.config), string(fix.att.config))
+	// The artifact tags stay out of tags/list — they are not pullable images.
+	code, got := httpGet(t, base+"/tags/list")
+	if code != http.StatusOK || strings.Contains(got, ".sig") {
+		t.Fatalf("tags/list = %d %q", code, got)
+	}
+}
+
+// fetchReferrersIndex GETs a referrers URL and decodes the OCI index reply.
+func fetchReferrersIndex(t *testing.T, url string) (*http.Response, ociReferrersIndex) {
+	t.Helper()
+	resp, err := http.Get(url) //nolint:noctx // test request
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := readAllString(t, resp)
+	var index ociReferrersIndex
+	if resp.StatusCode == http.StatusOK {
+		if err := json.Unmarshal([]byte(body), &index); err != nil {
+			t.Fatalf("parse referrers index %q: %v", body, err)
+		}
+	}
+	return resp, index
+}
+
+// TestContainerReferrersEndpoint exercises GET /v2/<name>/referrers/<digest>:
+// per-subject listings, the artifactType filter, the empty index for a
+// subject with nothing attached, and the error shapes.
+func TestContainerReferrersEndpoint(t *testing.T) {
+	hs, fix := collectAndImportSignedContainer(t)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	base := srv.URL + "/v2/docker.io/library/signed/referrers/"
+
+	// The index digest carries the cosign signature.
+	resp, index := fetchReferrersIndex(t, base+fix.indexDigest)
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != mtOCIIndex {
+		t.Fatalf("referrers(index) = %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	if index.SchemaVersion != 2 || index.MediaType != mtOCIIndex || len(index.Manifests) != 1 || index.Manifests[0].Digest != fix.sig.digest {
+		t.Fatalf("referrers(index) body = %+v", index)
+	}
+
+	// The amd64 manifest digest carries both attestations.
+	_, index = fetchReferrersIndex(t, base+fix.img.manifestDigest)
+	if len(index.Manifests) != 2 {
+		t.Fatalf("referrers(amd64) = %+v", index.Manifests)
+	}
+
+	// artifactType filters, and the response says so.
+	resp, index = fetchReferrersIndex(t, base+fix.img.manifestDigest+"?artifactType=application%2Fvnd.in-toto%2Bjson")
+	if resp.Header.Get("OCI-Filters-Applied") != "artifactType" {
+		t.Errorf("filtered response missing OCI-Filters-Applied header")
+	}
+	if len(index.Manifests) != 1 || index.Manifests[0].Digest != fix.refAtt.digest || index.Manifests[0].ArtifactType != "application/vnd.in-toto+json" {
+		t.Fatalf("filtered referrers = %+v", index.Manifests)
+	}
+
+	// A subject with nothing attached gets an empty index (the API is
+	// supported; there is just nothing to list), never a 404.
+	resp, index = fetchReferrersIndex(t, base+containerSHA([]byte("unattached")))
+	if resp.StatusCode != http.StatusOK || index.Manifests == nil || len(index.Manifests) != 0 {
+		t.Fatalf("referrers(unattached) = %d %+v", resp.StatusCode, index)
+	}
+
+	// Error shapes: malformed digest and unknown repository.
+	assertHTTPStatus(t, base+"not-a-digest", http.StatusBadRequest)
+	assertHTTPStatus(t, srv.URL+"/v2/docker.io/library/nope/referrers/"+fix.indexDigest, http.StatusNotFound)
+}
+
+// TestCollectContainersArtifactFailureIsNonFatal breaks the signature fetch:
+// the image must still mirror (verification then fails closed on the high
+// side), with no artifact recorded.
+func TestCollectContainersArtifactFailureIsNonFatal(t *testing.T) {
+	img := makeFakeImage("layer-flaky")
+	mux, requireToken, srv := newFakeRegistry(t)
+	registerFakeImage(mux, "library/flaky", "1.0", img, requireToken)
+	mux.HandleFunc("/v2/library/flaky/manifests/"+cosignArtifactTag(containerSHA(img.index), ".sig"),
+		func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) })
+
+	ls, _ := newContainerLowServer(t, map[string]string{"docker.io": srv.URL})
+	res, err := ls.CollectContainers(context.Background(), ContainerCollectRequest{Images: []string{"flaky:1.0"}})
+	if err != nil || res.ExportedModules != 1 {
+		t.Fatalf("collect with a failing artifact = %+v, %v", res, err)
+	}
+	if arts := readBundleManifest(t, ls, res.BundleID).Containers.Repos[0].Images[0].Artifacts; len(arts) != 0 {
+		t.Fatalf("failed artifact must not be recorded: %+v", arts)
+	}
+}
+
+// TestValidateContainerArtifactsAndIndex checks the import-side validation of
+// the new records: every referenced blob must be in the verified file set and
+// every identity field must keep its shape.
+func TestValidateContainerArtifactsAndIndex(t *testing.T) {
+	imgDigest := containerSHA([]byte("m"))
+	blob := containerSHA([]byte("b"))
+	idxDigest := containerSHA([]byte("i"))
+	artDigest := containerSHA([]byte("a"))
+	artBlob := containerSHA([]byte("ab"))
+	base := func() []ContainerRepo {
+		return []ContainerRepo{{
+			Registry: "docker.io", Repository: "library/signed",
+			Images: []ContainerImage{{
+				Tag: "1.0", Digest: imgDigest, MediaType: mtDockerManifest,
+				Blobs: []ContainerBlob{{Digest: blob, Size: 1}},
+				Index: &ContainerIndex{Digest: idxDigest, MediaType: mtOCIIndex, Size: 1},
+				Artifacts: []ContainerArtifact{{
+					Subject: idxDigest, Tag: cosignArtifactTag(idxDigest, ".sig"),
+					Digest: artDigest, MediaType: mtOCIManifest, Size: 1,
+					Blobs: []ContainerBlob{{Digest: artBlob, Size: 1}},
+				}},
+			}},
+		}}
+	}
+	var files []ManifestFile
+	seen := map[string]bool{}
+	for _, d := range []string{imgDigest, blob, idxDigest, artDigest, artBlob} {
+		f := ManifestFile{Path: containerBlobRel(d), SHA256: strings.TrimPrefix(d, "sha256:"), Size: 1}
+		files = append(files, f)
+		seen[f.Path] = true
+	}
+	if err := validateContainerRepos(base(), seen, files); err != nil {
+		t.Fatalf("valid repos rejected: %v", err)
+	}
+
+	missing := containerSHA([]byte("not-in-files"))
+	tests := []struct {
+		name   string
+		mutate func([]ContainerRepo)
+	}{
+		{"artifact manifest missing from files", func(r []ContainerRepo) { r[0].Images[0].Artifacts[0].Digest = missing }},
+		{"artifact blob missing from files", func(r []ContainerRepo) { r[0].Images[0].Artifacts[0].Blobs[0].Digest = missing }},
+		{"invalid artifact subject", func(r []ContainerRepo) { r[0].Images[0].Artifacts[0].Subject = "not-a-digest" }},
+		{"invalid artifact tag", func(r []ContainerRepo) { r[0].Images[0].Artifacts[0].Tag = "bad tag" }},
+		{"artifact media type not a manifest", func(r []ContainerRepo) { r[0].Images[0].Artifacts[0].MediaType = mtOCIIndex }},
+		{"index blob missing from files", func(r []ContainerRepo) { r[0].Images[0].Index.Digest = missing }},
+		{"index media type not an index", func(r []ContainerRepo) { r[0].Images[0].Index.MediaType = mtOCIManifest }},
+	}
+	for _, tt := range tests {
+		repos := base()
+		tt.mutate(repos)
+		if err := validateContainerRepos(repos, seen, files); err == nil {
+			t.Errorf("%s should be rejected", tt.name)
+		}
+	}
+}
+
+func TestCosignArtifactTag(t *testing.T) {
+	hex := strings.Repeat("ab", 32)
+	if got := cosignArtifactTag("sha256:"+hex, ".sig"); got != "sha256-"+hex+".sig" {
+		t.Fatalf("cosignArtifactTag = %q", got)
+	}
+	if got := cosignArtifactTag("sha256:"+hex, ""); got != "sha256-"+hex {
+		t.Fatalf("fallback tag = %q", got)
+	}
+	// The rendered names must be valid tags, or the high side could never
+	// serve them back.
+	for _, suffix := range []string{".sig", ".att", ".sbom", ""} {
+		if tag := cosignArtifactTag("sha256:"+hex, suffix); !containerTagRE.MatchString(tag) {
+			t.Errorf("tag %q fails the tag grammar", tag)
+		}
+	}
+}
+
+func TestIndexAttestationEntries(t *testing.T) {
+	amd := "sha256:" + strings.Repeat("aa", 32)
+	entries := []ociDescriptor{
+		{Digest: "sha256:" + strings.Repeat("11", 32), Annotations: map[string]string{
+			"vnd.docker.reference.type": "attestation-manifest", "vnd.docker.reference.digest": amd,
+		}},
+		{Digest: "sha256:" + strings.Repeat("22", 32), Annotations: map[string]string{
+			"vnd.docker.reference.type":   "attestation-manifest",
+			"vnd.docker.reference.digest": "sha256:" + strings.Repeat("33", 32), // another platform's
+		}},
+		{Digest: amd, Platform: &ociPlatform{OS: "linux", Architecture: "amd64"}},
+	}
+	got := indexAttestationEntries(entries, amd)
+	if len(got) != 1 || got[0].Digest != entries[0].Digest {
+		t.Fatalf("indexAttestationEntries = %+v", got)
+	}
+}
+
+func TestContainerArtifactKind(t *testing.T) {
+	tests := []struct {
+		art  ContainerArtifact
+		want string
+	}{
+		{ContainerArtifact{Tag: "sha256-ab.sig"}, "signature"},
+		{ContainerArtifact{Tag: "sha256-ab.att"}, "attestation"},
+		{ContainerArtifact{Tag: "sha256-ab.sbom"}, "sbom"},
+		{ContainerArtifact{Annotations: map[string]string{"vnd.docker.reference.type": "attestation-manifest"}}, "attestation"},
+		{ContainerArtifact{ArtifactType: "application/vnd.in-toto+json"}, "attestation"},
+		{ContainerArtifact{ArtifactType: "application/spdx+json"}, "sbom"},
+		{ContainerArtifact{ArtifactType: "application/vnd.dev.cosign.simplesigning.v1+json"}, "signature"},
+		{ContainerArtifact{ArtifactType: "application/vnd.oci.image.config.v1+json"}, "artifact"},
+	}
+	for _, tt := range tests {
+		if got := containerArtifactKind(tt.art); got != tt.want {
+			t.Errorf("containerArtifactKind(%+v) = %q, want %q", tt.art, got, tt.want)
+		}
+	}
+	if got := summarizeContainerArtifacts([]ContainerArtifact{
+		{Tag: "x.sig"}, {Tag: "y.att"}, {Tag: "z.att"},
+	}); got != "1 signature, 2 attestations" {
+		t.Errorf("summarizeContainerArtifacts = %q", got)
+	}
+	if got := summarizeContainerArtifacts(nil); got != "" {
+		t.Errorf("empty summary = %q", got)
+	}
+}
+
+// TestMergeContainerRepoDigestPinnedIndexes pins two different multi-platform
+// indexes that share one linux/amd64 manifest and checks they keep distinct
+// records — identity is the digest a pull resolves (the preserved index), not
+// the shared amd64 manifest — while re-importing the same pin replaces its
+// record in place.
+func TestMergeContainerRepoDigestPinnedIndexes(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	amd := containerSHA([]byte("shared-amd64-manifest"))
+	idx1, idx2 := containerSHA([]byte("index-1")), containerSHA([]byte("index-2"))
+	pin := func(idx string, size int64) ContainerImage {
+		return ContainerImage{
+			Digest: amd, MediaType: mtDockerManifest, Size: size,
+			Index: &ContainerIndex{Digest: idx, MediaType: mtOCIIndex, Size: 1},
+		}
+	}
+	repo := func(imgs ...ContainerImage) ContainerRepo {
+		return ContainerRepo{Registry: "docker.io", Repository: "library/pinned", Images: imgs}
+	}
+	if err := hs.mergeContainerRepo(repo(pin(idx1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	if err := hs.mergeContainerRepo(repo(pin(idx2, 1))); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := hs.loadContainerRepoIndex("docker.io/library/pinned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Images) != 2 {
+		t.Fatalf("images = %+v, want both index pins retained", merged.Images)
+	}
+	for _, idx := range []string{idx1, idx2} {
+		if doc, ok := findContainerManifestDoc(merged, idx); !ok || doc.Digest != idx {
+			t.Errorf("manifest doc for %s = %+v (ok=%v)", idx, doc, ok)
+		}
+		if img, ok := findContainerImage(merged, idx); !ok || img.Index == nil || img.Index.Digest != idx {
+			t.Errorf("findContainerImage(%s) = %+v (ok=%v)", idx, img, ok)
+		}
+	}
+	// Re-importing one pin replaces its record instead of appending a third.
+	if err := hs.mergeContainerRepo(repo(pin(idx2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	merged, err = hs.loadContainerRepoIndex("docker.io/library/pinned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Images) != 2 {
+		t.Fatalf("re-import duplicated the pin: %+v", merged.Images)
+	}
+}
+
+// TestArtifactCollectorCapStopsFetching fills the collector to the artifact
+// cap and checks further discovery performs no upstream requests at all —
+// the cap bounds the fetches, not just the recorded artifacts.
+func TestArtifactCollectorCapStopsFetching(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("capped collector reached upstream: %s", r.URL.Path)
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	ls, _ := newContainerLowServer(t, map[string]string{"docker.io": srv.URL})
+	col := &artifactCollector{
+		c: ls.newContainerClient(), ref: imageRef{Registry: "docker.io", Repository: "library/alpine"},
+		stageRoot: t.TempDir(), seenFile: map[string]bool{}, skip: map[string]bool{},
+		found: map[string]*ContainerArtifact{},
+	}
+	for i := 0; i < containerMaxImageArtifacts; i++ {
+		col.found[containerSHA([]byte(fmt.Sprintf("artifact-%d", i)))] = &ContainerArtifact{}
+	}
+	subject := containerSHA([]byte("subject"))
+	col.addByTag(context.Background(), subject, cosignArtifactTag(subject, ".sig"))
+	col.addReferrer(context.Background(), subject, ociDescriptor{Digest: containerSHA([]byte("extra-referrer"))})
+	if !col.capped {
+		t.Error("cap warning never emitted")
+	}
+	if len(col.order) != 0 {
+		t.Errorf("capped collector recorded artifacts: %v", col.order)
 	}
 }
 

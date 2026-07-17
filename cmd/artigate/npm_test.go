@@ -252,15 +252,24 @@ func TestValidateNpmRequest(t *testing.T) {
 }
 
 func TestValidateNpmPackages(t *testing.T) {
-	seen := map[string]bool{"npm/packages/lodash/lodash-4.17.21.tgz": true}
+	tarballPath := "npm/packages/lodash/lodash-4.17.21.tgz"
+	attPath := npmAttestationsRel("lodash", "4.17.21")
+	seen := map[string]bool{tarballPath: true, attPath: true}
 	good := []NpmPackage{{
 		Name: "lodash", Version: "4.17.21", Filename: "lodash-4.17.21.tgz",
-		Path: "npm/packages/lodash/lodash-4.17.21.tgz", SHA256: strings.Repeat("a", 64),
+		Path: tarballPath, SHA256: strings.Repeat("a", 64),
+		Signatures:       []NpmRegistrySignature{{KeyID: "SHA256:k", Sig: "MEUCIQ"}},
+		AttestationsPath: attPath, AttestationsPredicateType: "https://slsa.dev/provenance/v1",
 	}}
 	if err := validateNpmPackages(good, seen); err != nil {
 		t.Errorf("valid packages rejected: %v", err)
 	}
 
+	withProv := func(mutate func(*NpmPackage)) []NpmPackage {
+		p := good[0]
+		mutate(&p)
+		return []NpmPackage{p}
+	}
 	bad := []struct {
 		name string
 		pkgs []NpmPackage
@@ -269,11 +278,22 @@ func TestValidateNpmPackages(t *testing.T) {
 		{"bad version", []NpmPackage{{Name: "x", Version: "../..", Path: "npm/packages/x/x-1.tgz"}}},
 		{"outside npm tree", []NpmPackage{{Name: "x", Version: "1.0.0", Path: "python/packages/x.tgz"}}},
 		{"unlisted file", []NpmPackage{{Name: "x", Version: "1.0.0", Path: "npm/packages/x/x-1.0.0.tgz"}}},
+		{"empty signature keyid", withProv(func(p *NpmPackage) { p.Signatures = []NpmRegistrySignature{{Sig: "x"}} })},
+		{"oversized signature", withProv(func(p *NpmPackage) {
+			p.Signatures = []NpmRegistrySignature{{KeyID: "k", Sig: strings.Repeat("A", 9000)}}
+		})},
+		{"non-canonical attestations path", withProv(func(p *NpmPackage) { p.AttestationsPath = "npm/attestations/other/1.0.0.json" })},
+		{"attestations without predicate", withProv(func(p *NpmPackage) { p.AttestationsPredicateType = "" })},
+		{"predicate without attestations", withProv(func(p *NpmPackage) { p.AttestationsPath = "" })},
 	}
 	for _, tt := range bad {
 		if err := validateNpmPackages(tt.pkgs, seen); err == nil {
 			t.Errorf("%s: expected error, got nil", tt.name)
 		}
+	}
+	// An attestations file absent from the manifest file set is rejected.
+	if err := validateNpmPackages(good, map[string]bool{tarballPath: true}); err == nil {
+		t.Error("unlisted attestations file accepted")
 	}
 }
 
@@ -790,29 +810,219 @@ func TestValidateNpmDistTags(t *testing.T) {
 // TestNpmFetchDistTags exercises the best-effort tag fetch: a registry
 // serving tags (with junk entries to drop), a package whose packument 404s,
 // and a package with an unusable resolved URL.
-func TestNpmFetchDistTags(t *testing.T) {
+func TestNpmFetchUpstreamMeta(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/lodash", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Accept") != npmAbbreviatedType {
 			t.Errorf("packument fetched without the abbreviated media type: %q", r.Header.Get("Accept"))
 		}
-		_, _ = w.Write([]byte(`{"dist-tags":{"latest":"4.17.21","next":"5.0.0-beta.1","bad tag":"1.0.0","broken":"not_a_version"}}`))
+		_, _ = w.Write([]byte(`{
+		  "dist-tags":{"latest":"4.17.21","next":"5.0.0-beta.1","bad tag":"1.0.0","broken":"not_a_version"},
+		  "versions":{"4.17.21":{"dist":{
+		    "signatures":[{"keyid":"SHA256:key1","sig":"MEUCIQtest"},{"keyid":"","sig":"dropme"}],
+		    "attestations":{"url":"https://upstream/-/npm/v1/attestations/lodash@4.17.21","provenance":{"predicateType":"https://slsa.dev/provenance/v1"}}
+		  }}}
+		}`))
+	})
+	mux.HandleFunc("/-/npm/v1/keys", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"keys":[{"expires":null,"keyid":"SHA256:key1","keytype":"ecdsa-sha2-nistp256","scheme":"ecdsa-sha2-nistp256","key":"MFkwEtest"}]}`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	entries := []npmLockEntry{
-		{Name: "lodash", Resolved: srv.URL + "/lodash/-/lodash-4.17.21.tgz"},
-		{Name: "gone", Resolved: srv.URL + "/gone/-/gone-1.0.0.tgz"},
-		{Name: "weird", Resolved: "https://cdn.example/blob.tgz"},
+		{Name: "lodash", Version: "4.17.21", Resolved: srv.URL + "/lodash/-/lodash-4.17.21.tgz"},
+		{Name: "gone", Version: "1.0.0", Resolved: srv.URL + "/gone/-/gone-1.0.0.tgz"},
+		{Name: "weird", Version: "1.0.0", Resolved: "https://cdn.example/blob.tgz"},
 	}
-	tags := fetchNpmDistTags(context.Background(), entries)
-	if len(tags) != 1 || tags["lodash"] == nil {
-		t.Fatalf("fetchNpmDistTags = %+v, want lodash only", tags)
+	meta := fetchNpmUpstreamMeta(context.Background(), entries)
+	if len(meta.tags) != 1 || meta.tags["lodash"] == nil {
+		t.Fatalf("meta.tags = %+v, want lodash only", meta.tags)
 	}
 	want := map[string]string{"latest": "4.17.21", "next": "5.0.0-beta.1"}
-	if len(tags["lodash"]) != len(want) || tags["lodash"]["latest"] != want["latest"] || tags["lodash"]["next"] != want["next"] {
-		t.Errorf("lodash tags = %+v, want %+v (junk dropped)", tags["lodash"], want)
+	if len(meta.tags["lodash"]) != len(want) || meta.tags["lodash"]["latest"] != want["latest"] || meta.tags["lodash"]["next"] != want["next"] {
+		t.Errorf("lodash tags = %+v, want %+v (junk dropped)", meta.tags["lodash"], want)
+	}
+	// The malformed signature entry is dropped; the good one survives.
+	sigs := meta.sigs["lodash@4.17.21"]
+	if len(sigs) != 1 || sigs[0].KeyID != "SHA256:key1" || sigs[0].Sig != "MEUCIQtest" {
+		t.Errorf("signatures = %+v", sigs)
+	}
+	if meta.atts["lodash@4.17.21"].PredicateType != "https://slsa.dev/provenance/v1" {
+		t.Errorf("attestations ref = %+v", meta.atts["lodash@4.17.21"])
+	}
+	host := npmRegistryHost(srv.URL)
+	if keys := meta.keys[host]; len(keys) != 1 || keys[0].KeyID != "SHA256:key1" || keys[0].Expires != nil {
+		t.Errorf("keys[%s] = %+v", host, meta.keys[host])
+	}
+}
+
+// TestNpmSignaturePipeline runs a collect against a registry that publishes
+// registry signatures, provenance attestations, and signing keys, imports the
+// bundle, and asserts the mirror serves all three the way `npm audit
+// signatures` consumes them: dist.signatures in the packument, the merged
+// /-/npm/v1/keys endpoint, and the attestations document at the URL
+// dist.attestations advertises.
+func TestNpmSignaturePipeline(t *testing.T) {
+	lodash := makeNpmTgz(t, "package", "lodash", "4.17.21")
+	attestations := `{"attestations":[{"predicateType":"https://slsa.dev/provenance/v1","bundle":{"fake":"sigstore-bundle"}}]}`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/lodash/-/lodash-4.17.21.tgz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(lodash)
+	})
+	mux.HandleFunc("/lodash", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+		  "dist-tags":{"latest":"4.17.21"},
+		  "versions":{"4.17.21":{"dist":{
+		    "signatures":[{"keyid":"SHA256:key1","sig":"MEUCIQtest"}],
+		    "attestations":{"url":"ignored","provenance":{"predicateType":"https://slsa.dev/provenance/v1"}}
+		  }}}
+		}`))
+	})
+	mux.HandleFunc("/-/npm/v1/keys", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"keys":[{"expires":null,"keyid":"SHA256:key1","keytype":"ecdsa-sha2-nistp256","scheme":"ecdsa-sha2-nistp256","key":"MFkwEtest"}]}`))
+	})
+	mux.HandleFunc("/-/npm/v1/attestations/lodash@4.17.21", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, attestations)
+	})
+	registry := httptest.NewServer(mux)
+	t.Cleanup(registry.Close)
+
+	lock := fmt.Sprintf(`{
+	  "name": "artigate-collect", "lockfileVersion": 3,
+	  "packages": {
+	    "": {"name": "artigate-collect", "version": "0.0.0"},
+	    "node_modules/lodash": {"version": "4.17.21", "resolved": "%s/lodash/-/lodash-4.17.21.tgz", "integrity": "%s"}
+	  }
+	}`, registry.URL, sriFor(lodash))
+	_, priv := newTestKeys(t)
+	cfg := LowConfig{Root: t.TempDir(), ExportDir: filepath.Join(t.TempDir(), "out"), NpmBinary: writeFakeNpm(t, lock)}
+	ls, err := NewLowServer(cfg, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ls.Close() })
+
+	res, err := ls.CollectNpm(context.Background(), NpmCollectRequest{Packages: []string{"lodash"}})
+	if err != nil {
+		t.Fatalf("CollectNpm: %v", err)
+	}
+	m := readBundleManifest(t, ls, res.BundleID)
+	if len(m.Npm.Packages) != 1 {
+		t.Fatalf("bundle packages = %+v", m.Npm.Packages)
+	}
+	p := m.Npm.Packages[0]
+	if len(p.Signatures) != 1 || p.Signatures[0].KeyID != "SHA256:key1" {
+		t.Fatalf("bundle signatures = %+v", p.Signatures)
+	}
+	if p.AttestationsPath != "npm/attestations/lodash/4.17.21.json" || p.AttestationsPredicateType != "https://slsa.dev/provenance/v1" {
+		t.Fatalf("bundle attestations ref = %q %q", p.AttestationsPath, p.AttestationsPredicateType)
+	}
+	host := npmRegistryHost(registry.URL)
+	if len(m.Npm.Keys[host]) != 1 {
+		t.Fatalf("bundle keys = %+v", m.Npm.Keys)
+	}
+
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	for _, suffix := range bundleSuffixes() {
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, res.BundleID+suffix))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, res.BundleID+suffix), b)
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("high import failed: %v", err)
+	}
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	// The packument carries the signatures and the rewritten attestations URL.
+	code, body := httpGet(t, srv.URL+"/npm/lodash")
+	if code != http.StatusOK {
+		t.Fatalf("packument status %d", code)
+	}
+	var doc struct {
+		Versions map[string]struct {
+			Dist struct {
+				Signatures   []NpmRegistrySignature `json:"signatures"`
+				Attestations struct {
+					URL        string `json:"url"`
+					Provenance struct {
+						PredicateType string `json:"predicateType"`
+					} `json:"provenance"`
+				} `json:"attestations"`
+			} `json:"dist"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatal(err)
+	}
+	v := doc.Versions["4.17.21"]
+	if len(v.Dist.Signatures) != 1 || v.Dist.Signatures[0].Sig != "MEUCIQtest" {
+		t.Fatalf("served signatures = %+v", v.Dist.Signatures)
+	}
+	wantAttURL := srv.URL + "/npm/-/npm/v1/attestations/lodash@4.17.21"
+	if v.Dist.Attestations.URL != wantAttURL || v.Dist.Attestations.Provenance.PredicateType != "https://slsa.dev/provenance/v1" {
+		t.Fatalf("served attestations = %+v", v.Dist.Attestations)
+	}
+
+	// The keys endpoint serves the merged upstream keys, expires kept null.
+	code, body = httpGet(t, srv.URL+"/npm/-/npm/v1/keys")
+	var keysDoc struct {
+		Keys []NpmRegistryKey `json:"keys"`
+	}
+	if err := json.Unmarshal([]byte(body), &keysDoc); err != nil || code != http.StatusOK {
+		t.Fatalf("keys endpoint: %d %s (%v)", code, body, err)
+	}
+	if len(keysDoc.Keys) != 1 || keysDoc.Keys[0].KeyID != "SHA256:key1" || keysDoc.Keys[0].Expires != nil {
+		t.Fatalf("merged keys = %+v", keysDoc.Keys)
+	}
+	if !strings.Contains(body, `"expires": null`) {
+		t.Fatalf("expires must round-trip as JSON null:\n%s", body)
+	}
+	// The attestations document serves verbatim at the advertised URL.
+	code, body = httpGet(t, wantAttURL)
+	if code != http.StatusOK || body != attestations {
+		t.Fatalf("attestations endpoint: %d %q", code, body)
+	}
+	// Unmirrored attestations and malformed specs 404.
+	assertHTTPStatus(t, srv.URL+"/npm/-/npm/v1/attestations/lodash@9.9.9", http.StatusNotFound)
+	assertHTTPStatus(t, srv.URL+"/npm/-/npm/v1/attestations/nonsense", http.StatusNotFound)
+}
+
+// TestNpmKeysEndpointEmpty mirrors nothing and expects the keys endpoint to
+// 404 like an upstream registry that publishes no signing keys.
+func TestNpmKeysEndpointEmpty(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	assertHTTPStatus(t, srv.URL+"/npm/-/npm/v1/keys", http.StatusNotFound)
+}
+
+func TestValidateNpmKeys(t *testing.T) {
+	good := map[string][]NpmRegistryKey{
+		"registry.npmjs.org": {{KeyID: "SHA256:k", KeyType: "ecdsa-sha2-nistp256", Scheme: "ecdsa-sha2-nistp256", Key: "MFkwE"}},
+		"npm.example.com:8443": {
+			{KeyID: "SHA256:k2", Key: "MFkwF"},
+		},
+	}
+	if err := validateNpmKeys(good); err != nil {
+		t.Fatalf("valid keys rejected: %v", err)
+	}
+	bad := []map[string][]NpmRegistryKey{
+		{"Bad Host": {{KeyID: "k", Key: "v"}}},
+		{"../etc": {{KeyID: "k", Key: "v"}}},
+		{"registry.npmjs.org": {{KeyID: "", Key: "v"}}},
+		{"registry.npmjs.org": {{KeyID: "k", Key: ""}}},
+		{"registry.npmjs.org": {{KeyID: "k", Key: strings.Repeat("A", 5000)}}},
+	}
+	for i, keys := range bad {
+		if err := validateNpmKeys(keys); err == nil {
+			t.Errorf("bad keys %d accepted", i)
+		}
 	}
 }
 

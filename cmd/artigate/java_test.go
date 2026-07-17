@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -70,9 +71,12 @@ func newMavenLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
 	t.Helper()
 	_, priv := newTestKeys(t)
 	cfg := LowConfig{
-		Root:        t.TempDir(),
-		ExportDir:   filepath.Join(t.TempDir(), "out"),
-		MavenBinary: writeFakeMvn(t),
+		Root:      t.TempDir(),
+		ExportDir: filepath.Join(t.TempDir(), "out"),
+		// Signature fetches stay local: a 404-everything upstream mirrors
+		// nothing, exactly like an unsigned repository.
+		MavenSignatureURL: quiet404Server(t).URL,
+		MavenBinary:       writeFakeMvn(t),
 	}
 	ls, err := NewLowServer(cfg, priv)
 	if err != nil {
@@ -193,6 +197,69 @@ func assertServed(t *testing.T, url, wantSub string) {
 
 // TestCollectMavenRejectsSnapshot proves an uploaded pom declaring a SNAPSHOT
 // dependency is refused at sanitization time, before mvn ever runs.
+// TestCollectMavenMirrorsSignatures serves detached .asc signatures for a
+// subset of the resolved files and asserts they ride the bundle (and the
+// artifact record) and serve from the static /maven/ tree — while unsigned
+// files (404) and non-PGP responses are skipped without failing the collect.
+func TestCollectMavenMirrorsSignatures(t *testing.T) {
+	const sig = "-----BEGIN PGP SIGNATURE-----\n\nfakebody\n-----END PGP SIGNATURE-----\n"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar.asc", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, sig)
+	})
+	// A 200 that is not an armored signature (an error page) must not be
+	// stored; everything else 404s like an unsigned upstream file.
+	mux.HandleFunc("/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.pom.asc", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "<html>error page</html>")
+	})
+	upstream := httptest.NewServer(mux)
+	t.Cleanup(upstream.Close)
+
+	ls, priv := newMavenLowServer(t)
+	ls.cfg.MavenSignatureURL = upstream.URL
+	res, err := ls.CollectMaven(context.Background(), MavenCollectRequest{Coordinates: []string{"org.slf4j:slf4j-api:2.0.16"}})
+	if err != nil {
+		t.Fatalf("CollectMaven: %v", err)
+	}
+	m := readBundleManifest(t, ls, res.BundleID)
+	const jarAsc = "maven/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar.asc"
+	paths := map[string]bool{}
+	for _, f := range m.Files {
+		paths[f.Path] = true
+	}
+	if !paths[jarAsc] {
+		t.Fatalf("bundle misses the jar signature; files: %v", paths)
+	}
+	if paths["maven/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.pom.asc"] {
+		t.Fatal("non-PGP 200 response was stored as a signature")
+	}
+	sigListed := false
+	for _, a := range m.Maven.Artifacts {
+		for _, f := range a.Files {
+			sigListed = sigListed || f == jarAsc
+		}
+	}
+	if !sigListed {
+		t.Fatal("artifact record does not list the mirrored signature")
+	}
+
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	for _, suffix := range bundleSuffixes() {
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, res.BundleID+suffix))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, res.BundleID+suffix), b)
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("high import failed: %v", err)
+	}
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	assertHTTPBody(t, srv.URL+"/"+jarAsc, sig)
+}
+
 func TestCollectMavenRejectsSnapshot(t *testing.T) {
 	ls, _ := newMavenLowServer(t)
 	pom := `<project><groupId>t</groupId><artifactId>t</artifactId><version>1</version><dependencies>` +

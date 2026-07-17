@@ -132,12 +132,17 @@ and environment variable.
   still no build hooks) and verified against the API-declared SHA-256; clients
   build them locally exactly as they would against PyPI. An optional
   cross-target downloads wheels for the high-side interpreter/platform rather
-  than the low-side host.
+  than the low-side host. PEP 740 provenance documents published by the index
+  (attested trusted-publisher uploads) mirror automatically and serve through
+  `/integrity/…` plus the simple JSON `provenance` key.
 - **Java** — Maven coordinates (`groupId:artifactId:version`, one per line) or an
   uploaded `pom.xml`. Only the pom's dependency information is used — build
   sections, profiles, and repository overrides are rejected, so an uploaded pom
   can never execute code through Maven. Release versions only; SNAPSHOTs and
-  version ranges are rejected.
+  version ranges are rejected. Each resolved file's detached `.asc` PGP
+  signature is mirrored from Maven Central (best-effort; `--maven-signatures`
+  overrides the source), so Gradle dependency verification and manual
+  `gpg --verify` work against the mirror.
 - **NPM** — package specs (one per line: `lodash@4.17.21`, a bare `lodash` for
   the newest version, a range like `react@^18.2`, scoped `@types/node`), or an
   uploaded `package.json` (with an optional `package-lock.json` pinning the
@@ -146,6 +151,9 @@ and environment variable.
   tarball is downloaded and verified against the lockfile's integrity hash.
   Dependencies that resolve outside the registry (git/file URLs) are skipped
   and reported. `--npm-registry` points resolution at a different registry.
+  Registry signatures, provenance attestations, and the registry signing keys
+  are mirrored with the packages, so `npm audit signatures` verifies against
+  the mirror.
 - **APT** — a deb822 source stanza (paste or upload a `.sources` file). `Suites:`
   may list several suites of the archive (they share one mirror and its pool); an
   optional `Signed-By` keyring verifies each suite's upstream release with `gpgv`;
@@ -185,6 +193,18 @@ and environment variable.
   keeps its own namespace on the high side, so `docker.io/...` and
   `ghcr.io/...` content never mixes. Layers are content-addressed, so a base
   layer shared by several images is bundled and stored once.
+
+  **Signatures and attestations cross the diode too.** Each collect also
+  mirrors whatever is attached to the image upstream — cosign/sigstore
+  signatures, in-toto/SLSA provenance, SBOMs — discovered via the OCI 1.1
+  referrers API (and its tag fallback), cosign's `sha256-<digest>.sig`/
+  `.att`/`.sbom` tag scheme, and buildkit's attestation entries in the image
+  index. A multi-platform tag serves its original **index** document on the
+  high side, so the digest a client resolves is exactly upstream's and
+  signatures over it verify unchanged; `cosign verify`, Kyverno, and Ratify
+  work against the mirror with the same keys/identities they use online.
+  (Artifacts that fail to fetch are skipped with a warning — the image still
+  mirrors, and verification simply fails closed for it.)
 
   The tag position also takes a **version constraint**, resolved against the
   upstream tag list at collect time to the newest matching version:
@@ -263,7 +283,10 @@ and environment variable.
   or bare for the newest version). Chart archives are verified against the
   repository index digest when the index declares one. Each upstream repo is
   served as its own mirror under `/helm/<mirror>`, its `index.yaml`
-  regenerated from every chart's own embedded `Chart.yaml`.
+  regenerated from every chart's own embedded `Chart.yaml`. A chart's signed
+  `.prov` provenance file is mirrored when the upstream publishes one, and the
+  chart is then advertised under its original `<name>-<version>.tgz` name so
+  `helm pull --verify` passes with the author's key.
 - **NuGet** — package specs, one per line (`Newtonsoft.Json@13.0.3`, or a bare
   `Serilog` for the newest stable release). Dependencies from each package's
   nuspec are resolved the way NuGet restore does (lowest applicable version)
@@ -670,6 +693,12 @@ apk update   # add --allow-untrusted instead when the index is served unsigned
 # Containers — the pull name embeds the upstream registry
 docker pull artigate-high.local/docker.io/library/alpine:3.20
 docker pull artigate-high.local/ghcr.io/org/app:v1
+
+# Signatures/attestations mirrored with the image verify offline: cosign's
+# tag scheme and the OCI referrers API both answer on the high side
+cosign verify --key cosign.pub artigate-high.local/ghcr.io/org/app:v1
+cosign verify-attestation --type slsaprovenance --key cosign.pub \
+  artigate-high.local/ghcr.io/org/app:v1
 ```
 
 ```bash
@@ -988,6 +1017,23 @@ edge-triggered (one notification per gap; the gap then ages via
 - **Signing the served repos** is optional (`--apt-gpg-key`/`--rpm-gpg-key` for
   APT/RPM, `--apk-rsa-key` for Alpine); otherwise those repositories are
   published unsigned.
+- **Upstream verification material passes through** wherever the ecosystem
+  publishes any, so clients keep verifying instead of relaxing checks:
+  Go sumdb notes and Terraform's GPG chain (long-standing), container cosign
+  signatures/attestations/SBOMs with the referrers API, npm registry
+  signatures + provenance attestations + the `/-/npm/v1/keys` endpoint
+  (`npm audit signatures` works against the mirror), Maven `.asc` PGP
+  signatures (fetched from Central — override with `--maven-signatures`),
+  Helm `.prov` provenance files (`helm pull --verify`), and PyPI PEP 740
+  provenance via `/integrity/…` and the simple JSON `provenance` key. All of
+  it is best-effort at collect time (unsigned upstream content mirrors bare)
+  and captured at collect: re-signing upstream later needs a re-collect.
+  Ecosystems whose upstreams publish nothing verifiable per artifact
+  (crates.io, RubyGems, Packagist, CRAN, Hugging Face, OSV) have nothing to
+  pass through — clients there verify the checksums the mirror regenerates
+  from verified bytes; NuGet signatures are embedded in the `.nupkg` files
+  and already cross unmodified. Conda content-trust metadata, Ansible Galaxy
+  collection signatures, and Open VSX signatures are not mirrored yet.
 - **Containers**: linux/amd64 only, and registries on non-standard ports can't
   be mirrored (the port can't appear in the high-side pull name). Pulls are
   anonymous by default; private registries take a per-pull login (the `auth`
@@ -996,7 +1042,13 @@ edge-triggered (one notification per gap; the gap then ages via
   (`host=user:password`, comma-separated) — scheduled pulls use only the
   latter. `--container-registry host=baseURL` on the low side redirects a
   registry's API to a private mirror/proxy. The high-side registry is
-  read-only (no push).
+  read-only (no push). Attached artifacts (cosign signatures, attestations,
+  SBOMs) mirror automatically and are served back through cosign's tag
+  scheme and `GET /v2/<name>/referrers/<digest>`; a multi-platform tag
+  resolves to its preserved upstream index digest, so policy engines verify
+  the mirror's content byte for byte. Only artifacts attached to the pulled
+  image (or its index) at collect time cross — re-signing upstream later
+  needs a re-collect to propagate.
 - **OSV**: databases are TLS-trusted at collect time (the OSV bucket
   publishes no digests for its zips) and hash-locked into the signed bundle
   from there. Advisory *contents* are served verbatim from the verified zip;

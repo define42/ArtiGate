@@ -249,6 +249,18 @@ func writeFakePip(t *testing.T) string {
 	return p
 }
 
+// quiet404Server is a local upstream that 404s everything, so collects in
+// tests resolve their best-effort metadata fetches (provenance, signatures)
+// locally instead of reaching for the real defaults.
+func quiet404Server(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func newPyLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
 	t.Helper()
 	_, priv := newTestKeys(t)
@@ -256,6 +268,7 @@ func newPyLowServer(t *testing.T) (*LowServer, ed25519.PrivateKey) {
 		Root:      t.TempDir(),
 		ExportDir: filepath.Join(t.TempDir(), "out"),
 		PipBinary: writeFakePip(t),
+		PyPIJSON:  quiet404Server(t).URL + "/pypi",
 	}
 	ls, err := NewLowServer(cfg, priv)
 	if err != nil {
@@ -332,6 +345,96 @@ func TestLowToHighPythonPipeline(t *testing.T) {
 	if code, body := httpGet(t, srv.URL+"/packages/urllib3-2.5.0-py3-none-any.whl"); code != http.StatusOK || body != "wheel-urllib3" {
 		t.Errorf("pipeline wheel download: status %d body %q", code, body)
 	}
+}
+
+// TestPythonProvenancePipeline mirrors a wheel whose index publishes a PEP
+// 740 provenance document and asserts the passthrough end to end: the
+// document rides the bundle, /integrity/... serves it under the PyPI media
+// type, the simple JSON page advertises it, and identity mismatches 404.
+func TestPythonProvenancePipeline(t *testing.T) {
+	provenance := `{"version":1,"attestation_bundles":[{"publisher":{"kind":"GitHub"},"attestations":[{"fake":"bundle"}]}]}`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/integrity/requests/2.32.4/requests-2.32.4-py3-none-any.whl/provenance",
+		func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, provenance) })
+	// urllib3 has no provenance (404), like most of the index.
+	upstream := httptest.NewServer(mux)
+	t.Cleanup(upstream.Close)
+
+	ls, priv := newPyLowServer(t)
+	ls.cfg.PyPIJSON = upstream.URL + "/pypi"
+	res, err := ls.CollectPython(context.Background(), PythonCollectRequest{Requirements: []string{"requests"}})
+	if err != nil {
+		t.Fatalf("CollectPython: %v", err)
+	}
+	m := readBundleManifest(t, ls, res.BundleID)
+	var reqFile, urlFile PythonFile
+	for _, p := range m.Python.Projects {
+		for _, f := range p.Files {
+			switch p.NormalizedName {
+			case "requests":
+				reqFile = f
+			case "urllib3":
+				urlFile = f
+			}
+		}
+	}
+	if reqFile.ProvenancePath != reqFile.Path+".provenance" {
+		t.Fatalf("requests provenance path = %q", reqFile.ProvenancePath)
+	}
+	if urlFile.ProvenancePath != "" {
+		t.Fatalf("urllib3 must have no provenance, got %q", urlFile.ProvenancePath)
+	}
+
+	pub := priv.Public().(ed25519.PublicKey)
+	hs := newTestHighServer(t, pub)
+	for _, suffix := range bundleSuffixes() {
+		b, err := os.ReadFile(filepath.Join(ls.cfg.ExportDir, res.BundleID+suffix))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(hs.cfg.Landing, res.BundleID+suffix), b)
+	}
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("high import failed: %v", err)
+	}
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+
+	provURL := srv.URL + "/integrity/requests/2.32.4/requests-2.32.4-py3-none-any.whl/provenance"
+	resp, err := http.Get(provURL) //nolint:noctx // test request
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := readAllString(t, resp)
+	if resp.StatusCode != http.StatusOK || body != provenance {
+		t.Fatalf("integrity endpoint: %d %q", resp.StatusCode, body)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != pyIntegrityJSONType {
+		t.Errorf("integrity Content-Type = %q, want %q", ct, pyIntegrityJSONType)
+	}
+
+	// The PEP 691 JSON page advertises the provenance URL for the attested
+	// file only.
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/simple/requests/", nil) //nolint:noctx // test request
+	req.Header.Set("Accept", pySimpleJSONType)
+	jsonResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page struct {
+		Files []pySimpleFile `json:"files"`
+	}
+	if err := json.Unmarshal([]byte(readAllString(t, jsonResp)), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Files) != 1 || page.Files[0].Provenance != provURL {
+		t.Fatalf("simple JSON provenance = %+v, want %q", page.Files, provURL)
+	}
+
+	// Identity mismatches and absent documents 404.
+	assertHTTPStatus(t, srv.URL+"/integrity/other/2.32.4/requests-2.32.4-py3-none-any.whl/provenance", http.StatusNotFound)
+	assertHTTPStatus(t, srv.URL+"/integrity/requests/9.9.9/requests-2.32.4-py3-none-any.whl/provenance", http.StatusNotFound)
+	assertHTTPStatus(t, srv.URL+"/integrity/urllib3/2.5.0/urllib3-2.5.0-py3-none-any.whl/provenance", http.StatusNotFound)
 }
 
 func TestValidatePipArg(t *testing.T) {
@@ -477,7 +580,10 @@ func newPyLowServerWithPip(t *testing.T, script string) (*LowServer, ed25519.Pri
 	if err := os.WriteFile(pip, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg := LowConfig{Root: t.TempDir(), ExportDir: filepath.Join(t.TempDir(), "out"), PipBinary: pip}
+	cfg := LowConfig{
+		Root: t.TempDir(), ExportDir: filepath.Join(t.TempDir(), "out"), PipBinary: pip,
+		PyPIJSON: quiet404Server(t).URL + "/pypi",
+	}
 	ls, err := NewLowServer(cfg, priv)
 	if err != nil {
 		t.Fatal(err)

@@ -31,11 +31,19 @@ func TestHelm(t *testing.T) {
 	stack.WaitImported(t, "helm", res.Sequence)
 
 	// The regenerated index is rebuilt from the chart's own Chart.yaml and
-	// links the archive relatively (under the collision-safe "_" stem).
+	// links the archive relatively. jetstack signs its charts, so the
+	// mirrored .prov makes the index advertise the original
+	// "<name>-<version>.tgz" packaging name — the basename `helm pull
+	// --verify` checks against the prov's signed file list — served as an
+	// alias of the collision-safe "_" stem the bytes are stored under.
 	code, body := httpGet(t, stack.HighURL+"/helm/jetstack/index.yaml")
 	if code != 200 || !strings.Contains(string(body), "cert-manager") ||
-		!strings.Contains(string(body), "charts/cert-manager_"+certManagerVersion+".tgz") {
+		!strings.Contains(string(body), "charts/cert-manager-"+certManagerVersion+".tgz") {
 		t.Fatalf("regenerated index.yaml = %d %s", code, body)
+	}
+	provURL := stack.HighURL + "/helm/jetstack/charts/cert-manager-" + certManagerVersion + ".tgz.prov"
+	if code, _ := httpGet(t, provURL); code != 200 {
+		t.Fatalf("mirrored chart provenance = %d, want 200 at %s", code, provURL)
 	}
 
 	tmp := t.TempDir()

@@ -79,6 +79,10 @@ type HelmChart struct {
 	Filename string `json:"filename"`
 	Path     string `json:"path"`
 	SHA256   string `json:"sha256"`
+	// ProvPath is the chart's mirrored provenance file (the PGP-signed
+	// .tgz.prov `helm install --verify` checks), stored beside the archive.
+	// Always Path+".prov" when present.
+	ProvPath string `json:"prov_path,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -159,6 +163,14 @@ func validateHelmChart(mirror string, c HelmChart, seen map[string]bool) error {
 	if c.Path != helmChartRel(mirror, c.Filename) || !seen[c.Path] {
 		return fmt.Errorf("chart %s@%s references file not listed in manifest.files: %s", c.Name, c.Version, c.Path)
 	}
+	if c.ProvPath != "" {
+		if c.ProvPath != c.Path+".prov" {
+			return fmt.Errorf("chart %s@%s has non-canonical provenance path %s", c.Name, c.Version, c.ProvPath)
+		}
+		if !seen[c.ProvPath] {
+			return fmt.Errorf("chart %s@%s references provenance not listed in manifest.files: %s", c.Name, c.Version, c.ProvPath)
+		}
+	}
 	return nil
 }
 
@@ -209,7 +221,7 @@ func (s *HighServer) serveHelm(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "not found", http.StatusNotFound)
 		return true
 	}
-	abs := filepath.Join(s.helmDir(), filepath.FromSlash(rel))
+	abs := s.helmServeTarget(rel)
 	if !safeJoin(s.helmDir(), abs) {
 		http.Error(w, "unsafe path", http.StatusBadRequest)
 		return true
@@ -221,18 +233,71 @@ func (s *HighServer) serveHelm(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// helmServablePath restricts the served tree to the two client-facing shapes:
-// <mirror>/index.yaml and <mirror>/charts/<file>.tgz. The regenerated metadata
-// store stays private.
+// helmServablePath restricts the served tree to the client-facing shapes:
+// <mirror>/index.yaml, <mirror>/charts/<file>.tgz, and the charts'
+// <file>.tgz.prov provenance siblings. The regenerated metadata store stays
+// private.
 func helmServablePath(rel string) bool {
 	segs := strings.Split(rel, "/")
 	switch {
 	case len(segs) == 2 && segs[1] == "index.yaml":
 		return validateMirrorName(segs[0]) == nil
-	case len(segs) == 3 && segs[1] == "charts" && strings.HasSuffix(segs[2], ".tgz"):
+	case len(segs) == 3 && segs[1] == "charts" &&
+		(strings.HasSuffix(segs[2], ".tgz") || strings.HasSuffix(segs[2], ".tgz.prov")):
 		return validateMirrorName(segs[0]) == nil
 	}
 	return false
+}
+
+// helmServeTarget resolves a servable /helm path to the file that answers it.
+// A charts/ request that no stored file matches is retried as an
+// original-name alias: charts with mirrored provenance are advertised under
+// their upstream "<name>-<version>.tgz" packaging name (what `helm pull
+// --verify` must see), while their bytes live under the collision-safe stem.
+func (s *HighServer) helmServeTarget(rel string) string {
+	abs := filepath.Join(s.helmDir(), filepath.FromSlash(rel))
+	segs := strings.Split(rel, "/")
+	if len(segs) != 3 || fileExists(abs) {
+		return abs
+	}
+	if stored, ok := s.resolveHelmChartAlias(segs[0], segs[2]); ok {
+		return filepath.Join(s.helmDir(), segs[0], "charts", stored)
+	}
+	return abs
+}
+
+// resolveHelmChartAlias maps a requested charts/ basename ("<name>-<version>
+// .tgz" or its .prov sibling) to the stored filename, by matching the stored
+// charts' embedded identity. Stored names and download names can never
+// collide across distinct charts here: the request reaches this resolver
+// only when no stored file answers it directly.
+func (s *HighServer) resolveHelmChartAlias(mirror, base string) (string, bool) {
+	want, isProv := strings.CutSuffix(base, ".prov")
+	metaDir := filepath.Join(s.helmDir(), mirror, "metadata")
+	entries, err := os.ReadDir(metaDir)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		stem, ok := strings.CutSuffix(e.Name(), ".json")
+		if e.IsDir() || !ok {
+			continue
+		}
+		st, err := s.readHelmStored(mirror, stem)
+		if err != nil {
+			continue
+		}
+		name, _ := st.Metadata["name"].(string)
+		version, _ := st.Metadata["version"].(string)
+		if name == "" || version == "" || name+"-"+version+".tgz" != want {
+			continue
+		}
+		if isProv {
+			return st.Filename + ".prov", true
+		}
+		return st.Filename, true
+	}
+	return "", false
 }
 
 // -----------------------------------------------------------------------------
@@ -247,6 +312,9 @@ type helmStoredChart struct {
 	Filename string         `json:"filename"`
 	Digest   string         `json:"digest"`
 	Metadata map[string]any `json:"metadata"`
+	// Prov marks a chart whose .prov provenance file is installed beside the
+	// archive, letting `helm pull --verify` fetch and check it.
+	Prov bool `json:"prov,omitempty"`
 }
 
 // publishHelm regenerates the served repository for every mirror in an
@@ -306,7 +374,7 @@ func (s *HighServer) publishHelmChart(mirror string, c HelmChart) error {
 	if err != nil {
 		return err
 	}
-	st := helmStoredChart{Filename: c.Filename, Digest: digest, Metadata: meta}
+	st := helmStoredChart{Filename: c.Filename, Digest: digest, Metadata: meta, Prov: c.ProvPath != "" && fileExists(abs+".prov")}
 	out := filepath.Join(s.helmDir(), mirror, "metadata", helmChartStem(c.Name, c.Version)+".json")
 	if !safeJoin(s.helmDir(), out) {
 		return fmt.Errorf("unsafe metadata path for %s@%s", c.Name, c.Version)
@@ -481,10 +549,25 @@ func (s *HighServer) helmIndexEntry(mirror, metaPath string) (string, map[string
 	}
 	// Relative URLs resolve against the repo base, so the index needs no
 	// absolute self-URL and survives being served under any host name.
-	entry["urls"] = []string{"charts/" + st.Filename}
+	entry["urls"] = []string{"charts/" + helmDownloadName(name, st)}
 	entry["digest"] = st.Digest
 	entry["created"] = fi.ModTime().UTC().Format(time.RFC3339)
 	return name, entry, true
+}
+
+// helmDownloadName is the basename a chart's download URL advertises. A chart
+// with mirrored provenance uses its original "<name>-<version>.tgz" packaging
+// name: `helm pull --verify` saves the download under the URL basename and
+// checks that exact filename against the .prov's signed file list, so the
+// canonical collision-safe stem would never verify. The mirror serves the
+// original name as an alias of the stored file (see helmServeTarget); charts
+// without provenance keep their stored stem, changing nothing for them.
+func helmDownloadName(name string, st helmStoredChart) string {
+	version, _ := st.Metadata["version"].(string)
+	if !st.Prov || version == "" {
+		return st.Filename
+	}
+	return name + "-" + version + ".tgz"
 }
 
 // sortHelmEntries orders one chart's index entries newest version first.
@@ -800,9 +883,9 @@ func (s *LowServer) downloadHelmCharts(ctx context.Context, stageRoot, mirror, r
 			continue
 		}
 		var chart HelmChart
-		var mf ManifestFile
+		var chartFiles []ManifestFile
 		if err == nil {
-			chart, mf, err = s.downloadHelmChart(ctx, stageRoot, mirror, repoURL, entry)
+			chart, chartFiles, err = s.downloadHelmChart(ctx, stageRoot, mirror, repoURL, entry)
 		}
 		if err != nil {
 			emitProgress(ctx, "  ✗ %s: %s", spec, err)
@@ -811,7 +894,7 @@ func (s *LowServer) downloadHelmCharts(ctx context.Context, stageRoot, mirror, r
 		}
 		seen[entry.Name+"@"+entry.Version] = true
 		charts = append(charts, chart)
-		files = append(files, mf)
+		files = append(files, chartFiles...)
 	}
 	return charts, files, failed
 }
@@ -865,11 +948,12 @@ func helmVersionLess(a, b string) bool {
 
 // downloadHelmChart fetches one chart archive, verifying the index digest when
 // the index declares one (upstream indexes carry a plain or sha256-prefixed
-// hex digest of the archive).
-func (s *LowServer) downloadHelmChart(ctx context.Context, stageRoot, mirror, repoURL string, entry *helmUpstreamEntry) (HelmChart, ManifestFile, error) {
+// hex digest of the archive), plus the chart's .prov provenance file when the
+// upstream publishes one.
+func (s *LowServer) downloadHelmChart(ctx context.Context, stageRoot, mirror, repoURL string, entry *helmUpstreamEntry) (HelmChart, []ManifestFile, error) {
 	dlURL, err := helmChartURL(repoURL, entry)
 	if err != nil {
-		return HelmChart{}, ManifestFile{}, err
+		return HelmChart{}, nil, err
 	}
 	filename := helmChartFilename(entry.Name, entry.Version)
 	rel := helmChartRel(mirror, filename)
@@ -885,10 +969,47 @@ func (s *LowServer) downloadHelmChart(ctx context.Context, stageRoot, mirror, re
 		sum, size, err = downloadFileSHA256(ctx, dlURL, abs)
 	}
 	if err != nil {
-		return HelmChart{}, ManifestFile{}, err
+		return HelmChart{}, nil, err
 	}
 	chart := HelmChart{Name: entry.Name, Version: entry.Version, Filename: filename, Path: rel, SHA256: sum}
-	return chart, ManifestFile{Path: rel, SHA256: sum, Size: size}, nil
+	files := []ManifestFile{{Path: rel, SHA256: sum, Size: size}}
+	if provFile, ok := fetchHelmProvenance(ctx, dlURL, stageRoot, rel); ok {
+		chart.ProvPath = provFile.Path
+		files = append(files, provFile)
+	}
+	return chart, files, nil
+}
+
+// fetchHelmProvenance mirrors the .prov provenance file `helm package --sign`
+// publishes next to a chart. It is best-effort: most repositories publish
+// none (404, silent), and no failure here fails the chart. The document is
+// PGP-signed by the chart author and passes through verbatim — the client's
+// keyring, not the mirror, decides trust.
+func fetchHelmProvenance(ctx context.Context, chartURL, stageRoot, chartRel string) (ManifestFile, bool) {
+	rel := chartRel + ".prov"
+	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
+	_, size, err := downloadFileSHA256(ctx, chartURL+".prov", abs)
+	if err != nil {
+		var httpErr *upstreamHTTPError
+		if !errors.As(err, &httpErr) || httpErr.Status != http.StatusNotFound {
+			emitProgress(ctx, "  ⚠ provenance %s: %s", path.Base(rel), err)
+		}
+		return ManifestFile{}, false
+	}
+	// A .prov is a small armored PGP document; require its shape so an error
+	// page served with a 200 never becomes a stored provenance file.
+	if b, readErr := os.ReadFile(abs); readErr != nil || size > 1<<20 ||
+		!strings.HasPrefix(strings.TrimSpace(string(b)), "-----BEGIN PGP SIGNED MESSAGE-----") {
+		_ = os.Remove(abs)
+		emitProgress(ctx, "  ⚠ provenance %s: response is not a signed provenance document", path.Base(rel))
+		return ManifestFile{}, false
+	}
+	mf, err := hashManifestFile(abs, rel)
+	if err != nil {
+		return ManifestFile{}, false
+	}
+	emitProgress(ctx, "  ⊕ provenance %s", path.Base(rel))
+	return mf, true
 }
 
 // helmChartURL resolves a chart's download URL: the index's first URL, which
