@@ -169,6 +169,17 @@ jobs:
             tags="${tags},${repo}:${{ steps.tag.outputs.new_tag }}"
           fi
           echo "tags=${tags}" >> "$GITHUB_OUTPUT"
+          # The binary's own identity (artigate version, startup logs, the
+          # dashboards, /metrics) is stamped from the tag this run just cut.
+          # The Docker build context excludes .git, so without this build-arg
+          # the released image would report itself as "dev". If no new tag was
+          # created, describe the checkout from the existing tags instead
+          # (fetch-depth: 0 above fetched them).
+          version="${{ steps.tag.outputs.new_tag }}"
+          if [ -z "$version" ]; then
+            version="$(git describe --tags --always)"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push container
         uses: docker/build-push-action@v6
@@ -176,3 +187,5 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.imgtags.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.imgtags.outputs.version }}

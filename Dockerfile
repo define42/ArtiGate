@@ -16,8 +16,10 @@ COPY . .
 
 # Optional version stamp reported by `artigate version`, the startup logs, and
 # both dashboards: docker build --build-arg VERSION=$(git describe --tags
-# --always --dirty). Left empty (the context excludes .git, so there is no VCS
-# metadata to fall back on) the binary reports "dev".
+# --always --dirty). The release workflow (.github/workflows/go.yml) passes the
+# semver tag it just cut, so published GHCR images identify as their release.
+# Left empty (the context excludes .git, so there is no VCS metadata to fall
+# back on) the binary reports "dev".
 ARG VERSION=
 
 # CGO is disabled to produce a fully static binary that runs on any base image.
