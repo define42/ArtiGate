@@ -55,6 +55,8 @@ func catalog() map[string][]Entry {
 			{Label: "Rocky Linux 9 - AppStream", File: "rpm/rocky9_appstream.repo"},
 			{Label: "Rocky Linux 9 - CRB", File: "rpm/rocky9_crb.repo"},
 			{Label: "Rocky Linux 9 - extras", File: "rpm/rocky9_extras.repo"},
+			{Label: "EPEL 10 - Extra Packages for Enterprise Linux (EL10)", File: "rpm/epel10.repo"},
+			{Label: "EPEL 9 - Extra Packages for Enterprise Linux (EL9)", File: "rpm/epel9.repo"},
 			{Label: "Docker CE - EL10 (Rocky/RHEL 10)", File: "rpm/docker_ce_el10.repo"},
 			{Label: "Docker CE - EL9 (Rocky/RHEL 9)", File: "rpm/docker_ce_el9.repo"},
 			{Label: "Visual Studio Code (stable)", File: "rpm/vscode.repo"},
