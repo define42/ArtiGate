@@ -66,12 +66,14 @@ func catalog() map[string][]Entry {
 			{Label: "Firefox (stable) - Mozilla", File: "rpm/firefox.repo"},
 		},
 		"apk": {
+			{Label: "Alpine 3.24 - main + community", File: "apk/alpine_3.24_full.repositories"},
+			{Label: "Alpine 3.24 - main only", File: "apk/alpine_3.24_main.repositories"},
+			{Label: "Alpine 3.23 - main + community", File: "apk/alpine_3.23_full.repositories"},
+			{Label: "Alpine 3.23 - main only", File: "apk/alpine_3.23_main.repositories"},
 			{Label: "Alpine 3.22 - main + community", File: "apk/alpine_3.22_full.repositories"},
 			{Label: "Alpine 3.22 - main only", File: "apk/alpine_3.22_main.repositories"},
 			{Label: "Alpine 3.21 - main + community", File: "apk/alpine_3.21_full.repositories"},
 			{Label: "Alpine 3.21 - main only", File: "apk/alpine_3.21_main.repositories"},
-			{Label: "Alpine 3.20 - main + community", File: "apk/alpine_3.20_full.repositories"},
-			{Label: "Alpine 3.20 - main only", File: "apk/alpine_3.20_main.repositories"},
 			{Label: "Alpine edge - main, community, testing (development)", File: "apk/alpine_edge.repositories"},
 		},
 	}
