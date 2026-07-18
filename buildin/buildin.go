@@ -43,6 +43,7 @@ func catalog() map[string][]Entry {
 			{Label: "Docker CE - Ubuntu 22.04 (jammy)", File: "apt/docker_ce_jammy.sources"},
 			{Label: "Visual Studio Code (stable)", File: "apt/vscode.sources"},
 			{Label: "Google Chrome (stable)", File: "apt/google_chrome.sources"},
+			{Label: "Firefox (stable) - Mozilla", File: "apt/firefox.sources"},
 		},
 		"rpm": {
 			{Label: "Rocky Linux 10 - BaseOS, AppStream, CRB and extras", File: "rpm/rocky10_full.repo"},
@@ -61,6 +62,7 @@ func catalog() map[string][]Entry {
 			{Label: "Docker CE - EL9 (Rocky/RHEL 9)", File: "rpm/docker_ce_el9.repo"},
 			{Label: "Visual Studio Code (stable)", File: "rpm/vscode.repo"},
 			{Label: "Google Chrome (stable)", File: "rpm/google_chrome.repo"},
+			{Label: "Firefox (stable) - Mozilla", File: "rpm/firefox.repo"},
 		},
 	}
 }
