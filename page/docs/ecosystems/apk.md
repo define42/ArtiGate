@@ -66,6 +66,9 @@ https://dl-cdn.alpinelinux.org/alpine/v3.22/community
 !!! warning "One mirror base per collect"
     Every line must share the same mirror base — lines naming different mirrors are rejected with `repositories name different mirrors (… and …); collect them separately`. Branch, repository, and architecture tokens must be single path-safe segments.
 
+!!! tip "Built-in repository lists"
+    The Alpine card ships ready-made `/etc/apk/repositories` lists for Alpine 3.22, 3.21 and 3.20 — each as a `main + community` or `main`-only variant — plus the rolling `edge` branch (main, community, testing). Pick one under "…or start from a built-in repository list" and it is pasted into the repositories box — edit it freely, then collect once or add a schedule. The architecture is chosen separately on the card (default `x86_64`), so the same list serves any arch. The files ship in the source tree under `buildin/apk/`.
+
 ## Private mirrors
 
 Mirrors that demand a login are fetched with HTTP Basic from one of two sources, resolved as *request `auth` → `ARTIGATE_UPSTREAM_AUTH` → anonymous*:

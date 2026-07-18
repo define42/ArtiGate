@@ -661,6 +661,11 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or paste an /etc/apk/repositories file <span class="opt">&mdash; overrides the fields above (architectures still apply)</span>
         <textarea id="apkreposfile" rows="2" placeholder="https://dl-cdn.alpinelinux.org/alpine/v3.22/main&#10;https://dl-cdn.alpinelinux.org/alpine/v3.22/community" autocomplete="off"></textarea>
       </label>
+      <label class="filelabel">&hellip;or start from a built-in repository list <span class="opt">&mdash; fills the repositories box above</span>
+        <select id="apkBuiltin" class="restream" onchange="applyBuiltin('apk')">
+          <option value="">Choose a built-in repository list&hellip;</option>
+        </select>
+      </label>
       <details class="pytarget">
         <summary>Private mirror login (optional)</summary>
         <div class="pytarget-grid">
@@ -1454,7 +1459,7 @@ function loadRpmFile(){
 // renderLowUI injects it server-side.
 const BUILTIN_SOURCES={{BUILTIN_SOURCES}};
 // BUILTIN_INPUT maps each stream that has built-ins to its collect input field.
-const BUILTIN_INPUT={apt:'aptsrc',rpm:'rpmrepo'};
+const BUILTIN_INPUT={apt:'aptsrc',rpm:'rpmrepo',apk:'apkreposfile'};
 
 // populateBuiltins fills each ecosystem's built-in picker; a stream with no
 // entries keeps its picker row hidden.

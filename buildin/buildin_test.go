@@ -34,8 +34,8 @@ func TestSourcesCatalogMatchesEmbeddedFiles(t *testing.T) {
 // the catalog references.
 func checkEntries(t *testing.T, src map[string][]Entry) map[string]bool {
 	t.Helper()
-	if len(src["apt"]) == 0 || len(src["rpm"]) == 0 {
-		t.Errorf("want built-in sources for both apt and rpm, got streams %v", mapKeys(src))
+	if len(src["apt"]) == 0 || len(src["rpm"]) == 0 || len(src["apk"]) == 0 {
+		t.Errorf("want built-in sources for apt, rpm and apk, got streams %v", mapKeys(src))
 	}
 	cataloged := map[string]bool{}
 	labels := map[string]bool{}
