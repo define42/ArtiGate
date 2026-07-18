@@ -232,9 +232,14 @@ func snapFileRel(name, filename string) string {
 	return path.Join("snap", "files", name, filename)
 }
 
-// validateSnapPackage checks one manifest record: path-safe identity, the
-// canonical storage paths, and that both referenced files are listed.
-func validateSnapPackage(p SnapPackage, seen map[string]bool) error {
+// validateSnapRecord checks one snap record's own fields — identity, the
+// store's free-text metadata, digest, and canonical filename — independent
+// of the manifest file list. The low side applies the same check at collect
+// time (downloadSnap), so an out-of-spec store field fails that one snap
+// into the skipped list instead of being signed into a bundle the high side
+// must then reject — which, on a strictly sequenced stream, would stall
+// every later snap import behind the rejected sequence number.
+func validateSnapRecord(p SnapPackage) error {
 	if err := errors.Join(
 		validateSnapName(p.Name),
 		validateSnapID(p.SnapID),
@@ -252,6 +257,15 @@ func validateSnapPackage(p SnapPackage, seen map[string]bool) error {
 	}
 	if p.Filename != snapFilename(p.Name, p.Revision) {
 		return fmt.Errorf("snap %s@%d has non-canonical filename %s", p.Name, p.Revision, p.Filename)
+	}
+	return nil
+}
+
+// validateSnapPackage checks one manifest record: path-safe identity, the
+// canonical storage paths, and that both referenced files are listed.
+func validateSnapPackage(p SnapPackage, seen map[string]bool) error {
+	if err := validateSnapRecord(p); err != nil {
+		return err
 	}
 	if p.Path != snapFileRel(p.Name, p.Filename) || !seen[p.Path] {
 		return fmt.Errorf("snap %s@%d references file not listed in manifest.files: %s", p.Name, p.Revision, p.Path)
@@ -1146,6 +1160,11 @@ func (d *snapDownloader) downloadSnap(ctx context.Context, info *snapStoreInfo, 
 		Version: entry.Version, Base: entry.Base, Confinement: entry.Confinement, Type: entry.Type,
 		Summary: info.Snap.Summary, Publisher: info.Snap.Publisher.Username, License: info.Snap.License,
 		Filename: filename, Path: rel, SHA256: sum, SHA3384: entry.Download.SHA3384, AssertPath: assertRel,
+	}
+	// The exact record check the high side applies at import: an out-of-spec
+	// store field must fail this one snap here, not poison the signed bundle.
+	if err := validateSnapRecord(pkg); err != nil {
+		return SnapPackage{}, nil, err
 	}
 	return pkg, []ManifestFile{{Path: rel, SHA256: sum, Size: size}, assertFile}, nil
 }

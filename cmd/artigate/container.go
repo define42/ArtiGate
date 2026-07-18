@@ -1510,6 +1510,15 @@ func verifyContainerConfigPlatform(stageRoot string, ref imageRef, configDigest 
 // into thousands of fetches.
 const containerMaxImageArtifacts = 64
 
+// containerMaxArtifactFetches bounds how many artifact-manifest fetches the
+// discovery schemes may attempt for one image, recorded or not. The
+// found-count cap alone cannot bound the work: a referrer that 404s (or
+// errors) records nothing, so a hostile or stale registry listing thousands
+// of dangling referrers would otherwise still drive one upstream GET per
+// listed digest. Generous headroom over the artifact cap so a few dangling
+// entries never crowd out real artifacts.
+const containerMaxArtifactFetches = containerMaxImageArtifacts * 4
+
 // collectImageArtifacts discovers and mirrors the artifacts attached to a
 // resolved image: buildkit attestation-manifest index entries, cosign's tag
 // scheme, and the OCI referrers API — for both the digest a tag pull serves
@@ -1562,6 +1571,7 @@ type artifactCollector struct {
 	found     map[string]*ContainerArtifact
 	order     []string
 	files     []ManifestFile
+	attempts  int // manifest fetches attempted, recorded or not
 	capped    bool
 }
 
@@ -1574,12 +1584,15 @@ func (a *artifactCollector) list() []ContainerArtifact {
 	return out
 }
 
-// capReached reports whether the per-image artifact cap is hit, warning
-// once. Every discovery path checks it before fetching anything, so a noisy
-// or hostile registry listing thousands of referrers cannot drive manifest
-// GETs past the cap — the guard bounds the requests, not just the records.
+// capReached reports whether artifact discovery for this image must stop —
+// the per-image artifact cap or the fetch-attempt budget is exhausted —
+// warning once. Every discovery path checks it before fetching anything and
+// counts each fetch attempt, so the guard bounds the upstream requests, not
+// just the records: a referrer that 404s records nothing but still spends
+// its attempt, so a list of dangling digests runs out of budget instead of
+// driving one GET per entry.
 func (a *artifactCollector) capReached(ctx context.Context) bool {
-	if len(a.found) < containerMaxImageArtifacts {
+	if len(a.found) < containerMaxImageArtifacts && a.attempts < containerMaxArtifactFetches {
 		return false
 	}
 	a.warnCapped(ctx)
@@ -1592,6 +1605,7 @@ func (a *artifactCollector) addByTag(ctx context.Context, subject, tag string) {
 	if a.capReached(ctx) {
 		return
 	}
+	a.attempts++
 	body, mediaType, digest, found, err := a.c.fetchArtifactManifest(ctx, a.ref, tag)
 	if err != nil {
 		emitProgress(ctx, "    ⚠ artifact %s: %v", tag, err)
@@ -1613,6 +1627,7 @@ func (a *artifactCollector) addReferrer(ctx context.Context, subject string, des
 	if a.capReached(ctx) {
 		return
 	}
+	a.attempts++
 	body, mediaType, digest, found, err := a.c.fetchArtifactManifest(ctx, a.ref, desc.Digest)
 	if err != nil || !found {
 		if err == nil {
@@ -1679,7 +1694,8 @@ func (a *artifactCollector) stageArtifact(ctx context.Context, subject, tag stri
 func (a *artifactCollector) warnCapped(ctx context.Context) {
 	if !a.capped {
 		a.capped = true
-		emitProgress(ctx, "    ⚠ more than %d attached artifacts; skipping the rest", containerMaxImageArtifacts)
+		emitProgress(ctx, "    ⚠ artifact discovery cap reached (%d mirrored, %d fetches); skipping the rest",
+			len(a.found), a.attempts)
 	}
 }
 

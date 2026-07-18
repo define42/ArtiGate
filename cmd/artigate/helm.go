@@ -28,6 +28,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -270,13 +271,81 @@ func (s *HighServer) helmServeTarget(rel string) string {
 // .tgz" or its .prov sibling) to the stored filename, by matching the stored
 // charts' embedded identity. Stored names and download names can never
 // collide across distinct charts here: the request reaches this resolver
-// only when no stored file answers it directly.
+// only when no stored file answers it directly. The lookup is answered from
+// a per-mirror alias map (helmAliasCache) — this path is unauthenticated and
+// hit by every provenance-alias pull, so it must not scan the metadata
+// directory per request.
 func (s *HighServer) resolveHelmChartAlias(mirror, base string) (string, bool) {
 	want, isProv := strings.CutSuffix(base, ".prov")
-	metaDir := filepath.Join(s.helmDir(), mirror, "metadata")
-	entries, err := os.ReadDir(metaDir)
-	if err != nil {
+	aliases, ok := s.helmAliasIndex(mirror)
+	if !ok {
 		return "", false
+	}
+	stored, ok := aliases[want]
+	if !ok {
+		return "", false
+	}
+	if isProv {
+		return stored + ".prov", true
+	}
+	return stored, true
+}
+
+// helmAliasCache memoizes, per mirror, the map from a chart's advertised
+// download name ("<name>-<version>.tgz") to its stored filename. Without it
+// the unauthenticated charts/ route would re-read every chart's stored
+// metadata on each request that names no stored file directly — which is
+// every provenance-alias fetch `helm pull --verify` makes, and every probe
+// for a name that does not exist. Each entry is keyed by the mirror's
+// index.yaml (size, modtime): every publish regenerates that file, so a
+// changed mirror rebuilds its map on the next request, like npmAuditCache.
+type helmAliasCache struct {
+	mu      sync.Mutex
+	mirrors map[string]helmAliasEntry
+}
+
+type helmAliasEntry struct {
+	size    int64
+	modTime time.Time
+	aliases map[string]string
+}
+
+// helmAliasIndex returns the mirror's alias map, rebuilding it only when the
+// mirror's index.yaml is new or changed since the map was built. A mirror
+// without an index has no charts to alias — and stays out of the cache, so
+// probes for mirrors that do not exist cannot grow it.
+func (s *HighServer) helmAliasIndex(mirror string) (map[string]string, bool) {
+	fi, err := os.Stat(filepath.Join(s.helmDir(), mirror, "index.yaml"))
+	if err != nil {
+		return nil, false
+	}
+	c := &s.helmAliases
+	c.mu.Lock()
+	if e, ok := c.mirrors[mirror]; ok && e.size == fi.Size() && e.modTime.Equal(fi.ModTime()) {
+		c.mu.Unlock()
+		return e.aliases, true
+	}
+	c.mu.Unlock()
+
+	aliases := s.buildHelmAliasIndex(mirror)
+
+	c.mu.Lock()
+	if c.mirrors == nil {
+		c.mirrors = make(map[string]helmAliasEntry)
+	}
+	c.mirrors[mirror] = helmAliasEntry{size: fi.Size(), modTime: fi.ModTime(), aliases: aliases}
+	c.mu.Unlock()
+	return aliases, true
+}
+
+// buildHelmAliasIndex scans one mirror's stored-chart metadata once, mapping
+// each chart's advertised download name to its stored filename. The returned
+// map is shared read-only through the cache and never mutated after this.
+func (s *HighServer) buildHelmAliasIndex(mirror string) map[string]string {
+	aliases := map[string]string{}
+	entries, err := os.ReadDir(filepath.Join(s.helmDir(), mirror, "metadata"))
+	if err != nil {
+		return aliases
 	}
 	for _, e := range entries {
 		stem, ok := strings.CutSuffix(e.Name(), ".json")
@@ -289,15 +358,12 @@ func (s *HighServer) resolveHelmChartAlias(mirror, base string) (string, bool) {
 		}
 		name, _ := st.Metadata["name"].(string)
 		version, _ := st.Metadata["version"].(string)
-		if name == "" || version == "" || name+"-"+version+".tgz" != want {
+		if name == "" || version == "" {
 			continue
 		}
-		if isProv {
-			return st.Filename + ".prov", true
-		}
-		return st.Filename, true
+		aliases[name+"-"+version+".tgz"] = st.Filename
 	}
-	return "", false
+	return aliases
 }
 
 // -----------------------------------------------------------------------------
