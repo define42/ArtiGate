@@ -14,12 +14,12 @@ Because it re-runs the real collect every time, a watch inherits all of that col
 - [Export dedup](architecture.md#export-deduplication-and-delta-bundles) still applies: if every resolved file was already forwarded on that stream, no bundle is produced and no sequence number is consumed — the watch just records a "skipped" run. If only some files are new, the run emits a **delta bundle** carrying just the churn (the watch message counts the already-forwarded files).
 - Per-unit fetch failures are collected as skipped units, not fatal, so one broken reference never blocks the batch.
 
-A watch can target any of the twenty-one schedulable streams — every stream except [`uploads`](ecosystems/uploads.md), which has no upstream to re-pull:
+A watch can target any of the twenty-two schedulable streams — every stream except [`uploads`](ecosystems/uploads.md), which has no upstream to re-pull:
 
 ```text
 go   python   maven   apt   rpm   hf   containers   npm
 crates   terraform   helm   nuget   apk   conda   rubygems
-composer   vsx   galaxy   cran   git   osv
+composer   vsx   galaxy   cran   snap   git   osv
 ```
 
 ## Adding a schedule from an ecosystem page

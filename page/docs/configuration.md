@@ -102,6 +102,7 @@ artigate low \
 | `--rubygems-url` | `""` (→ `https://rubygems.org`) | Gem server gems and their compact index are fetched from |
 | `--composer-repo` | `""` (→ `https://repo.packagist.org`) | Composer repository package metadata and dists are resolved from |
 | `--vsx-registry` | `""` (→ `https://open-vsx.org`) | Open VSX registry VS Code extensions are fetched from |
+| `--snap-store` | `""` (→ `https://api.snapcraft.io`) | Snap Store API snaps and their assertions are fetched from |
 | `--galaxy-server` | `""` (→ `https://galaxy.ansible.com`) | Galaxy server Ansible collections are fetched from |
 | `--cran-mirror` | `""` (→ `https://cloud.r-project.org`) | CRAN mirror R packages are fetched from |
 | `--git` | `git` | git command used to fetch Terraform modules from `git::` sources |
@@ -114,7 +115,7 @@ artigate low \
 
 ### Routes
 
-- `POST /admin/{go,python,maven,apt,rpm,hf,containers,npm,crates,terraform,helm,nuget,apk,conda,rubygems,composer,vsx,galaxy,cran,git,osv,uploads}/collect` — one endpoint per stream (add `?stream=1` for streamed progress, `?dry_run=1` for an estimate; every JSON body accepts `"force": true` to bypass export dedup). `uploads` takes `multipart/form-data` instead of JSON
+- `POST /admin/{go,python,maven,apt,rpm,hf,containers,npm,crates,terraform,helm,nuget,apk,conda,rubygems,composer,vsx,galaxy,cran,snap,git,osv,uploads}/collect` — one endpoint per stream (add `?stream=1` for streamed progress, `?dry_run=1` for an estimate; every JSON body accepts `"force": true` to bypass export dedup). `uploads` takes `multipart/form-data` instead of JSON
 - `POST /admin/reexport?stream=go&sequences=42,45-47` (`stream` defaults to `go`; also accepts a JSON body `{"stream":"go","sequences":"42,45-47"}`)
 - `GET /admin/bundles`
 - `GET /admin/watches`, `POST /admin/watches`, `POST /admin/watches/{update,run,enable,disable,delete}` — the [watch scheduler](scheduling.md)
@@ -318,7 +319,7 @@ Validation (all fatal at startup):
 
 The file paths, listen addresses, and behaviour toggles are **flag-only**; TLS and low-side auth are **env-only**. There is deliberately no flag for TLS and no env var for paths/listen addresses.
 
-- **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags (including `--git`), the upstream overrides (`--pypi-json`, `--hf-endpoint`, `--crates-index`, `--terraform-registry`, `--nuget-source`, `--osv-upstream`, `--conda-channel-base`, `--rubygems-url`, `--composer-repo`, `--vsx-registry`, `--galaxy-server`, `--cran-mirror`, `--npm-registry`, `--container-registry`), `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`, `--apk-key-name`.
+- **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags (including `--git`), the upstream overrides (`--pypi-json`, `--hf-endpoint`, `--crates-index`, `--terraform-registry`, `--nuget-source`, `--osv-upstream`, `--conda-channel-base`, `--rubygems-url`, `--composer-repo`, `--vsx-registry`, `--galaxy-server`, `--cran-mirror`, `--snap-store`, `--npm-registry`, `--container-registry`), `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`, `--apk-key-name`.
 - **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_LOW_ALLOW_UNAUTHENTICATED`, `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`, `ARTIGATE_CONTAINER_AUTH`, `ARTIGATE_GO_AUTH`, `ARTIGATE_UPSTREAM_AUTH`, `ARTIGATE_WEBHOOK_URL`, `ARTIGATE_WEBHOOK_TOKEN`.
 
 See also: [Deployment](deployment.md) for production topologies, [Security & trust](security.md) for the trust model, and [TLS / HTTPS](tls.md) for the full TLS matrix.

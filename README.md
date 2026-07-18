@@ -9,7 +9,9 @@ NPM packages, Rust crates, Terraform/OpenTofu providers and modules, Helm
 charts, NuGet packages, APT (`.deb`), RPM (`.rpm`), and Alpine (`.apk`)
 repositories, Conda channels, Ruby gems, PHP Composer packages, VS Code
 extensions (from Open VSX), Ansible Galaxy collections, R packages (CRAN),
-raw git repositories, container images (Docker/OCI, linux/amd64), AI models
+Snap packages (with their store assertions, ready for `snap ack` +
+`snap install`), raw git repositories, container images (Docker/OCI,
+linux/amd64), AI models
 from Hugging Face (GGUF for Ollama, plus full safetensors repositories), and
 OSV vulnerability-advisory databases from the internet into an air-gapped
 network, and serves them there in each ecosystem's native format — so the
@@ -22,8 +24,9 @@ One binary, two modes:
   (a `go.mod` or module list, a Python requirements list, Maven coordinates, a
   `package.json` or NPM package list, a crate/provider/chart/NuGet list, an APT
   source, a `.repo`, an Alpine repositories file, a conda channel and package
-  list, a gem/Composer/extension/collection/CRAN package list, a git clone
-  URL, a list of container images, a list of Hugging Face model references,
+  list, a gem/Composer/extension/collection/CRAN/snap package list, a git
+  clone URL, a list of container images, a list of Hugging Face model
+  references,
   or a list of OSV ecosystem names); it fetches the artifacts from upstream
   and writes **signed, numbered bundle files**.
 - **`high`** — runs air-gapped. It imports the bundles (in order, verifying every
@@ -33,7 +36,9 @@ One binary, two modes:
   provider+module registry, Helm repositories, a NuGet v3 feed, APT/RPM/Alpine
   repositories, conda channels, a RubyGems compact-index source, a Composer
   repository, a VS Code extension gallery, an Ansible Galaxy v3 API, a CRAN
-  mirror, read-only git repositories (dumb HTTP), a read-only OCI container
+  mirror, a Snap download mirror (`.snap` + `.assert` pairs for snapd's
+  offline install flow), read-only git repositories (dumb HTTP), a read-only
+  OCI container
   registry, an Ollama-compatible model registry with a Hugging Face Hub
   download API, and an OSV advisory feed for offline vulnerability scanners.
 
@@ -352,6 +357,18 @@ and environment variable.
   packages verified against the index MD5. The high side regenerates
   `src/contrib/PACKAGES(.gz)` from each tarball's own `DESCRIPTION`, so
   `install.packages("pkg", repos = "<high>/cran")` works.
+- **Snap** — snap specs, one per line (`hello`, or `hello@edge` /
+  `blender@4.1/stable` to pick a channel; one architecture per collect,
+  default `amd64`; `--snap-store` overrides the upstream). Each snap's
+  current revision in that channel is fetched from the Snap Store API,
+  verified against the store-declared SHA3-384, and mirrored together with
+  its signed store assertions (`.assert`) and, unless opted out, the base
+  snap it runs on. The high side recomputes every archive's SHA3-384 and
+  refuses revisions whose assertions don't vouch for the exact bytes, then
+  serves the `<name>_<rev>.snap` + `<name>_<rev>.assert` pairs (plus a JSON
+  revision index at `/snap/info/<name>`) — on the air-gapped machine,
+  `snap ack <name>_<rev>.assert && snap install <name>_<rev>.snap` installs
+  with snapd's own signature verification, no `--dangerous` needed.
 - **Git** — a clone URL (plus an optional mirror name and ref list). The low
   side speaks the smart HTTP protocol as a pure-Go client — no git binary
   beside the signing key — fetches every selected branch and tag as one
@@ -1047,7 +1064,10 @@ edge-triggered (one notification per gap; the gap then ages via
   signatures + provenance attestations + the `/-/npm/v1/keys` endpoint
   (`npm audit signatures` works against the mirror), Maven `.asc` PGP
   signatures (fetched from Central — override with `--maven-signatures`),
-  Helm `.prov` provenance files (`helm pull --verify`), and PyPI PEP 740
+  Helm `.prov` provenance files (`helm pull --verify`), Snap Store
+  assertion chains (`snap ack` verifies them against snapd's built-in root
+  of trust; the high side additionally refuses any archive whose recomputed
+  SHA3-384 the assertions don't vouch for), and PyPI PEP 740
   provenance via `/integrity/…` and the simple JSON `provenance` key. All of
   it is best-effort at collect time (unsigned upstream content mirrors bare)
   and captured at collect: re-signing upstream later needs a re-collect.

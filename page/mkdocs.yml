@@ -79,6 +79,7 @@ nav:
       - VS Code extensions: ecosystems/vsx.md
       - Ansible Galaxy: ecosystems/galaxy.md
       - R packages (CRAN): ecosystems/cran.md
+      - Snap packages: ecosystems/snap.md
       - Git repositories: ecosystems/git.md
       - OSV advisories: ecosystems/osv.md
       - Uploads (arbitrary files): ecosystems/uploads.md

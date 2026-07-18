@@ -8,7 +8,7 @@ ArtiGate is a single binary with two roles that never share routes: `artigate lo
 ## Conventions
 
 - **Bundle IDs** are `<stream>-bundle-%06d`, e.g. `go-bundle-000042`, `python-bundle-000007`. Each bundle is three files: `<id>.tar.gz`, `<id>.manifest.json`, `<id>.manifest.json.sig`.
-- **Streams** are the twenty-two ecosystems, each independently sequenced: `go`, `python`, `maven`, `apt`, `rpm`, `hf`, `containers`, `npm`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `conda`, `rubygems`, `composer`, `vsx`, `galaxy`, `cran`, `git`, `osv`, `uploads`. The `go` stream keeps the legacy single-stream numbering.
+- **Streams** are the twenty-three ecosystems, each independently sequenced: `go`, `python`, `maven`, `apt`, `rpm`, `hf`, `containers`, `npm`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `conda`, `rubygems`, `composer`, `vsx`, `galaxy`, `cran`, `snap`, `git`, `osv`, `uploads`. The `go` stream keeps the legacy single-stream numbering.
 - **Error codes**: collect and re-export errors are `400`; watch validation `400`, watch store failures `500`; high-side import/status failures `500`; UI `detail` not-found `404`; `repos` for a wrong ecosystem `400`. Non-read methods on serving/UI routes return `405`.
 - **Auth**: only the low dashboard can require login (`ARTIGATE_LOW_AUTH`). The high side is never authenticated. See [Security & trust](security.md) and [TLS / HTTPS](tls.md).
 
@@ -520,6 +520,27 @@ Each artifact is verified against the v3-API-declared SHA-256 **and** size; per-
 | `packages` | `[]string` | **Required.** `name` for the mirror's current version, `name@1.15.4` to pin (superseded pins fetch from `Archive/`) |
 
 Tarballs are verified against the index-declared MD5 when present (Archive downloads are TLS-trusted); dependency resolution follows `Depends`/`Imports`/`LinkingTo` at current versions, skipping base packages. Unresolvable items are reported in `skipped_modules`.
+
+---
+
+#### Snap packages — `POST /admin/snap/collect`
+
+`SnapCollectRequest`. Body limit **1 MiB**. See [Snap packages](ecosystems/snap.md).
+
+```json
+{
+  "snaps": ["hello", "firefox@latest/candidate"],
+  "architecture": "amd64"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `snaps` | `[]string` | **Required.** `name` for the stable channel, `name@channel` to pick another (`hello@edge`, `blender@4.1/stable`) |
+| `architecture` | string | Store architecture (default `amd64`; one per collect) |
+| `no_bases` | bool | Skip the base snaps the listed snaps declare (which otherwise ride along from stable) |
+
+Each `.snap` is verified during download against the store-declared SHA3-384 and size, and mirrored together with its store assertion chain (`.assert`), cross-checked against the channel entry before staging. Per-snap failures are reported in `skipped_modules`.
 
 ---
 
@@ -1096,6 +1117,16 @@ Client: `install.packages("pkg", repos = "<base>/cran")`. See [R packages (CRAN)
 | `/cran/src/contrib/<name>_<version>.tar.gz` | The source package |
 | `/cran/src/contrib/Archive/<name>/<name>_<version>.tar.gz` | Superseded releases |
 
+#### Snap packages — prefix `/snap`
+
+Client: download the pair, then `snap ack <name>_<rev>.assert && snap install <name>_<rev>.snap`. See [Snap packages](ecosystems/snap.md).
+
+| URL | Returns |
+|---|---|
+| `/snap/files/<name>/<name>_<rev>.snap` | The squashfs archive |
+| `/snap/files/<name>/<name>_<rev>.assert` | The store assertion chain (`application/x.ubuntu.assertion`) |
+| `/snap/info/<name>` | JSON revision index (newest first): version, channel, architecture, digest, and both file URLs per revision |
+
 #### Git (dumb HTTP) — prefix `/git`
 
 Client: `git clone <base>/git/<mirror>.git`. See [Git repositories](ecosystems/git.md).
@@ -1141,7 +1172,7 @@ Just the import status; the package trees are fetched lazily.
 
 #### `GET /ui/api/tree?eco=<eco>&path=<path>`
 
-`eco` ∈ `go` (default), `python`, `maven`, `apt`, `rpm`, `hf`, `containers`, `npm`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `conda`, `rubygems`, `composer`, `vsx`, `galaxy`, `cran`, `git`, `osv`, `uploads`. `path` is the parent node path (empty for root); children are returned one level at a time.
+`eco` ∈ `go` (default), `python`, `maven`, `apt`, `rpm`, `hf`, `containers`, `npm`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `conda`, `rubygems`, `composer`, `vsx`, `galaxy`, `cran`, `snap`, `git`, `osv`, `uploads`. `path` is the parent node path (empty for root); children are returned one level at a time.
 
 ```json
 { "nodes": [
