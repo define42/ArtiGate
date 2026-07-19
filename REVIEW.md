@@ -872,8 +872,13 @@ bounded "the requests, not just the records"; that was true only for the success
 in `addByTag`/`addReferrer` before each `fetchArtifactManifest`) and `capReached` stops
 discovery when either the artifact cap (64) or the attempt budget
 (`containerMaxArtifactFetches`, 4×) is exhausted; the cap warning now reports both
-numbers. Regression test `TestArtifactCollectorAttemptCapBoundsMissingReferrers`
-(asserts the GET count stays within the budget for an all-404 referrer list).
+numbers. The budget gates the *next* fetch only: `record` checks the found cap alone
+(`foundCapReached`), so a manifest fetched on the budget's final attempt is still
+recorded rather than thrown away with its bytes in hand. Regression tests
+`TestArtifactCollectorAttemptCapBoundsMissingReferrers` (the GET count stays within
+the budget for an all-404 referrer list) and
+`TestArtifactCollectorRecordsFinalBudgetedArtifact` (the boundary artifact is kept,
+the attempt after it is refused).
 
 ### L20 — Snap store metadata was validated only on the high side
 

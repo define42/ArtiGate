@@ -1580,6 +1580,34 @@ func TestArtifactCollectorAttemptCapBoundsMissingReferrers(t *testing.T) {
 	}
 }
 
+// TestArtifactCollectorRecordsFinalBudgetedArtifact pins the budget's
+// boundary: a manifest fetched on the budget's final attempt is already in
+// hand and must still be recorded — the attempt budget gates the next
+// discovery GET, never what may be kept of a response already fetched.
+// Only the attempt after it is refused.
+func TestArtifactCollectorRecordsFinalBudgetedArtifact(t *testing.T) {
+	fix, srv := newSignedImageRegistry(t)
+	ls, _ := newContainerLowServer(t, map[string]string{"docker.io": srv.URL})
+	col := &artifactCollector{
+		c: ls.newContainerClient(), ref: imageRef{Registry: "docker.io", Repository: "library/signed"},
+		stageRoot: t.TempDir(), seenFile: map[string]bool{}, skip: map[string]bool{},
+		found:    map[string]*ContainerArtifact{},
+		attempts: containerMaxArtifactFetches - 1,
+	}
+	col.addByTag(context.Background(), fix.indexDigest, cosignArtifactTag(fix.indexDigest, ".sig"))
+	if len(col.order) != 1 || col.order[0] != fix.sig.digest {
+		t.Fatalf("final budgeted artifact not recorded: order = %v, want [%s]", col.order, fix.sig.digest)
+	}
+	// The budget is spent now: the next discovery attempt is refused.
+	col.addByTag(context.Background(), fix.indexDigest, cosignArtifactTag(fix.indexDigest, ".att"))
+	if len(col.order) != 1 {
+		t.Fatalf("discovery continued past the attempt budget: %v", col.order)
+	}
+	if !col.capped {
+		t.Error("cap warning never emitted for the refused attempt")
+	}
+}
+
 // TestContainerManifestServeCapsBlobRead is the manifest-side sibling of the
 // config-blob cap: import checks a manifest blob's size only > 0, so the
 // unauthenticated pull path must not read an arbitrarily large "manifest"

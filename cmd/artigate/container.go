@@ -1599,6 +1599,21 @@ func (a *artifactCollector) capReached(ctx context.Context) bool {
 	return true
 }
 
+// foundCapReached reports whether the mirrored-artifact cap alone is hit,
+// warning once. record checks this instead of capReached: a manifest whose
+// fetch was admitted spent the budget's final attempt getting the bytes in
+// hand, and dropping them then would save no upstream request — the attempt
+// budget bounds discovery GETs, so it gates the next fetch, never what may
+// be kept of a response already fetched. (The artifact's blob downloads are
+// the same cost every recorded artifact pays, bounded by the found cap.)
+func (a *artifactCollector) foundCapReached(ctx context.Context) bool {
+	if len(a.found) < containerMaxImageArtifacts {
+		return false
+	}
+	a.warnCapped(ctx)
+	return true
+}
+
 // addByTag mirrors the artifact at one cosign tag-scheme tag. A missing tag
 // is the normal case and silent.
 func (a *artifactCollector) addByTag(ctx context.Context, subject, tag string) {
@@ -1651,7 +1666,7 @@ func (a *artifactCollector) record(ctx context.Context, subject, tag string, bod
 		}
 		return
 	}
-	if a.capReached(ctx) {
+	if a.foundCapReached(ctx) {
 		return
 	}
 	art, files, err := a.stageArtifact(ctx, subject, tag, body, mediaType, digest, desc)
