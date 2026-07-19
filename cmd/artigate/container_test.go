@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -1541,6 +1542,69 @@ func TestArtifactCollectorCapStopsFetching(t *testing.T) {
 	}
 	if len(col.order) != 0 {
 		t.Errorf("capped collector recorded artifacts: %v", col.order)
+	}
+}
+
+// TestArtifactCollectorAttemptCapBoundsMissingReferrers pins the other half
+// of the discovery bound: a referrer that 404s records nothing, so the
+// found-count cap never trips — the fetch-attempt budget must stop the loop
+// instead of letting a hostile or stale referrers index drive one upstream
+// GET per listed digest.
+func TestArtifactCollectorAttemptCapBoundsMissingReferrers(t *testing.T) {
+	var gets atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/manifests/") {
+			gets.Add(1)
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	ls, _ := newContainerLowServer(t, map[string]string{"docker.io": srv.URL})
+	col := &artifactCollector{
+		c: ls.newContainerClient(), ref: imageRef{Registry: "docker.io", Repository: "library/alpine"},
+		stageRoot: t.TempDir(), seenFile: map[string]bool{}, skip: map[string]bool{},
+		found: map[string]*ContainerArtifact{},
+	}
+	subject := containerSHA([]byte("subject"))
+	for i := 0; i < containerMaxArtifactFetches+16; i++ {
+		col.addReferrer(context.Background(), subject, ociDescriptor{Digest: containerSHA([]byte(fmt.Sprintf("missing-%d", i)))})
+	}
+	if got := gets.Load(); got == 0 || got > containerMaxArtifactFetches {
+		t.Errorf("collector made %d manifest GETs, want between 1 and %d", got, containerMaxArtifactFetches)
+	}
+	if !col.capped {
+		t.Error("attempt-cap warning never emitted")
+	}
+	if len(col.order) != 0 {
+		t.Errorf("collector recorded artifacts for 404ing referrers: %v", col.order)
+	}
+}
+
+// TestArtifactCollectorRecordsFinalBudgetedArtifact pins the budget's
+// boundary: a manifest fetched on the budget's final attempt is already in
+// hand and must still be recorded — the attempt budget gates the next
+// discovery GET, never what may be kept of a response already fetched.
+// Only the attempt after it is refused.
+func TestArtifactCollectorRecordsFinalBudgetedArtifact(t *testing.T) {
+	fix, srv := newSignedImageRegistry(t)
+	ls, _ := newContainerLowServer(t, map[string]string{"docker.io": srv.URL})
+	col := &artifactCollector{
+		c: ls.newContainerClient(), ref: imageRef{Registry: "docker.io", Repository: "library/signed"},
+		stageRoot: t.TempDir(), seenFile: map[string]bool{}, skip: map[string]bool{},
+		found:    map[string]*ContainerArtifact{},
+		attempts: containerMaxArtifactFetches - 1,
+	}
+	col.addByTag(context.Background(), fix.indexDigest, cosignArtifactTag(fix.indexDigest, ".sig"))
+	if len(col.order) != 1 || col.order[0] != fix.sig.digest {
+		t.Fatalf("final budgeted artifact not recorded: order = %v, want [%s]", col.order, fix.sig.digest)
+	}
+	// The budget is spent now: the next discovery attempt is refused.
+	col.addByTag(context.Background(), fix.indexDigest, cosignArtifactTag(fix.indexDigest, ".att"))
+	if len(col.order) != 1 {
+		t.Fatalf("discovery continued past the attempt budget: %v", col.order)
+	}
+	if !col.capped {
+		t.Error("cap warning never emitted for the refused attempt")
 	}
 }
 

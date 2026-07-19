@@ -540,6 +540,63 @@ func TestHelmProvenancePipeline(t *testing.T) {
 	assertHTTPStatus(t, srv.URL+"/helm/"+mirror+"/charts/db-0.5.0.tgz.prov", http.StatusNotFound)
 }
 
+// TestHelmAliasIndexCache pins the request-cost fix on the alias resolver:
+// the unauthenticated charts/ route answers aliased names (every `helm pull
+// --verify` fetch, every probe for a name that does not exist) from a
+// per-mirror map built by scanning the metadata directory once, keyed on
+// index.yaml's (size, modtime) — every publish rewrites index.yaml, which
+// rebuilds the map on the next request.
+func TestHelmAliasIndexCache(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	mirror := filepath.Join(hs.helmDir(), "up")
+	for _, dir := range []string{"metadata", "charts"} {
+		if err := os.MkdirAll(filepath.Join(mirror, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile := func(rel, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(mirror, rel), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(filepath.Join("charts", "web_1.0.0.tgz"), "chart-bytes")
+	writeFile(filepath.Join("metadata", "web_1.0.0.json"),
+		`{"filename":"web_1.0.0.tgz","metadata":{"name":"web","version":"1.0.0"}}`)
+	writeFile("index.yaml", "entries: {}\n")
+
+	// A mirror with no index.yaml resolves nothing and is never cached, so
+	// probes against mirrors that do not exist cannot grow the map.
+	if _, ok := hs.resolveHelmChartAlias("nosuch", "web-1.0.0.tgz"); ok {
+		t.Fatal("alias resolved for a mirror that does not exist")
+	}
+	if n := len(hs.helmAliases.mirrors); n != 0 {
+		t.Fatalf("nonexistent mirror grew the cache to %d entries", n)
+	}
+
+	if stored, ok := hs.resolveHelmChartAlias("up", "web-1.0.0.tgz"); !ok || stored != "web_1.0.0.tgz" {
+		t.Fatalf("alias = %q, %v; want web_1.0.0.tgz", stored, ok)
+	}
+	if prov, ok := hs.resolveHelmChartAlias("up", "web-1.0.0.tgz.prov"); !ok || prov != "web_1.0.0.tgz.prov" {
+		t.Fatalf("prov alias = %q, %v; want web_1.0.0.tgz.prov", prov, ok)
+	}
+
+	// Answered from the cache: removing the metadata behind the map changes
+	// nothing while index.yaml is untouched…
+	if err := os.Remove(filepath.Join(mirror, "metadata", "web_1.0.0.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := hs.resolveHelmChartAlias("up", "web-1.0.0.tgz"); !ok {
+		t.Fatal("resolver re-scanned metadata although index.yaml was unchanged")
+	}
+	// …and a rewritten index.yaml (every publish does this) rebuilds the map.
+	writeFile("index.yaml", "entries: {}\n# republished\n")
+	if _, ok := hs.resolveHelmChartAlias("up", "web-1.0.0.tgz"); ok {
+		t.Fatal("rewritten index.yaml did not rebuild the alias map")
+	}
+}
+
 // TestValidateHelmChartProvenance covers the prov-path shape checks.
 func TestValidateHelmChartProvenance(t *testing.T) {
 	chart := HelmChart{

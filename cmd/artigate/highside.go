@@ -126,6 +126,10 @@ type HighServer struct {
 	// /ui/api/detail panel, so repeated detail requests do not re-hash the
 	// selected artifact on every hit (see detailDigestCache).
 	detailDigests detailDigestCache
+	// helmAliases memoizes each helm mirror's advertised-name → stored-name
+	// chart map, so the unauthenticated charts/ route does not re-read every
+	// chart's stored metadata per aliased request (see helmAliasCache).
+	helmAliases helmAliasCache
 	// derivedBlocks tracks osv derived-state files (stored metadata, the npm
 	// audit index) whose stale bytes a failed publish could not get off the
 	// disk; the osv read paths treat a blocked path as absent (see

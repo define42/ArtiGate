@@ -784,6 +784,30 @@ func TestSnapCollectNoBases(t *testing.T) {
 	}
 }
 
+// TestSnapCollectRejectsBadStoreText pins the low-side half of the record
+// validation symmetry: a store field the high side's validateSnapPackage
+// would reject (control characters here) fails that one snap at collect
+// time instead of being signed into a bundle the high side must then reject
+// — which, on the strictly sequenced snap stream, would stall every later
+// import behind the dead sequence number.
+func TestSnapCollectRejectsBadStoreText(t *testing.T) {
+	snaps := snapTestFixtures()
+	snaps[0].version = "2.10\x01" // hello
+	srv := fakeSnapStore(t, snaps)
+	ls, _ := newSnapLowServer(t, srv.URL)
+	res, err := ls.CollectSnap(context.Background(), SnapCollectRequest{Snaps: []string{"hello", "core22"}, NoBases: true})
+	if err != nil {
+		t.Fatalf("CollectSnap: %v", err)
+	}
+	if res.ExportedModules != 1 {
+		t.Errorf("exported %d snaps, want just core22: %+v", res.ExportedModules, res)
+	}
+	if len(res.SkippedModules) != 1 || res.SkippedModules[0].Module != "hello" ||
+		!strings.Contains(res.SkippedModules[0].Error, "control characters") {
+		t.Errorf("skipped = %+v, want hello failing the free-text check", res.SkippedModules)
+	}
+}
+
 // TestSnapCollectAllFail pins the all-failed error shape.
 func TestSnapCollectAllFail(t *testing.T) {
 	srv := fakeSnapStore(t, nil)
