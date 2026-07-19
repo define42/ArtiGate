@@ -1,0 +1,2511 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Dependency mirror for one-way data-diode / air-gapped networks.">
+      
+      
+      
+      
+        <link rel="prev" href="../getting-started/">
+      
+      
+        <link rel="next" href="../low-side/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Architecture - ArtiGate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#architecture" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="ArtiGate" class="md-header__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ArtiGate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Architecture
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="ArtiGate" class="md-nav__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ArtiGate
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-big-picture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The big picture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#streams-independent-per-ecosystem-numbering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streams: independent per-ecosystem numbering
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-bundle-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The bundle format
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The bundle format">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bundlemanifest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BundleManifest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manifestfile-the-atomic-verified-unit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ManifestFile — the atomic verified unit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ecosystem-sub-manifests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ecosystem sub-manifests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deterministic-archive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deterministic archive
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ed25519-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ed25519 signing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-write-archive-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: write, archive, export
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: write, archive, export">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-mark-prior-allocate-write-commit-record-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The mark-prior → allocate → write → commit → record path
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#export-deduplication-and-delta-bundles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Export deduplication and delta bundles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-diode-transfer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The diode transfer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The diode transfer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optional-http-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional HTTP transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-built-in-udp-diode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional built-in UDP diode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-strict-in-order-import-per-stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side: strict in-order import per stream
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification-on-import" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verification on import
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verification on import">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#immutable-installs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Immutable installs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-trust-model-regenerate-never-trust-transferred-indexes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The trust model: regenerate, never trust transferred indexes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#on-disk-layout-content-addressed-container-blob-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        On-disk layout: content-addressed container blob store
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-go-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to go next
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Running
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../low-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Low side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../high-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    High side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduling (watches)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-diode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Built-in UDP diode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Ecosystems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/go/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Go modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python (PyPI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/maven/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Java (Maven)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/npm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NPM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/apt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    APT (Debian/Ubuntu)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/rpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPM (RHEL/Fedora)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Container images (OCI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/ai-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI models (Hugging Face)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rust crates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/terraform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terraform / OpenTofu
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm charts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/nuget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NuGet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/apk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alpine (apk)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/conda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conda channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/rubygems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RubyGems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/composer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHP Composer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/vsx/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code extensions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/galaxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible Galaxy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/cran/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R packages (CRAN)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/snap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snap packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/git/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Git repositories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/osv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OSV advisories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/uploads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Uploads (arbitrary files)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security & trust
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS / HTTPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-big-picture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The big picture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#streams-independent-per-ecosystem-numbering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streams: independent per-ecosystem numbering
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-bundle-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The bundle format
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The bundle format">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bundlemanifest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BundleManifest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manifestfile-the-atomic-verified-unit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ManifestFile — the atomic verified unit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ecosystem-sub-manifests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ecosystem sub-manifests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deterministic-archive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deterministic archive
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ed25519-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ed25519 signing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-write-archive-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: write, archive, export
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: write, archive, export">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-mark-prior-allocate-write-commit-record-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The mark-prior → allocate → write → commit → record path
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#export-deduplication-and-delta-bundles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Export deduplication and delta bundles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-diode-transfer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The diode transfer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The diode transfer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optional-http-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional HTTP transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-built-in-udp-diode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional built-in UDP diode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-strict-in-order-import-per-stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side: strict in-order import per stream
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification-on-import" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verification on import
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verification on import">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#immutable-installs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Immutable installs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-trust-model-regenerate-never-trust-transferred-indexes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The trust model: regenerate, never trust transferred indexes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#on-disk-layout-content-addressed-container-blob-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        On-disk layout: content-addressed container blob store
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-go-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to go next
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h1>
+<p>ArtiGate is a single Go binary that mirrors artifact ecosystems across a one-way data diode. This page is the deep model: how a low-side <em>exporter</em> turns upstream artifacts into signed, sequenced <strong>bundles</strong>, how those bundles cross the diode, and how a high-side <em>importer</em> verifies them and rebuilds every repository index from the artifacts themselves — trusting nothing that was transferred except bytes that pass an Ed25519 signature and a SHA-256 hash.</p>
+<div class="admonition note">
+<p class="admonition-title">Two design constraints drive everything below</p>
+<ul>
+<li><strong>Lean on the stdlib.</strong> The core mirroring pipeline uses only two third-party dependencies: pure-Go SQLite (<code>modernc.org/sqlite</code>) for the <a href="../scheduling/">watch scheduler</a> and the export-dedup index, and <code>hashicorp/go-version</code> for <a href="../ecosystems/containers/">container</a> tag constraints. The optional TLS, login, and UDP-diode features add four more: <code>caddyserver/certmagic</code> for automatic HTTPS, <code>gorilla/securecookie</code> for login sessions, <code>golang.org/x/crypto</code> for argon2id auth hashes, and <code>klauspost/reedsolomon</code> for the <a href="../data-diode/">built-in UDP diode</a>'s forward error correction — six direct dependencies in all, linked into the single binary.</li>
+<li><strong>The low side delegates fetching</strong> to the installed <code>go</code> / <code>git</code> / <code>pip</code> / <code>mvn</code> / <code>npm</code> toolchains. <strong>The high side never invokes them and never reaches upstream.</strong> It only serves what crossed the diode.</li>
+</ul>
+</div>
+<h2 id="the-big-picture">The big picture<a class="headerlink" href="#the-big-picture" title="Permanent link">&para;</a></h2>
+<p>One binary, four subcommands (<code>keygen</code>, <code>low</code>, <code>high</code>, plus <code>hashpw</code> for low-side auth hashes). Data flows in exactly one direction:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>  ┌──────────────── LOW SIDE (internet-facing) ────────────────┐
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  │                                                            │
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  │  operator ──POST /admin/{eco}/collect──▶ runLow            │
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  │                                            │               │
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  │            native toolchains (go/pip/…) ◀──┘ fetch          │
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>  │                                            │               │
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  │            build + Ed25519-sign bundle ────┤               │
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  │                                            ▼               │
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  │      &lt;root&gt;/bundles  (archive)      --export-dir           │
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  │      retained for re-export         /var/spool/diode-out   │
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>  └────────────────────────────────────────────┬──────────────┘
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                                                │
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                       ═══ ONE-WAY DATA DIODE ═══  (folder move, HTTP upload,
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>                                                │   or the built-in UDP pitcher/catcher)
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>  ┌────────────────────────────────────────────▼──────────────┐
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>  │  --landing /var/spool/diode-in                             │
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>  │                                            │               │
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>  │  importLoop (ticks) ──▶ verify sig+hashes ─┤ HIGH SIDE     │
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>  │                          install immutably │ (isolated)    │
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>  │                          regenerate indexes│               │
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>  │                                            ▼               │
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>  │  serve  /go /simple /maven /apt /rpm /v2 /npm /hf /api     │
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>  │         /crates /terraform /helm /nuget /apk               │
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>  └────────────────────────────────────────────────────────────┘
+</code></pre></div>
+<ol>
+<li><strong>Low side</strong> (<code>runLow</code>) is an <em>exporter</em>, not a proxy. Its HTTP handler rejects anything that is not an <code>/admin/*</code> route or the dashboard — "the low side is an exporter, not a module proxy." Operators drive it with <code>POST /admin/{ecosystem}/collect</code>; it fetches with the native tools and writes a signed <strong>bundle</strong> (three files) into the export directory (default <code>/var/spool/diode-out</code>).</li>
+<li><strong>The diode transfer</strong> moves those three files from the low export dir to the high <strong>landing</strong> dir (default <code>/var/spool/diode-in</code>). By default ArtiGate never performs this move — it is your diode/guard — but the optional <a href="#optional-http-transport">HTTP transport</a> lets the two sides do it themselves for diodes that speak HTTP, and the <a href="../data-diode/">built-in UDP diode</a> drives a one-way fiber directly.</li>
+<li><strong>High side</strong> (<code>runHigh</code>) watches the landing dir on a ticker, imports bundles <strong>strictly in sequence order per stream</strong>, verifies signature + hashes, installs artifacts immutably, and <strong>regenerates</strong> all repository metadata from the artifacts actually present. Then it serves read-only clients.</li>
+</ol>
+<p>See <a href="../low-side/">Low side</a> and <a href="../high-side/">High side</a> for operating each half, and <a href="../security/">Security &amp; trust</a> for the threat model.</p>
+<h2 id="streams-independent-per-ecosystem-numbering">Streams: independent per-ecosystem numbering<a class="headerlink" href="#streams-independent-per-ecosystem-numbering" title="Permanent link">&para;</a></h2>
+<p>Each ecosystem is its own <strong>stream</strong> with its <strong>own independent sequence counter</strong>, so a lost or out-of-order bundle in one stream never blocks the others.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kd">const</span><span class="w"> </span><span class="p">(</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="nx">streamGo</span><span class="w">         </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;go&quot;</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nx">streamPython</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;python&quot;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nx">streamMaven</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;maven&quot;</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nx">streamApt</span><span class="w">        </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;apt&quot;</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nx">streamRpm</span><span class="w">        </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;rpm&quot;</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nx">streamContainers</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;containers&quot;</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nx">streamNpm</span><span class="w">        </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;npm&quot;</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nx">streamHF</span><span class="w">         </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;hf&quot;</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nx">streamCrates</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;crates&quot;</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nx">streamTerraform</span><span class="w">  </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;terraform&quot;</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="nx">streamHelm</span><span class="w">       </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;helm&quot;</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="nx">streamNuget</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;nuget&quot;</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="nx">streamApk</span><span class="w">        </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;apk&quot;</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">    </span><span class="nx">streamConda</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;conda&quot;</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="nx">streamRubyGems</span><span class="w">   </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;rubygems&quot;</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">    </span><span class="nx">streamComposer</span><span class="w">   </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;composer&quot;</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">    </span><span class="nx">streamVSX</span><span class="w">        </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;vsx&quot;</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="nx">streamGalaxy</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;galaxy&quot;</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">    </span><span class="nx">streamCRAN</span><span class="w">       </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;cran&quot;</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">    </span><span class="nx">streamSnap</span><span class="w">       </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;snap&quot;</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">    </span><span class="nx">streamGit</span><span class="w">        </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;git&quot;</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="p">)</span>
+</code></pre></div>
+<p><code>knownStreams()</code> returns every stream registered in <code>ecosystems()</code> (<code>cmd/artigate/ecosystem.go</code>) — the single registry the collect routes, watch dispatch, manifest validation, publish sequence, high-side URL routing, and dashboard wiring all derive from; they appear in status even before anything has been exported. The <code>go</code> stream deliberately keeps the pre-multi-stream numbering for backward compatibility.</p>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Low side</th>
+<th>High side</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>State file</td>
+<td><code>&lt;root&gt;/low-state.json</code> (mode <code>0600</code>)</td>
+<td><code>&lt;root&gt;/import-state.json</code></td>
+</tr>
+<tr>
+<td>State struct</td>
+<td><code>LowState.Sequences map[string]int64</code> — <strong>next</strong> sequence per stream</td>
+<td><code>HighState.Imported map[string]int64</code> — <strong>last-imported</strong> sequence per stream, plus <code>ImportedAt</code></td>
+</tr>
+<tr>
+<td>Legacy migration</td>
+<td><code>next_sequence</code> → <code>Sequences["go"]</code> on load</td>
+<td><code>last_imported_sequence</code> → <code>Imported["go"]</code> on load</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">Why streams are independent</p>
+<p>A long APT mirror and a quick Python collect run <strong>concurrently</strong>. Per-stream export locks (<code>streamLock</code>) serialize each stream's <em>allocate → write → commit</em> so two exporters on one stream can't claim the same sequence, while different streams proceed in parallel. These locks are deliberately separate from the fast <code>mu</code> that guards status readers — status must never block for the minutes a bundle write takes.</p>
+</div>
+<h2 id="the-bundle-format">The bundle format<a class="headerlink" href="#the-bundle-format" title="Permanent link">&para;</a></h2>
+<p>One transferable bundle is <strong>three files</strong> sharing a bundle ID:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;bundleID&gt;.tar.gz</code></td>
+<td>The artifact archive — only the manifest's <strong>non-prior</strong> files (see <a href="#export-deduplication-and-delta-bundles">delta bundles</a>)</td>
+</tr>
+<tr>
+<td><code>&lt;bundleID&gt;.manifest.json</code></td>
+<td>The manifest — <strong>these exact bytes are what gets signed</strong></td>
+</tr>
+<tr>
+<td><code>&lt;bundleID&gt;.manifest.json.sig</code></td>
+<td>Detached Ed25519 signature, base64 + trailing newline</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Bundle ID</strong>: <code>fmt.Sprintf("%s-bundle-%06d", stream, seq)</code> — e.g. <code>go-bundle-000042</code>, <code>python-bundle-000007</code>. The parser (<code>^([a-z0-9]+)-bundle-([0-9]{6,})\.manifest\.json$</code>) accepts <strong>6 or more</strong> digits, so sequences past <code>999999</code> still parse; ordering compares the parsed integer, not the string.</p>
+<h3 id="bundlemanifest">BundleManifest<a class="headerlink" href="#bundlemanifest" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BundleManifest</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nx">Type</span><span class="w">             </span><span class="kt">string</span><span class="w">             </span><span class="s">`json:&quot;type&quot;`</span><span class="w">               </span><span class="c1">// always &quot;go-module-bundle&quot;</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nx">Stream</span><span class="w">           </span><span class="kt">string</span><span class="w">             </span><span class="s">`json:&quot;stream,omitempty&quot;`</span><span class="w">   </span><span class="c1">// empty ⇒ legacy &quot;go&quot;</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nx">Sequence</span><span class="w">         </span><span class="kt">int64</span><span class="w">              </span><span class="s">`json:&quot;sequence&quot;`</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nx">PreviousSequence</span><span class="w"> </span><span class="kt">int64</span><span class="w">              </span><span class="s">`json:&quot;previous_sequence&quot;`</span><span class="w">  </span><span class="c1">// == Sequence-1</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nx">Created</span><span class="w">          </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w">          </span><span class="s">`json:&quot;created&quot;`</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nx">Generator</span><span class="w">        </span><span class="kt">string</span><span class="w">             </span><span class="s">`json:&quot;generator&quot;`</span><span class="w">          </span><span class="c1">// hostname</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nx">BundleID</span><span class="w">         </span><span class="kt">string</span><span class="w">             </span><span class="s">`json:&quot;bundle_id&quot;`</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nx">Ecosystems</span><span class="w">       </span><span class="p">[]</span><span class="kt">string</span><span class="w">           </span><span class="s">`json:&quot;ecosystems,omitempty&quot;`</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="nx">Modules</span><span class="w">          </span><span class="p">[]</span><span class="nx">ManifestMod</span><span class="w">      </span><span class="s">`json:&quot;modules,omitempty&quot;`</span><span class="w">     </span><span class="c1">// Go</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span><span class="nx">Python</span><span class="w">           </span><span class="o">*</span><span class="nx">PythonManifest</span><span class="w">    </span><span class="s">`json:&quot;python,omitempty&quot;`</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span><span class="nx">Maven</span><span class="w">            </span><span class="o">*</span><span class="nx">MavenManifest</span><span class="w">     </span><span class="s">`json:&quot;maven,omitempty&quot;`</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">    </span><span class="nx">Apt</span><span class="w">              </span><span class="o">*</span><span class="nx">AptManifest</span><span class="w">       </span><span class="s">`json:&quot;apt,omitempty&quot;`</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">    </span><span class="nx">Rpm</span><span class="w">              </span><span class="o">*</span><span class="nx">RpmManifest</span><span class="w">       </span><span class="s">`json:&quot;rpm,omitempty&quot;`</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="nx">Containers</span><span class="w">       </span><span class="o">*</span><span class="nx">ContainerManifest</span><span class="w"> </span><span class="s">`json:&quot;containers,omitempty&quot;`</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">    </span><span class="nx">Npm</span><span class="w">              </span><span class="o">*</span><span class="nx">NpmManifest</span><span class="w">       </span><span class="s">`json:&quot;npm,omitempty&quot;`</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">    </span><span class="nx">HuggingFace</span><span class="w">      </span><span class="o">*</span><span class="nx">HFManifest</span><span class="w">        </span><span class="s">`json:&quot;huggingface,omitempty&quot;`</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">    </span><span class="nx">Crates</span><span class="w">           </span><span class="o">*</span><span class="nx">CratesManifest</span><span class="w">    </span><span class="s">`json:&quot;crates,omitempty&quot;`</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">    </span><span class="nx">Terraform</span><span class="w">        </span><span class="o">*</span><span class="nx">TerraformManifest</span><span class="w"> </span><span class="s">`json:&quot;terraform,omitempty&quot;`</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="w">    </span><span class="nx">Helm</span><span class="w">             </span><span class="o">*</span><span class="nx">HelmManifest</span><span class="w">      </span><span class="s">`json:&quot;helm,omitempty&quot;`</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="w">    </span><span class="nx">Nuget</span><span class="w">            </span><span class="o">*</span><span class="nx">NugetManifest</span><span class="w">     </span><span class="s">`json:&quot;nuget,omitempty&quot;`</span>
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="w">    </span><span class="nx">Apk</span><span class="w">              </span><span class="o">*</span><span class="nx">ApkManifest</span><span class="w">       </span><span class="s">`json:&quot;apk,omitempty&quot;`</span>
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="w">    </span><span class="nx">Files</span><span class="w">            </span><span class="p">[]</span><span class="nx">ManifestFile</span><span class="w">     </span><span class="s">`json:&quot;files&quot;`</span><span class="w">               </span><span class="c1">// flat authoritative file set</span>
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="p">}</span>
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title"><code>Type</code> is always <code>\"go-module-bundle\"</code></p>
+<p>The <code>Type</code> value is the legacy constant <code>"go-module-bundle"</code> for <strong>every</strong> ecosystem — it is <em>not</em> per-ecosystem. Do not use it to detect the ecosystem. The real ecosystem is carried by <code>Stream</code> plus whichever sub-manifest pointer is populated.</p>
+</div>
+<h3 id="manifestfile-the-atomic-verified-unit">ManifestFile — the atomic verified unit<a class="headerlink" href="#manifestfile-the-atomic-verified-unit" title="Permanent link">&para;</a></h3>
+<p>Everything the high side installs is a <code>ManifestFile</code>. Each is independently hash-verified.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">ManifestFile</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="nx">Path</span><span class="w">   </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;path&quot;`</span><span class="w">             </span><span class="c1">// slash-relative repo path</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nx">SHA256</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;sha256&quot;`</span><span class="w">           </span><span class="c1">// exactly 64 hex chars</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nx">Size</span><span class="w">   </span><span class="kt">int64</span><span class="w">  </span><span class="s">`json:&quot;size&quot;`</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nx">Prior</span><span class="w">  </span><span class="kt">bool</span><span class="w">   </span><span class="s">`json:&quot;prior,omitempty&quot;`</span><span class="w">  </span><span class="c1">// already forwarded on this stream — listed, not archived</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="p">}</span>
+</code></pre></div>
+<p>The flat <code>Files</code> slice is the <strong>authoritative</strong> set: it is what the archive is checked against on import, and every ecosystem sub-manifest must reference paths that appear here. A file marked <code>prior</code> was already shipped in an earlier bundle on the same stream — it stays in the manifest so the repository reference set is complete, but it is <strong>not packed into the archive</strong>; the importer verifies it against the accumulated repository instead.</p>
+<h3 id="ecosystem-sub-manifests">Ecosystem sub-manifests<a class="headerlink" href="#ecosystem-sub-manifests" title="Permanent link">&para;</a></h3>
+<p>Each sub-manifest wraps a slice and carries <strong>raw upstream metadata for high-side regeneration</strong> — never for trust:</p>
+<table>
+<thead>
+<tr>
+<th>Stream</th>
+<th>Sub-manifest</th>
+<th>Carries (examples)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Go</td>
+<td><code>Modules []ManifestMod</code></td>
+<td><code>Files</code> keyed by <code>"info"</code> / <code>"mod"</code> / <code>"zip"</code></td>
+</tr>
+<tr>
+<td>Python</td>
+<td><code>Python.Projects</code></td>
+<td><code>normalized_name</code> (PEP 503), <code>requires_python</code>, <code>yanked</code></td>
+</tr>
+<tr>
+<td>npm</td>
+<td><code>Npm.Packages</code></td>
+<td><code>integrity</code> (SRI) — high side <strong>recomputes</strong> it from the tarball</td>
+</tr>
+<tr>
+<td>APT</td>
+<td><code>Apt.Mirrors</code></td>
+<td>the raw <code>Packages</code> <strong>stanza</strong> string per <code>.deb</code>, per suite</td>
+</tr>
+<tr>
+<td>RPM</td>
+<td><code>Rpm.Mirrors</code></td>
+<td>per-package repodata inputs</td>
+</tr>
+<tr>
+<td>Maven</td>
+<td><code>Maven.Artifacts</code></td>
+<td>coordinates + files</td>
+</tr>
+<tr>
+<td>Containers</td>
+<td><code>Containers.Repos</code></td>
+<td>registry/repository, manifest+config+layer digests</td>
+</tr>
+<tr>
+<td>Crates</td>
+<td><code>Crates.Crates</code></td>
+<td>the verbatim sparse-index <strong>line</strong> per release — its <code>cksum</code> must equal the artifact's SHA-256, re-checked at import</td>
+</tr>
+<tr>
+<td>Terraform</td>
+<td><code>Terraform.Providers</code> / <code>Terraform.Modules</code></td>
+<td>per-platform zips plus the upstream verification chain (<code>SHA256SUMS</code>, <code>.sig</code>, signing keys)</td>
+</tr>
+<tr>
+<td>Helm</td>
+<td><code>Helm.Repos</code></td>
+<td>mirror name/URL + chart records — served metadata is re-extracted from each archive's <code>Chart.yaml</code></td>
+</tr>
+<tr>
+<td>NuGet</td>
+<td><code>Nuget.Packages</code></td>
+<td>identity + hash only — served metadata is re-extracted from each package's <code>.nuspec</code></td>
+</tr>
+<tr>
+<td>apk</td>
+<td><code>Apk.Mirrors</code></td>
+<td>the raw <code>APKINDEX</code> <strong>stanza</strong> string per <code>.apk</code>, per branch/repo/arch</td>
+</tr>
+</tbody>
+</table>
+<h3 id="deterministic-archive">Deterministic archive<a class="headerlink" href="#deterministic-archive" title="Permanent link">&para;</a></h3>
+<p>Bundles are byte-reproducible: every tar entry is written with mode <code>0644</code>, <code>ModTime = time.Unix(0, 0).UTC()</code>, and <code>Name = mf.Path</code>.</p>
+<h2 id="ed25519-signing">Ed25519 signing<a class="headerlink" href="#ed25519-signing" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>keygen ──▶ low.ed25519       (private, base64, mode 0600)  ─── stays on low side
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>       └─▶ high.ed25519.pub  (public,  base64, mode 0644)  ─── copied to high side
+</code></pre></div>
+<ul>
+<li><strong>Keygen</strong> (<code>runKeygen</code>) uses <code>ed25519.GenerateKey</code>. Keys are stored base64, whole-file, and length-checked against <code>ed25519.PrivateKeySize</code> / <code>PublicKeySize</code> on load.</li>
+<li><strong>Signing</strong> is over the <em>canonical manifest bytes</em>. In the writer, the manifest is serialized with <code>json.MarshalIndent(manifest, "", "  ")</code>, and <code>sig := ed25519.Sign(s.privateKey, manifestBytes)</code>. The <strong>exact <code>manifestBytes</code> written to disk are what is signed</strong> — the signature file is <code>base64.StdEncoding.EncodeToString(sig) + "\n"</code>.</li>
+<li>On import the high side re-reads those same on-disk bytes and calls <code>ed25519.Verify</code>. Field order and indentation are therefore load-bearing.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Never rewrite a manifest in place</p>
+<p>Because the signature is over the exact serialized bytes — not a re-marshal — any tool that reformats or re-orders the manifest JSON invalidates the signature. Move the three files together, untouched.</p>
+</div>
+<p><code>--private-key</code> is <strong>required</strong> on the low side; <code>--public-key</code> is <strong>required</strong> on the high side. See <a href="../security/">Security &amp; trust</a>.</p>
+<h2 id="low-side-write-archive-export">Low side: write, archive, export<a class="headerlink" href="#low-side-write-archive-export" title="Permanent link">&para;</a></h2>
+<p><code>writeBundleArtifacts</code> is the shared writer for every ecosystem (its <code>baseDir</code> is the Go module cache for Go, a staging dir for the others):</p>
+<ol>
+<li><code>createTarGzAtomic</code> — write to <code>.tmp</code> with <code>O_CREATE|O_EXCL</code>, fsync, then atomic <code>os.Rename</code>.</li>
+<li>Atomically write the manifest (<code>0644</code>) and the base64 signature (<code>0644</code>).</li>
+<li><code>archiveBundle</code> — copy all three files into the persistent archive <code>&lt;root&gt;/bundles</code>.</li>
+</ol>
+<p>So a bundle lives in <strong>two</strong> places:</p>
+<table>
+<thead>
+<tr>
+<th>Location</th>
+<th>Purpose</th>
+<th>After the diode transfer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--export-dir</code> (<code>/var/spool/diode-out</code>)</td>
+<td>staged for the diode; the transfer — or a successful HTTP/UDP diode upload — moves these out</td>
+<td>gone (forwarded)</td>
+</tr>
+<tr>
+<td><code>&lt;root&gt;/bundles</code></td>
+<td>retained for <a href="../low-side/">re-export</a></td>
+<td>kept</td>
+</tr>
+</tbody>
+</table>
+<p><code>GET /admin/bundles</code> surfaces <code>InArchive</code> / <code>InOutbound</code> booleans and <code>SizeBytes</code> per sequence: a forwarded bundle is archive-only; a not-yet-sent one is in both.</p>
+<h3 id="the-mark-prior-allocate-write-commit-record-path">The mark-prior → allocate → write → commit → record path<a class="headerlink" href="#the-mark-prior-allocate-write-commit-record-path" title="Permanent link">&para;</a></h3>
+<p><code>exportIfNew</code> is the shared core, applied by every collector while holding that stream's lock, with dedup resolved <strong>first</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>if not force:
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>        markPriorFiles(stream, files)     # flag every already-forwarded file as prior
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>if countDelivered(files) == 0:            # nothing new at all
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>        return {Skipped: true, &quot;no new content since the last export&quot;}   # NO sequence consumed
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>seq := allocateSequence(stream) # skips complete durable bundles; rejects partial same-ID crash residue
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>res := write(seq)               # build + sign + write bundle (archive carries non-prior files only)
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>commitSequence(stream, seq)     # sets Sequences[stream] = seq+1, persists state
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>res.PriorFiles = &lt;prior count&gt;  # reported back to the dashboard / schedule
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>recordForwarded(stream, files)  # record hashes AFTER the commit succeeds
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>uploadBundleIfConfigured()      # HTTP diode, if ARTIGATE_DIODE_URL is set — failure is reported, never fatal
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Ordering is a correctness invariant</p>
+<p>Hashes are recorded in the dedup index <strong>only after</strong> the sequence commit succeeds. If the commit fails, the content is not durably part of the stream, so a retry must re-export it rather than see it as "already forwarded" and wrongly skip.</p>
+<p>A completed bundle is durable before its next-sequence counter is saved. After a crash, allocation scans the outbound spool and bundle archive and skips any complete sequence already present. Writers refuse to replace any existing same-ID artifact; partial crash residue must be recovered or removed explicitly, because overwriting it could fork an already-observed sequence while skipping it would create a permanent gap.</p>
+</div>
+<p>Collectors also refuse to burn a sequence on an empty bundle — "the high side would then wait on it forever." The Go collector, for example, fetches <em>before</em> allocating a sequence, skips individually-unfetchable modules into <code>SkippedModules</code> rather than aborting the batch, and never writes an empty bundle.</p>
+<h2 id="export-deduplication-and-delta-bundles">Export deduplication and delta bundles<a class="headerlink" href="#export-deduplication-and-delta-bundles" title="Permanent link">&para;</a></h2>
+<p>A per-stream index of everything already forwarded lets a scheduled re-pull of an unchanged upstream stop re-sending — and often re-downloading — bytes the high side already has. It is a SQLite DB at <code>&lt;root&gt;/exported.db</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="n">forwarded_files</span><span class="w"> </span><span class="p">(</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="n">stream</span><span class="w"> </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="n">sha256</span><span class="w"> </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="n">path</span><span class="w">   </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="n">sha256</span><span class="p">,</span><span class="w"> </span><span class="n">path</span><span class="p">)</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="p">)</span><span class="w"> </span><span class="k">WITHOUT</span><span class="w"> </span><span class="n">ROWID</span>
+</code></pre></div>
+<ul>
+<li><strong>What it records</strong>: for every file ever written into a bundle (i.e. forwarded across the diode), its <code>(stream, sha256, path)</code>. Writes use <code>INSERT OR IGNORE</code> in one transaction (idempotent via the primary key). Rows from the pre-delta schema carry an empty path and still match by hash alone; they are path-qualified the first time they are touched.</li>
+<li><strong>Nothing new</strong>: when <em>every</em> file is already forwarded, <code>exportIfNew</code> returns <code>Skipped: true</code>, <strong>consumes no sequence number</strong>, and writes no bundle.</li>
+<li><strong>Delta bundles</strong>: when only <em>some</em> files are new, the bundle is still written — but already-forwarded files are marked <code>prior</code> in the manifest and left out of the archive. The <code>ExportResult.prior_files</code> count reports how many rode along as references.</li>
+<li><strong>Pre-download skip</strong>: collectors whose upstream declares a file's SHA-256 <em>before</em> the bytes are fetched — APT <code>Packages</code> indexes, RPM <code>primary.xml</code>, container image digests, Hugging Face LFS metadata — consult the index first and skip the download entirely. The pip/mvn/npm/go-driven collectors have no usable pre-download hash, so they still download (Go's module cache already avoids re-downloads) and dedup after hashing.</li>
+<li><strong>Force</strong>: every collect request accepts <code>"force": true</code>, which bypasses the index for that collect and produces a full, self-contained bundle — the disaster-recovery path when a high side is rebuilt from scratch.</li>
+<li><strong>Fail-safe</strong>: an empty file set is never "all forwarded"; any store error is logged ("exporting without dedup") and treated as <em>not forwarded</em>. The index is an <em>optimization, not correctness state</em> — it never suppresses content when unsure.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Deliberately independent of the bundle archive</p>
+<p>The dedup index is kept separate from <code>&lt;root&gt;/bundles</code> on purpose. Rebuilding it from archived manifests would let archive pruning "forget" already-shipped content and re-ship it. The DB uses <code>SetMaxOpenConns(1)</code> + <code>PRAGMA busy_timeout=5000</code> (single-writer, serialized), so a SQLite failure can never wedge the JSON-based sequence pipeline.</p>
+</div>
+<p>Two more properties: dedup is <strong>per-stream</strong> — it does not dedup across streams. And <strong>re-export bypasses it entirely</strong> — <code>POST /admin/reexport?stream=go&amp;sequences=42,45-47</code> replays the <em>exact archived bytes</em> via <code>replayArchivedBundle</code> (no re-signing), never consulting or updating the dedup index. This is how the same content can be re-shipped after a lost transfer without being wrongly skipped.</p>
+<div class="admonition note">
+<p class="admonition-title">A delta bundle assumes its history</p>
+<p>A bundle whose manifest lists <code>prior</code> files imports only on a high side that has already imported this stream's earlier bundles. On a fresh or pruned high side the import fails with <em>"bundle references prior file … that is not in the repository: import this stream's earlier bundles first, or run a forced (full) re-collect on the low side"</em> — which is also the fix.</p>
+</div>
+<h2 id="the-diode-transfer">The diode transfer<a class="headerlink" href="#the-diode-transfer" title="Permanent link">&para;</a></h2>
+<p>By default ArtiGate does not move files across the diode — your data-diode or cross-domain guard does. The contract is minimal:</p>
+<ul>
+<li>Move the three files of each bundle (<code>.tar.gz</code>, <code>.manifest.json</code>, <code>.manifest.json.sig</code>) from the low <code>--export-dir</code> to the high <code>--landing</code> dir.</li>
+<li>The transfer is <strong>one-way</strong>: nothing ever flows high → low. There is no acknowledgement channel, which is exactly why the low side retains <code>&lt;root&gt;/bundles</code> for operator-driven re-export.</li>
+<li>A partially-arrived bundle is simply not yet "complete" on the high side (see below) and is skipped until all three files are present.</li>
+</ul>
+<h3 id="optional-http-transport">Optional HTTP transport<a class="headerlink" href="#optional-http-transport" title="Permanent link">&para;</a></h3>
+<p>For diodes (or diode proxies) that speak HTTP instead of moving files, both sides also implement the transfer themselves, configured by environment variables (see <a href="../deployment/">Deployment</a>): with <code>ARTIGATE_DIODE_URL</code> set, the low side uploads each bundle's three files (<code>PUT &lt;url&gt;/&lt;file&gt;</code>, the archive first) right after export and re-export, then clears them from the export dir — which keeps its exact spool semantics, staged-until-transferred; with <code>ARTIGATE_DIODE_INGEST=on</code>, the high side accepts uploads at <code>PUT/POST /diode/&lt;file&gt;</code>, streams them atomically into the landing directory, and imports a completed bundle immediately instead of waiting for the next scan tick. A shared, whitespace-free bearer token of at least 32 bytes (<code>ARTIGATE_DIODE_TOKEN</code>) is mandatory whenever this HTTP transport is enabled.</p>
+<p>The transport carries <strong>zero trust</strong>: an uploaded bundle enters the same verify-and-import pipeline as a diode-carried file — signature, sequencing, and every hash are still checked. A failed upload never loses a bundle; the collect still succeeds, the failure is reported (<code>diode_error</code> in the result, and on a schedule's status), and the staged bundle is re-transmitted from the Status page.</p>
+<h3 id="optional-built-in-udp-diode">Optional built-in UDP diode<a class="headerlink" href="#optional-built-in-udp-diode" title="Permanent link">&para;</a></h3>
+<p>For a real one-way fiber with no proxy software at all, the low side's <strong>pitcher</strong> transmits every bundle as rate-limited, Reed-Solomon-coded IPv6 link-local multicast out a dedicated NIC, and the high side's <strong>catcher</strong> reassembles the datagrams into the landing directory and triggers an immediate import. The wire, like the HTTP transport, carries zero trust. See <a href="../data-diode/">Built-in UDP diode</a> for the full design and tuning guide.</p>
+<h2 id="high-side-strict-in-order-import-per-stream">High side: strict in-order import per stream<a class="headerlink" href="#high-side-strict-in-order-import-per-stream" title="Permanent link">&para;</a></h2>
+<p><code>importLoop</code> ticks every <code>--import-interval</code> (default <strong>10s</strong>; <code>0</code> disables the background importer, leaving only <code>POST /admin/import</code>). Each tick calls <code>ImportNext</code>, which holds <code>s.mu</code> for the whole operation.</p>
+<p><strong>Sort first</strong> — <code>quarantineFutureBundlesLocked</code> scans the landing dir and routes each complete bundle:</p>
+<table>
+<thead>
+<tr>
+<th>Condition</th>
+<th>Destination</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>seq &gt; next</code></td>
+<td>move to <code>--quarantine</code> (default <code>&lt;root&gt;/quarantine</code>) — a future/out-of-order bundle</td>
+</tr>
+<tr>
+<td><code>seq &lt;= Imported[stream]</code></td>
+<td>move to <code>&lt;landing&gt;/duplicates</code> — an already-imported replay</td>
+</tr>
+<tr>
+<td><code>seq == next</code></td>
+<td>left in place, ready to import</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Then drain</strong> — for each known stream, repeatedly compute <code>next = Imported[stream] + 1</code>, find <code>bundleIDFor(stream, next)</code> via <code>findBundleDirLocked</code> (which checks <strong>landing then quarantine</strong>), import it, advance, and repeat. If the next bundle isn't found, that stream <code>break</code>s and the others continue.</p>
+<div class="admonition tip">
+<p class="admonition-title">Auto-import when a gap fills</p>
+<p>Because <code>findBundleDirLocked</code> also looks in quarantine, a future bundle that was set aside is imported automatically the moment its missing predecessor arrives and is imported — no operator action needed. A permanently missing bundle blocks only its own stream, forever, never the others.</p>
+</div>
+<p>The chain link is enforced: a manifest's <code>PreviousSequence</code> must equal the high side's current <code>Imported[stream]</code>. Bundles import strictly consecutively; gaps quarantine, they never skip forward.</p>
+<h2 id="verification-on-import">Verification on import<a class="headerlink" href="#verification-on-import" title="Permanent link">&para;</a></h2>
+<p><code>importBundleFromDirLocked</code> is the gate every artifact passes through:</p>
+<ol>
+<li><strong>All three files present</strong>, or the bundle is "incomplete" and skipped.</li>
+<li><strong><code>loadVerifiedManifest</code></strong> — read the manifest bytes + signature, base64-decode the sig, and <code>ed25519.Verify(s.publicKey, manifestBytes, sig)</code> on the <strong>raw on-disk bytes</strong>. Failure ⇒ "signature verification failed".</li>
+<li><strong><code>checkManifestFields</code></strong> — <code>Type == "go-module-bundle"</code>; <code>Stream</code> matches (empty ⇒ <code>go</code>); <code>Sequence == expectedSeq</code>; <code>PreviousSequence == Imported[stream]</code>; <code>BundleID</code> matches; then <code>validateManifestCompleteness</code> requires valid <code>Files</code> (64-hex SHA-256, safe relative paths) and at least one populated ecosystem section, each cross-checked so every declared artifact references a path present in <code>Files</code>.</li>
+<li><strong>Extract + hash-verify the archive</strong> into <code>&lt;root&gt;/tmp/&lt;bundleID&gt;</code>: each tar entry must be a regular file, must be listed in the manifest (an <code>unexpected file</code> is rejected), its <strong>size must match</strong>, its path must <code>safeJoin</code> under staging (blocking traversal), and its <strong>streaming SHA-256 must equal the manifest hash</strong>. Any non-prior manifest file missing from the archive is an error.</li>
+<li><strong>Check prior files</strong> — a file marked <code>prior</code> is not in the archive at all: it must already sit in the accumulated repository. Repository installs are immutable and were hash-verified when they first arrived, so the importer checks <strong>existence and size</strong> (re-hashing every prior file would make a large delta import as expensive as a full one). A missing prior file fails the import with <em>"bundle references prior file <code>&lt;path&gt;</code> (sha256 <code>&lt;hash&gt;</code>) that is not in the repository: import this stream's earlier bundles first, or run a forced (full) re-collect on the low side"</em>.</li>
+<li><strong>Install</strong> the verified files, then <strong>regenerate metadata</strong> (below).</li>
+<li>On success: set <code>Imported[stream] = manifest.Sequence</code> and <code>ImportedAt</code>, save state, and move the three landing files into <code>&lt;landing&gt;/imported</code>.</li>
+</ol>
+<h3 id="immutable-installs">Immutable installs<a class="headerlink" href="#immutable-installs" title="Permanent link">&para;</a></h3>
+<p><code>installVerifiedFile</code> makes every repo path <strong>write-once</strong>:</p>
+<ul>
+<li>If the destination already exists, it is re-hashed. A different hash ⇒ <strong><code>"immutable file conflict"</code></strong> error. A matching hash ⇒ <strong>no-op</strong> (re-imports are idempotent).</li>
+<li>Otherwise the file is copied atomically at <code>0644</code>.</li>
+</ul>
+<p>Content can never be silently mutated across bundles. For Go, a <code>.complete</code> marker is written per module <strong>only after all its files are installed</strong>, and the proxy's <code>isComplete</code> requires that marker plus the <code>.info</code> / <code>.mod</code> / <code>.zip</code> before serving a version — so half-installed versions are never visible.</p>
+<h2 id="the-trust-model-regenerate-never-trust-transferred-indexes">The trust model: regenerate, never trust transferred indexes<a class="headerlink" href="#the-trust-model-regenerate-never-trust-transferred-indexes" title="Permanent link">&para;</a></h2>
+<p>This is the heart of ArtiGate. The high side treats <strong>the artifacts themselves as the only source of truth</strong> and rebuilds all repository metadata locally, after signature + hash verification. It never serves a transferred index, <code>latest</code>, <code>Release</code>, packument, or repodata file.</p>
+<table>
+<thead>
+<tr>
+<th>Ecosystem</th>
+<th>What the high side regenerates</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>APT</td>
+<td><code>InRelease</code> / <code>Packages</code> per suite from the accumulated stanzas of the <code>.deb</code> files now present — never the transferred Release/Packages. Optionally signed with <code>--apt-gpg-key</code> (unset ⇒ served unsigned).</td>
+</tr>
+<tr>
+<td>RPM</td>
+<td><code>repodata</code> from the <code>.rpm</code> files present; <code>repomd.xml.asc</code> optionally signed with <code>--rpm-gpg-key</code>.</td>
+</tr>
+<tr>
+<td>npm</td>
+<td>The served packument from each tarball's own embedded <code>package.json</code> — never a transferred packument. <code>integrity</code> is <strong>recomputed</strong> from the artifact; the manifest's value is kept only for audit.</td>
+</tr>
+<tr>
+<td>Containers</td>
+<td>Per-repo <code>_index.json</code> merged from the manifests/blobs present; blobs served only if the requesting repo's own index references them.</td>
+</tr>
+<tr>
+<td>Go</td>
+<td>Listings are computed by scanning the <code>@v</code> directory for complete versions; <code>chooseLatest</code> is derived from the present <code>.info</code> files. There is no transferred "latest" the high side trusts.</td>
+</tr>
+<tr>
+<td>Crates</td>
+<td>Every sparse-index file from the manifest-carried index lines whose <code>cksum</code> equals the verified artifact's SHA-256, gated on the <code>.crate</code> being present.</td>
+</tr>
+<tr>
+<td>Terraform</td>
+<td>Provider version lists and download descriptors from the stored per-version metadata, after cross-checking each zip against the mirrored <code>SHA256SUMS</code>; only platforms whose zip is present are listed.</td>
+</tr>
+<tr>
+<td>Helm</td>
+<td><code>index.yaml</code> per mirror from each chart's own embedded <code>Chart.yaml</code>, with the <code>digest</code> recomputed from the artifact.</td>
+</tr>
+<tr>
+<td>NuGet</td>
+<td>The v3 feed (versions, registration, search) from each package's own embedded <code>.nuspec</code> — never a transferred metadata file.</td>
+</tr>
+<tr>
+<td>apk</td>
+<td><code>APKINDEX.tar.gz</code> per branch/repo/arch from the accumulated stanzas of the <code>.apk</code> files present; optionally signed with <code>--apk-rsa-key</code>.</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Why this matters</p>
+<p>Even a maliciously crafted bundle can only ever cause the high side to serve exactly the bytes whose SHA-256 the signed manifest committed to — and those bytes had to pass the archive hash check on the way in. The index a client browses is a <em>local derivation</em> of verified content, so a forged index in a bundle is simply ignored. See <a href="../security/">Security &amp; trust</a> for the full argument.</p>
+</div>
+<h2 id="on-disk-layout-content-addressed-container-blob-store">On-disk layout: content-addressed container blob store<a class="headerlink" href="#on-disk-layout-content-addressed-container-blob-store" title="Permanent link">&para;</a></h2>
+<p>The <a href="../ecosystems/containers/">container store</a> is a good illustration of the on-disk model. Blobs are <strong>content-addressed and shared across all repositories</strong> — a layer used by ten images is stored once — using <strong>3-character sharding</strong> so no single directory holds millions of entries (<code>16³ = 4096</code> shard dirs — the same prefix-sharding idea git and Docker's registry use, though they shard on the first two hex chars while ArtiGate uses three):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>&lt;root&gt;/cache/download/containers/
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>├── blobs/sha256/
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>│   ├── ab1/ab1c9e…f0   ← blob whose digest starts sha256:ab1c9e…
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>│   ├── 3f2/3f2a77…9b
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>│   └── …               ← first 3 hex chars of the digest = shard dir
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>└── repos/
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    └── docker.io/library/alpine/
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>        └── _index.json  ← per-repo index; served repo name is &quot;&lt;registry&gt;/&lt;repository&gt;&quot;
+</code></pre></div>
+<p>The shard key is <code>containerBlobShardHex(hex)</code> — the first 3 hex characters of the digest — and the bundle-relative path is <code>containers/blobs/sha256/&lt;first3hex&gt;/&lt;full64hex&gt;</code>. The <code>_index.json</code> name cannot collide with real content because a repository path component may not start with <code>_</code>. Per-repo isolation still holds over the shared store: a served repo can expose only blobs its own index references. Other ecosystems follow the same "verified artifacts on disk, metadata derived on demand" shape — and content addressing is what makes <a href="#export-deduplication-and-delta-bundles">delta bundles</a> cheap, since a shared layer or model blob is forwarded exactly once.</p>
+<h2 id="where-to-go-next">Where to go next<a class="headerlink" href="#where-to-go-next" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../low-side/">Low side</a> — collecting, re-exporting, watches, and the export dir.</li>
+<li><a href="../high-side/">High side</a> — importing, quarantine, status/missing, and serving.</li>
+<li><a href="../scheduling/">Scheduling (watches)</a> — recurring collects on a stored spec.</li>
+<li><a href="../data-diode/">Built-in UDP diode</a> — the pitcher/catcher transport.</li>
+<li><a href="../security/">Security &amp; trust</a> — the full trust argument and hardening.</li>
+<li><a href="../ecosystems/">Ecosystems</a> — the twenty-two streams and their per-ecosystem details.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.top", "navigation.tracking", "navigation.sections", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

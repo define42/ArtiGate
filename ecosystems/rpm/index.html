@@ -1,0 +1,2170 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Dependency mirror for one-way data-diode / air-gapped networks.">
+      
+      
+      
+      
+        <link rel="prev" href="../apt/">
+      
+      
+        <link rel="next" href="../containers/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>RPM (RHEL/Fedora) - ArtiGate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#rpm-rhelfedora" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ArtiGate" class="md-header__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ArtiGate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              RPM (RHEL/Fedora)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ArtiGate" class="md-nav__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ArtiGate
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Running
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../low-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Low side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../high-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    High side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduling (watches)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-diode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Built-in UDP diode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Ecosystems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../go/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Go modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python (PyPI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../maven/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Java (Maven)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../npm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NPM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    APT (Debian/Ubuntu)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPM (RHEL/Fedora)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPM (RHEL/Fedora)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-it-mirrors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What it mirrors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-input-the-repo-stanza" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low-side input: the .repo stanza
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low-side input: the .repo stanza">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#repo-ini-parsing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        .repo (INI) parsing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-baseurl-must-be-concrete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The baseurl must be concrete
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#private-repositories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Private repositories
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-filter-default-x86_64-noarch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture filter (default x86_64 + noarch)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#newest-version-only-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "Newest version only" default
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-regeneration-and-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High-side regeneration and signing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-serving" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High-side serving
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-repo-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client .repo config
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Container images (OCI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI models (Hugging Face)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rust crates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terraform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terraform / OpenTofu
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm charts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nuget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NuGet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alpine (apk)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../conda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conda channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rubygems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RubyGems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../composer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHP Composer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vsx/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code extensions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../galaxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible Galaxy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cran/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R packages (CRAN)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../snap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snap packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../git/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Git repositories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../osv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OSV advisories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../uploads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Uploads (arbitrary files)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security & trust
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS / HTTPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-it-mirrors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What it mirrors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-input-the-repo-stanza" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low-side input: the .repo stanza
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low-side input: the .repo stanza">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#repo-ini-parsing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        .repo (INI) parsing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-baseurl-must-be-concrete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The baseurl must be concrete
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#private-repositories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Private repositories
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-filter-default-x86_64-noarch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture filter (default x86_64 + noarch)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#newest-version-only-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "Newest version only" default
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-regeneration-and-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High-side regeneration and signing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-serving" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High-side serving
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-repo-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client .repo config
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="rpm-rhelfedora">RPM (RHEL/Fedora)<a class="headerlink" href="#rpm-rhelfedora" title="Permanent link">&para;</a></h1>
+<p>ArtiGate mirrors yum/dnf repositories at full metadata fidelity: the <a href="../../low-side/">low side</a> fetches <code>repomd.xml</code>, every metadata file it references, and every <code>.rpm</code>, verifies them, and packs them into a signed bundle; the <a href="../../high-side/">high side</a> regenerates <code>repomd.xml</code> from the recorded entries, optionally re-signs it, and serves the whole repository read-only under <code>/rpm/&lt;mirror&gt;</code>.</p>
+<p>RPM work travels on the <code>rpm</code> stream. Like every ecosystem, that stream has its own sequence counter and export lock, so an RPM collect never blocks or interleaves with Go, Python, Maven, npm, APT, container, or AI model work — only the <code>rpm</code> stream lock is held across the whole mirror → write → commit.</p>
+<p>Unlike a pull-through cache, ArtiGate is a <strong>full repository mirror</strong> (Fedora/RHEL/EPEL-scale): each collect re-syncs against the current upstream repository into one new sequenced, Ed25519-signed bundle. <a href="../../architecture/#export-deduplication-and-delta-bundles">Export dedup</a> keeps the re-sync cheap: the primary index declares each <code>.rpm</code>'s SHA-256 before the bytes are fetched, so packages already forwarded on the <code>rpm</code> stream are <strong>not downloaded again</strong> — they ride in the manifest as <code>prior</code> references while only the genuinely new packages are downloaded and packed into a delta bundle. An unchanged repository produces no bundle at all, and <code>"force": true</code> bypasses the index for a full, self-contained bundle.</p>
+<h2 id="what-it-mirrors">What it mirrors<a class="headerlink" href="#what-it-mirrors" title="Permanent link">&para;</a></h2>
+<p>For each mirror, ArtiGate downloads and integrity-checks:</p>
+<table>
+<thead>
+<tr>
+<th>Content</th>
+<th>Source</th>
+<th>Verification</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>repodata/repomd.xml</code></td>
+<td><code>GET {base}/repodata/repomd.xml</code></td>
+<td>optional detached signature (see below)</td>
+</tr>
+<tr>
+<td>Every metadata file</td>
+<td>each <code>&lt;data&gt;</code> <code>href</code> in <code>repomd.xml</code> (primary, filelists, other, updateinfo, comps/group, modules, zchunk variants, …)</td>
+<td>upstream-declared checksum</td>
+</tr>
+<tr>
+<td>Every <code>.rpm</code></td>
+<td>each <code>&lt;location&gt;</code> in the primary index</td>
+<td>SHA-256 (the package <code>pkgid</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>The primary index is parsed to enumerate packages; the <code>.rpm</code> files and all metadata files are packed into the bundle, along with the <code>repomd.xml</code> <code>&lt;data&gt;</code> entries the high side needs to regenerate the repository entry point.</p>
+<div class="admonition note">
+<p class="admonition-title">Every file is checksum-gated before it is staged</p>
+<p>Each download is verified against the checksum upstream declares for it, and discarded on mismatch. Metadata honours the upstream algorithm (<code>sha256</code>, <code>sha512</code>, or legacy <code>sha1</code>); every <code>.rpm</code> is always verified as <strong>SHA-256</strong> against its <code>&lt;checksum pkgid="YES"&gt;</code> value. The bundle manifest additionally records each file's own SHA-256, which the high side re-verifies on import.</p>
+</div>
+<h2 id="low-side-input-the-repo-stanza">Low-side input: the <code>.repo</code> stanza<a class="headerlink" href="#low-side-input-the-repo-stanza" title="Permanent link">&para;</a></h2>
+<p>Drive a collect with <code>POST /admin/rpm/collect</code>. Provide <strong>either</strong> a full yum/dnf <code>.repo</code> file, <strong>or</strong> the explicit <code>name</code>/<code>base_url</code> fields:</p>
+<div class="admonition tip">
+<p class="admonition-title">Built-in repo definitions</p>
+<p>The dashboard's RPM card ships ready-made <code>.repo</code> definitions for Rocky Linux 9 and 10 — BaseOS, AppStream, CRB and extras individually, or all four at once — plus EPEL (Extra Packages for Enterprise Linux) 9 and 10, Docker CE (EL9/EL10), Visual Studio Code, Google Chrome and Firefox (Mozilla's own yum repository). Pick one under "…or start from a built-in repo definition" and it is pasted into the input, ready to collect once or schedule. Their remote <code>gpgkey=</code> URLs are informational (verification runs only for local keyring paths). The files ship in the source tree under <code>buildin/rpm/</code>.</p>
+</div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://packages.microsoft.com/rhel/9.0/prod/&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">&quot;gpg_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">&quot;repo_file&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">&quot;newest_only&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">&quot;architectures&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;x86_64&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;noarch&quot;</span><span class="p">]</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="p">}</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td>string</td>
+<td>Mirror name (explicit-fields form only); derived from the URL host/path when empty. Must not contain <code>/</code>. Ignored with <code>repo_file</code> — those mirrors are always URL-named (see below).</td>
+</tr>
+<tr>
+<td><code>base_url</code></td>
+<td>string</td>
+<td>Concrete <code>baseurl</code> (see the variable rule below). Required if no <code>repo_file</code>.</td>
+</tr>
+<tr>
+<td><code>gpg_key</code></td>
+<td>string</td>
+<td><strong>Local</strong> keyring path for <code>gpgv</code>, used to verify <code>repomd.xml.asc</code>. Optional.</td>
+</tr>
+<tr>
+<td><code>repo_file</code></td>
+<td>string</td>
+<td>A full <code>.repo</code> (INI) file, one or more <code>[section]</code>s. Wins when non-blank.</td>
+</tr>
+<tr>
+<td><code>newest_only</code></td>
+<td>*bool</td>
+<td>Keep only the newest version of each package. <strong>Defaults to <code>true</code></strong> when omitted.</td>
+</tr>
+<tr>
+<td><code>architectures</code></td>
+<td>[]string</td>
+<td>Package architectures to mirror. <strong>Defaults to <code>["x86_64", "noarch"]</code></strong> when omitted — <code>noarch</code> stays in because hardware-arch packages routinely depend on noarch ones. List explicitly to override (e.g. add <code>i686</code>, or <code>["x86_64"]</code> to drop noarch). Applies to every repo in the collect.</td>
+</tr>
+<tr>
+<td><code>force</code></td>
+<td>bool</td>
+<td>Bypass the export-dedup index — download and pack every <code>.rpm</code> even if already forwarded (full, self-contained bundle).</td>
+</tr>
+</tbody>
+</table>
+<p>When <code>repo_file</code> is present and non-blank it wins: each <code>[section]</code> becomes one mirror. A top-level <code>gpg_key</code> in the request <strong>overrides</strong> the <code>gpgkey=</code> parsed from every section.</p>
+<div class="admonition note">
+<p class="admonition-title">Mirror names always derive from <code>baseurl</code> (APT-style)</p>
+<p>The <code>[section]</code> header is <strong>structural only</strong> — distro repo files all ship generic ids (<code>[baseos]</code>, <code>[appstream]</code>), which would collide across distros and releases on the high side (Rocky 9's and RHEL 9's <code>baseos</code> would silently share one namespace, newest import winning). Instead, each mirror is named by its baseurl slug, e.g. <code>http://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/</code> → <code>dl-rockylinux-org-pub-rocky-9-BaseOS-x86-64-os</code> — unique by construction, exactly like APT mirror names. To hand-pick a name, use the explicit <code>name</code> + <code>base_url</code> fields instead of <code>repo_file</code>. Two sections with the same baseurl derive the same name and are rejected as duplicates.</p>
+</div>
+<h3 id="repo-ini-parsing"><code>.repo</code> (INI) parsing<a class="headerlink" href="#repo-ini-parsing" title="Permanent link">&para;</a></h3>
+<p>Only two keys are read from each <code>[section]</code>; everything else (<code>enabled</code>, <code>gpgcheck</code>, <code>name</code>, <code>metalink</code>, <code>mirrorlist</code>, …) is <strong>silently ignored</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">[my-repo]</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="na">name</span><span class="o">=</span><span class="s">My Repo</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="na">baseurl</span><span class="o">=</span><span class="s">https://packages.microsoft.com/rhel/9.0/prod/</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="na">enabled</span><span class="o">=</span><span class="s">1</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="na">gpgcheck</span><span class="o">=</span><span class="s">1</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="na">gpgkey</span><span class="o">=</span><span class="s">file:///etc/pki/rpm-gpg/MICROSOFT-GPG-KEY</span>
+</code></pre></div>
+<ul>
+<li><strong><code>baseurl</code></strong> → only the first whitespace-separated token is kept (a multi-URL baseurl keeps just the first URL).</li>
+<li><strong><code>gpgkey</code></strong> → passed through only when it names a <strong>local</strong> file:<ul>
+<li><code>file:///path</code> → <code>file://</code> stripped, used as a local <code>gpgv</code> keyring.</li>
+<li><code>/absolute/path</code> → used directly.</li>
+<li>anything else (e.g. an <code>https://</code> key URL) → <strong>dropped</strong>, so low-side signature verification is simply skipped.</li>
+</ul>
+</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">A remote <code>gpgkey=https://…</code> yields no verification</p>
+<p>ArtiGate only verifies <code>repomd.xml.asc</code> when <code>gpgkey</code> resolves to a local keyring file. A normal upstream <code>gpgkey=https://…</code> URL is silently dropped and the repomd signature is <strong>not</strong> checked at collect time. To verify on the low side, point <code>gpg_key</code> (or a <code>file://</code> <code>gpgkey=</code>) at a keyring you have already imported locally.</p>
+</div>
+<h3 id="the-baseurl-must-be-concrete">The <code>baseurl</code> must be concrete<a class="headerlink" href="#the-baseurl-must-be-concrete" title="Permanent link">&para;</a></h3>
+<p>There is <strong>no</strong> variable substitution. Any <code>$</code> in <code>base_url</code> is a hard error — you must expand <code>$releasever</code>/<code>$basearch</code> yourself and pin a concrete URL:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>base_url &quot;https://.../$releasever/$basearch/&quot; has unresolved variables
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>($releasever/$basearch); pin a concrete URL
+</code></pre></div>
+<p>The scheme must be <code>http</code> or <code>https</code>.</p>
+<h2 id="private-repositories">Private repositories<a class="headerlink" href="#private-repositories" title="Permanent link">&para;</a></h2>
+<p>Repos that demand a login are fetched with HTTP Basic from one of two sources, resolved per host as <em>request <code>auth</code> → <code>ARTIGATE_UPSTREAM_AUTH</code> → anonymous</em>:</p>
+<ul>
+<li><strong>Per-collect login</strong> — an optional <code>auth</code> object on the collect request, also exposed as the <em>Private repository login</em> fields on the low-side RPM page: <code>{"host": "rpm.example.com", "username": "bot", "password": "secret"}</code>. Used for that one collect and never stored. <code>host</code> may be omitted when every <code>.repo</code> section lives on one host; a multi-host <code>.repo</code> file must name the host the login is for.</li>
+<li><strong>Standing credentials</strong> — comma-separated <code>host=user:password</code> entries in <code>ARTIGATE_UPSTREAM_AUTH</code> on the low side (the key is the baseurl's exact host, <code>host:port</code> included). Re-read on every collect, and the <strong>only</strong> credential source <a href="../../scheduling/">scheduled watches</a> can use — specs carrying an <code>auth</code> key are rejected.</li>
+</ul>
+<p>A <code>baseurl</code> embedding <code>user:pass@</code> is rejected outright: the URL is recorded in the signed manifest and echoed in progress and error text, so a login there would leak — including across the diode.</p>
+<h2 id="architecture-filter-default-x86_64-noarch">Architecture filter (default <code>x86_64</code> + <code>noarch</code>)<a class="headerlink" href="#architecture-filter-default-x86_64-noarch" title="Permanent link">&para;</a></h2>
+<p>Only packages whose <code>&lt;arch&gt;</code> is listed in <code>architectures</code> are downloaded and advertised; the default is <strong><code>x86_64</code> plus <code>noarch</code></strong>. <code>noarch</code> packages (fonts, configuration, pure-python tools, …) are dependencies of hardware-arch packages, so filtering to <code>x86_64</code> alone would leave dnf unable to resolve — override with an explicit list if you really want that, or to add more architectures (<code>i686</code>, <code>aarch64</code>, …).</p>
+<h2 id="newest-version-only-default">"Newest version only" default<a class="headerlink" href="#newest-version-only-default" title="Permanent link">&para;</a></h2>
+<p><code>newest_only</code> <strong>defaults to <code>true</code></strong>. When enabled, ArtiGate keeps only the highest <strong>EVR</strong> (epoch → version → release) of each <code>(name, arch)</code> pair, using a faithful reimplementation of rpm's <code>rpmvercmp</code> — including the <code>~</code> (pre-release, sorts before everything) and <code>^</code> (post-release) separators, numeric-outranks-alpha segment rules, and leading-zero-stripped numeric comparison.</p>
+<p>Set <code>"newest_only": false</code> to mirror <strong>every</strong> version present in the index.</p>
+<p>When the architecture filter or newest-only actually drops packages, ArtiGate rewrites the staged primary index so the served repository advertises <strong>only</strong> the kept packages: it keeps each retained <code>&lt;package&gt;</code> block <strong>verbatim</strong> (no metadata-field loss), rewrites the root <code>packages="N"</code> count, recompresses to match the original href extension, and updates both the manifest file entry and the primary <code>&lt;data&gt;</code> entry (checksums/open-checksums/sizes) so the bundle and the high side's regenerated <code>repomd.xml</code> stay consistent.</p>
+<div class="admonition warning">
+<p class="admonition-title">Filtering cannot rewrite a zchunk-only primary index</p>
+<p>Rewriting the primary requires recompressing it. If the primary index is offered <strong>only</strong> as <code>.zck</code> (zchunk), the rewrite fails with <code>cannot rewrite zchunk (.zck) index …</code>. The workaround is a filter that drops nothing: <code>"newest_only": false</code> plus an <code>architectures</code> list covering every arch in the repo.</p>
+</div>
+<h2 id="high-side-regeneration-and-signing">High-side regeneration and signing<a class="headerlink" href="#high-side-regeneration-and-signing" title="Permanent link">&para;</a></h2>
+<p>On import, for each mirror the high side:</p>
+<ol>
+<li><strong>Persists a snapshot</strong> of the mirror (<code>repodata</code> entries + package list) to <code>&lt;root&gt;/rpm/&lt;mirror&gt;/index.json</code>. The newest snapshot wins — metadata files are content-named and immutable; <code>repomd.xml</code> is high-side-owned.</li>
+<li><strong>Regenerates <code>repomd.xml</code></strong> from the recorded <code>&lt;data&gt;</code> entries, emitting a <code>&lt;data&gt;</code> block <strong>only for entries whose file actually exists on disk</strong> (so a metadata file absent from the bundle is dropped from the index). It preserves the upstream checksums and open-checksums <strong>verbatim</strong> — it never decompresses or re-hashes the (potentially huge or zchunk-only) metadata — defaulting the checksum type to <code>sha256</code> when blank. <code>&lt;revision&gt;</code> is set to the current Unix time.</li>
+<li><strong>Optionally re-signs</strong> the regenerated <code>repomd.xml</code>.</li>
+</ol>
+<div class="admonition note">
+<p class="admonition-title">The high side re-signs with its own key</p>
+<p>ArtiGate never trusts the transferred upstream <code>repomd.xml.asc</code> as final; the low side used it only to verify at collect time. The high side owns the repository entry point and signs it with its <strong>own</strong> GPG key.</p>
+</div>
+<p>Signing is controlled by one high-side flag:</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--rpm-gpg-key &lt;key-id&gt;</code></td>
+<td>GPG key id used to sign regenerated RPM repositories. Produces <code>repodata/repomd.xml.asc</code>.</td>
+</tr>
+<tr>
+<td><em>(unset)</em></td>
+<td>Repositories are served <strong>unsigned</strong>; any stale <code>repomd.xml.asc</code> is removed.</td>
+</tr>
+</tbody>
+</table>
+<p>When set, the high side runs:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>gpg<span class="w"> </span>--batch<span class="w"> </span>--yes<span class="w"> </span>--armor<span class="w"> </span>--local-user<span class="w"> </span>&lt;key-id&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--detach-sign<span class="w"> </span>--output<span class="w"> </span>repodata/repomd.xml.asc<span class="w"> </span>repodata/repomd.xml
+</code></pre></div>
+<p>The key must exist in the high side's GPG keyring. See <a href="../../security/">Security &amp; trust</a> for the full sign-on-low, verify-and-regenerate-on-high model.</p>
+<h2 id="high-side-serving">High-side serving<a class="headerlink" href="#high-side-serving" title="Permanent link">&para;</a></h2>
+<p>The repository is served read-only under the <code>/rpm</code> prefix. Only <code>GET</code> and <code>HEAD</code> are accepted; anything else is <code>405</code>. Paths are validated against traversal and joined under <code>&lt;root&gt;/rpm/</code>.</p>
+<p>A mirror named <code>epel9</code> therefore exposes:</p>
+<table>
+<thead>
+<tr>
+<th>URL</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/rpm/epel9/repodata/repomd.xml</code></td>
+<td>regenerated index entry point</td>
+</tr>
+<tr>
+<td><code>/rpm/epel9/repodata/repomd.xml.asc</code></td>
+<td>detached signature (only when <code>--rpm-gpg-key</code> is set)</td>
+</tr>
+<tr>
+<td><code>/rpm/epel9/repodata/&lt;metadata&gt;</code></td>
+<td>mirrored primary/filelists/other/… files</td>
+</tr>
+<tr>
+<td><code>/rpm/epel9/Packages/f/foo.rpm</code></td>
+<td>a package at its upstream <code>&lt;location&gt;</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="client-repo-config">Client <code>.repo</code> config<a class="headerlink" href="#client-repo-config" title="Permanent link">&para;</a></h2>
+<p>Point dnf/yum at the high side and configure it as the <strong>sole</strong> repository with no public fallback — that is what closes the dependency-confusion gap the diode exists to eliminate (see <a href="../../security/">Security &amp; trust</a>).</p>
+<p><strong>Signed repo</strong> (high side started with <code>--rpm-gpg-key</code>), written to <code>/etc/yum.repos.d/artigate-&lt;name&gt;.repo</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">[artigate-epel9]</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="na">name</span><span class="o">=</span><span class="s">ArtiGate epel9</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="na">baseurl</span><span class="o">=</span><span class="s">https://high:8080/rpm/epel9</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="na">enabled</span><span class="o">=</span><span class="s">1</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="na">gpgcheck</span><span class="o">=</span><span class="s">1</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="na">repo_gpgcheck</span><span class="o">=</span><span class="s">1</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="na">gpgkey</span><span class="o">=</span><span class="s">file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate</span>
+</code></pre></div>
+<p><strong>Unsigned repo</strong> (no signing key configured on the high side):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">[artigate-epel9]</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="na">name</span><span class="o">=</span><span class="s">ArtiGate epel9</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="na">baseurl</span><span class="o">=</span><span class="s">https://high:8080/rpm/epel9</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="na">enabled</span><span class="o">=</span><span class="s">1</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="na">gpgcheck</span><span class="o">=</span><span class="s">0</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="na">repo_gpgcheck</span><span class="o">=</span><span class="s">0</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gpgcheck</code></td>
+<td>Per-<strong>package</strong> signature check.</td>
+</tr>
+<tr>
+<td><code>repo_gpgcheck</code></td>
+<td>Verifies <code>repomd.xml</code> against ArtiGate's high-side key.</td>
+</tr>
+<tr>
+<td><code>gpgkey</code></td>
+<td>Path to ArtiGate's high-side public key.</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">You must distribute the high-side public key</p>
+<p>The signed config references <code>/etc/pki/rpm-gpg/RPM-GPG-KEY-artigate</code>, but ArtiGate does <strong>not</strong> install that key on clients. Export the public half of the key you passed to <code>--rpm-gpg-key</code> and place it at that path (or wherever your <code>gpgkey=</code> points). If you serve the repo unsigned instead, both <code>gpgcheck</code> and <code>repo_gpgcheck</code> are off — sign it with <code>--rpm-gpg-key</code> to turn signature checks back on.</p>
+</div>
+<h2 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h2>
+<p>Mirror the newest packages of a concrete vendor repo, then serve it signed.</p>
+<p>Low side — trigger a collect from a <code>.repo</code> file:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>curl<span class="w"> </span>-fsS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://low:8080/admin/rpm/collect<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="s1">        &quot;repo_file&quot;: &quot;[packages-microsoft]\nname=Microsoft RHEL9\nbaseurl=https://packages.microsoft.com/rhel/9.0/prod/\nenabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-GPG-KEY\n&quot;,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="s1">        &quot;newest_only&quot;: true</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="s1">      }&#39;</span>
+</code></pre></div>
+<p>The mirror is named from its baseurl — here <code>packages-microsoft-com-rhel-9-0-prod</code> — regardless of the <code>[section]</code> header. To pick the name yourself, use the explicit fields instead:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>curl<span class="w"> </span>-fsS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://low:8080/admin/rpm/collect<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="s1">        &quot;name&quot;: &quot;packages-microsoft&quot;,</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="s1">        &quot;base_url&quot;: &quot;https://packages.microsoft.com/rhel/9.0/prod/&quot;,</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="s1">        &quot;newest_only&quot;: true</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="s1">      }&#39;</span>
+</code></pre></div>
+<p>High side — start it with a signing key so <code>repomd.xml</code> is re-signed on import:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>artigate<span class="w"> </span>high<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>--public-key<span class="w"> </span>/etc/artigate/high.ed25519.pub<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>--rpm-gpg-key<span class="w"> </span>artigate-repo-signing
+</code></pre></div>
+<p>Client — after the bundle crosses the diode and is imported, on an air-gapped host:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>cat<span class="w"> </span>&gt;/etc/yum.repos.d/artigate-packages-microsoft.repo<span class="w"> </span><span class="s">&lt;&lt;&#39;EOF&#39;</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="s">[artigate-packages-microsoft]</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="s">name=ArtiGate packages-microsoft</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="s">baseurl=https://high:8080/rpm/packages-microsoft</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="s">enabled=1</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="s">gpgcheck=1</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="s">repo_gpgcheck=1</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="s">gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="s">EOF</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>dnf<span class="w"> </span>--disablerepo<span class="o">=</span><span class="s1">&#39;*&#39;</span><span class="w"> </span>--enablerepo<span class="o">=</span><span class="s1">&#39;artigate-packages-microsoft&#39;</span><span class="w"> </span>makecache
+</code></pre></div>
+<h2 id="limitations">Limitations<a class="headerlink" href="#limitations" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>The primary index must be <code>.gz</code>, <code>.xz</code>, <code>.zst</code>, or uncompressed.</strong> ArtiGate must parse it to enumerate packages; a primary offered <strong>only as <code>.zck</code> (zchunk)</strong> cannot be parsed and the collect fails with <code>zchunk (.zck) index cannot be parsed</code>. (Docker CE's EL9 repos publish <code>.zst</code>-compressed metadata, which is supported — <code>.zst</code> is decompressed in-process, no external tool.) Metadata files ArtiGate never parses (it only stores and re-serves them) may still be <code>.zck</code>.</li>
+<li><strong>Newest-only cannot rewrite a <code>.zck</code> primary.</strong> If newest-only would drop packages but the primary is zchunk-only, disable newest-only for that repo.</li>
+<li><strong>Each collect re-syncs the metadata.</strong> Every collect re-fetches the current <code>repomd.xml</code> and its indexes. The packages themselves are incremental: <code>.rpm</code>s already forwarded are skipped before download and ride as <code>prior</code> references in a delta bundle; an unchanged repository writes no new bundle and burns no sequence.</li>
+<li><strong><code>baseurl</code> variables are not expanded.</strong> Any <code>$releasever</code>/<code>$basearch</code> (any <code>$</code>) is rejected; pin concrete URLs.</li>
+<li><strong>Remote <code>gpgkey=https://…</code> is not used for verification.</strong> Only <code>file://</code>/absolute local keyrings are honoured on the low side.</li>
+<li><strong>External binaries.</strong> <code>xz</code> must be installed on the <strong>low</strong> side for <code>.xz</code> metadata (parsing the primary index and recompressing it for newest-only); <code>.gz</code> (stdlib) and <code>.zst</code> (in-process, e.g. Docker CE EL9) need no external tool. The high side never decompresses or re-hashes RPM metadata, so it needs no <code>xz</code>; <code>gpgv</code> on the low side for repomd verification; <code>gpg</code> on the high side for signing.</li>
+<li><strong>Size/time caps.</strong> <code>.rpm</code> and metadata files <strong>stream to disk</strong> while being hashed (never buffered in memory), with the repo-declared size enforced exactly (8 GiB cap when none is declared) and a 30-minute timeout. In-memory reads are capped: <code>repomd.xml(.asc)</code> at 16 MiB, the compressed primary index at 1 GiB, and gzip/xz/zstd decompression refuses to expand beyond 2 GiB (decompression-bomb guard).</li>
+</ul>
+<h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../low-side/">Low side</a> — operating the exporter</li>
+<li><a href="../../high-side/">High side</a> — operating the read-only mirror</li>
+<li><a href="../../scheduling/">Scheduling (watches)</a> — recurring re-syncs</li>
+<li><a href="../../security/">Security &amp; trust</a> — the sign / verify / regenerate model</li>
+<li><a href="../../api/">HTTP API reference</a> — the exact request/response contracts</li>
+<li><a href="../../configuration/">Configuration reference</a> — every flag and environment variable</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.top", "navigation.tracking", "navigation.sections", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

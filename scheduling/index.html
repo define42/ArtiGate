@@ -1,0 +1,2303 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Dependency mirror for one-way data-diode / air-gapped networks.">
+      
+      
+      
+      
+        <link rel="prev" href="../high-side/">
+      
+      
+        <link rel="next" href="../deployment/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Scheduling (watches) - ArtiGate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#scheduling-watches" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="ArtiGate" class="md-header__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ArtiGate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Scheduling (watches)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="ArtiGate" class="md-nav__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ArtiGate
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Running
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../low-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Low side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../high-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    High side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduling (watches)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduling (watches)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-a-watch-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a watch does
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adding-a-schedule-from-an-ecosystem-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a schedule from an ecosystem page
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Adding a schedule from an ecosystem page">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#example-schedule-a-python-collect-every-hour" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: schedule a Python collect every hour
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-schedule-a-container-image-daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: schedule a container image daily
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#version-constraint-re-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Version-constraint re-resolution
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managing-schedules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Managing schedules
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Managing schedules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#editing-a-schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editing a schedule
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#status-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-watches-are-stored" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where watches are stored
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-scheduler-and-watch-interval" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The scheduler and --watch-interval
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-adminwatches-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The /admin/watches* API
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The /admin/watches* API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#list-watches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        List watches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edit-a-watch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edit a watch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trigger-pause-resume-and-remove-a-watch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trigger, pause, resume, and remove a watch
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-diode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Built-in UDP diode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Ecosystems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/go/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Go modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python (PyPI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/maven/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Java (Maven)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/npm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NPM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/apt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    APT (Debian/Ubuntu)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/rpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPM (RHEL/Fedora)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Container images (OCI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/ai-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI models (Hugging Face)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rust crates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/terraform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terraform / OpenTofu
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm charts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/nuget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NuGet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/apk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alpine (apk)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/conda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conda channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/rubygems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RubyGems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/composer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHP Composer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/vsx/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code extensions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/galaxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible Galaxy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/cran/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R packages (CRAN)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/snap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snap packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/git/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Git repositories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/osv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OSV advisories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/uploads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Uploads (arbitrary files)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security & trust
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS / HTTPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-a-watch-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a watch does
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adding-a-schedule-from-an-ecosystem-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a schedule from an ecosystem page
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Adding a schedule from an ecosystem page">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#example-schedule-a-python-collect-every-hour" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: schedule a Python collect every hour
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-schedule-a-container-image-daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: schedule a container image daily
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#version-constraint-re-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Version-constraint re-resolution
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managing-schedules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Managing schedules
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Managing schedules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#editing-a-schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editing a schedule
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#status-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-watches-are-stored" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where watches are stored
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-scheduler-and-watch-interval" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The scheduler and --watch-interval
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-adminwatches-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The /admin/watches* API
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The /admin/watches* API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#list-watches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        List watches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edit-a-watch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edit a watch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trigger-pause-resume-and-remove-a-watch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trigger, pause, resume, and remove a watch
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="scheduling-watches">Scheduling (watches)<a class="headerlink" href="#scheduling-watches" title="Permanent link">&para;</a></h1>
+<p>A <strong>watch</strong> is a recurring collect: it re-runs a stored collect for exactly one ecosystem stream on a fixed interval, so a dependency like Python <code>requests</code> or the <code>alpine:3.20</code> image can be pulled every hour or every day without an operator triggering it each time.</p>
+<p>Watches live entirely on the <a href="../low-side/">low side</a>. They are configured from the same ecosystem pages you use for a one-off collect, persisted in SQLite, and driven by a small in-process scheduler.</p>
+<h2 id="what-a-watch-does">What a watch does<a class="headerlink" href="#what-a-watch-does" title="Permanent link">&para;</a></h2>
+<p>A watch stores the <strong>exact JSON body its page's collect would POST</strong> (the <code>spec</code>) and replays it on a schedule. When the scheduler fires a watch it hands the stored spec straight to the same <code>Collect*</code> method that the interactive <code>/admin/&lt;stream&gt;/collect</code> endpoint calls — so a watch is a stored replay of the page's collect, nothing more.</p>
+<p>Because it re-runs the real collect every time, a watch inherits all of that collect's behaviour:</p>
+<ul>
+<li>Moving references re-resolve on each run (see <a href="#version-constraint-re-resolution">below</a>).</li>
+<li><a href="../architecture/#export-deduplication-and-delta-bundles">Export dedup</a> still applies: if every resolved file was already forwarded on that stream, no bundle is produced and no sequence number is consumed — the watch just records a "skipped" run. If only some files are new, the run emits a <strong>delta bundle</strong> carrying just the churn (the watch message counts the already-forwarded files).</li>
+<li>Per-unit fetch failures are collected as skipped units, not fatal, so one broken reference never blocks the batch.</li>
+</ul>
+<p>A watch can target any of the twenty-two schedulable streams — every stream except <a href="../ecosystems/uploads/"><code>uploads</code></a>, which has no upstream to re-pull:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>go   python   maven   apt   rpm   hf   containers   npm
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>crates   terraform   helm   nuget   apk   conda   rubygems
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>composer   vsx   galaxy   cran   snap   git   osv
+</code></pre></div>
+<h2 id="adding-a-schedule-from-an-ecosystem-page">Adding a schedule from an ecosystem page<a class="headerlink" href="#adding-a-schedule-from-an-ecosystem-page" title="Permanent link">&para;</a></h2>
+<p>Every schedulable ecosystem page — from <a href="../ecosystems/go/">Go</a> and <a href="../ecosystems/python/">Python</a> through <a href="../ecosystems/conda/">Conda</a>, <a href="../ecosystems/git/">Git</a>, and <a href="../ecosystems/osv/">OSV</a>; everything in the <a href="../ecosystems/">ecosystems overview</a> except <a href="../ecosystems/uploads/">Uploads</a> — has a <strong>"Schedule the above"</strong> row beneath its collect form. Fill in the collect form as you would for a one-off export, then:</p>
+<ol>
+<li>Enter a number in the <strong>every</strong> field.</li>
+<li>Choose <strong>hours</strong> or <strong>days</strong> (days is the default).</li>
+<li>Submit. The page builds the same spec its "Collect &amp; export" button would send and POSTs it to <code>POST /admin/watches</code>.</li>
+</ol>
+<p>The interval you pick is converted to seconds (<code>hours</code> × 3600, <code>days</code> × 86400) and sent as <code>interval_seconds</code>.</p>
+<div class="admonition note">
+<p class="admonition-title">The UI offers hours and days; the API accepts anything ≥ 1 minute</p>
+<p>The scheduling row only exposes hours and days, but the underlying API accepts any <code>interval_seconds</code>. The enforced floor is <strong>1 minute</strong> (<code>minWatchInterval</code>); shorter intervals are rejected with HTTP 400.</p>
+</div>
+<p>A freshly created watch is always <strong>enabled</strong> and its next run time is set to <em>now</em>, so it fires on the next scheduler tick.</p>
+<h3 id="example-schedule-a-python-collect-every-hour">Example: schedule a Python collect every hour<a class="headerlink" href="#example-schedule-a-python-collect-every-hour" title="Permanent link">&para;</a></h3>
+<p>The spec is whatever the Python page would POST — here, a <code>requirements</code> collect. Sending it directly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/admin/watches<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="s1">        &quot;stream&quot;: &quot;python&quot;,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="s1">        &quot;label&quot;: &quot;requests hourly&quot;,</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="s1">        &quot;interval_seconds&quot;: 3600,</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="s1">        &quot;spec&quot;: { &quot;requirements&quot;: [&quot;requests==2.32.3&quot;] }</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="s1">      }&#39;</span>
+</code></pre></div>
+<p>The response is the created <code>Watch</code>, including its assigned <code>id</code>.</p>
+<h3 id="example-schedule-a-container-image-daily">Example: schedule a container image daily<a class="headerlink" href="#example-schedule-a-container-image-daily" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/admin/watches<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="s1">        &quot;stream&quot;: &quot;containers&quot;,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="s1">        &quot;label&quot;: &quot;alpine base&quot;,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="s1">        &quot;interval_seconds&quot;: 86400,</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="s1">        &quot;spec&quot;: { &quot;images&quot;: [&quot;alpine:3.20&quot;] }</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="s1">      }&#39;</span>
+</code></pre></div>
+<div class="admonition tip">
+<p class="admonition-title">The spec is the page's collect body</p>
+<p>Anything the ecosystem page accepts is a valid spec: <code>{"modules": [...], "resolve_deps": true}</code> for Go, <code>{"coordinates": [...]}</code> or <code>{"pom_xml": "..."}</code> for Maven, <code>{"packages": [...]}</code> for NPM, <code>{"source_list": "...", "newest_only": true}</code> for APT, and so on. The spec is stored verbatim as text and replayed unchanged.</p>
+</div>
+<h2 id="version-constraint-re-resolution">Version-constraint re-resolution<a class="headerlink" href="#version-constraint-re-resolution" title="Permanent link">&para;</a></h2>
+<p>The stored spec is replayed literally, but the <em>upstream resolution</em> happens fresh on every run. What that means depends on how pinned the spec is:</p>
+<table>
+<thead>
+<tr>
+<th>Spec references</th>
+<th>Behaviour on each run</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Container version constraint (e.g. <code>golang:1.26.x</code>, <code>golang:&gt;=1.24,&lt;2.0</code>)</td>
+<td>Re-resolved against the upstream tag list <strong>at that run</strong> — the schedule tracks new matching releases through the diode automatically</td>
+</tr>
+<tr>
+<td>Moving container tag (e.g. <code>alpine:3.20</code>)</td>
+<td>Re-resolved to whatever manifest/digest the tag points to <strong>at that run</strong> — new pushes are picked up</td>
+</tr>
+<tr>
+<td>Pinned digest (e.g. <code>ghcr.io/org/app@sha256:…</code>)</td>
+<td>Always the same content; dedup decides whether a new bundle is emitted</td>
+</tr>
+<tr>
+<td>Go <code>module@latest</code> or <code>resolve_deps: true</code></td>
+<td>The module graph is re-resolved each run, so newly published versions are pulled</td>
+</tr>
+<tr>
+<td>Hugging Face branch (e.g. <code>openai/gpt-oss-20b@main</code>)</td>
+<td>Re-resolved to the branch's current commit; a moved branch adds the new snapshot</td>
+</tr>
+<tr>
+<td>Bare crate / provider / chart / NuGet spec (e.g. <code>serde</code>, <code>hashicorp/aws</code>, <code>nginx</code>, <code>Serilog</code>)</td>
+<td>Re-resolved to the newest release <strong>at that run</strong>, so the schedule tracks new versions through the diode automatically</td>
+</tr>
+<tr>
+<td>Alpine branch/repo selection (e.g. <code>v3.22/main</code>)</td>
+<td>The <code>APKINDEX</code> is re-fetched and its (newest-only by default) packages re-mirrored — note the index declares no whole-file hash, so unchanged <code>.apk</code>s are re-<strong>downloaded</strong> on the low side and deduped at export</td>
+</tr>
+<tr>
+<td>Pinned version (e.g. <code>requests==2.32.3</code>)</td>
+<td>Same content each run; only dedup decides whether anything is sent</td>
+</tr>
+</tbody>
+</table>
+<p>For containers specifically, every run re-parses the image refs and re-mirrors them. Only <code>linux/amd64</code> is mirrored; per-image fetch failures are collected as skipped units (surfaced in the watch message as "N skipped") rather than aborting the batch. A scheduled pull of a <strong>private</strong> upstream authenticates via the low side's standing-credential variables — <code>ARTIGATE_CONTAINER_AUTH</code> for containers, <code>ARTIGATE_GO_AUTH</code> for Go modules, <code>ARTIGATE_UPSTREAM_AUTH</code> for git/APT/RPM/Alpine/Conda — never via the spec: specs are stored and echoed in plaintext, so any spec carrying an <code>auth</code> key is rejected with HTTP 400. See <a href="../ecosystems/containers/#private-registries">Container images</a> for the container details.</p>
+<p>In short: a watch on a moving reference keeps up with the upstream; a watch on a pinned reference is a no-op after its first successful run, cheaply skipped by dedup.</p>
+<h2 id="managing-schedules">Managing schedules<a class="headerlink" href="#managing-schedules" title="Permanent link">&para;</a></h2>
+<p>You can manage watches from two places in the low-side UI:</p>
+<ul>
+<li><strong>The ecosystem page</strong> lists that stream's own watches.</li>
+<li><strong>The Overview</strong> page ("Scheduled pulls") lists <strong>every</strong> watch across all ecosystems, with a Stream column, last run, status pill, next run, and per-row actions.</li>
+</ul>
+<p>Both views back onto the same <code>/admin/watches*</code> API.</p>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Pause / disable</strong></td>
+<td>Sets <code>enabled = 0</code>. The scheduler stops firing it; <code>next_run_at</code> is left untouched.</td>
+</tr>
+<tr>
+<td><strong>Enable</strong></td>
+<td>Sets <code>enabled = 1</code> <strong>and</strong> <code>next_run_at = now</code>, so re-enabling makes it due promptly.</td>
+</tr>
+<tr>
+<td><strong>Run now</strong></td>
+<td>Runs the watch immediately in the background, regardless of schedule.</td>
+</tr>
+<tr>
+<td><strong>Edit</strong></td>
+<td>Opens the watch's label, interval, and stored collect spec for editing in place. The id, stream, enabled state, and run history are kept.</td>
+</tr>
+<tr>
+<td><strong>Delete</strong></td>
+<td>Removes the watch permanently.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="editing-a-schedule">Editing a schedule<a class="headerlink" href="#editing-a-schedule" title="Permanent link">&para;</a></h3>
+<p><strong>Edit</strong> (available in both views) opens a dialog with the watch's label, its interval, and the stored spec as editable JSON — so you can add a requirement to a Python schedule or bump an interval without deleting and recreating the watch (which would lose its run history). Saving POSTs <code>/admin/watches/update</code>.</p>
+<p>Two things to know about an edit's timing:</p>
+<ul>
+<li><strong>The next run is re-spaced from the last run.</strong> After an edit, a watch that has run before gets <code>next_run_at = last_run_at + interval</code>, so shortening the interval can make it due immediately; lengthening pushes the next run out. A watch that has never run keeps its next-run time (it is already due from creation).</li>
+<li><strong>An in-flight run keeps the old spec.</strong> A run that is already queued or running uses the spec it was enqueued with; the edited spec applies from the next run.</li>
+</ul>
+<p>The stream itself cannot be changed — a spec only makes sense for the stream it was written for. To move a schedule to a different ecosystem, delete it and create a new one from that ecosystem's page.</p>
+<div class="admonition warning">
+<p class="admonition-title">Run now returns immediately and is fire-and-forget</p>
+<p>A collect can take minutes, so <code>POST /admin/watches/run</code> starts the run in the background on a detached context and returns <code>{"status":"started"}</code> right away. That response says nothing about the collect's eventual outcome — poll <code>GET /admin/watches</code> and read the status fields to see how it went. Because the run detaches from the request, it is <strong>not</strong> cancelled when the HTTP request ends or the server shuts down.</p>
+</div>
+<p>An <strong>in-flight guard</strong> prevents the same watch running twice at once: if a run-now overlaps a scheduler tick (or a slow run overlaps the next tick), the second attempt is a no-op. Different watches, and different streams, still run independently.</p>
+<h2 id="status-fields">Status fields<a class="headerlink" href="#status-fields" title="Permanent link">&para;</a></h2>
+<p>Each watch tracks the outcome of its last run and when it will next fire. These are the fields shown in the UI and returned by <code>GET /admin/watches</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>JSON</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Last run</td>
+<td><code>last_run_at</code></td>
+<td>When the watch last executed. Omitted until the first run.</td>
+</tr>
+<tr>
+<td>Status</td>
+<td><code>last_status</code></td>
+<td><code>"ok"</code> or <code>"error"</code> (omitted from the JSON, like <code>last_message</code>, until the first run — the stored DB value defaults to an empty string).</td>
+</tr>
+<tr>
+<td>Message</td>
+<td><code>last_message</code></td>
+<td>Human-readable outcome (bundle summary, "skipped", or the error string).</td>
+</tr>
+<tr>
+<td>Next run</td>
+<td><code>next_run_at</code></td>
+<td>When the scheduler will next fire it. Always set.</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>last_message</code> is built from the run result:</p>
+<table>
+<thead>
+<tr>
+<th>Outcome</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>New content exported</td>
+<td><code>bundle &lt;bundle-id&gt;: &lt;N&gt; unit(s)</code> — with <code>, &lt;n&gt; file(s) already forwarded</code> appended for a delta bundle, and <code>, &lt;n&gt; skipped</code> if any units failed</td>
+</tr>
+<tr>
+<td>Dedup skip (nothing new)</td>
+<td><code>no new content since last export; skipped</code></td>
+</tr>
+<tr>
+<td>No bundle produced</td>
+<td><code>no bundle produced</code></td>
+</tr>
+<tr>
+<td>HTTP diode upload failed</td>
+<td>the success message plus <code>; diode upload failed: &lt;error&gt;</code> — the bundle is committed and staged for re-transmit</td>
+</tr>
+<tr>
+<td>Failure</td>
+<td>the error string</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Next-run is computed from the run's finish time</p>
+<p>After a run, <code>next_run_at = finish_time + interval</code>. Intervals therefore drift by the run duration and are not aligned to wall-clock boundaries. There is no catch-up: a watch that became due many times while the scheduler was down fires once, then re-schedules from now.</p>
+</div>
+<h2 id="where-watches-are-stored">Where watches are stored<a class="headerlink" href="#where-watches-are-stored" title="Permanent link">&para;</a></h2>
+<p>Watches are persisted in a dedicated SQLite database at <code>&lt;root&gt;/watches.db</code>, where <code>&lt;root&gt;</code> is the low-side <code>--root</code> (default <code>/var/lib/artigate-low</code>). It is opened during low-side startup and is separate from the low side's other state (<code>exported.db</code>, the export-dedup index, and <code>low-state.json</code>, the sequence state).</p>
+<ul>
+<li>The driver is the pure-Go <code>modernc.org/sqlite</code> — no cgo.</li>
+<li>The connection pool is capped at a single writer (<code>SetMaxOpenConns(1)</code>) with <code>PRAGMA busy_timeout=5000</code>, so the scheduler and the UI serialize instead of hitting "database is locked".</li>
+<li>Timestamps are stored as fixed-width RFC3339 UTC text, which sorts and compares correctly as SQL text.</li>
+</ul>
+<p>The <code>watches</code> table schema:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="n">watches</span><span class="w"> </span><span class="p">(</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="n">id</span><span class="w">               </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="n">AUTOINCREMENT</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="n">stream</span><span class="w">           </span><span class="nb">TEXT</span><span class="w">    </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="n">label</span><span class="w">            </span><span class="nb">TEXT</span><span class="w">    </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="n">spec</span><span class="w">             </span><span class="nb">TEXT</span><span class="w">    </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="n">interval_seconds</span><span class="w"> </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="n">enabled</span><span class="w">          </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="n">created_at</span><span class="w">       </span><span class="nb">TEXT</span><span class="w">    </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="n">last_run_at</span><span class="w">      </span><span class="nb">TEXT</span><span class="p">,</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span><span class="n">last_status</span><span class="w">      </span><span class="nb">TEXT</span><span class="w">    </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="p">,</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">  </span><span class="n">last_message</span><span class="w">     </span><span class="nb">TEXT</span><span class="w">    </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="p">,</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">  </span><span class="n">next_run_at</span><span class="w">      </span><span class="nb">TEXT</span><span class="w">    </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="p">)</span>
+</code></pre></div>
+<h2 id="the-scheduler-and-watch-interval">The scheduler and <code>--watch-interval</code><a class="headerlink" href="#the-scheduler-and-watch-interval" title="Permanent link">&para;</a></h2>
+<p>The scheduler is a single in-process goroutine on the low side. It is controlled by one flag:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>artigate<span class="w"> </span>low<span class="w"> </span>--watch-interval<span class="o">=</span>60s<span class="w">   </span><span class="c1"># default</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--watch-interval</code></td>
+<td><code>60s</code></td>
+<td>How often the scheduler checks for due watches. <code>0</code> disables scheduled watches entirely.</td>
+</tr>
+</tbody>
+</table>
+<p>The value is a Go duration, so <code>30s</code>, <code>5m</code>, and <code>1h</code> are all valid. On each tick the scheduler queries the watches whose <code>next_run_at</code> has arrived (<code>enabled = 1 AND next_run_at &lt;= now</code>, ordered by ID) and runs them <strong>sequentially, one at a time</strong>.</p>
+<div class="admonition warning">
+<p class="admonition-title">The tick is the polling granularity, not the schedule</p>
+<p>A watch fires on the first tick at or after its <code>next_run_at</code>, so the effective latency to a run is up to one <code>--watch-interval</code>. A too-coarse tick (say <code>1h</code>) means a watch scheduled "every 30 minutes" still only fires hourly. Because due watches run sequentially within a tick, a long collect delays the other watches due in the same tick.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title"><code>--watch-interval 0</code> disables only the scheduler</p>
+<p>With <code>--watch-interval 0</code> no scheduler goroutine starts, so <strong>nothing fires automatically</strong>. Manual <strong>Run now</strong> (<code>POST /admin/watches/run</code>) still works.</p>
+</div>
+<h2 id="the-adminwatches-api">The <code>/admin/watches*</code> API<a class="headerlink" href="#the-adminwatches-api" title="Permanent link">&para;</a></h2>
+<p>The watch endpoints live under <code>/admin/</code> on the low side and are subject to the low-side auth middleware when <code>ARTIGATE_LOW_AUTH</code> is set. See the <a href="../api/">HTTP API reference</a> for the full request/response schemas.</p>
+<table>
+<thead>
+<tr>
+<th>Method + Path</th>
+<th>Body</th>
+<th>Response</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /admin/watches</code></td>
+<td>—</td>
+<td><code>{"watches":[…]}</code></td>
+</tr>
+<tr>
+<td><code>POST /admin/watches</code></td>
+<td><code>{stream, label, spec, interval_seconds}</code></td>
+<td>the created <code>Watch</code> (with <code>id</code>)</td>
+</tr>
+<tr>
+<td><code>POST /admin/watches/update</code></td>
+<td><code>{id, label?, spec?, interval_seconds?}</code></td>
+<td>the updated <code>Watch</code></td>
+</tr>
+<tr>
+<td><code>POST /admin/watches/run</code></td>
+<td><code>{"id":&lt;n&gt;}</code></td>
+<td><code>{"status":"started"}</code></td>
+</tr>
+<tr>
+<td><code>POST /admin/watches/enable</code></td>
+<td><code>{"id":&lt;n&gt;}</code></td>
+<td><code>{"status":"ok"}</code></td>
+</tr>
+<tr>
+<td><code>POST /admin/watches/disable</code></td>
+<td><code>{"id":&lt;n&gt;}</code></td>
+<td><code>{"status":"ok"}</code></td>
+</tr>
+<tr>
+<td><code>POST /admin/watches/delete</code></td>
+<td><code>{"id":&lt;n&gt;}</code></td>
+<td><code>{"status":"ok"}</code></td>
+</tr>
+</tbody>
+</table>
+<p>Notes on the request bodies:</p>
+<ul>
+<li>On <strong>create</strong>, <code>spec</code> is sent as a raw JSON object (not a string) and stored verbatim; <code>label</code> defaults to <code>stream</code> when blank; the watch is always created enabled. The body limit is 8 MiB. Validation rejects unknown streams, intervals below 1 minute, empty or invalid-JSON specs, and specs carrying an <code>auth</code> key (credentials must never be stored — use <code>ARTIGATE_CONTAINER_AUTH</code> / <code>ARTIGATE_GO_AUTH</code> / <code>ARTIGATE_UPSTREAM_AUTH</code>) with HTTP 400. The same <code>auth</code> check runs again at <strong>run time</strong>, so a spec stored before this guard existed fails its runs with the same message instead of ever using the stored login — recreate the watch without credentials and put the login in the standing-credential variable.</li>
+<li>On <strong>update</strong>, only <code>id</code> is required (unknown id → HTTP 404): a blank <code>label</code>, an omitted or <code>null</code> <code>spec</code>, and a zero <code>interval_seconds</code> each keep the watch's current value, and the merged result is validated like a create. The stream cannot be changed. The body limit is 8 MiB. See <a href="#editing-a-schedule">Editing a schedule</a> for how the next run is re-spaced.</li>
+<li>The <strong>run / enable / disable / delete</strong> endpoints all take <code>{"id":&lt;n&gt;}</code> (read up to 64 KiB); a missing or non-positive <code>id</code> returns HTTP 400, and <strong>run</strong> returns HTTP 404 if no watch has that id.</li>
+</ul>
+<h3 id="list-watches">List watches<a class="headerlink" href="#list-watches" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>curl<span class="w"> </span>http://localhost:8080/admin/watches
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;watches&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">      </span><span class="nt">&quot;stream&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;python&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">      </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;requests hourly&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">      </span><span class="nt">&quot;spec&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;{\&quot;requirements\&quot;:[\&quot;requests==2.32.3\&quot;]}&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">      </span><span class="nt">&quot;interval_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3600</span><span class="p">,</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">      </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">      </span><span class="nt">&quot;created_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-05T09:00:00Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">      </span><span class="nt">&quot;last_run_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-05T10:00:12Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">      </span><span class="nt">&quot;last_status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ok&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">      </span><span class="nt">&quot;last_message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;no new content since last export; skipped&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="w">      </span><span class="nt">&quot;next_run_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-05T11:00:12Z&quot;</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="edit-a-watch">Edit a watch<a class="headerlink" href="#edit-a-watch" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># change the interval to 2 hours and swap the spec; blank/omitted fields keep</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># their current value, and the stream stays fixed</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/admin/watches/update<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="s1">        &quot;id&quot;: 1,</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="s1">        &quot;interval_seconds&quot;: 7200,</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="s1">        &quot;spec&quot;: { &quot;requirements&quot;: [&quot;requests==2.32.4&quot;, &quot;urllib3&quot;] }</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="s1">      }&#39;</span>
+</code></pre></div>
+<p>The response is the updated <code>Watch</code>.</p>
+<h3 id="trigger-pause-resume-and-remove-a-watch">Trigger, pause, resume, and remove a watch<a class="headerlink" href="#trigger-pause-resume-and-remove-a-watch" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># run it now (background; poll the list for the outcome)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/admin/watches/run<span class="w">     </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;id&quot;:1}&#39;</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># pause it (scheduler stops firing it)</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/admin/watches/disable<span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;id&quot;:1}&#39;</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="c1"># resume it (also makes it due immediately)</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/admin/watches/enable<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;id&quot;:1}&#39;</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># delete it permanently</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/admin/watches/delete<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;id&quot;:1}&#39;</span>
+</code></pre></div>
+<h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../low-side/">Low side</a> — the server that hosts watches and runs the scheduler.</li>
+<li><a href="../ecosystems/">Ecosystems</a> — the collect forms each watch replays.</li>
+<li><a href="../ecosystems/containers/">Container images (OCI)</a> — moving-tag re-resolution in detail.</li>
+<li><a href="../api/">HTTP API reference</a> — full <code>/admin/watches*</code> schemas.</li>
+<li><a href="../troubleshooting/">Troubleshooting &amp; limitations</a> — scheduler gotchas consolidated.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.top", "navigation.tracking", "navigation.sections", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

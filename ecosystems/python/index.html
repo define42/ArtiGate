@@ -1,0 +1,2145 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Dependency mirror for one-way data-diode / air-gapped networks.">
+      
+      
+      
+      
+        <link rel="prev" href="../go/">
+      
+      
+        <link rel="next" href="../maven/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Python (PyPI) - ArtiGate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#python-pypi" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ArtiGate" class="md-header__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ArtiGate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Python (PyPI)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ArtiGate" class="md-nav__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ArtiGate
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Running
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../low-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Low side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../high-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    High side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduling (watches)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-diode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Built-in UDP diode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Ecosystems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../go/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Go modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python (PyPI)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python (PyPI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#data-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side — inputs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side — inputs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#from-the-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From the UI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#from-the-http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From the HTTP API
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#wheels-only-pip-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wheels-only pip policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#opt-in-sdists-for-packages-that-publish-no-wheel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opt-in sdists (for packages that publish no wheel)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-target-a-different-interpreter-or-platform" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-target (a different interpreter or platform)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#internals-how-collection-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Internals — how collection runs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-serving-the-simple-repository-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side — serving the Simple Repository API
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="High side — serving the Simple Repository API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#root-index-simple" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Root index — /simple/
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#project-page-simpleproject" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project page — /simple/&lt;project&gt;/
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#file-download-packagesfilename" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File download — /packages/&lt;filename&gt;
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-pip-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client (pip) configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../maven/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Java (Maven)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../npm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NPM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    APT (Debian/Ubuntu)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPM (RHEL/Fedora)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Container images (OCI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI models (Hugging Face)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rust crates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terraform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terraform / OpenTofu
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm charts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nuget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NuGet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alpine (apk)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../conda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conda channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rubygems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RubyGems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../composer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHP Composer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vsx/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code extensions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../galaxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible Galaxy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cran/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R packages (CRAN)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../snap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snap packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../git/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Git repositories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../osv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OSV advisories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../uploads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Uploads (arbitrary files)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security & trust
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS / HTTPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#data-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side — inputs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side — inputs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#from-the-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From the UI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#from-the-http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From the HTTP API
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#wheels-only-pip-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wheels-only pip policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#opt-in-sdists-for-packages-that-publish-no-wheel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opt-in sdists (for packages that publish no wheel)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-target-a-different-interpreter-or-platform" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-target (a different interpreter or platform)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#internals-how-collection-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Internals — how collection runs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-serving-the-simple-repository-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side — serving the Simple Repository API
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="High side — serving the Simple Repository API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#root-index-simple" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Root index — /simple/
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#project-page-simpleproject" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project page — /simple/&lt;project&gt;/
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#file-download-packagesfilename" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File download — /packages/&lt;filename&gt;
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-pip-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client (pip) configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="python-pypi">Python (PyPI)<a class="headerlink" href="#python-pypi" title="Permanent link">&para;</a></h1>
+<p>ArtiGate mirrors Python packages by running <code>pip download</code> on the low side and serving the resulting distributions through the PEP 503 "Simple Repository API" on the high side. It mirrors <strong>wheels by default</strong>; packages that publish no wheel can be <strong>opted into source distributions (sdists)</strong> per package, fetched straight from the index's JSON API — never through pip — and verified against the API-declared SHA-256.</p>
+<div class="admonition note">
+<p class="admonition-title">Wheels first, and no build hooks either way</p>
+<p>Every pip invocation passes <code>--only-binary=:all:</code>, and opted-in sdists bypass pip entirely (a plain HTTP download of the index-declared file). Either way no package-controlled build backend or metadata hook ever runs beside the low-side signing key and credentials. Wheel-based installs stay build-free on the high side; an opted-in sdist is built by the <em>client</em> at install time, exactly as it would be against PyPI.</p>
+</div>
+<p>For the shared bundle/diode model see <a href="../../architecture/">Architecture</a>; for running the two sides see <a href="../../low-side/">Low side</a> and <a href="../../high-side/">High side</a>.</p>
+<h2 id="data-flow">Data flow<a class="headerlink" href="#data-flow" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>  low side                                    diode              high side
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  ─────────                                   ─────              ─────────
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  pip download        →  *.whl     ┐
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                                   ├──  signed bundle  ──▶  verify + store  →  /simple/ + /packages/
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  index JSON API      →  *.tar.gz  ┘         (python stream)    (regenerated index HTML)
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>  (opted-in sdists)
+</code></pre></div>
+<ul>
+<li><strong>Low side is collect-only.</strong> It runs <code>python3 -m pip download</code> for the requirements, fetches any opted-in sdists from the index JSON API, and packs the distribution files into a numbered, Ed25519-signed ArtiGate bundle on the <code>python</code> sequence stream.</li>
+<li><strong>High side serves them</strong> through the Simple Repository API: HTML index pages under <code>/simple/</code> plus file downloads under <code>/packages/</code>. It regenerates all index HTML from the distribution files actually present on disk — it trusts no transferred index metadata.</li>
+</ul>
+<h2 id="low-side-inputs">Low side — inputs<a class="headerlink" href="#low-side-inputs" title="Permanent link">&para;</a></h2>
+<h3 id="from-the-ui">From the UI<a class="headerlink" href="#from-the-ui" title="Permanent link">&para;</a></h3>
+<p>The low-side dashboard has a <strong>"Mirror Python packages (requirements)"</strong> card. You paste requirements one per line (requirements.txt format) or load a <code>.txt</code> file:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>requests==2.32.4
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>urllib3&gt;=2,&lt;3
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>certifi
+</code></pre></div>
+<p>The client-side parser (<code>parseRequirements</code>) prepares the list before sending:</p>
+<ul>
+<li>Blank lines and <code>#</code> comment lines are dropped.</li>
+<li>Inline <code># …</code> comments and trailing line-continuation backslashes are stripped.</li>
+<li><strong>pip option lines</strong> — anything starting with <code>-</code> (e.g. <code>-r other.txt</code>, <code>--hash=…</code>, <code>--index-url …</code>) — are <strong>set aside, not sent</strong>. They are reported back as "Skipped N pip option line(s)".</li>
+</ul>
+<p>Only the remaining PEP 508 requirement specifiers are POSTed to the collect endpoint.</p>
+<h3 id="from-the-http-api">From the HTTP API<a class="headerlink" href="#from-the-http-api" title="Permanent link">&para;</a></h3>
+<p>Endpoint: <strong><code>POST /admin/python/collect</code></strong> (add <code>?stream=1</code> for streamed progress). The JSON body is read with a <strong>1 MiB limit</strong>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;requirements&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;requests==2.32.4&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;urllib3&gt;=2,&lt;3&quot;</span><span class="p">],</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;sdists&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;some-source-only-pkg&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;another==1.2.3&quot;</span><span class="p">],</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">&quot;python_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;3.12&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">&quot;abi&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cp312&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">&quot;implementation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cp&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nt">&quot;platforms&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;manylinux_2_28_x86_64&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;manylinux_2_34_x86_64&quot;</span><span class="p">],</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">&quot;only_binary&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="p">}</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>requirements</code></td>
+<td><code>[]string</code></td>
+<td>PEP 508 requirement specifiers — the same content as <code>requirements.txt</code> lines. Resolved with pip, wheels only. At least one of <code>requirements</code> and <code>sdists</code> must be non-empty, else <code>no python requirements provided</code>.</td>
+</tr>
+<tr>
+<td><code>sdists</code></td>
+<td><code>[]string</code></td>
+<td><a href="#opt-in-sdists-for-packages-that-publish-no-wheel">Opt-in sdist</a> specs, <code>name</code> (current release) or <code>name==1.2.3</code>. Fetched from the index JSON API, never through pip.</td>
+</tr>
+<tr>
+<td><code>target</code></td>
+<td>object</td>
+<td>Optional <a href="#cross-target-a-different-interpreter-or-platform">cross-target</a> selector. Omit to download for the low-side host's own interpreter.</td>
+</tr>
+<tr>
+<td><code>target.python_version</code></td>
+<td>string</td>
+<td>pip <code>--python-version</code> (e.g. <code>3.12</code>).</td>
+</tr>
+<tr>
+<td><code>target.implementation</code></td>
+<td>string</td>
+<td>pip <code>--implementation</code> (e.g. <code>cp</code>).</td>
+</tr>
+<tr>
+<td><code>target.abi</code></td>
+<td>string</td>
+<td>pip <code>--abi</code> (e.g. <code>cp312</code>).</td>
+</tr>
+<tr>
+<td><code>target.platforms</code></td>
+<td><code>[]string</code></td>
+<td>one pip <code>--platform</code> per entry (e.g. <code>manylinux_2_28_x86_64</code>).</td>
+</tr>
+<tr>
+<td><code>target.only_binary</code></td>
+<td>bool</td>
+<td>Compatibility field: omit or set <code>true</code>. <code>false</code> is rejected because wheels-only collection is mandatory.</td>
+</tr>
+<tr>
+<td><code>force</code></td>
+<td>bool</td>
+<td>bypass the export-dedup index for this collect — pack every wheel even if already forwarded (full, self-contained bundle).</td>
+</tr>
+</tbody>
+</table>
+<p>See the full HTTP surface in the <a href="../../api/">API reference</a>.</p>
+<div class="admonition warning">
+<p class="admonition-title">Argument-injection defense</p>
+<p>Every caller-supplied string that becomes a pip argument — each requirement plus <code>python_version</code>, <code>implementation</code>, <code>abi</code>, and each platform — is validated (each <code>sdists</code> spec is checked against its own strict <code>name</code>/<code>name==version</code> grammar too). A value is <strong>rejected if it starts with <code>-</code></strong>, is empty/whitespace-only, or contains a control character. This blocks smuggling a flag in as a requirement (e.g. <code>-r/etc/passwd</code> or <code>--index-url=http://attacker/</code>). Spaces are allowed on purpose, because PEP 508 environment markers contain them (e.g. <code>requests; python_version &lt; "3.9"</code>).</p>
+</div>
+<h2 id="wheels-only-pip-policy">Wheels-only pip policy<a class="headerlink" href="#wheels-only-pip-policy" title="Permanent link">&para;</a></h2>
+<p>Every pip invocation includes <code>--only-binary=:all:</code>. If any <em>requirement</em> has no compatible wheel, pip fails the collect before ArtiGate writes or signs a bundle. Pin a version that publishes a wheel, select the correct cross-target, exclude that package — or, for a package that publishes no wheel at all, list it in <a href="#opt-in-sdists-for-packages-that-publish-no-wheel"><code>sdists</code></a> instead.</p>
+<p>As defense in depth, ArtiGate also ignores and reports any recognized source-distribution archive (<code>.tar.gz</code>, <code>.tgz</code>, <code>.tar.bz2</code>, <code>.tar.xz</code>, <code>.zip</code>) produced by a broken or substituted pip executable. Only sdists that were explicitly opted in — fetched by ArtiGate itself, never by pip — are bundled. If no distributions result, the collect errors rather than writing an empty bundle.</p>
+<h2 id="opt-in-sdists-for-packages-that-publish-no-wheel">Opt-in sdists (for packages that publish no wheel)<a class="headerlink" href="#opt-in-sdists-for-packages-that-publish-no-wheel" title="Permanent link">&para;</a></h2>
+<p>Some projects publish no wheel at all. Rather than failing those forever, a collect can name them in the request's <code>sdists</code> list (an API-level field — the dashboard's requirements card does not expose it): <code>name</code> mirrors the current release's sdist, <code>name==1.2.3</code> pins one. Specs are validated against <code>^name(==version)?$</code> form — anything else is rejected with <code>invalid sdist spec … (use name or name==version)</code>.</p>
+<p>How the fetch works — pip is deliberately not involved, because downloading an sdist with pip runs the package's own metadata build hooks:</p>
+<ol>
+<li>The release is resolved through the index's <strong>JSON API</strong> (<code>&lt;base&gt;/&lt;name&gt;/json</code>, or <code>&lt;base&gt;/&lt;name&gt;/&lt;version&gt;/json</code> when pinned). The base defaults to <code>https://pypi.org/pypi</code>; <code>--pypi-json</code> points it at another index.</li>
+<li>The release's sdist is selected (preferring the <code>.tar.gz</code> form over <code>.zip</code>), its filename validated as a plain, path-safe archive name belonging to the requested project.</li>
+<li>The file is downloaded and verified against the <strong>API-declared SHA-256</strong>. A release whose index declares no sha256 is refused: an unverifiable file is never mirrored.</li>
+<li>The sdist's <code>Requires-Python</code> metadata is read from the archive (bounded scan, nothing is executed) so the served index can carry <code>data-requires-python</code>.</li>
+</ol>
+<p>Each failed sdist is skipped and reported in the result's <code>skipped_modules</code> — the wheels already collected are never at stake. Sdists are fetched <strong>exactly as named</strong>: their build dependencies are only mirrored if they resolve as wheels via <code>requirements</code> or are listed in <code>sdists</code> themselves.</p>
+<div class="admonition warning">
+<p class="admonition-title">Clients build opted-in sdists locally</p>
+<p>An sdist installs by building on the <em>client</em> — <code>pip install</code> runs the package's build backend there, exactly as it would against PyPI, so those clients need the build toolchain (and any native compilers) the package requires. The wheels-only guarantee that nothing package-controlled runs applies to the <strong>low side</strong>, not to consumers of an opted-in sdist.</p>
+</div>
+<h2 id="cross-target-a-different-interpreter-or-platform">Cross-target (a different interpreter or platform)<a class="headerlink" href="#cross-target-a-different-interpreter-or-platform" title="Permanent link">&para;</a></h2>
+<p>By default pip downloads wheels for the <strong>low-side host's own</strong> interpreter. To mirror wheels for the <em>high-side</em> target instead, set a cross-target. The UI exposes it under <strong>"Cross-target for a different interpreter (optional)"</strong> with fields for Python version (<code>3.12</code>), Implementation (<code>cp</code>), ABI (<code>cp312</code>), and Platforms (comma-separated).</p>
+<p>pip renders these in this order:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>--only-binary=:all:              # always present
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>--python-version 3.12
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>--implementation cp
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>--abi cp312
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>--platform manylinux_2_28_x86_64
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>--platform manylinux_2_34_x86_64
+</code></pre></div>
+<p>Wheels-only applies equally to native and cross-target collects, including an <code>implementation</code>-only target.</p>
+<h2 id="internals-how-collection-runs">Internals — how collection runs<a class="headerlink" href="#internals-how-collection-runs" title="Permanent link">&para;</a></h2>
+<p><code>pip download</code> is executed as:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>&lt;python&gt;<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>download<span class="w"> </span>--dest<span class="w"> </span>&lt;dest&gt;<span class="w"> </span><span class="o">[</span>target<span class="w"> </span>flags…<span class="o">]</span><span class="w"> </span>&lt;requirement…&gt;
+</code></pre></div>
+<ul>
+<li><strong>Binary</strong>: the <code>--python</code> flag (<code>PipBinary</code>), defaulting to <strong><code>python3</code></strong> when unset. So the full exec is typically <code>python3 -m pip download …</code>. See the <a href="../../configuration/">Configuration reference</a>.</li>
+<li><strong>Working directory</strong>: the low-side <code>--root</code>.</li>
+<li><strong>Timeout</strong>: a hard <strong>10-minute</strong> limit per invocation. A large dependency closure can time out.</li>
+<li>On failure the error wraps the combined stdout+stderr.</li>
+</ul>
+<p>Collection then:</p>
+<ul>
+<li>Holds the <strong>per-stream lock</strong> for the <code>python</code> stream across the whole download → write → commit, so a concurrent Python collect cannot claim the same sequence number. Other ecosystem streams run in parallel.</li>
+<li>Stages into <code>&lt;root&gt;/python/staging/collect-*</code> (removed on return); pip's <code>--dest</code> is <code>&lt;stage&gt;/python/packages</code>, and opted-in sdists are fetched into the same directory afterwards.</li>
+<li>Hashes each distribution file with SHA-256 and records the manifest path <code>python/packages/&lt;filename&gt;</code>.</li>
+<li>Applies <strong>export dedup</strong>: a failed collect burns no sequence number; if every file was already forwarded on the <code>python</code> stream the collect skips entirely (no bundle written), and if only some are new the bundle is a <a href="../../architecture/#export-deduplication-and-delta-bundles">delta</a> carrying just those (the rest ride as <code>prior</code> manifest references). <code>"force": true</code> bypasses the index.</li>
+</ul>
+<p>The signed bundle manifest carries a <code>python</code> block grouping distribution files per <code>project@version</code> — a project can carry wheels and an sdist in one bundle — with each file's filename, path, SHA-256, and <code>requires_python</code> (read from the wheel's or sdist's own metadata; nothing is executed). The manifest's <code>yanked</code> field exists but is not populated by the collector.</p>
+<h2 id="high-side-serving-the-simple-repository-api">High side — serving the Simple Repository API<a class="headerlink" href="#high-side-serving-the-simple-repository-api" title="Permanent link">&para;</a></h2>
+<p>Distribution files live flat on disk at <code>&lt;root&gt;/python/packages</code>. The high side lists every file there that parses as a wheel — plus every source distribution mirrored through the sdist opt-in — and regenerates all index HTML on each request.</p>
+<div class="admonition note">
+<p class="admonition-title">Routes sit at the server root</p>
+<p>Unlike npm (<code>/npm/</code>) or Maven (<code>/maven/</code>), the Python routes are <strong>un-namespaced</strong> — <code>/simple/</code> and <code>/packages/</code> at the server root, not under a <code>/python/</code> prefix.</p>
+</div>
+<p>Only <code>GET</code>/<code>HEAD</code> are allowed (else <code>405</code>). The dispatch:</p>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/simple</code> or <code>/simple/</code></td>
+<td>Root index — one <code>&lt;a&gt;</code> per distinct, sorted project name.</td>
+</tr>
+<tr>
+<td><code>/simple/&lt;project&gt;/</code></td>
+<td>Per-project links to that project's distribution files (wheels and opted-in sdists).</td>
+</tr>
+<tr>
+<td><code>/packages/&lt;filename&gt;</code></td>
+<td>The distribution file bytes.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="root-index-simple">Root index — <code>/simple/</code><a class="headerlink" href="#root-index-simple" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="err">GET /simple/</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="cp">&lt;!DOCTYPE html&gt;</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="p">&lt;</span><span class="nt">html</span><span class="p">&gt;</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>  <span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/simple/requests/&quot;</span><span class="p">&gt;</span>requests<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/simple/urllib3/&quot;</span><span class="p">&gt;</span>urllib3<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>  <span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">&lt;/</span><span class="nt">html</span><span class="p">&gt;</span>
+</code></pre></div>
+<p>Served as legacy PEP 503 <strong>HTML</strong> with <code>Content-Type: text/html; charset=utf-8</code> (not the PEP 691 JSON API).</p>
+<h3 id="project-page-simpleproject">Project page — <code>/simple/&lt;project&gt;/</code><a class="headerlink" href="#project-page-simpleproject" title="Permanent link">&para;</a></h3>
+<p>The path segment is PEP 503-normalized (lowercase; runs of <code>-</code>, <code>_</code>, <code>.</code> collapse to a single <code>-</code>), so lookups are <strong>case- and separator-insensitive</strong>: <code>/simple/typing_extensions/</code>, <code>/simple/Typing-Extensions/</code>, and <code>/simple/typing.extensions/</code> all resolve to the same project (<code>typing-extensions</code>). If no distribution file matches, it returns <code>404 not found</code>.</p>
+<p>Each link's <code>href</code> includes the SHA-256 as a URL fragment (the PEP 503 hash), computed live from the file on disk, and a <code>data-requires-python</code> attribute when the distribution's own metadata declares <code>Requires-Python</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>Links for requests<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/packages/requests-2.32.4-py3-none-any.whl#sha256=&lt;64-hex&gt;&quot;</span> <span class="na">data-requires-python</span><span class="o">=</span><span class="s">&quot;&amp;gt;=3.8&quot;</span><span class="p">&gt;</span>requests-2.32.4-py3-none-any.whl<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+</code></pre></div>
+<h3 id="file-download-packagesfilename">File download — <code>/packages/&lt;filename&gt;</code><a class="headerlink" href="#file-download-packagesfilename" title="Permanent link">&para;</a></h3>
+<p>The store is flat: the filename must be non-empty and contain <strong>no <code>/</code></strong> (else <code>404</code>), and the resolved path is traversal-guarded (an unsafe path returns <code>400 unsafe path</code>). Files are served with <code>HEAD</code> and range support.</p>
+<h2 id="client-pip-configuration">Client (pip) configuration<a class="headerlink" href="#client-pip-configuration" title="Permanent link">&para;</a></h2>
+<p>Point pip at the mirror as its <strong>only</strong> index. The high side's "Set me up" guide renders this with the live host filled in:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># /etc/pip.conf   (or ~/.config/pip/pip.conf)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">[global]</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="na">index-url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">https://artigate-high.local/simple/</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="na">disable-pip-version-check</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">true</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--only-binary<span class="o">=</span>:all:<span class="w"> </span>-r<span class="w"> </span>requirements.txt<span class="w">   </span><span class="c1"># wheel-only mirrors</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt<span class="w">                       </span><span class="c1"># if sdists were opted in</span>
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Do not add <code>--extra-index-url</code></p>
+<p>Mixing in another index reopens dependency-confusion risk. This mirror is the single source of truth. Client-side <code>--only-binary=:all:</code> is recommended when the mirror holds only wheels — it needs no compilers or build backends and matches exactly what the mirror holds. Leave it off for packages mirrored through the sdist opt-in: those must build on the client.</p>
+</div>
+<p>Note the mirror is set as <code>index-url</code>, not <code>--extra-index-url</code>. For scheduled/recurring mirroring of a requirements set see <a href="../../scheduling/">Scheduling (watches)</a>; for the trust model see <a href="../../security/">Security &amp; trust</a>.</p>
+<h2 id="limitations">Limitations<a class="headerlink" href="#limitations" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Wheels through pip; sdists only by explicit opt-in.</strong> A <em>requirement</em> with no compatible wheel still fails the collect — pin a wheel-bearing version, choose the correct target, or list the package in <code>sdists</code> instead. Opted-in sdists are fetched exactly as named (no dependency resolution) and require an index-declared SHA-256.</li>
+<li><strong>10-minute pip timeout.</strong> A large dependency closure can exceed it; split the requirements or run a narrower target.</li>
+<li><strong>No <code>yanked</code> metadata.</strong> The manifest field exists but is never populated, and the <code>/simple/</code> HTML emits no <code>data-yanked</code> attribute. (<code>Requires-Python</code> <em>is</em> served, as <code>data-requires-python</code>, read from each distribution's own metadata.)</li>
+<li><strong>Legacy HTML Simple API only.</strong> ArtiGate serves PEP 503 HTML, not the PEP 691 JSON API. Hashes are attached as live-computed <code>#sha256=</code> fragments.</li>
+</ul>
+<p>See consolidated limitations and fixes in <a href="../../troubleshooting/">Troubleshooting &amp; limitations</a>.</p>
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../">Ecosystems overview</a> — the hub for every mirrored ecosystem.</li>
+<li><a href="../go/">Go modules</a>, <a href="../maven/">Java (Maven)</a>, <a href="../npm/">NPM</a>, <a href="../apt/">APT (Debian/Ubuntu)</a>, <a href="../rpm/">RPM (RHEL/Fedora)</a>, <a href="../containers/">Container images (OCI)</a>, <a href="../ai-models/">AI models (Hugging Face)</a> — sibling ecosystem pages.</li>
+<li><a href="../../low-side/">Low side</a> · <a href="../../high-side/">High side</a> · <a href="../../architecture/">Architecture</a> · <a href="../../configuration/">Configuration reference</a> · <a href="../../api/">HTTP API reference</a> · <a href="../../deployment/">Deployment</a>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.top", "navigation.tracking", "navigation.sections", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

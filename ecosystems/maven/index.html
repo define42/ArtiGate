@@ -1,0 +1,2274 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Dependency mirror for one-way data-diode / air-gapped networks.">
+      
+      
+      
+      
+        <link rel="prev" href="../python/">
+      
+      
+        <link rel="next" href="../npm/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Java (Maven) - ArtiGate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#java-maven" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ArtiGate" class="md-header__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ArtiGate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Java (Maven)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ArtiGate" class="md-nav__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ArtiGate
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Running
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../low-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Low side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../high-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    High side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduling (watches)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-diode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Built-in UDP diode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Ecosystems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../go/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Go modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python (PyPI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Java (Maven)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Java (Maven)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#data-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-collecting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: collecting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: collecting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inputs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#http-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTP endpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#uploaded-pomxml-sanitization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Uploaded pom.xml sanitization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coordinate-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordinate format
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#version-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Version policy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resolution-internals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolution internals
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-mvn-binary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The mvn binary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-gets-bundled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What gets bundled
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-serving-a-maven-2-repository" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side: serving a Maven 2 repository
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="High side: serving a Maven 2 repository">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generated-maven-metadataxml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generated maven-metadata.xml
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#high-side-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High-side dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scheduling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scheduling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitations
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../npm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NPM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    APT (Debian/Ubuntu)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPM (RHEL/Fedora)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Container images (OCI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI models (Hugging Face)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rust crates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terraform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terraform / OpenTofu
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm charts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nuget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NuGet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alpine (apk)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../conda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conda channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rubygems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RubyGems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../composer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHP Composer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vsx/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code extensions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../galaxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible Galaxy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cran/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R packages (CRAN)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../snap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snap packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../git/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Git repositories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../osv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OSV advisories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../uploads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Uploads (arbitrary files)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security & trust
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS / HTTPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#data-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-collecting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: collecting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: collecting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inputs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#http-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTP endpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#uploaded-pomxml-sanitization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Uploaded pom.xml sanitization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coordinate-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordinate format
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#version-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Version policy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resolution-internals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolution internals
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-mvn-binary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The mvn binary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-gets-bundled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What gets bundled
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-serving-a-maven-2-repository" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side: serving a Maven 2 repository
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="High side: serving a Maven 2 repository">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generated-maven-metadataxml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generated maven-metadata.xml
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#high-side-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High-side dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scheduling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scheduling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitations
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="java-maven">Java (Maven)<a class="headerlink" href="#java-maven" title="Permanent link">&para;</a></h1>
+<p>ArtiGate mirrors Java artifacts by delegating to a real Maven install on the low side — <code>mvn dependency:go-offline</code> resolves a project's full dependency <strong>and plugin</strong> closure into an isolated local repository, which is packed verbatim into a signed bundle. The high side then serves those files as a static Maven 2 repository under <code>/maven/</code>, generating <code>maven-metadata.xml</code> on the fly.</p>
+<p>Because the resolved local repository is already in Maven 2 layout, ArtiGate maps it directly onto the paths the high side serves — no repacking, no rewriting.</p>
+<div class="admonition note">
+<p class="admonition-title">Release versions only</p>
+<p>ArtiGate mirrors <strong>reproducible</strong> artifacts. <code>SNAPSHOT</code> builds change over time, and dynamic/range versions (<code>LATEST</code>, <code>RELEASE</code>, <code>1.+</code>, <code>[1.0,2.0)</code>) resolve to different concrete versions over time — none of them can back a reproducible air-gapped mirror, so they are rejected. See <a href="#version-policy">Version policy</a>.</p>
+</div>
+<h2 id="data-flow">Data flow<a class="headerlink" href="#data-flow" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Side</th>
+<th>Role</th>
+<th>Mechanism</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Low</strong></td>
+<td>collect-only</td>
+<td>Runs <code>mvn -B dependency:go-offline -Dmaven.repo.local=…</code>, walks the resolved repo, packs it into a numbered, Ed25519-signed bundle on the <code>maven</code> stream</td>
+</tr>
+<tr>
+<td><strong>High</strong></td>
+<td>serve-only</td>
+<td>Serves stored <code>.pom</code>/<code>.jar</code>/<code>.module</code> files (and their checksums) directly; computes <code>maven-metadata.xml</code> from the versions physically present</td>
+</tr>
+</tbody>
+</table>
+<p>The low side never serves artifacts and the high side never invokes <code>mvn</code> or reaches upstream — the two halves only ever exchange signed bundles across the diode. See <a href="../../architecture/">Architecture</a>.</p>
+<h2 id="low-side-collecting">Low side: collecting<a class="headerlink" href="#low-side-collecting" title="Permanent link">&para;</a></h2>
+<h3 id="inputs">Inputs<a class="headerlink" href="#inputs" title="Permanent link">&para;</a></h3>
+<p>The Java tab of the <a href="../../low-side/">low-side dashboard</a> accepts either:</p>
+<ul>
+<li><strong>Coordinates</strong> — a textarea (<code>#mvncoords</code>), one <code>groupId:artifactId:version</code> per line. <code>#</code>-prefixed lines and trailing <code># comment</code> text are stripped client-side.</li>
+<li><strong>A <code>pom.xml</code> upload</strong> — if a pom file is selected it is sent instead, and the coordinate list is ignored.</li>
+</ul>
+<p>Both map to the same HTTP endpoint.</p>
+<h3 id="http-endpoint">HTTP endpoint<a class="headerlink" href="#http-endpoint" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>POST /admin/maven/collect            (buffered JSON result)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>POST /admin/maven/collect?stream=1   (live NDJSON progress)
+</code></pre></div>
+<p>The request body is JSON (<code>MavenCollectRequest</code>), capped at <strong>8 MiB</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;coordinates&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;org.slf4j:slf4j-api:2.0.16&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;com.google.guava:guava:33.2.1-jre&quot;</span><span class="p">],</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;pom_xml&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;project&gt;…&lt;/project&gt;&quot;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">}</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>coordinates</code></td>
+<td><code>[]string</code></td>
+<td>One <code>groupId:artifactId:version</code> per entry</td>
+</tr>
+<tr>
+<td><code>pom_xml</code></td>
+<td><code>string</code></td>
+<td>A complete <code>pom.xml</code>; only its dependency information is used — see <a href="#uploaded-pomxml-sanitization">Uploaded <code>pom.xml</code> sanitization</a></td>
+</tr>
+<tr>
+<td><code>force</code></td>
+<td>bool</td>
+<td>Bypass the export-dedup index — pack every artifact even if already forwarded (full, self-contained bundle)</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title"><code>pom_xml</code> wins; <code>coordinates</code> is ignored when it is set</p>
+<p>If <code>pom_xml</code> is non-empty (after trimming whitespace), <code>coordinates</code> is ignored <strong>entirely</strong>. Provide one or the other. If neither is supplied the collect fails with <code>no maven coordinates or pom_xml provided</code>.</p>
+</div>
+<h3 id="uploaded-pomxml-sanitization">Uploaded <code>pom.xml</code> sanitization<a class="headerlink" href="#uploaded-pomxml-sanitization" title="Permanent link">&para;</a></h3>
+<p>A full POM is a build program, not just a dependency list: <code>&lt;build&gt;</code> extensions and plugins are <strong>loaded and executed inside the <code>mvn</code> process</strong> during resolution, and <code>&lt;repositories&gt;</code>/<code>&lt;pluginRepositories&gt;</code> would pull artifacts from caller-chosen hosts into the signed bundle. An uploaded <code>pom.xml</code> is therefore <strong>never handed to Maven verbatim</strong>. ArtiGate parses it, keeps a strict dependency-only subset, re-validates every value against the coordinate and <a href="#version-policy">version policy</a>, and regenerates the synthetic project Maven actually resolves — Maven never parses caller-supplied bytes.</p>
+<table>
+<thead>
+<tr>
+<th>Elements</th>
+<th>Treatment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>packaging</code> (standard packagings: <code>pom</code>, <code>jar</code>, <code>war</code>, <code>ear</code>, <code>ejb</code>, <code>maven-plugin</code>), <code>properties</code>, <code>dependencies</code>, <code>dependencyManagement</code>, <code>parent</code></td>
+<td><strong>Extracted.</strong> <code>${…}</code> property references in coordinates are interpolated by ArtiGate (properties themselves are then discarded). <code>&lt;parent&gt;</code> is translated into a <code>scope=import</code> BOM entry, which supplies the parent's <code>dependencyManagement</code> — what versionless dependencies need — without inheriting its <code>&lt;build&gt;</code>.</td>
+</tr>
+<tr>
+<td><code>name</code>, <code>description</code>, <code>url</code>, <code>licenses</code>, <code>developers</code>, <code>scm</code>, and other purely informational elements</td>
+<td><strong>Ignored</strong> (dropped).</td>
+</tr>
+<tr>
+<td><code>build</code>, <code>reporting</code>, <code>profiles</code>, <code>repositories</code>, <code>pluginRepositories</code>, <code>modules</code>, <code>&lt;!DOCTYPE …&gt;</code> directives, <code>scope=system</code> dependencies, custom packagings — and <strong>any element not listed above</strong> (fail closed)</td>
+<td><strong>Rejected</strong> with an explanatory error.</td>
+</tr>
+</tbody>
+</table>
+<p>Consequences worth knowing:</p>
+<ul>
+<li>SNAPSHOT and dynamic/range versions in an uploaded pom are now rejected <strong>at input time</strong>, same as the coordinates path (the post-resolution SNAPSHOT check remains as a backstop for transitively resolved artifacts).</li>
+<li>Build plugins declared in your pom are not resolved for mirroring (declaring them would require honoring <code>&lt;build&gt;</code>). The default lifecycle plugins for the declared packaging still are, via <code>dependency:go-offline</code>. To mirror a specific plugin, request it as a coordinate.</li>
+<li>Property references that cannot be resolved from the pom's own <code>&lt;properties&gt;</code> (including <code>${env.*}</code> and <code>${settings.*}</code>) fail the collect — pin the value instead.</li>
+</ul>
+<p>Drive it directly with <code>curl</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/admin/maven/collect<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;coordinates&quot;:[&quot;org.slf4j:slf4j-api:2.0.16&quot;]}&#39;</span>
+</code></pre></div>
+<h3 id="coordinate-format">Coordinate format<a class="headerlink" href="#coordinate-format" title="Permanent link">&para;</a></h3>
+<p>Each coordinate is exactly three colon-separated tokens — <code>groupId:artifactId:version</code>. Every token is trimmed and must match <code>^[A-Za-z0-9._-]+$</code>; anything else is rejected before Maven runs.</p>
+<p>For a coordinate list, ArtiGate builds a small synthetic project and lets Maven resolve its dependency closure:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="cp">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">&lt;project</span><span class="w"> </span><span class="na">xmlns=</span><span class="s">&quot;http://maven.apache.org/POM/4.0.0&quot;</span><span class="nt">&gt;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&lt;modelVersion&gt;</span>4.0.0<span class="nt">&lt;/modelVersion&gt;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">&lt;groupId&gt;</span>local.artigate<span class="nt">&lt;/groupId&gt;</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">&lt;artifactId&gt;</span>artigate-collect<span class="nt">&lt;/artifactId&gt;</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">&lt;version&gt;</span>0.0.0<span class="nt">&lt;/version&gt;</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="nt">&lt;packaging&gt;</span>pom<span class="nt">&lt;/packaging&gt;</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="nt">&lt;dependencies&gt;</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="nt">&lt;dependency&gt;&lt;groupId&gt;</span>org.slf4j<span class="nt">&lt;/groupId&gt;&lt;artifactId&gt;</span>slf4j-api<span class="nt">&lt;/artifactId&gt;&lt;version&gt;</span>2.0.16<span class="nt">&lt;/version&gt;&lt;/dependency&gt;</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span><span class="nt">&lt;/dependencies&gt;</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="nt">&lt;/project&gt;</span>
+</code></pre></div>
+<h3 id="version-policy">Version policy<a class="headerlink" href="#version-policy" title="Permanent link">&para;</a></h3>
+<p>The release-only policy is enforced on every coordinate before resolution:</p>
+<table>
+<thead>
+<tr>
+<th>Version input</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>empty</td>
+<td>rejected — <code>empty version</code></td>
+</tr>
+<tr>
+<td>contains <code>SNAPSHOT</code></td>
+<td>rejected — not reproducible</td>
+</tr>
+<tr>
+<td>exactly <code>LATEST</code> or <code>RELEASE</code></td>
+<td>rejected — <code>pin an exact version</code></td>
+</tr>
+<tr>
+<td>contains any of <code>[ ] ( ) , + *</code> (ranges like <code>[1.0,2.0)</code>, <code>1.+</code>)</td>
+<td>rejected — <code>pin an exact version</code></td>
+</tr>
+<tr>
+<td>not matching <code>^[A-Za-z0-9._-]+$</code></td>
+<td>rejected — <code>invalid version</code></td>
+</tr>
+<tr>
+<td>e.g. <code>2.0.16</code>, <code>33.2.1-jre</code></td>
+<td>accepted</td>
+</tr>
+</tbody>
+</table>
+<p>The same policy applies to every dependency extracted from an uploaded <code>pom.xml</code> (after property interpolation) — see <a href="#uploaded-pomxml-sanitization">Uploaded <code>pom.xml</code> sanitization</a>. A post-resolution check additionally rejects any <strong>transitively</strong> resolved artifact whose version contains <code>SNAPSHOT</code>.</p>
+<h3 id="resolution-internals">Resolution internals<a class="headerlink" href="#resolution-internals" title="Permanent link">&para;</a></h3>
+<p><code>CollectMaven</code> performs a lock-protected resolve → pack → commit:</p>
+<ol>
+<li><strong>Lock the <code>maven</code> stream.</strong> The per-stream mutex is held for the whole operation so a concurrent Maven exporter cannot claim the same sequence number; other streams (Go, Python, …) export in parallel. See <a href="../../low-side/">Low side</a>.</li>
+<li><strong>Stage.</strong> A temp dir is created under <code>&lt;root&gt;/maven/staging/collect-*</code> and the <code>pom.xml</code> is written into it. The local repository lives at <code>&lt;stageRoot&gt;/maven</code> so its Maven 2 layout maps directly onto the <code>maven/…</code> paths the high side serves.</li>
+<li><strong>Resolve.</strong> ArtiGate runs, in batch mode with an isolated local repo:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>mvn<span class="w"> </span>-B<span class="w"> </span>-f<span class="w"> </span>&lt;stageRoot&gt;/pom.xml<span class="w"> </span>dependency:go-offline<span class="w"> </span>-Dmaven.repo.local<span class="o">=</span>&lt;stageRoot&gt;/maven
+</code></pre></div>
+   <code>dependency:go-offline</code> pulls the full transitive dependency and plugin closure. The invocation has a <strong>15-minute</strong> timeout; on failure the last 4096 bytes of <code>mvn</code> output are returned as diagnostics.</li>
+<li><strong>Walk &amp; filter.</strong> The resolved repo is walked; each artifact file becomes a manifest entry. If nothing resolved, the collect errors with <code>maven resolution produced no artifacts</code> rather than emit an empty bundle.</li>
+<li><strong>Reject SNAPSHOTs.</strong> Any resolved artifact whose version contains <code>SNAPSHOT</code> aborts the collect.</li>
+<li><strong>Dedup &amp; export.</strong> If every resolved file was already exported on the <code>maven</code> stream, the collect is skipped (no sequence consumed). If only some are new, the signed bundle is a <a href="../../architecture/#export-deduplication-and-delta-bundles">delta</a>: its archive carries the new files and the rest ride as <code>prior</code> manifest references. <code>"force": true</code> bypasses the index for a full bundle.</li>
+</ol>
+<h3 id="the-mvn-binary">The <code>mvn</code> binary<a class="headerlink" href="#the-mvn-binary" title="Permanent link">&para;</a></h3>
+<p>The low side delegates fetching to the <code>mvn</code> already installed on the host, run with the host's Maven settings, credentials, and network access — so its upstream repositories are whatever that host's Maven is configured to use.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--maven</code> flag / <code>MavenBinary</code></td>
+<td><code>mvn</code></td>
+<td>Maven command used to resolve artifacts</td>
+</tr>
+</tbody>
+</table>
+<p>See the <a href="../../configuration/">configuration reference</a> for all low-side flags.</p>
+<h3 id="what-gets-bundled">What gets bundled<a class="headerlink" href="#what-gets-bundled" title="Permanent link">&para;</a></h3>
+<p>The walk derives each artifact's coordinate from its Maven 2 layout position (<code>…/group/parts/artifactId/version/file</code>), skipping Maven's internal bookkeeping. These files are <strong>never</strong> bundled:</p>
+<table>
+<thead>
+<tr>
+<th>Skipped</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>names starting with <code>_</code> (e.g. <code>_remote.repositories</code>)</td>
+<td>resolver bookkeeping</td>
+</tr>
+<tr>
+<td><code>maven-metadata*</code></td>
+<td>per-remote metadata — regenerated on the high side</td>
+</tr>
+<tr>
+<td><code>resolver-status.properties</code></td>
+<td>resolver bookkeeping</td>
+</tr>
+<tr>
+<td><code>*.lastUpdated</code></td>
+<td>resolver bookkeeping</td>
+</tr>
+<tr>
+<td><code>*.part</code>, <code>*.tmp</code></td>
+<td>partial downloads</td>
+</tr>
+</tbody>
+</table>
+<p>Everything else — <code>.pom</code>, <code>.jar</code>, <code>.module</code>, <code>-sources.jar</code>, and their legacy <code>.sha1</code>/<code>.md5</code> checksums — is packed. The bundle's <code>maven</code> sub-manifest records one entry per coordinate:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;artifacts&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">      </span><span class="nt">&quot;group_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;org.slf4j&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">      </span><span class="nt">&quot;artifact_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;slf4j-api&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">      </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2.0.16&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">      </span><span class="nt">&quot;files&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;maven/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">                </span><span class="s2">&quot;maven/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.pom&quot;</span><span class="p">]</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="p">}</span>
+</code></pre></div>
+<p>On import, the high side rejects any bundle whose artifacts lack a coordinate, list no files, or reference a file that is not in the manifest's overall file set. The real integrity control is the Ed25519 signature over the manifest (which hashes every file); the <code>.sha1</code>/<code>.md5</code> files are legacy Maven checksums, not a security control — see <a href="../../security/">Security &amp; trust</a>.</p>
+<h2 id="high-side-serving-a-maven-2-repository">High side: serving a Maven 2 repository<a class="headerlink" href="#high-side-serving-a-maven-2-repository" title="Permanent link">&para;</a></h2>
+<p>The high side exposes the mirrored files as a static Maven 2 repository rooted at <code>&lt;root&gt;/cache/download/maven</code>, served under <code>/maven/</code>.</p>
+<h3 id="routing">Routing<a class="headerlink" href="#routing" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Only <code>GET</code> and <code>HEAD</code> are allowed; other methods return <code>405 method not allowed</code>.</li>
+<li>Bare <code>/maven</code> (no file) returns <code>404</code>. Paths that fail relative-path or safe-join validation return <code>404</code> / <code>400 unsafe path</code>.</li>
+<li><strong><code>maven-metadata.xml</code></strong> (and its <code>.sha1</code>/<code>.md5</code>) is <strong>computed on the fly</strong> — never served from disk. Every other path (<code>.pom</code>, <code>.jar</code>, <code>.module</code>, checksums, …) is served directly from <code>&lt;root&gt;/cache/download/maven/&lt;path&gt;</code>.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="err">GET /maven/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar   → stored file</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="err">GET /maven/org/slf4j/slf4j-api/maven-metadata.xml            → generated</span>
+</code></pre></div>
+<h3 id="generated-maven-metadataxml">Generated <code>maven-metadata.xml</code><a class="headerlink" href="#generated-maven-metadataxml" title="Permanent link">&para;</a></h3>
+<p>For a metadata request, ArtiGate scans the requested artifact directory and lists every version subdirectory that <strong>contains a <code>.pom</code></strong> (jar-only directories are invisible). A directory with no such versions returns <code>404</code>. The rendered document:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="cp">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nt">&lt;metadata&gt;</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&lt;groupId&gt;</span>org.slf4j<span class="nt">&lt;/groupId&gt;</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">&lt;artifactId&gt;</span>slf4j-api<span class="nt">&lt;/artifactId&gt;</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">&lt;versioning&gt;</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">&lt;latest&gt;</span>2.0.16<span class="nt">&lt;/latest&gt;</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nt">&lt;release&gt;</span>2.0.16<span class="nt">&lt;/release&gt;</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="nt">&lt;versions&gt;</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">      </span><span class="nt">&lt;version&gt;</span>2.0.9<span class="nt">&lt;/version&gt;</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">      </span><span class="nt">&lt;version&gt;</span>2.0.16<span class="nt">&lt;/version&gt;</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">    </span><span class="nt">&lt;/versions&gt;</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">    </span><span class="nt">&lt;lastUpdated&gt;</span>20260705120000<span class="nt">&lt;/lastUpdated&gt;</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">  </span><span class="nt">&lt;/versioning&gt;</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="nt">&lt;/metadata&gt;</span>
+</code></pre></div>
+<ul>
+<li><code>&lt;latest&gt;</code> and <code>&lt;release&gt;</code> are the same value — the highest version present.</li>
+<li><code>&lt;lastUpdated&gt;</code> uses the newest <code>.pom</code> mod-time in UTC (<code>YYYYMMDDHHMMSS</code>); it is omitted when unknown.</li>
+<li>The <code>.sha1</code>/<code>.md5</code> variants are the checksums of the <strong>generated</strong> XML bytes, not of any stored file.</li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Version ordering is best-effort</p>
+<p>Versions are ordered by a best-effort comparison (dot/dash-separated tokens compared numerically when both are numbers, otherwise lexically). This only drives the <code>latest</code>/<code>release</code> hints — it is not a full Maven version-spec implementation. Because clients pin exact versions, ordering imprecision is cosmetic.</p>
+</div>
+<h3 id="high-side-dashboard">High-side dashboard<a class="headerlink" href="#high-side-dashboard" title="Permanent link">&para;</a></h3>
+<p>The <a href="../../high-side/">high-side dashboard</a> lists mirrored artifacts as <code>group/artifact</code> paths (e.g. <code>org/slf4j/slf4j-api</code>) with the versions present. The detail panel for a version shows the <code>groupId:artifactId:version</code> coordinate, its repo path (<code>/maven/&lt;artifactPath&gt;/&lt;version&gt;/</code>), each primary file with its size (checksums omitted), and the <code>.jar</code>'s SHA-256 when present.</p>
+<h2 id="client-configuration">Client configuration<a class="headerlink" href="#client-configuration" title="Permanent link">&para;</a></h2>
+<p>Point Maven at the high side as a <strong>mirror of everything</strong> via <code>~/.m2/settings.xml</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="cm">&lt;!-- ~/.m2/settings.xml --&gt;</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nt">&lt;settings&gt;</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&lt;mirrors&gt;</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">&lt;mirror&gt;</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">      </span><span class="nt">&lt;id&gt;</span>artigate<span class="nt">&lt;/id&gt;</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">      </span><span class="nt">&lt;mirrorOf&gt;</span>*<span class="nt">&lt;/mirrorOf&gt;</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">      </span><span class="nt">&lt;url&gt;</span>https://artigate-high.local/maven/<span class="nt">&lt;/url&gt;</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">    </span><span class="nt">&lt;/mirror&gt;</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="nt">&lt;/mirrors&gt;</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="nt">&lt;/settings&gt;</span>
+</code></pre></div>
+<ul>
+<li><code>mirrorOf=*</code> routes <strong>all</strong> repositories through ArtiGate.</li>
+<li>The trailing slash on <code>.../maven/</code> matters.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Don't reopen egress</p>
+<p>On the high side, use ArtiGate as the <strong>only</strong> source. Leaving <code>mavenCentral()</code> (Gradle) or extra <code>&lt;repository&gt;</code> upstreams configured reopens dependency-confusion / egress risk. The high side is unauthenticated by design — it serves only already-verified public mirror content, so bind it to localhost or a trusted network. See <a href="../../security/">Security &amp; trust</a>; for HTTPS see <a href="../../tls/">TLS / HTTPS</a>.</p>
+</div>
+<h2 id="scheduling">Scheduling<a class="headerlink" href="#scheduling" title="Permanent link">&para;</a></h2>
+<p>Any Maven collect can be turned into a recurring <strong>watch</strong> so an unchanged upstream produces no new bundles (thanks to export dedup) while new releases flow across automatically. See <a href="../../scheduling/">Scheduling (watches)</a>.</p>
+<h2 id="limitations">Limitations<a class="headerlink" href="#limitations" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Release, exact versions only.</strong> <code>SNAPSHOT</code>, <code>LATEST</code>, <code>RELEASE</code>, <code>1.+</code>, and <code>[1.0,2.0)</code> are rejected on both input paths.</li>
+<li><strong>Uploaded <code>pom.xml</code> is reduced to dependency information.</strong> <code>build</code>, <code>profiles</code>, <code>repositories</code>, multi-module <code>modules</code>, and <code>scope=system</code> are rejected; your build plugins are not mirrored from a pom (request them as coordinates). See <a href="#uploaded-pomxml-sanitization">Uploaded <code>pom.xml</code> sanitization</a>.</li>
+<li><strong><code>coordinates</code> is silently ignored</strong> whenever <code>pom_xml</code> is set.</li>
+<li><strong><code>maven-metadata.xml</code> is always regenerated</strong> from present <code>.pom</code> files; transferred metadata is never bundled or served. A version directory counts only if it holds a <code>.pom</code>.</li>
+<li><strong>Best-effort version ordering</strong> — cosmetic only.</li>
+<li><strong>15-minute</strong> Maven timeout; <strong>8 MiB</strong> request-body cap.</li>
+<li><strong>The high-side <code>/maven/</code> endpoint is unauthenticated by design.</strong></li>
+<li>Needs a working <code>mvn</code> on the low-side host (configurable via <code>--maven</code>); resolution reaches whatever upstream repositories that host's Maven is configured for.</li>
+</ul>
+<p>See <a href="../../troubleshooting/">Troubleshooting &amp; limitations</a> for the consolidated list, and the <a href="../">Ecosystems overview</a> for the other seven.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.top", "navigation.tracking", "navigation.sections", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

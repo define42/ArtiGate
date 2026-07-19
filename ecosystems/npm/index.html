@@ -1,0 +1,2387 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Dependency mirror for one-way data-diode / air-gapped networks.">
+      
+      
+      
+      
+        <link rel="prev" href="../maven/">
+      
+      
+        <link rel="next" href="../apt/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>NPM - ArtiGate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#npm" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ArtiGate" class="md-header__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ArtiGate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              NPM
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ArtiGate" class="md-nav__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ArtiGate
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Running
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../low-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Low side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../high-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    High side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduling (watches)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-diode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Built-in UDP diode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Ecosystems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../go/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Go modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python (PyPI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../maven/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Java (Maven)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NPM
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NPM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: inputs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: inputs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mode-1-package-specs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 1 — package specs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mode-2-project-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 2 — project files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-graph-resolution-with-npm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: graph resolution with npm
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: graph resolution with npm">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#low-side-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low-side flags
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-lockfile-requirements-npm-7-lockfileversion-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: lockfile requirements (npm 7+ / lockfileVersion 2+)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-download-and-integrity-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: download and integrity verification
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: download and integrity verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sri-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SRI verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-the-signed-bundle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: the signed bundle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-import-time-metadata-regeneration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side: import-time metadata regeneration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-registry-serving" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side: registry serving
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="High side: registry serving">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#packument" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Packument
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#version-object" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Version object
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tarball-serving-and-404-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tarball serving and 404 semantics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitations
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    APT (Debian/Ubuntu)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPM (RHEL/Fedora)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Container images (OCI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI models (Hugging Face)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rust crates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terraform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terraform / OpenTofu
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm charts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nuget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NuGet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alpine (apk)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../conda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conda channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rubygems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RubyGems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../composer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHP Composer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vsx/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code extensions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../galaxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible Galaxy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cran/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R packages (CRAN)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../snap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snap packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../git/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Git repositories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../osv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OSV advisories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../uploads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Uploads (arbitrary files)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security & trust
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS / HTTPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: inputs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: inputs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mode-1-package-specs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 1 — package specs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mode-2-project-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 2 — project files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-graph-resolution-with-npm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: graph resolution with npm
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: graph resolution with npm">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#low-side-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low-side flags
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-lockfile-requirements-npm-7-lockfileversion-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: lockfile requirements (npm 7+ / lockfileVersion 2+)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-download-and-integrity-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: download and integrity verification
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: download and integrity verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sri-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SRI verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-the-signed-bundle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: the signed bundle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-import-time-metadata-regeneration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side: import-time metadata regeneration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-registry-serving" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side: registry serving
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="High side: registry serving">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#packument" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Packument
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#version-object" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Version object
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tarball-serving-and-404-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tarball serving and 404 semantics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitations
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="npm">NPM<a class="headerlink" href="#npm" title="Permanent link">&para;</a></h1>
+<p>ArtiGate mirrors npm registry packages across a data diode by delegating the entire dependency graph to the real <code>npm</code> on the low side, downloading and integrity-verifying every registry tarball, and regenerating the npm registry API on the high side from each tarball's own embedded <code>package.json</code>.</p>
+<p>The adapter has three parts: <strong>low-side collect</strong> (resolve with <code>npm</code>, download tarballs, verify SRI integrity, pack a signed bundle), <strong>high-side serve</strong> (a regenerated npm registry API), and the <strong>client <code>.npmrc</code></strong> shown in the high-side UI. See <a href="../../architecture/">Architecture</a> for the diode model, and the sibling <a href="../go/">Go modules</a> page for the equivalent Go flow.</p>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>  specs / package.json
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>        │
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>        ▼
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  npm install --package-lock-only        (resolve only; nothing installs,
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>        │                                 scripts never run)
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>        ▼
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  parse package-lock.json &quot;packages&quot; map
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        │
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>        ▼
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  download every registry tarball ──▶ verify lockfile SRI integrity
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>        │
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>        ▼
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>  signed ArtiGate bundle ══ diode ══▶ high side import
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>                                          │
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                                          ▼
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                            regenerate metadata from each tarball&#39;s
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>                            own package.json → npm registry under /npm/
+</code></pre></div>
+<ul>
+<li>The low side never installs anything and <strong>never runs lifecycle scripts</strong> — resolution uses <code>npm install --package-lock-only --ignore-scripts</code>.</li>
+<li>Only <strong>registry tarballs</strong> are mirrored. Dependencies resolved to git or file URLs are skipped and reported.</li>
+<li>The high side <strong>never trusts transferred metadata</strong>: every packument and version manifest is rebuilt from the tarball's embedded <code>package.json</code>, and <code>shasum</code>/<code>integrity</code> are recomputed from the artifact.</li>
+</ul>
+<h2 id="low-side-inputs">Low side: inputs<a class="headerlink" href="#low-side-inputs" title="Permanent link">&para;</a></h2>
+<p><code>POST /admin/npm/collect</code> (add <code>?stream=1</code> for streamed progress). The request body has two mutually exclusive input modes:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;packages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;react@^18.2&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;@types/node&quot;</span><span class="p">],</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;package_json&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;package_lock&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">}</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>packages</code></td>
+<td><code>[]string</code></td>
+<td>List of npm install specs. Ignored when <code>package_json</code> is set.</td>
+</tr>
+<tr>
+<td><code>package_json</code></td>
+<td><code>string</code></td>
+<td>A project's own <code>package.json</code>, mirrored exactly as it resolves.</td>
+</tr>
+<tr>
+<td><code>package_lock</code></td>
+<td><code>string</code></td>
+<td>Optional <code>package-lock.json</code> to pin the exact resolved graph. Requires <code>package_json</code>.</td>
+</tr>
+<tr>
+<td><code>force</code></td>
+<td>bool</td>
+<td>Bypass the export-dedup index — pack every tarball even if already forwarded (full, self-contained bundle).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="mode-1-package-specs">Mode 1 — package specs<a class="headerlink" href="#mode-1-package-specs" title="Permanent link">&para;</a></h3>
+<p><code>packages</code> is a list of ordinary npm install specs. Supported forms:</p>
+<table>
+<thead>
+<tr>
+<th>Spec</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lodash</code></td>
+<td>newest version</td>
+</tr>
+<tr>
+<td><code>lodash@4.17.21</code></td>
+<td>pinned version</td>
+</tr>
+<tr>
+<td><code>react@^18.2</code></td>
+<td>semver range</td>
+</tr>
+<tr>
+<td><code>@scope/pkg@latest</code></td>
+<td>scoped, newest version</td>
+</tr>
+<tr>
+<td><code>@types/node</code></td>
+<td>bare scoped name</td>
+</tr>
+</tbody>
+</table>
+<p>A bare name (or <code>name@latest</code>) resolves to the newest published version. In the low-side dashboard, enter one spec per line.</p>
+<h3 id="mode-2-project-files">Mode 2 — project files<a class="headerlink" href="#mode-2-project-files" title="Permanent link">&para;</a></h3>
+<p>Set <code>package_json</code> to a project's own <code>package.json</code> to mirror exactly what that project resolves. Optionally set <code>package_lock</code> to a <code>package-lock.json</code> to pin the exact resolved graph.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>When <code>package_json</code> is set, <code>packages</code> is ignored. <code>package_lock</code> <strong>without</strong> <code>package_json</code> is rejected with <code>package_lock requires package_json</code>.</p>
+</div>
+<h3 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Empty specs, specs starting with <code>-</code> (would be parsed as an npm flag such as <code>--registry=...</code>), and specs containing a space or control character are rejected — this is the argument-injection guard.</li>
+<li>Package names must be a single path-safe element (<code>^[A-Za-z0-9][A-Za-z0-9._-]*$</code>, first char excludes <code>.</code> <code>_</code> <code>-</code>) or a two-part <code>@scope/pkg</code>, at most 214 characters.</li>
+<li>Versions always start with a digit (<code>^[0-9][0-9A-Za-z.+-]*$</code>), so they can never be <code>..</code>, a flag, or contain a path separator.</li>
+<li>The request body is read with an <strong>8 MiB limit</strong> (generous enough to carry an embedded <code>package-lock.json</code>). An empty body is tolerated.</li>
+</ul>
+<h2 id="low-side-graph-resolution-with-npm">Low side: graph resolution with npm<a class="headerlink" href="#low-side-graph-resolution-with-npm" title="Permanent link">&para;</a></h2>
+<p>ArtiGate materializes the project in a staging directory (<code>&lt;root&gt;/npm/staging/collect-*</code>) — either the provided <code>package.json</code> verbatim, or a synthetic one:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="s2">&quot;artigate-collect&quot;</span><span class="p">,</span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="s2">&quot;0.0.0&quot;</span><span class="p">,</span><span class="nt">&quot;private&quot;</span><span class="p">:</span><span class="kc">true</span><span class="p">}</span>
+</code></pre></div>
+<p>It then runs <code>npm</code> with exactly these flags, appending the specs:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>npm<span class="w"> </span>install<span class="w"> </span>--package-lock-only<span class="w"> </span>--ignore-scripts<span class="w"> </span>--no-audit<span class="w"> </span>--no-fund<span class="w"> </span><span class="o">[</span>--registry<span class="o">=</span>&lt;url&gt;<span class="o">]</span><span class="w"> </span>&lt;specs...&gt;
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--package-lock-only</code></td>
+<td>Resolve the full graph and write <code>package-lock.json</code>; <strong>download and install nothing</strong>.</td>
+</tr>
+<tr>
+<td><code>--ignore-scripts</code></td>
+<td><strong>Lifecycle scripts never run</strong> during resolution.</td>
+</tr>
+<tr>
+<td><code>--no-audit</code></td>
+<td>Silence the audit call.</td>
+</tr>
+<tr>
+<td><code>--no-fund</code></td>
+<td>Silence funding messages.</td>
+</tr>
+<tr>
+<td><code>--registry=&lt;url&gt;</code></td>
+<td>Appended <strong>only if</strong> <code>--npm-registry</code> is non-empty.</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>npm</code> run executes with a <strong>15-minute timeout</strong>, <code>cmd.Dir</code> set to the staging directory, and these environment additions on top of the inherited environment:</p>
+<table>
+<thead>
+<tr>
+<th>Env</th>
+<th>Value</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>npm_config_cache</code></td>
+<td><code>&lt;root&gt;/npm/cache</code></td>
+<td>keep the cache out of <code>$HOME</code></td>
+</tr>
+<tr>
+<td><code>npm_config_update_notifier</code></td>
+<td><code>false</code></td>
+<td>suppress update checks</td>
+</tr>
+<tr>
+<td><code>npm_config_progress</code></td>
+<td><code>false</code></td>
+<td>suppress progress bars</td>
+</tr>
+</tbody>
+</table>
+<p>The resolved graph is read back from <code>package-lock.json</code> (error <code>npm produced no package-lock.json</code> if missing) — <code>npm</code>'s output is used only for error diagnostics (last 4096 bytes on failure).</p>
+<h3 id="low-side-flags">Low-side flags<a class="headerlink" href="#low-side-flags" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--npm</code></td>
+<td><code>npm</code></td>
+<td>npm command used to resolve NPM package graphs</td>
+</tr>
+<tr>
+<td><code>--npm-registry</code></td>
+<td><code>""</code></td>
+<td>Registry URL npm resolves against (passed as <code>--registry</code>). Empty = use npm's own configured default registry.</td>
+</tr>
+</tbody>
+</table>
+<p>See the <a href="../../configuration/">Configuration reference</a> for the full flag surface.</p>
+<h2 id="low-side-lockfile-requirements-npm-7-lockfileversion-2">Low side: lockfile requirements (npm 7+ / lockfileVersion 2+)<a class="headerlink" href="#low-side-lockfile-requirements-npm-7-lockfileversion-2" title="Permanent link">&para;</a></h2>
+<p>ArtiGate parses only the <code>packages</code> map of <code>package-lock.json</code>. If that map is absent or empty, resolution fails hard:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>package-lock.json has no &quot;packages&quot; map (lockfileVersion 2+, npm 7 or newer, is required)
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">npm 7 or newer is required</p>
+<p>Lockfile v1 (which uses <code>dependencies</code> instead of <code>packages</code>) is rejected outright. Provide an npm 7+ toolchain, or an uploaded <code>package-lock.json</code> at lockfileVersion 2 or higher.</p>
+</div>
+<p>Entries are iterated in sorted order and deduplicated on <code>name@version</code>. Some entries are handled specially:</p>
+<table>
+<thead>
+<tr>
+<th>Entry kind</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Root project / workspace directory (key outside <code>node_modules/</code>)</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td>Workspace link (<code>link: true</code>)</td>
+<td>dropped <strong>silently</strong></td>
+</tr>
+<tr>
+<td>Bundled dependency (<code>inBundle: true</code>)</td>
+<td>dropped <strong>silently</strong> (already inside a parent tarball)</td>
+</tr>
+<tr>
+<td><code>resolved</code> scheme not <code>http</code>/<code>https</code> (git / file / <code>git+ssh</code>)</td>
+<td><strong>skipped and reported</strong></td>
+</tr>
+<tr>
+<td>Invalid name, missing/invalid version, missing <code>resolved</code> URL</td>
+<td><strong>skipped and reported</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Reported skips appear in the collect result's <code>SkippedModules</code> with a per-module reason, for example <code>unsupported resolved URL "git+ssh://..." (only registry tarballs are mirrored)</code>.</p>
+<h2 id="low-side-download-and-integrity-verification">Low side: download and integrity verification<a class="headerlink" href="#low-side-download-and-integrity-verification" title="Permanent link">&para;</a></h2>
+<p>Each resolved entry's tarball is downloaded over HTTP(S) from its <code>resolved</code> URL and stored at <code>npm/packages/&lt;name&gt;/&lt;base&gt;-&lt;version&gt;.tgz</code> (scoped names keep the <code>@scope/</code> directory).</p>
+<ul>
+<li><strong>Per-tarball timeout: 10 minutes.</strong> Non-200 responses fail with <code>GET &lt;url&gt;: HTTP &lt;code&gt;</code>.</li>
+<li><strong>Per-tarball size cap: 2 GiB.</strong></li>
+<li>The destination is opened <code>O_CREATE|O_EXCL</code> and any partial file is removed on error.</li>
+<li>The download streams through the SRI verifier, which checks integrity <strong>after</strong> the full write.</li>
+</ul>
+<h3 id="sri-verification">SRI verification<a class="headerlink" href="#sri-verification" title="Permanent link">&para;</a></h3>
+<p>The lockfile <code>integrity</code> string (space-separated <code>algo-base64</code> entries) is verified against the downloaded bytes:</p>
+<ul>
+<li>The <strong>strongest available</strong> algorithm is chosen, preferring <code>sha512 → sha384 → sha256 → sha1</code>.</li>
+<li>Comparison is constant-time; a mismatch fails with <code>&lt;algo&gt; integrity mismatch: got &lt;b64&gt; want &lt;b64&gt;</code>.</li>
+<li>Present but unusable integrity fails with <code>unsupported integrity &lt;value&gt;</code>; invalid base64 fails with <code>invalid &lt;algo&gt; integrity value</code>.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Empty integrity ⇒ unverified download</p>
+<p>A lockfile entry with an <strong>empty</strong> <code>integrity</code> field is downloaded <strong>without hash checking</strong> (the verifier is <code>nil</code>). This is tolerated for old lockfile entries that lack integrity. The high side always recomputes digests from the tarball, so the served metadata is trustworthy regardless, but the low-side download of such an entry is not integrity-checked.</p>
+</div>
+<p>A failed download becomes a reported <code>FailedModule</code> and is skipped — the batch continues rather than aborting on one bad tarball. If <strong>zero</strong> packages are fetched, the collection errors with <code>no npm packages could be fetched: &lt;summary&gt;</code>.</p>
+<h2 id="low-side-the-signed-bundle">Low side: the signed bundle<a class="headerlink" href="#low-side-the-signed-bundle" title="Permanent link">&para;</a></h2>
+<p>Successful tarballs are packed into the standard numbered, Ed25519-signed ArtiGate bundle on the <code>npm</code> stream. Only the <code>npm</code> stream lock is held across resolve → download → write → commit, so other ecosystems export in parallel. The manifest records one <code>NpmPackage</code> per tarball:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;@scope/pkg&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.0.0&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">&quot;filename&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pkg-1.0.0.tgz&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;npm/packages/@scope/pkg/pkg-1.0.0.tgz&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="nt">&quot;sha256&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;…&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nt">&quot;integrity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sha512-…&quot;</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="p">}</span>
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code>integrity</code> here is the SRI from the resolving lockfile, kept for <strong>audit only</strong>. The high side recomputes <code>shasum</code> and <code>integrity</code> from the artifact itself and does not trust this value.</p>
+</div>
+<p>The collection is deduplicated: if every resolved tarball was already forwarded on a previous bundle, no new sequence number is burned; if only some are new, the bundle is a <a href="../../architecture/#export-deduplication-and-delta-bundles">delta</a> whose archive carries just those (the rest ride as <code>prior</code> manifest references). <code>"force": true</code> bypasses the index. See <a href="../../low-side/">Low side</a> and <a href="../../scheduling/">Scheduling (watches)</a> for the export and recurring-pull mechanics.</p>
+<h2 id="high-side-import-time-metadata-regeneration">High side: import-time metadata regeneration<a class="headerlink" href="#high-side-import-time-metadata-regeneration" title="Permanent link">&para;</a></h2>
+<p>On import, every <code>NpmPackage</code> in the bundle is republished. For each tarball ArtiGate:</p>
+<ol>
+<li>Extracts the embedded <code>package.json</code> — the first depth-one <code>&lt;dir&gt;/package.json</code> (npm strips one leading path component, usually <code>package/</code>), read with an 8 MiB limit and validated as JSON.</li>
+<li>Computes two digests in a single pass: <code>shasum</code> = SHA-1 hex (legacy <code>dist.shasum</code>, not a security control) and <code>integrity</code> = <code>sha512-&lt;base64&gt;</code> (SRI <code>dist.integrity</code>).</li>
+<li>Writes a per-version record to <code>&lt;root&gt;/npm/metadata/&lt;name&gt;/&lt;version&gt;.json</code>:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;filename&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pkg-1.0.0.tgz&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;shasum&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;sha1-hex&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;integrity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sha512-&lt;base64&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;manifest&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;…the tarball&#39;s embedded package.json…&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="p">}</span>
+</code></pre></div>
+<p>Tarballs live under <code>&lt;root&gt;/npm/packages/</code>, regenerated metadata under <code>&lt;root&gt;/npm/metadata/</code>.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>A package whose tarball can't be parsed is logged and skipped — its version simply 404s later, rather than wedging the stream's import. See <a href="../../high-side/">High side</a>.</p>
+</div>
+<h2 id="high-side-registry-serving">High side: registry serving<a class="headerlink" href="#high-side-registry-serving" title="Permanent link">&para;</a></h2>
+<p>The high side serves a read-only npm registry API under <code>/npm/</code>. Only read methods are accepted; others return <code>405 method not allowed</code>. Scoped names arrive literal (<code>@scope/pkg</code>) or URL-encoded (<code>@scope%2fpkg</code>) and decode to the same path.</p>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Response</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /npm/&lt;name&gt;</code></td>
+<td>full packument JSON</td>
+</tr>
+<tr>
+<td><code>GET /npm/&lt;name&gt;/&lt;version&gt;</code></td>
+<td>single version object</td>
+</tr>
+<tr>
+<td><code>GET /npm/&lt;name&gt;/-/&lt;file&gt;.tgz</code></td>
+<td>tarball bytes</td>
+</tr>
+</tbody>
+</table>
+<p><code>&lt;name&gt;</code> may be <code>@scope/pkg</code>. See the <a href="../../api/">HTTP API reference</a> for the complete route table.</p>
+<h3 id="packument">Packument<a class="headerlink" href="#packument" title="Permanent link">&para;</a></h3>
+<p>The packument is regenerated on the fly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;name&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;dist-tags&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;latest&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;upstream or computed&gt;&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;next&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;if mirrored&gt;&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;versions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">&quot;&lt;version&gt;&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;…version object…&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="p">}</span>
+</code></pre></div>
+<ul>
+<li><strong><code>dist-tags</code> are the mirrored upstream tags, filtered to versions actually served.</strong> Each collect snapshots the package's upstream <code>dist-tags</code> (best-effort, from the registry the package came from; well-formed entries travel in the signed manifest), and the packument carries every snapshotted tag — <code>next</code>, <code>beta</code>, custom tags — whose target version is present on the mirror. A tag pointing at an unmirrored version is dropped rather than served dangling.</li>
+<li><strong><code>latest</code> is always present</strong>: the mirrored upstream <code>latest</code> when its target is served, otherwise regenerated as the highest non-prerelease version present (or the highest overall if only prereleases are mirrored), computed with the shared semver helpers.</li>
+<li>Only versions whose <strong>tarball is actually present</strong> are included; an empty version set returns <code>404 not found</code>.</li>
+<li><code>GET /npm/&lt;name&gt;/&lt;tag&gt;</code> resolves a served dist-tag to its version object too, so <code>npm install &lt;name&gt;@beta</code> works when that tag's target is mirrored.</li>
+</ul>
+<h3 id="version-object">Version object<a class="headerlink" href="#version-object" title="Permanent link">&para;</a></h3>
+<p>Each version object starts from the embedded <code>package.json</code> and overrides <code>name</code>, <code>version</code>, and <code>dist</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;name&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;version&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;dist&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nt">&quot;tarball&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;baseURL&gt;/npm/&lt;name&gt;/-/&lt;filename&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="nt">&quot;shasum&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;sha1-hex&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">    </span><span class="nt">&quot;integrity&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sha512-&lt;base64&gt;&quot;</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="p">}</span>
+</code></pre></div>
+<ul>
+<li><code>dist.tarball</code> is an <strong>absolute</strong> URL. The scheme comes from <code>X-Forwarded-Proto</code> (if <code>http</code>/<code>https</code>), else <code>https</code> when TLS is terminated by ArtiGate, else <code>http</code>; the host is the request <code>Host</code>.</li>
+<li>If the manifest declares <code>preinstall</code>/<code>install</code>/<code>postinstall</code>, <code>"hasInstallScript": true</code> is added for npm's install planner.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Install scripts still run client-side</p>
+<p>Lifecycle scripts never run on the low side during resolution, but the served version object still reports <code>hasInstallScript</code>. A downstream <code>npm install</code> against the mirror <strong>will</strong> run install scripts on the client. Harden your build hosts accordingly — see <a href="../../security/">Security &amp; trust</a>.</p>
+</div>
+<h3 id="tarball-serving-and-404-semantics">Tarball serving and 404 semantics<a class="headerlink" href="#tarball-serving-and-404-semantics" title="Permanent link">&para;</a></h3>
+<p>Tarball requests require a <code>.tgz</code> suffix and a valid name, and are joined under the packages directory with a traversal guard (<code>400 unsafe path</code> otherwise). A version 404s if its metadata is missing or corrupt, the stored filename is empty or contains <code>/</code>, or the tarball is no longer present — only complete versions are served.</p>
+<h2 id="client-configuration">Client configuration<a class="headerlink" href="#client-configuration" title="Permanent link">&para;</a></h2>
+<p>The high-side UI shows this exact <code>.npmrc</code> under <strong>NPM packages</strong>. Point npm's <code>registry</code> at the mirror's <code>/npm/</code> endpoint:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="na">registry</span><span class="o">=</span><span class="s">&lt;base&gt;/npm/</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="na">fund</span><span class="o">=</span><span class="s">false</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="na">update-notifier</span><span class="o">=</span><span class="s">false</span>
+</code></pre></div>
+<p>Then install as usual:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>npm<span class="w"> </span>install
+</code></pre></div>
+<p>The <code>.npmrc</code> can be <code>~/.npmrc</code>, <code>/etc/npmrc</code>, or a per-project <code>.npmrc</code>.</p>
+<div class="admonition tip">
+<p class="admonition-title">npm audit works — once the OSV npm database is mirrored</p>
+<p>The mirror answers npm's bulk-audit endpoint from the mirrored <a href="../osv/">OSV</a> <code>npm</code> advisory database. Until that database is imported the endpoint answers <strong>404</strong> (npm reports "audit unavailable" rather than a false all-clear) — add <code>audit=false</code> to the <code>.npmrc</code> in that case. <code>fund</code> and <code>update-notifier</code> just silence noise. Do <strong>not</strong> mix in another registry — this mirror is the single source of truth, and only registry tarballs are mirrored (no git dependencies).</p>
+</div>
+<h2 id="limitations">Limitations<a class="headerlink" href="#limitations" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>npm 7+ / lockfileVersion 2+ required.</strong> Lockfile v1 (no <code>packages</code> map) is rejected outright.</li>
+<li><strong>Registry tarballs only.</strong> Git, file, and <code>git+ssh</code> <code>resolved</code> URLs (any non-<code>http</code>/<code>https</code> scheme) are skipped and reported. Workspace links (<code>link</code>) and bundled deps (<code>inBundle</code>) are dropped silently.</li>
+<li><strong>Lifecycle scripts never run</strong> during resolution (<code>--ignore-scripts</code>), but the served version object still sets <code>hasInstallScript</code>, so a client <code>npm install</code> on the mirror will run install scripts.</li>
+<li><strong>Empty lockfile <code>integrity</code> ⇒ that tarball is downloaded unverified</strong> on the low side. High-side metadata is always recomputed from the tarball regardless.</li>
+<li><strong>Only the <code>latest</code> dist-tag is served</strong> — no <code>next</code>/<code>beta</code>/custom tags.</li>
+<li>A packument omits versions whose tarball is absent; a version 404s if its tarball is missing. Imports never wedge on one unparseable tarball (it is logged and skipped).</li>
+<li>Size and time limits: request body 8 MiB, embedded <code>package.json</code> read 8 MiB, per-tarball download cap 2 GiB; <code>npm</code> run timeout 15 minutes, per-tarball download timeout 10 minutes.</li>
+<li><code>--npm-registry</code> empty ⇒ npm uses its own configured default registry (no <code>--registry</code> passed).</li>
+</ul>
+<p>See <a href="../../troubleshooting/">Troubleshooting &amp; limitations</a> for the consolidated list, and the <a href="../">Ecosystems overview</a> for the other supported ecosystems.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.top", "navigation.tracking", "navigation.sections", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,2299 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Dependency mirror for one-way data-diode / air-gapped networks.">
+      
+      
+      
+      
+        <link rel="prev" href="../scheduling/">
+      
+      
+        <link rel="next" href="../data-diode/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Deployment - ArtiGate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#deployment" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="ArtiGate" class="md-header__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ArtiGate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Deployment
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="ArtiGate" class="md-nav__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ArtiGate
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Running
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../low-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Low side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../high-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    High side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduling (watches)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-docker-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Docker image
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#docker-compose-demo-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docker Compose demo stack
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Docker Compose demo stack">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configure-credentials-before-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure credentials before startup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Services
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#managing-the-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Managing the stack
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#network-exposure-and-tls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Network exposure and TLS
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#systemd-units" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        systemd units
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-real-diode-transfer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The real diode transfer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The real diode transfer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#carry-three-files-per-bundle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Carry three files per bundle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#strict-in-order-import" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Strict in-order import
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gaps-are-quarantined-and-auto-filled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gaps are quarantined and auto-filled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-http-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional HTTP transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#state-volumes-and-backups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        State, volumes, and backups
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-diode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Built-in UDP diode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Ecosystems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/go/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Go modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python (PyPI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/maven/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Java (Maven)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/npm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NPM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/apt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    APT (Debian/Ubuntu)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/rpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPM (RHEL/Fedora)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Container images (OCI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/ai-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI models (Hugging Face)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rust crates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/terraform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terraform / OpenTofu
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm charts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/nuget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NuGet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/apk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alpine (apk)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/conda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conda channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/rubygems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RubyGems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/composer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHP Composer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/vsx/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code extensions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/galaxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible Galaxy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/cran/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R packages (CRAN)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/snap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snap packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/git/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Git repositories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/osv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OSV advisories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/uploads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Uploads (arbitrary files)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security & trust
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS / HTTPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-docker-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Docker image
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#docker-compose-demo-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docker Compose demo stack
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Docker Compose demo stack">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configure-credentials-before-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure credentials before startup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Services
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#managing-the-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Managing the stack
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#network-exposure-and-tls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Network exposure and TLS
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#systemd-units" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        systemd units
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-real-diode-transfer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The real diode transfer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The real diode transfer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#carry-three-files-per-bundle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Carry three files per bundle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#strict-in-order-import" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Strict in-order import
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gaps-are-quarantined-and-auto-filled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gaps are quarantined and auto-filled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-http-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional HTTP transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#state-volumes-and-backups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        State, volumes, and backups
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="deployment">Deployment<a class="headerlink" href="#deployment" title="Permanent link">&para;</a></h1>
+<p>This page covers running ArtiGate in production: the Docker image and the fetch tooling it bundles, the Docker Compose demo stack, <code>systemd</code> units for the two sides, how the real one-way diode transfer works, and how state, volumes, and backups are laid out.</p>
+<p>ArtiGate is a single static binary with four subcommands (<code>keygen</code>, <code>low</code>, <code>high</code>, <code>hashpw</code>). The low side and high side are separate processes, usually on physically separated hosts, connected only by a one-way transfer that carries signed bundle files. For the exhaustive flag and environment-variable reference see <a href="../configuration/">Configuration</a>; for HTTPS see <a href="../tls/">TLS / HTTPS</a>.</p>
+<h2 id="the-docker-image">The Docker image<a class="headerlink" href="#the-docker-image" title="Permanent link">&para;</a></h2>
+<p>The <code>Dockerfile</code> is a two-stage build, both stages on <code>golang:1.26.5-alpine</code>.</p>
+<p><strong>Build stage.</strong> <code>go.mod</code>/<code>go.sum</code> are copied first so the module-download layer caches independently of source changes (ArtiGate's runtime deps are pure-Go: <code>certmagic</code> for ACME/TLS, <code>gorilla/securecookie</code>, <code>hashicorp/go-version</code>, <code>golang.org/x/crypto</code>, <code>klauspost/reedsolomon</code> for the UDP diode's forward error correction, and <code>modernc.org</code> SQLite). The binary is compiled fully static with CGO disabled, so it runs on any base:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">RUN</span><span class="w"> </span><span class="nv">CGO_ENABLED</span><span class="o">=</span><span class="m">0</span><span class="w"> </span>go<span class="w"> </span>build<span class="w"> </span>-trimpath<span class="w"> </span>-ldflags<span class="o">=</span><span class="s2">&quot;-s -w&quot;</span><span class="w"> </span>-o<span class="w"> </span>/out/artigate<span class="w"> </span>./cmd/artigate
+</code></pre></div>
+<p><strong>Runtime stage.</strong> A single <code>apk add</code> installs the fetch toolchain that the <strong>low side</strong> shells out to. The Go toolchain itself is already present from the <code>golang:1.26.5-alpine</code> base and is not re-installed via apk:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">RUN</span><span class="w"> </span>apk<span class="w"> </span>add<span class="w"> </span>--no-cache<span class="w"> </span>git<span class="w"> </span>ca-certificates<span class="w"> </span>openssh-client<span class="w"> </span>python3<span class="w"> </span>py3-pip<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>maven<span class="w"> </span>openjdk17-jre-headless<span class="w"> </span>nodejs<span class="w"> </span>npm<span class="w"> </span>gnupg<span class="w"> </span>xz
+</code></pre></div>
+<p>Each tool maps to a low-side ecosystem:</p>
+<table>
+<thead>
+<tr>
+<th>Tool (package)</th>
+<th>Used by the low side for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>go</code> (from the base image) + <code>git</code></td>
+<td>Go modules — fetching and VCS resolution</td>
+</tr>
+<tr>
+<td><code>pip</code> (<code>python3</code>, <code>py3-pip</code>)</td>
+<td>Python wheels</td>
+</tr>
+<tr>
+<td><code>mvn</code> (<code>maven</code> + <code>openjdk17-jre-headless</code>)</td>
+<td>Java / Maven artifacts</td>
+</tr>
+<tr>
+<td><code>npm</code> (<code>nodejs</code>, <code>npm</code>)</td>
+<td>NPM dependency-graph resolution</td>
+</tr>
+<tr>
+<td><code>gpgv</code> (<code>gnupg</code>)</td>
+<td>Verifying upstream APT / RPM repository signatures</td>
+</tr>
+<tr>
+<td><code>xz</code></td>
+<td>Decompressing some RPM indexes</td>
+</tr>
+</tbody>
+</table>
+<p>APT, RPM, NPM, container, and Hugging Face files themselves are fetched <strong>over HTTP with the Go standard library</strong>, not with external CLIs — only the tools above are shelled out to. See <a href="../low-side/">Low side</a> for how each collector works.</p>
+<div class="admonition tip">
+<p class="admonition-title">A prebuilt image is published on every merge</p>
+<p>CI builds and pushes this image to <strong><code>ghcr.io/define42/artigate</code></strong> on every push to <code>main</code>, tagged <code>latest</code>, with the commit SHA, and with an automatically bumped semver tag.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">The high side needs almost none of this</p>
+<p>The <strong>high side never invokes</strong> <code>go</code>, <code>git</code>, <code>pip</code>, <code>mvn</code>, or <code>npm</code> and never fetches upstream. It uses <code>gnupg</code> only when signing regenerated APT/RPM repositories (<code>--apt-gpg-key</code> / <code>--rpm-gpg-key</code>); otherwise it needs nothing but the binary. A high-only deployment can therefore use a much slimmer image (binary + optionally gnupg). The shared image above is convenient but over-provisioned for the high side.</p>
+</div>
+<p>The image creates a system user/group <code>artigate</code>, installs the binary at <code>/usr/local/bin/artigate</code>, sets the Go cache environment, pre-creates the working directories, and drops privileges:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">ENV</span><span class="w"> </span><span class="nv">HOME</span><span class="o">=</span>/home/artigate<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nv">GOCACHE</span><span class="o">=</span>/home/artigate/.cache/go-build<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nv">GOMODCACHE</span><span class="o">=</span>/home/artigate/go/pkg/mod
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">RUN</span><span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </span>/var/lib/artigate<span class="w"> </span>/var/spool/diode-out<span class="w"> </span>/var/spool/diode-in<span class="w"> </span>/keys<span class="w"> </span>...
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="k">USER</span><span class="w"> </span><span class="s">artigate</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="k">WORKDIR</span><span class="w"> </span><span class="s">/home/artigate</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="k">EXPOSE</span><span class="w"> </span><span class="s">8080</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="k">ENTRYPOINT</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;artigate&quot;</span><span class="p">]</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;--help&quot;</span><span class="p">]</span>
+</code></pre></div>
+<p>Because the entrypoint is the binary itself, <code>docker run &lt;image&gt;</code> prints usage. Override <code>CMD</code> with <code>low …</code> or <code>high …</code> (and their flags) to run a side.</p>
+<h2 id="docker-compose-demo-stack">Docker Compose demo stack<a class="headerlink" href="#docker-compose-demo-stack" title="Permanent link">&para;</a></h2>
+<p>The bundled <code>docker-compose.yml</code> runs a complete low + high pipeline on a single host, wired together over the <strong>HTTP diode transport</strong>: the low side uploads each exported bundle to the high side's <code>/diode</code> ingest endpoint (<code>ARTIGATE_DIODE_URL=http://high:8080/diode</code>, shared <code>ARTIGATE_DIODE_TOKEN</code>), which <strong>stands in for the one-way data diode</strong> and lets you exercise the whole flow locally. Prefer the classic folder flow instead? Drop the <code>ARTIGATE_DIODE_*</code> variables and mount one shared volume as the low side's <code>/var/spool/diode-out</code> and the high side's <code>/var/spool/diode-in</code>.</p>
+<div class="admonition warning">
+<p class="admonition-title">The compose wiring is not a real diode</p>
+<p>In a real deployment the two sides are physically separated and the transfer is enforced one-way by hardware. In the demo the low side simply HTTP-POSTs to the high side on the same Docker network — nothing enforces directionality. Never treat the demo topology as an air gap. The stack has no default credentials, refuses to render until an operator login and random diode token are supplied, and publishes both services on loopback only. See <a href="../security/">Security &amp; trust</a>.</p>
+</div>
+<h3 id="configure-credentials-before-startup">Configure credentials before startup<a class="headerlink" href="#configure-credentials-before-startup" title="Permanent link">&para;</a></h3>
+<p>Copy the committed template to the gitignored <code>.env</code>, generate an argon2id
+operator credential and an independent random diode bearer token, and paste the
+complete values into the corresponding variables:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>cp<span class="w"> </span>.env.example<span class="w"> </span>.env
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>./artigate<span class="w"> </span>hashpw<span class="w"> </span>--user<span class="w"> </span>admin
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">32</span>
+</code></pre></div>
+<p>Keep <code>ARTIGATE_LOW_AUTH</code> single-quoted in <code>.env</code>; this preserves every <code>$</code>
+in the PHC hash literally. Empty values make <code>docker compose config</code> and
+<code>docker compose up</code> fail before a container starts.</p>
+<h3 id="services">Services<a class="headerlink" href="#services" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Role</th>
+<th>Host port</th>
+<th>Key volumes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>keygen</code></td>
+<td>One-shot: generate the Ed25519 pair into separate private/public volumes</td>
+<td>—</td>
+<td><code>keys:/low-keys</code>, <code>high-keys:/high-keys</code></td>
+</tr>
+<tr>
+<td><code>low</code></td>
+<td>Internet-side exporter dashboard</td>
+<td><code>127.0.0.1:8080 → 8080</code></td>
+<td><code>keys:/keys:ro</code>, <code>low-outbound:/var/spool/diode-out</code>, <code>low-data:/var/lib/artigate</code></td>
+</tr>
+<tr>
+<td><code>high</code></td>
+<td>Air-gapped read-only repository + tree</td>
+<td><code>127.0.0.1:8081 → 8080</code></td>
+<td><code>high-keys:/keys:ro</code>, <code>high-landing:/var/spool/diode-in</code>, <code>high-data:/var/lib/artigate</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>keygen</code> runs first; both <code>low</code> and <code>high</code> declare <code>depends_on: keygen: condition: service_completed_successfully</code> (and <code>low</code> additionally waits for <code>high</code> to start, so the first collect's upload doesn't race the high side's boot). The keygen command is guarded so it never overwrites existing keys and fails if only half of the pair remains. On upgrade it copies the public key from the legacy <code>keys</code> volume into the new <code>high-keys</code> volume without changing the private key. Crucially, the high container never mounts <code>keys</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>artigate<span class="w"> </span>keygen<span class="w"> </span>--private<span class="w"> </span>/low-keys/low.ed25519<span class="w"> </span>--public<span class="w"> </span>/high-keys/high.ed25519.pub
+</code></pre></div>
+<p>The <code>low</code> service exports on port 8080 and the <code>high</code> service maps host <strong>8081</strong> to container 8080 (both listen on <code>:8080</code> internally):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">low</span><span class="p">:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">command</span><span class="p">:</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">low</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--listen=:8080</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--root=/var/lib/artigate</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--export-dir=/var/spool/diode-out</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--private-key=/keys/low.ed25519</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--upstream-goproxy=https://proxy.golang.org,direct</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">environment</span><span class="p">:</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span><span class="nt">ARTIGATE_DIODE_URL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://high:8080/diode</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span><span class="nt">ARTIGATE_DIODE_TOKEN</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;${ARTIGATE_DIODE_TOKEN:?set</span><span class="nv"> </span><span class="s">it</span><span class="nv"> </span><span class="s">in</span><span class="nv"> </span><span class="s">.env}&quot;</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">    </span><span class="nt">ARTIGATE_LOW_AUTH</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;${ARTIGATE_LOW_AUTH:?set</span><span class="nv"> </span><span class="s">it</span><span class="nv"> </span><span class="s">in</span><span class="nv"> </span><span class="s">.env}&quot;</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;${ARTIGATE_LOW_BIND:-127.0.0.1}:8080:8080&quot;</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="nt">high</span><span class="p">:</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">  </span><span class="nt">command</span><span class="p">:</span>
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">high</span>
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--listen=:8080</span>
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--root=/var/lib/artigate</span>
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--landing=/var/spool/diode-in</span>
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--public-key=/keys/high.ed25519.pub</span>
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--import-interval=10s</span>
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="w">  </span><span class="nt">environment</span><span class="p">:</span>
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="w">    </span><span class="nt">ARTIGATE_DIODE_INGEST</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;on&quot;</span>
+<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="w">    </span><span class="nt">ARTIGATE_DIODE_TOKEN</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;${ARTIGATE_DIODE_TOKEN:?set</span><span class="nv"> </span><span class="s">it</span><span class="nv"> </span><span class="s">in</span><span class="nv"> </span><span class="s">.env}&quot;</span>
+<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;${ARTIGATE_HIGH_BIND:-127.0.0.1}:8081:8080&quot;</span>
+</code></pre></div>
+<p>After the stack is up:</p>
+<ul>
+<li><strong>Low side</strong> (exporter dashboard): <a href="http://localhost:8080/">http://localhost:8080/</a></li>
+<li><strong>High side</strong> (repository + tree): <a href="http://localhost:8081/">http://localhost:8081/</a></li>
+</ul>
+<p>The browser prompts for the configured operator login. API clients first obtain
+a session cookie from <code>/login</code>, then use it for privileged collect calls:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>curl<span class="w"> </span>-c<span class="w"> </span>/tmp/artigate.cookies<span class="w"> </span>-XPOST<span class="w"> </span>localhost:8080/login<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--data-urlencode<span class="w"> </span><span class="s1">&#39;username=admin&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--data-urlencode<span class="w"> </span><span class="s2">&quot;password=</span><span class="nv">$ARTIGATE_PASSWORD</span><span class="s2">&quot;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Mirror a Go module and its full dependency graph:</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>curl<span class="w"> </span>-b<span class="w"> </span>/tmp/artigate.cookies<span class="w"> </span>-XPOST<span class="w"> </span>localhost:8080/admin/go/collect<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;modules&quot;:[&quot;rsc.io/quote@latest&quot;],&quot;resolve_deps&quot;:true}&#39;</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># Mirror Python wheels:</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>curl<span class="w"> </span>-b<span class="w"> </span>/tmp/artigate.cookies<span class="w"> </span>-XPOST<span class="w"> </span>localhost:8080/admin/python/collect<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;requirements&quot;:[&quot;requests&quot;]}&#39;</span>
+</code></pre></div>
+<p>See the <a href="../api/">HTTP API reference</a> for every route and JSON field.</p>
+<h3 id="managing-the-stack">Managing the stack<a class="headerlink" href="#managing-the-stack" title="Permanent link">&para;</a></h3>
+<p>The <code>Makefile</code> wraps Compose (it auto-detects <code>docker compose</code> v2 and falls back to legacy <code>docker-compose</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Target</th>
+<th>Command</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>make run</code></td>
+<td><code>docker compose up --build</code></td>
+<td>Build and start low + high in the foreground</td>
+</tr>
+<tr>
+<td><code>make run-detach</code></td>
+<td><code>docker compose up --build -d</code></td>
+<td>Start the stack in the background</td>
+</tr>
+<tr>
+<td><code>make stop</code></td>
+<td><code>docker compose down</code></td>
+<td>Stop the stack, <strong>keeping state</strong> — sequence counters, keys, and mirror survive, so a restart continues where it left off</td>
+</tr>
+<tr>
+<td><code>make reset</code></td>
+<td><code>docker compose down -v</code></td>
+<td>Stop <strong>and wipe all volumes</strong> — a fresh start, sequences back to <code>1</code></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title"><code>reset</code> destroys the mirror and resets sequencing</p>
+<p><code>make reset</code> (<code>docker compose down -v</code>) removes <code>low-data</code>, <code>high-data</code>, <code>low-outbound</code>, <code>high-landing</code>, <code>keys</code>, and <code>high-keys</code>. Sequence numbering restarts at <code>1</code> and a new key pair is generated. Use <code>make stop</code> for an ordinary restart; only use <code>reset</code> when you deliberately want to start over.</p>
+</div>
+<h3 id="network-exposure-and-tls">Network exposure and TLS<a class="headerlink" href="#network-exposure-and-tls" title="Permanent link">&para;</a></h3>
+<p>The shipped Compose stack always requires low-side authentication and binds
+host ports to <code>127.0.0.1</code>. The application still speaks plain HTTP inside this
+local boundary. For remote access, keep the containers private and terminate
+TLS in an authenticating reverse proxy; then set
+<code>ARTIGATE_LOW_COOKIE_SECURE=true</code>. Only override <code>ARTIGATE_LOW_BIND</code> or
+<code>ARTIGATE_HIGH_BIND</code> after that protection is in place.</p>
+<p>Direct binary and systemd deployments can still omit <code>ARTIGATE_LOW_AUTH</code> for
+strictly isolated networks, but doing so leaves every collect, upload, re-export,
+and scheduling endpoint open. The high side is <strong>never authenticated</strong> by the
+application. See <a href="../tls/">TLS / HTTPS</a> and <a href="../security/">Security &amp; trust</a>.</p>
+<h2 id="systemd-units">systemd units<a class="headerlink" href="#systemd-units" title="Permanent link">&para;</a></h2>
+<p>For a package/binary deployment, <code>examples/systemd/</code> contains reference units for both sides. Both run as <code>User=artigate</code> / <code>Group=artigate</code> with <code>Restart=always</code>, <code>RestartSec=5</code>, <code>NoNewPrivileges=true</code>, <code>PrivateTmp=true</code>, and <code>WantedBy=multi-user.target</code> after <code>network-online.target</code>.</p>
+<p>Note the <code>--root</code> paths differ from compose: the units use the binary's real per-side defaults, <code>/var/lib/artigate-low</code> and <code>/var/lib/artigate-high</code>.</p>
+<p><strong><code>artigate-low.service</code></strong> runs <code>artigate low</code> and, because the low side needs <code>HOME</code> for the Go module cache, sets <code>ProtectHome=false</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">[Service]</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="na">User</span><span class="o">=</span><span class="s">artigate</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="na">Group</span><span class="o">=</span><span class="s">artigate</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="na">ExecStart</span><span class="o">=</span><span class="s">/usr/local/bin/artigate low </span>\
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="s">--listen :8080 </span>\
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="s">--root /var/lib/artigate-low </span>\
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="s">--export-dir /var/spool/diode-out </span>\
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="s">--private-key /etc/artigate/low.ed25519 </span>\
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span><span class="s">--upstream-goproxy https://proxy.golang.org,direct </span>\
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">  </span><span class="s">--goprivate github.com/your-org/* </span>\
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span><span class="s">--gonosumdb github.com/your-org/*</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="na">ProtectSystem</span><span class="o">=</span><span class="s">full</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="na">ProtectHome</span><span class="o">=</span><span class="s">false</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="na">ReadWritePaths</span><span class="o">=</span><span class="s">/var/lib/artigate-low /var/spool/diode-out /etc/artigate</span>
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">The low side has no export loop</p>
+<p>There is no export interval to configure — the low side exports <strong>synchronously at collect time</strong>. The only timer flag is <code>--watch-interval</code> (default <code>60s</code>), which controls how often the scheduled-watch scheduler checks for due watches; see <a href="../scheduling/">Scheduling (watches)</a>.</p>
+</div>
+<p><strong><code>artigate-high.service</code></strong> runs <code>artigate high</code>. The high side needs no <code>HOME</code> or Go cache (consistent with the image note above), so it sets <code>ProtectHome=true</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">[Service]</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="na">User</span><span class="o">=</span><span class="s">artigate</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="na">Group</span><span class="o">=</span><span class="s">artigate</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="na">ExecStart</span><span class="o">=</span><span class="s">/usr/local/bin/artigate high </span>\
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="s">--listen :8080 </span>\
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="s">--root /var/lib/artigate-high </span>\
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="s">--landing /var/spool/diode-in </span>\
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="s">--public-key /etc/artigate/high.ed25519.pub </span>\
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="s">--import-interval 10s</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="na">ProtectSystem</span><span class="o">=</span><span class="s">full</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="na">ProtectHome</span><span class="o">=</span><span class="s">true</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="na">ReadWritePaths</span><span class="o">=</span><span class="s">/var/lib/artigate-high /var/spool/diode-in</span>
+</code></pre></div>
+<p>Install the units, drop the key material into <code>/etc/artigate/</code> (private key on the low host only, public key on the high host only), then:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>sudo<span class="w"> </span>systemctl<span class="w"> </span>daemon-reload
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>sudo<span class="w"> </span>systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>artigate-low<span class="w">     </span><span class="c1"># on the internet-side host</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>sudo<span class="w"> </span>systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>artigate-high<span class="w">    </span><span class="c1"># on the air-gapped host</span>
+</code></pre></div>
+<p>Enabling HTTPS on either side is done entirely through environment variables in a drop-in (<code>systemctl edit</code>), never flags — see <a href="../tls/">TLS / HTTPS</a>.</p>
+<h2 id="the-real-diode-transfer">The real diode transfer<a class="headerlink" href="#the-real-diode-transfer" title="Permanent link">&para;</a></h2>
+<p>In the default <strong>folder flow</strong>, ArtiGate itself never moves bundles across the gap; it only reads and writes files in two directories, and your job is to carry files from the low side's export directory (<code>--export-dir</code>, default <code>/var/spool/diode-out</code>) into the high side's landing directory (<code>--landing</code>, default <code>/var/spool/diode-in</code>). Two built-in transports can take that job over: the <strong>HTTP transport</strong> (<code>ARTIGATE_DIODE_*</code>, for diodes and diode proxies that speak HTTP) and the <strong><a href="../data-diode/">built-in UDP diode</a></strong> (<code>ARTIGATE_PITCHER_*</code>/<code>ARTIGATE_CATCHER_*</code>), which drives a raw one-way fiber directly with rate-limited, Reed-Solomon-coded multicast. Whatever carries the files, everything below — bundle format, ordering, quarantine, verification — is identical.</p>
+<h3 id="carry-three-files-per-bundle">Carry three files per bundle<a class="headerlink" href="#carry-three-files-per-bundle" title="Permanent link">&para;</a></h3>
+<p>A bundle is <strong>exactly three sibling files</strong> sharing a bundle ID. All three must be carried across for a bundle to be importable:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>&lt;bundleID&gt;.tar.gz             # the artifact archive (payload)
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>&lt;bundleID&gt;.manifest.json      # the manifest (the exact signed bytes)
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>&lt;bundleID&gt;.manifest.json.sig  # detached base64 Ed25519 signature over the manifest bytes
+</code></pre></div>
+<p>The bundle ID is <code>&lt;stream&gt;-bundle-&lt;seq&gt;</code> zero-padded to six digits, e.g. <code>go-bundle-000001</code>, <code>python-bundle-000042</code>, <code>apt-bundle-000001</code>. Each of the twenty-three <strong>streams</strong> — <code>go</code>, <code>python</code>, <code>maven</code>, <code>apt</code>, <code>rpm</code>, <code>hf</code>, <code>containers</code>, <code>npm</code>, <code>crates</code>, <code>terraform</code>, <code>helm</code>, <code>nuget</code>, <code>apk</code>, <code>conda</code>, <code>rubygems</code>, <code>composer</code>, <code>vsx</code>, <code>galaxy</code>, <code>cran</code>, <code>snap</code>, <code>git</code>, <code>osv</code>, <code>uploads</code> — has its own independent sequence counter, so a gap in one stream never blocks another. Bundles are written atomically (temp file + rename), so a partially-arrived bundle is simply "incomplete" and is skipped until all three files are present. See <a href="../architecture/">Architecture</a> for the bundle format and signing model.</p>
+<h3 id="strict-in-order-import">Strict in-order import<a class="headerlink" href="#strict-in-order-import" title="Permanent link">&para;</a></h3>
+<p>The high side runs an import loop every <code>--import-interval</code> (default <code>10s</code>; <code>0</code> disables the background importer, leaving <code>POST /admin/import</code> for manual runs). Each pass:</p>
+<ol>
+<li><strong>Sweeps the landing directory.</strong> For each complete bundle, its sequence is compared to the next-expected value for its stream:</li>
+<li><code>seq &gt; next</code> (a future bundle) → moved to the <strong>quarantine</strong> directory (<code>--quarantine</code>, default <code>&lt;root&gt;/quarantine</code>).</li>
+<li><code>seq ≤</code> the last-imported sequence → moved to <code>&lt;landing&gt;/duplicates</code>.</li>
+<li><code>seq == next</code> → left in place, ready to import.</li>
+<li><strong>Drains each stream in order.</strong> For every stream it repeatedly looks for the next sequence in the landing directory <em>and then</em> the quarantine directory; if that exact next sequence is missing, that stream stops (strict in-order) while the others continue.</li>
+</ol>
+<h3 id="gaps-are-quarantined-and-auto-filled">Gaps are quarantined and auto-filled<a class="headerlink" href="#gaps-are-quarantined-and-auto-filled" title="Permanent link">&para;</a></h3>
+<p>A missing bundle blocks <strong>only its own stream</strong>, and only until the gap is filled. Future bundles that arrive early are <strong>retained in quarantine, never discarded</strong>. When the missing predecessor finally arrives and imports, the very next pass picks the quarantined successor back up automatically — the gap bundle and its quarantined successors drain in the same pass, with no operator action.</p>
+<p>Every imported bundle is verified before install: the Ed25519 signature over the exact on-disk manifest bytes, a chained-sequence check (<code>previous_sequence</code> must equal the high side's current position for that stream, so bundles import strictly consecutively), and a per-file SHA-256 check of every archive entry. The high side then <strong>regenerates</strong> all repository metadata from the artifacts actually present — it never trusts transferred indexes. See <a href="../high-side/">High side</a> and <a href="../security/">Security &amp; trust</a>.</p>
+<p>Check where each stream stands with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>curl<span class="w"> </span>localhost:8081/admin/status
+</code></pre></div>
+<p>which reports, per stream, <code>last_imported_sequence</code>, <code>next_expected_sequence</code>, <code>missing_ranges</code>, <code>quarantined_sequences</code>, and any <code>blocking_missing_sequence</code>.</p>
+<div class="admonition note">
+<p class="admonition-title">The transport is yours to build — or use the built-in HTTP one</p>
+<p>ArtiGate makes no assumptions about how the three files cross the gap — a hardware data diode, a manual sneakernet drive, or any one-way transfer works, because bundles are self-contained and self-verifying. The only requirement is that all three files of a bundle land in the high side's landing directory. ArtiGate never sends anything back from high to low; the flow is strictly one-way.</p>
+</div>
+<h3 id="optional-http-transport">Optional HTTP transport<a class="headerlink" href="#optional-http-transport" title="Permanent link">&para;</a></h3>
+<p>For diodes or diode proxies that speak HTTP, ArtiGate can perform the transfer itself, configured entirely by environment variables:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Side</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ARTIGATE_DIODE_URL</code></td>
+<td>low</td>
+<td>endpoint bundles are uploaded to after every export and re-export (<code>PUT &lt;url&gt;/&lt;file&gt;</code>, archive first)</td>
+</tr>
+<tr>
+<td><code>ARTIGATE_DIODE_INGEST</code></td>
+<td>high</td>
+<td><code>on</code> accepts uploads at <code>PUT/POST /diode/&lt;file&gt;</code> into the landing directory (default <code>off</code>)</td>
+</tr>
+<tr>
+<td><code>ARTIGATE_DIODE_TOKEN</code></td>
+<td>both</td>
+<td>required shared bearer token for HTTP transport; at least 32 bytes, no whitespace</td>
+</tr>
+</tbody>
+</table>
+<p>After a successful upload the low side clears the bundle from the export directory (it shows as <em>sent</em> on the Status page); a failed upload never loses a bundle — the collect still succeeds, the dashboard and a schedule's status report the error, and the bundle stays staged for a re-transmit. Uploads stream atomically into the landing directory, completed bundles enter one coalescing import queue, and only supported stream/sequence bundle names are accepted. Archives are capped at 64 GiB, manifests at 16 MiB, signatures at 4 KiB, and unverified direct-file storage at 128 GiB across landing, quarantine, and rejected directories. The transport carries no trust — signature, sequencing, and hash checks are unchanged; the token protects the high side's disk before those checks. Anything that can <code>PUT</code> a file works as a sender:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>curl<span class="w"> </span>-fT<span class="w"> </span>go-bundle-000042.tar.gz<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span>https://artigate-high.local/diode/go-bundle-000042.tar.gz
+</code></pre></div>
+<h2 id="state-volumes-and-backups">State, volumes, and backups<a class="headerlink" href="#state-volumes-and-backups" title="Permanent link">&para;</a></h2>
+<p>Each side keeps durable state under its <code>--root</code>. Plan capacity and backups for these directories.</p>
+<p><strong>Low side</strong> (<code>--root</code>, default <code>/var/lib/artigate-low</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;root&gt;/low-state.json</code></td>
+<td>Per-stream next-sequence counters (mode <code>0600</code>)</td>
+</tr>
+<tr>
+<td><code>&lt;root&gt;/exported.db</code></td>
+<td>SQLite export-dedup index — which files (path + hash) have already been shipped per stream; what enables skips and delta bundles</td>
+</tr>
+<tr>
+<td><code>&lt;root&gt;/watches.db</code></td>
+<td>SQLite scheduled-watch definitions and history</td>
+</tr>
+<tr>
+<td><code>&lt;root&gt;/bundles</code></td>
+<td>Persistent archive of every generated bundle, retained for re-export</td>
+</tr>
+<tr>
+<td><code>&lt;root&gt;/gopath/...</code></td>
+<td>Go module download cache</td>
+</tr>
+<tr>
+<td><code>&lt;root&gt;/session.key</code></td>
+<td>Login-session cookie keys (only when <code>ARTIGATE_LOW_AUTH</code> is set; mode <code>0600</code>)</td>
+</tr>
+<tr>
+<td><code>&lt;export-dir&gt;</code> (default <code>/var/spool/diode-out</code>)</td>
+<td>Freshly written bundles staged for the diode transfer (cleared automatically after a successful HTTP/UDP diode upload)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>High side</strong> (<code>--root</code>, default <code>/var/lib/artigate-high</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;root&gt;/import-state.json</code></td>
+<td>Per-stream last-imported sequence and timestamp</td>
+</tr>
+<tr>
+<td><code>&lt;root&gt;/cache/download</code></td>
+<td>The installed, immutable artifact tree served to clients</td>
+</tr>
+<tr>
+<td><code>&lt;root&gt;/quarantine</code></td>
+<td>Retained out-of-order future bundles awaiting their predecessor</td>
+</tr>
+<tr>
+<td><code>&lt;root&gt;/tmp/&lt;bundleID&gt;</code></td>
+<td>Staging area for archive extraction and hash verification</td>
+</tr>
+<tr>
+<td><code>&lt;landing&gt;</code> (default <code>/var/spool/diode-in</code>)</td>
+<td>Incoming bundles; processed files move to <code>&lt;landing&gt;/imported</code>, replays to <code>&lt;landing&gt;/duplicates</code></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">Account for disk growth</p>
+<p>Processed bundles land in <code>&lt;landing&gt;/imported</code>, duplicates in <code>&lt;landing&gt;/duplicates</code>, future bundles in <code>&lt;quarantine&gt;</code>, and every generated bundle in the low side's <code>&lt;root&gt;/bundles</code> archive. The high side reaps <code>imported</code>/<code>duplicates</code> files after 7 days (the authoritative replay copy is the low side's archive) and <code>rejected</code> files after 7 days; quarantine is never reaped — it holds valid future bundles waiting for a gap to fill. The low-side <code>bundles</code> archive has <strong>no automatic retention</strong>: it is what powers re-export (<code>POST /admin/reexport</code>), so it grows with every bundle produced — monitor it and prune sequences you will never need to replay.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Backups</p>
+<p>Back up each side's <code>&lt;root&gt;</code> to preserve state across host loss. On the low side the critical items are <code>low-state.json</code>, <code>exported.db</code>, <code>watches.db</code>, and the <code>bundles</code> archive; the Go cache is reconstructible. On the high side, <code>import-state.json</code> plus <code>cache/download</code> are the mirror itself. The Ed25519 private key (low) and public key (high) live outside <code>&lt;root&gt;</code> (for example <code>/etc/artigate/</code>, or the separate Compose <code>keys</code> and <code>high-keys</code> volumes) — back these up separately and keep the private key on the low side only.</p>
+<p>Losing <code>exported.db</code> alone is safe but wasteful (the next collects re-download and re-send content the high side already has). Losing it <em>while keeping</em> <code>low-state.json</code> and re-pointing at a <strong>fresh</strong> high side is the one combination to avoid — recover a rebuilt high side with a <strong>forced</strong> collect (<code>"force": true</code>) or by re-exporting the archived bundles, since normal collects emit delta bundles that assume the stream's earlier content is present.</p>
+</div>
+<h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../configuration/">Configuration reference</a> — every flag, default, and environment variable.</li>
+<li><a href="../tls/">TLS / HTTPS</a> — enabling HTTPS (same env vars for low and high).</li>
+<li><a href="../high-side/">High side</a> — operating the importer and repository server.</li>
+<li><a href="../security/">Security &amp; trust</a> — the trust model and hardening guidance.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.top", "navigation.tracking", "navigation.sections", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

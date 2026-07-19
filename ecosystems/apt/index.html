@@ -1,0 +1,2203 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Dependency mirror for one-way data-diode / air-gapped networks.">
+      
+      
+      
+      
+        <link rel="prev" href="../npm/">
+      
+      
+        <link rel="next" href="../rpm/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>APT (Debian/Ubuntu) - ArtiGate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#apt-debianubuntu" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ArtiGate" class="md-header__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ArtiGate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              APT (Debian/Ubuntu)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ArtiGate" class="md-nav__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ArtiGate
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Running
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../low-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Low side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../high-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    High side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduling (watches)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-diode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Built-in UDP diode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Ecosystems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../go/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Go modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python (PyPI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../maven/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Java (Maven)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../npm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NPM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    APT (Debian/Ubuntu)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    APT (Debian/Ubuntu)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: input
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: input">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multiple-stanzas-multiple-mirrors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multiple stanzas → multiple mirrors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deb822-fields-honored" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deb822 fields honored
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-upstream-verification-with-signed-by" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional upstream verification with Signed-By
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#private-repositories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Private repositories
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-gets-mirrored" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What gets mirrored
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What gets mirrored">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#newest-version-only-default-vs-every-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "Newest version only" (default) vs every version
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-regeneration-and-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side: regeneration and signing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="High side: regeneration and signing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optional-signing-with-apt-gpg-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional signing with --apt-gpg-key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#serving-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Serving path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-the-microsoft-vs-code-repository" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: the Microsoft VS Code repository
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPM (RHEL/Fedora)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Container images (OCI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI models (Hugging Face)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rust crates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../terraform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terraform / OpenTofu
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm charts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nuget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NuGet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alpine (apk)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../conda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conda channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rubygems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RubyGems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../composer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHP Composer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vsx/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code extensions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../galaxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible Galaxy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cran/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R packages (CRAN)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../snap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snap packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../git/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Git repositories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../osv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OSV advisories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../uploads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Uploads (arbitrary files)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security & trust
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS / HTTPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#low-side-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low side: input
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Low side: input">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multiple-stanzas-multiple-mirrors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multiple stanzas → multiple mirrors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deb822-fields-honored" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deb822 fields honored
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-upstream-verification-with-signed-by" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional upstream verification with Signed-By
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#private-repositories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Private repositories
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-gets-mirrored" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What gets mirrored
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What gets mirrored">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#newest-version-only-default-vs-every-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "Newest version only" (default) vs every version
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-side-regeneration-and-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High side: regeneration and signing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="High side: regeneration and signing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optional-signing-with-apt-gpg-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional signing with --apt-gpg-key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#serving-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Serving path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-the-microsoft-vs-code-repository" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: the Microsoft VS Code repository
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related pages
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="apt-debianubuntu">APT (Debian/Ubuntu)<a class="headerlink" href="#apt-debianubuntu" title="Permanent link">&para;</a></h1>
+<p>ArtiGate mirrors Debian/Ubuntu-style APT repositories in <strong>full-mirror mode</strong> across the air gap: the low side downloads and verifies each suite's upstream <code>Release</code> + <code>Packages</code> indexes and every referenced <code>.deb</code>, and the high side <strong>regenerates</strong> its own <code>Release</code>/<code>Packages</code> per suite from the artifacts it actually holds and serves them as static files.</p>
+<p>A mirror is one <strong>archive root</strong> (one <code>URIs:</code> value) carrying <strong>one or more suites</strong>, exactly like a real APT archive — <code>Suites: noble noble-updates noble-security</code> mirrors all three under a single namespace with a shared <code>pool/</code>.</p>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Side</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Low</strong> (<code>artigate low</code>)</td>
+<td>Reads a deb822 <code>.sources</code> stanza, and for each suite fetches and (optionally) GPG-verifies the upstream <code>Release</code>, resolves the <code>Packages</code> index for each component × architecture, downloads and SHA-256-verifies every <code>.deb</code>, and packs everything into an Ed25519-signed bundle. A <code>.deb</code> listed in several suites is downloaded and bundled once. Collect-only — it never proxies or pulls through.</td>
+</tr>
+<tr>
+<td><strong>High</strong> (<code>artigate high</code>)</td>
+<td>On bundle import, merges the packages into a persistent per-mirror index, regenerates <code>Packages</code>/<code>Packages.gz</code> and <code>Release</code> under <code>dists/&lt;suite&gt;</code> for every suite from the stanzas of <code>.deb</code>s it actually holds, optionally clearsigns <code>InRelease</code>/<code>Release.gpg</code> with <strong>ArtiGate's own</strong> GPG key, and serves the result read-only under <code>/apt/&lt;mirror&gt;</code>.</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">The high side never trusts transferred metadata</p>
+<p>The upstream <code>Release</code>/<code>Packages</code> that crossed the diode are treated as inputs only. The high side rebuilds them from the <code>.deb</code> stanzas it holds. Transfer integrity is guaranteed by ArtiGate's <strong>Ed25519 bundle signature</strong> plus per-file SHA-256 verification on import — independent of any APT GPG signing. See <a href="../../security/">Security &amp; trust</a>.</p>
+</div>
+<h2 id="low-side-input">Low side: input<a class="headerlink" href="#low-side-input" title="Permanent link">&para;</a></h2>
+<p>The low-side dashboard mirrors an APT repository from a <strong>deb822 source stanza</strong> — the modern <code>.sources</code> format. Paste a stanza (or load a <code>.sources</code> file) into the "Mirror an APT repository" card, choose whether to keep only the newest version of each package, and collect.</p>
+<div class="admonition tip">
+<p class="admonition-title">Built-in source lists</p>
+<p>The APT card ships ready-made source lists for Ubuntu 26.04 LTS (resolute), 24.04 LTS (noble) and 22.04 LTS (jammy) — each as a full-archive, main-only, or security-only variant — plus Docker CE (per release) and release-independent lists for Visual Studio Code, Google Chrome and Firefox (Mozilla's own apt repository). Pick one under "…or start from a built-in source list" and it is pasted into the input — edit it freely (trim suites, components), then collect once or add a schedule. The built-ins set no <code>Signed-By</code>, so upstream GPG verification is skipped unless you add a keyring path yourself. The files ship in the source tree under <code>buildin/apt/</code>.</p>
+</div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Types: deb
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>URIs: http://archive.ubuntu.com/ubuntu
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>Suites: noble noble-updates noble-security
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>Components: main universe
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>Architectures: amd64
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+</code></pre></div>
+<p>This posts to <code>POST /admin/apt/collect</code>. The request body is capped at <strong>1 MiB</strong>. Besides <code>source_list</code>, the body accepts <code>newest_only</code> and <code>force</code> (both booleans), or — instead of a stanza — the explicit fields <code>name</code>, <code>uri</code>, <code>suites</code>, <code>components</code>, <code>architectures</code>, and <code>signed_by</code>, which describe a single mirror; see the <a href="../../api/">HTTP API reference</a>.</p>
+<h3 id="multiple-stanzas-multiple-mirrors">Multiple stanzas → multiple mirrors<a class="headerlink" href="#multiple-stanzas-multiple-mirrors" title="Permanent link">&para;</a></h3>
+<p>Every <code>deb</code> stanza in the pasted text is parsed. A multi-repo <code>.sources</code> file therefore becomes <strong>multiple mirrors in one bundle</strong>, each published as its own repository (its own namespace) on the high side. Several suites of the <strong>same</strong> archive belong in <strong>one</strong> stanza, not several.</p>
+<div class="admonition warning">
+<p class="admonition-title">Each stanza needs a distinct name</p>
+<p>Mirror names must be unique within a collect. Duplicate names are rejected with <code>duplicate mirror name "…"; combine the suites of same-URI stanzas into one stanza (Suites: a b c), or give each source a distinct name</code>. When no name is supplied, one is derived from the URI (see below), so distinct URIs get distinct names automatically — and two stanzas with the same URI collide by design: merge their <code>Suites:</code> instead.</p>
+</div>
+<h3 id="deb822-fields-honored">deb822 fields honored<a class="headerlink" href="#deb822-fields-honored" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+<th>Default if omitted</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Types</code></td>
+<td>Only validated when present: if supplied it must contain the token <code>deb</code> (binary), and <code>deb-src</code> alone is rejected. Omitting it is allowed and the stanza is mirrored as <code>deb</code>.</td>
+<td>none → treated as <code>deb</code></td>
+</tr>
+<tr>
+<td><code>URIs</code></td>
+<td>Archive root URL (<code>http</code>/<code>https</code>). <strong>Only the first token is used.</strong></td>
+<td>required</td>
+</tr>
+<tr>
+<td><code>Suites</code></td>
+<td>One or more suites, e.g. <code>noble noble-updates noble-security</code>. <strong>Every token is mirrored.</strong> Duplicate tokens are dropped.</td>
+<td>required (≥ 1)</td>
+</tr>
+<tr>
+<td><code>Components</code></td>
+<td>Space-separated components, e.g. <code>main contrib</code>. Applies to every suite in the stanza.</td>
+<td><code>main</code></td>
+</tr>
+<tr>
+<td><code>Architectures</code></td>
+<td>Space-separated arches, e.g. <code>amd64 arm64</code>. Applies to every suite in the stanza.</td>
+<td><code>amd64</code></td>
+</tr>
+<tr>
+<td><code>Signed-By</code></td>
+<td>Keyring <strong>file path</strong> used to verify each suite's upstream <code>Release</code>.</td>
+<td>none → verification skipped</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">First-token-only for URIs</p>
+<p>If a single stanza lists multiple <code>URIs</code> (mirror fallbacks of the same archive), only the <strong>first</strong> whitespace-separated token is honored; the rest are silently dropped. Use separate stanzas for genuinely different archives.</p>
+</div>
+<p>The derived default name replaces every non-alphanumeric rune with <code>-</code> (collapsed). For example <code>https://packages.microsoft.com/repos/code</code> → <code>packages-microsoft-com-repos-code</code>. Each name must be a single path segment (no <code>/</code>), and suite/component/architecture tokens must match <code>^[A-Za-z0-9._-]+$</code>.</p>
+<h3 id="optional-upstream-verification-with-signed-by">Optional upstream verification with <code>Signed-By</code><a class="headerlink" href="#optional-upstream-verification-with-signed-by" title="Permanent link">&para;</a></h3>
+<p><code>Signed-By</code> verification is <strong>opt-in</strong>. When present, ArtiGate verifies each suite's upstream <code>Release</code> before trusting its checksums:</p>
+<ul>
+<li>It first tries <code>dists/&lt;suite&gt;/InRelease</code> (clearsigned) and verifies it with <code>gpgv --keyring &lt;signed_by&gt;</code>, then strips the PGP armor so the body matches the checksums.</li>
+<li>Otherwise it falls back to detached <code>dists/&lt;suite&gt;/Release</code> + <code>Release.gpg</code> and verifies that pair.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">No key means no signature check</p>
+<p>If <code>Signed-By</code> is empty, <strong>no GPG signature is verified at all</strong> — the <code>Release</code> is fetched and trusted over TLS only. Supply <code>Signed-By</code> (a keyring <strong>file path</strong>, not a fingerprint) whenever you want the upstream signature checked. <code>gpgv</code> and the keyring file must exist on the low-side host; verification runs with a 1-minute timeout. Only the keyring's basename is recorded in the bundle.</p>
+</div>
+<h2 id="private-repositories">Private repositories<a class="headerlink" href="#private-repositories" title="Permanent link">&para;</a></h2>
+<p>Mirrors that demand a login are fetched with HTTP Basic from one of two sources, resolved per host as <em>request <code>auth</code> → <code>ARTIGATE_UPSTREAM_AUTH</code> → anonymous</em>:</p>
+<ul>
+<li><strong>Per-collect login</strong> — an optional <code>auth</code> object on the collect request, also exposed as the <em>Private repository login</em> fields on the low-side APT page: <code>{"host": "apt.example.com", "username": "bot", "password": "secret"}</code>. It is used for that one collect and never stored. <code>host</code> may be omitted when every source in the collect lives on one host; a <code>source_list</code> spanning several hosts must name the one the login is for, and a host matching none of the sources is rejected.</li>
+<li><strong>Standing credentials</strong> — comma-separated <code>host=user:password</code> entries in <code>ARTIGATE_UPSTREAM_AUTH</code> on the low side (the key is the mirror URL's exact host, <code>host:port</code> included). Re-read on every collect, and the <strong>only</strong> credential source <a href="../../scheduling/">scheduled watches</a> can use — specs carrying an <code>auth</code> key are rejected.</li>
+</ul>
+<p>A <code>URIs:</code> value embedding <code>user:pass@</code> is rejected outright: the URI is recorded in the signed manifest and echoed in progress and error text, so a login there would leak — including across the diode. Credentials never appear in bundles, logs, progress lines, or error messages.</p>
+<h2 id="what-gets-mirrored">What gets mirrored<a class="headerlink" href="#what-gets-mirrored" title="Permanent link">&para;</a></h2>
+<p>For each mirror, and for <strong>each of its suites</strong> (<code>distBase = &lt;uri&gt;/dists/&lt;suite&gt;</code>):</p>
+<ol>
+<li><strong><code>Release</code></strong> — fetched, optionally verified, then parsed. Only its <strong><code>SHA256:</code></strong> section is consulted to locate and verify the index files. (A <code>Release</code> with no SHA256 section fails to locate indexes.)</li>
+<li><strong><code>Packages</code> index</strong> — for each component × architecture, ArtiGate looks in <code>&lt;comp&gt;/binary-&lt;arch&gt;/</code> and tries, in order, <code>Packages.gz</code> (stdlib gzip) then plain <code>Packages</code>. The candidate must be listed in the <code>Release</code> SHA256 map; it is downloaded, SHA-256-verified, and decompressed.</li>
+<li><strong>Every referenced <code>.deb</code></strong> — each package stanza's <code>Filename</code> (a <code>pool/...</code> path) is path-safety-checked, downloaded, and SHA-256-verified against the index value. A mismatch is a hard failure. Suites share the archive's <code>pool/</code>, so a <code>.deb</code> listed by more than one suite is downloaded and bundled <strong>once</strong>.</li>
+</ol>
+<p>Because the <code>Packages</code> index declares each <code>.deb</code>'s SHA-256 <em>before</em> the bytes are fetched, APT collects get the full benefit of <a href="../../architecture/#export-deduplication-and-delta-bundles">export dedup</a>: a <code>.deb</code> already forwarded on the <code>apt</code> stream is <strong>not downloaded again at all</strong> — it rides in the manifest as a <code>prior</code> reference — and only genuinely new packages are downloaded and packed into a delta bundle. A re-collect that finds nothing new is skipped entirely (no bundle, no sequence). Add <code>"force": true</code> to the collect body to bypass the index and produce a full, self-contained bundle.</p>
+<div class="admonition warning">
+<p class="admonition-title">Index format support</p>
+<p>Only <code>Packages.gz</code> and plain <code>Packages</code> are supported (stdlib gzip). Repositories that publish <strong>only</strong> <code>.xz</code>, <code>.bz2</code>, or <code>.zst</code> indexes are not mirrorable.</p>
+</div>
+<p><code>.deb</code> files <strong>stream to disk</strong> while being hashed — a package is never buffered in memory, and its byte count must match the index-declared <code>Size</code> exactly (files without a declared size are capped at 8 GiB). Streamed downloads have a 30-minute timeout. In-memory fetches are small and capped: <code>Release</code>/<code>InRelease</code>/<code>Release.gpg</code> at 16 MiB, a <code>Packages</code> index at 1 GiB (10-minute timeout), and gzip decompression of an index refuses to expand beyond 2 GiB (decompression-bomb guard). An empty result (no packages) produces no bundle: <code>apt mirror produced no packages</code>.</p>
+<h3 id="newest-version-only-default-vs-every-version">"Newest version only" (default) vs every version<a class="headerlink" href="#newest-version-only-default-vs-every-version" title="Permanent link">&para;</a></h3>
+<p>The <strong>"Newest version of each package only"</strong> checkbox is <strong>checked by default</strong> (<code>newest_only</code> defaults to <code>true</code>). With it on, ArtiGate keeps only the highest version per <code>(Package, Architecture)</code>, using a full dpkg-compatible version comparison (epoch → upstream → revision, with <code>~</code> sorting before everything). Uncheck it (<code>"newest_only": false</code>) to mirror <strong>every</strong> version present in the index.</p>
+<p>The filter is applied <strong>per suite</strong> (per component × architecture index): <code>noble</code> keeps its own newest and <code>noble-updates</code> keeps its own newest, mirroring each suite's actual shape. APT on the client then picks the overall candidate across suites, exactly as it does against the upstream archive.</p>
+<div class="admonition note">
+<p class="admonition-title">Newest-only is a low-side filter</p>
+<p>The newest-only filter is applied at collect time on the low side. The high side <strong>accumulates</strong> every version, architecture, and suite it has ever imported (see below), so it never removes older versions that already crossed the diode.</p>
+</div>
+<h2 id="high-side-regeneration-and-signing">High side: regeneration and signing<a class="headerlink" href="#high-side-regeneration-and-signing" title="Permanent link">&para;</a></h2>
+<p>On import (after Ed25519 signature + per-file SHA-256 verification), the high side publishes each mirror under <code>&lt;downloadDir&gt;/apt/&lt;name&gt;</code>:</p>
+<ul>
+<li><strong>Merge</strong> — the new mirror is merged into a persistent <code>&lt;name&gt;/index.json</code>. Suites accumulate <strong>per suite</strong>: each suite record carries its own components/architectures (unioned when the same suite is re-imported), so suites collected with different settings never bleed into each other. Packages are deduped <strong>by <code>(Suite, Filename)</code></strong> (a <code>.deb</code> listed in two suites gets one index entry per suite but one pool file). Re-collecting the same mirror with a different suite therefore <strong>adds</strong> a suite; it never replaces one.</li>
+<li><strong>Regenerate <code>Packages</code>/<code>Packages.gz</code></strong> — for each suite × <strong>that suite's own</strong> components × architectures, ArtiGate emits the stanzas of that suite's packages where the <code>.deb</code> <strong>actually exists on disk</strong>. <code>Architecture: all</code> packages are emitted into every architecture's index.</li>
+<li><strong>Prune stale <code>dists/</code> entries</strong> — everything under <code>dists/</code> is regenerated from the index on every publish, so any <code>dists/&lt;x&gt;</code> not among the mirror's suites is deleted.</li>
+<li><strong>Regenerate <code>Release</code></strong> — one minimal, freshly built file per suite, whose <code>Components:</code>/<code>Architectures:</code> lines are the suite's own (clients are never pointed at indexes the suite doesn't have):</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Origin: ArtiGate
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>Label: &lt;mirror name&gt;
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>Suite: &lt;suite&gt;
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>Codename: &lt;suite&gt;
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>Components: main
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>Architectures: amd64
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>Date: Sun, 05 Jul 2026 12:00:00 UTC
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>MD5Sum:
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a> &lt;hash&gt; &lt;size&gt; main/binary-amd64/Packages
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a> …
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>SHA1:
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a> …
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>SHA256:
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a> …
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Regenerated <code>Release</code> is minimal</p>
+<p><code>Suite</code> and <code>Codename</code> are both set to the suite; there is no <code>Valid-Until</code>, no <code>Acquire-By-Hash</code>, and no <code>by-hash/</code> layout. Upstream <code>Release</code> fields other than the checksums are discarded. <code>MD5Sum</code>/<code>SHA1</code> are emitted for legacy clients only.</p>
+</div>
+<h3 id="optional-signing-with-apt-gpg-key">Optional signing with <code>--apt-gpg-key</code><a class="headerlink" href="#optional-signing-with-apt-gpg-key" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-apt-gpg-key &lt;key-id&gt;</code></td>
+<td><code>""</code> (unset)</td>
+<td>When set, the high side clearsigns <code>InRelease</code> and writes a detached <code>Release.gpg</code> for <strong>each suite</strong> using <strong>ArtiGate's own</strong> GPG key. When unset, the repository is served <strong>unsigned</strong> (any stale <code>InRelease</code>/<code>Release.gpg</code> is removed).</td>
+</tr>
+</tbody>
+</table>
+<p>When a key is set, ArtiGate runs the external <code>gpg</code> binary (1-minute timeout):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>gpg<span class="w"> </span>--batch<span class="w"> </span>--yes<span class="w"> </span>--armor<span class="w"> </span>--local-user<span class="w"> </span>&lt;key&gt;<span class="w"> </span>--clearsign<span class="w">   </span>--output<span class="w"> </span>&lt;distDir&gt;/InRelease<span class="w">   </span>&lt;distDir&gt;/Release
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>gpg<span class="w"> </span>--batch<span class="w"> </span>--yes<span class="w"> </span>--armor<span class="w"> </span>--local-user<span class="w"> </span>&lt;key&gt;<span class="w"> </span>--detach-sign<span class="w"> </span>--output<span class="w"> </span>&lt;distDir&gt;/Release.gpg<span class="w"> </span>&lt;distDir&gt;/Release
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">High-side signing uses ArtiGate's key, not the vendor's</p>
+<p>The <code>Signed-By</code> keyring from the low side is <strong>not</strong> reused for high-side signing. High-side signatures are made with ArtiGate's own key, so clients must trust ArtiGate's high-side keyring — not the original upstream vendor keyring.</p>
+</div>
+<h2 id="serving-path">Serving path<a class="headerlink" href="#serving-path" title="Permanent link">&para;</a></h2>
+<p>The high side serves the mirror as static files under <code>/apt</code> (GET/HEAD only):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>/apt/&lt;mirror&gt;/dists/&lt;suite&gt;/Release              # one dists/&lt;suite&gt; tree per suite
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>/apt/&lt;mirror&gt;/dists/&lt;suite&gt;/InRelease            # only when signed
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>/apt/&lt;mirror&gt;/dists/&lt;suite&gt;/Release.gpg          # only when signed
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>/apt/&lt;mirror&gt;/dists/&lt;suite&gt;/&lt;comp&gt;/binary-&lt;arch&gt;/Packages
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>/apt/&lt;mirror&gt;/dists/&lt;suite&gt;/&lt;comp&gt;/binary-&lt;arch&gt;/Packages.gz
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>/apt/&lt;mirror&gt;/pool/...                           # the .deb files, shared by all suites
+</code></pre></div>
+<h2 id="client-configuration">Client configuration<a class="headerlink" href="#client-configuration" title="Permanent link">&para;</a></h2>
+<p>Point APT at the high side with a deb822 <code>.sources</code> file. In the dashboard's APT tree (mirror → suite → component → package), every <strong>component node</strong> carries its own "Set me up" button — where you click already decides the release <em>and</em> the channel, so the guide has nothing left to ask:</p>
+<ul>
+<li>Clicking <code>noble/stable</code> on a Docker mirror generates a stanza pinned to exactly <code>Suites: noble</code> + <code>Components: stable</code>; machines that want pre-releases click <code>noble/test</code> instead. Mixing releases is never offered — a foreign release's build would sort higher and become apt's install candidate.</li>
+<li>The stanza's <code>Architectures:</code> is the clicked suite's own recorded list.</li>
+<li>When <strong>sibling suites of the same release</strong> also carry the clicked component (<code>noble-updates</code> and <code>noble-security</code> next to <code>noble</code>), the guide points them out — append them to <code>Suites:</code> on machines that should also pull updates and security fixes.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a># /etc/apt/sources.list.d/artigate.sources  (generated from the noble/main node)
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>Types: deb
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>URIs: https://high-proxy:8080/apt/archive-ubuntu-com-ubuntu
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>Suites: noble
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>Components: main
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>Architectures: amd64
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>Signed-By: /usr/share/keyrings/artigate-apt.gpg
+</code></pre></div>
+<p>Clients must use the <strong>same suite tokens</strong> the mirror was collected with — the regenerated <code>Release</code> sets both <code>Suite:</code> and <code>Codename:</code> to that token, so a mirror collected as <code>stable</code> is not addressable as <code>bookworm</code> (or vice versa). A machine's own codename is <code>lsb_release -cs</code> (or <code>VERSION_CODENAME</code> in <code>/etc/os-release</code>).</p>
+<p>The last line depends on whether the high side signed the suite:</p>
+<table>
+<thead>
+<tr>
+<th>High side</th>
+<th>Client line</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Signed (<code>--apt-gpg-key</code> set → <code>InRelease</code> present)</td>
+<td><code>Signed-By: /usr/share/keyrings/artigate-apt.gpg</code> — install <strong>ArtiGate's</strong> high-side APT public key here.</td>
+</tr>
+<tr>
+<td>Unsigned (no key)</td>
+<td><code>Trusted: yes</code> — APT trusts the repository directly.</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">Prefer signing over <code>Trusted: yes</code></p>
+<p><code>Trusted: yes</code> disables APT's own signature check and relies solely on TLS plus ArtiGate's diode integrity. To get end-to-end APT verification, set <code>--apt-gpg-key</code> on the high side and distribute that key to clients as <code>/usr/share/keyrings/artigate-apt.gpg</code>.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">No upstream fallback</p>
+<p>Configure ArtiGate as the <strong>sole</strong> APT source with no secondary/public mirror. Any additional upstream reintroduces the dependency-confusion risk the diode exists to eliminate. See <a href="../../security/">Security &amp; trust</a>.</p>
+</div>
+<h2 id="example-the-microsoft-vs-code-repository">Example: the Microsoft VS Code repository<a class="headerlink" href="#example-the-microsoft-vs-code-repository" title="Permanent link">&para;</a></h2>
+<p>Mirror <code>packages.microsoft.com/repos/code</code> on the low side. Paste this deb822 stanza into the dashboard's APT card (or <code>POST</code> it directly):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>curl<span class="w"> </span>-sS<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://low-host:8080/admin/apt/collect<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="s1">    &quot;source_list&quot;: &quot;Types: deb\nURIs: https://packages.microsoft.com/repos/code\nSuites: stable\nComponents: main\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/microsoft.gpg\n&quot;,</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="s1">    &quot;newest_only&quot;: true</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="s1">  }&#39;</span>
+</code></pre></div>
+<p>ArtiGate verifies the upstream <code>Release</code> with <code>microsoft.gpg</code>, mirrors the newest <code>.deb</code> for <code>stable/main</code> on <code>amd64</code>, and exports a signed bundle. The mirror name defaults to <code>packages-microsoft-com-repos-code</code>.</p>
+<p>After the bundle is imported on the high side, configure a client:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a># /etc/apt/sources.list.d/artigate.sources
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>Types: deb
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>URIs: https://high-proxy:8080/apt/packages-microsoft-com-repos-code
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>Suites: stable
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>Components: main
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>Architectures: amd64
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>Signed-By: /usr/share/keyrings/artigate-apt.gpg
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>sudo<span class="w"> </span>apt-get<span class="w"> </span>update
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>sudo<span class="w"> </span>apt-get<span class="w"> </span>install<span class="w"> </span>code
+</code></pre></div>
+<h2 id="limitations">Limitations<a class="headerlink" href="#limitations" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Upstream verification is opt-in.</strong> Without <code>Signed-By</code>, the upstream <code>Release</code> is trusted over TLS only — no GPG check.</li>
+<li><strong>First-token-only for <code>URIs</code>.</strong> Multiple <code>URIs</code> in one stanza are reduced to the first. (<code>Suites</code> has no such limit — every token is mirrored.)</li>
+<li><strong>Stanza-level <code>Components</code>/<code>Architectures</code> at collect time.</strong> They apply to every suite in the stanza; a suite that lacks one of the listed component × architecture indexes fails the collect. (Use separate collects with different settings per suite — the high side records and publishes them per suite.)</li>
+<li><strong>Index format.</strong> Only <code>Packages.gz</code>/<code>Packages</code> (stdlib gzip); no <code>.xz</code>/<code>.bz2</code>/<code>.zst</code>-only repositories.</li>
+<li><strong>SHA256-only.</strong> Only the <code>SHA256:</code> section of the upstream <code>Release</code> is used to locate indexes; a <code>Release</code> without it fails.</li>
+<li><strong>Minimal regenerated <code>Release</code>.</strong> <code>Origin: ArtiGate</code>, <code>Suite == Codename</code>, no <code>Valid-Until</code>, no by-hash; upstream <code>Release</code> metadata is discarded.</li>
+<li><strong>High side accumulates versions and suites.</strong> Newest-only filtering happens only on the low side; the high side keeps every version/arch/suite ever imported.</li>
+<li><strong>External binaries required.</strong> <code>gpgv</code> on the low side (only when <code>Signed-By</code> is used) and <code>gpg</code> on the high side (only when <code>--apt-gpg-key</code> is set).</li>
+<li><strong>Size/time caps.</strong> Request body 1 MiB. <code>.deb</code> files stream to disk (never through memory): exact index-declared size enforced, 8 GiB cap without one, 30-minute timeout. In-memory metadata: Release 16 MiB, Packages index 1 GiB, decompressed index 2 GiB, 10-minute timeout.</li>
+<li><strong>Unsigned by default.</strong> <code>--apt-gpg-key</code> is unset by default, so repositories are served unsigned and clients need <code>Trusted: yes</code> until you configure a key.</li>
+</ul>
+<h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../low-side/">Low side</a> — operating the exporter</li>
+<li><a href="../../high-side/">High side</a> — operating the read-only repository</li>
+<li><a href="../../security/">Security &amp; trust</a> — the signing/verification chain and hardening</li>
+<li><a href="../../scheduling/">Scheduling (watches)</a> — recurring APT collects</li>
+<li><a href="../../api/">HTTP API reference</a> — the exact request/response contracts</li>
+<li><a href="../../configuration/">Configuration reference</a> — every flag and environment variable</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.top", "navigation.tracking", "navigation.sections", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

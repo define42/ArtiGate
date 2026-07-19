@@ -1,0 +1,2124 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Dependency mirror for one-way data-diode / air-gapped networks.">
+      
+      
+      
+      
+        <link rel="prev" href="../architecture/">
+      
+      
+        <link rel="next" href="../high-side/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Low side - ArtiGate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#low-side" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="ArtiGate" class="md-header__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ArtiGate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Low side
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="ArtiGate" class="md-nav__button md-logo" aria-label="ArtiGate" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ArtiGate
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/define42/ArtiGate" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    define42/ArtiGate
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Running
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Low side
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Low side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#running-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running it
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running it">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#common-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common flags
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The dashboard
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#collect-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Collect &amp; export
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Collect &amp; export">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-lands-in-the-export-dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What lands in the export dir
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#live-progress-ndjson-streaming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live progress (NDJSON streaming)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#export-deduplication-and-delta-bundles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Export deduplication and delta bundles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#status-page-re-transmitting-bundles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status page &amp; re-transmitting bundles
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Status page &amp; re-transmitting bundles">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#re-export-a-bundle-number-or-range" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Re-export a bundle number or range
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scheduling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scheduling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fetching-uses-host-tools-and-credentials" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fetching uses host tools and credentials
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../high-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    High side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scheduling (watches)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-diode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Built-in UDP diode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Ecosystems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/go/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Go modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python (PyPI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/maven/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Java (Maven)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/npm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NPM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/apt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    APT (Debian/Ubuntu)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/rpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPM (RHEL/Fedora)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Container images (OCI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/ai-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI models (Hugging Face)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rust crates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/terraform/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terraform / OpenTofu
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm charts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/nuget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NuGet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/apk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alpine (apk)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/conda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conda channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/rubygems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RubyGems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/composer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PHP Composer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/vsx/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code extensions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/galaxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible Galaxy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/cran/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R packages (CRAN)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/snap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snap packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/git/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Git repositories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/osv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OSV advisories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystems/uploads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Uploads (arbitrary files)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security & trust
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS / HTTPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#running-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running it
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running it">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#common-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common flags
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The dashboard
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#collect-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Collect &amp; export
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Collect &amp; export">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-lands-in-the-export-dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What lands in the export dir
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#live-progress-ndjson-streaming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live progress (NDJSON streaming)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#export-deduplication-and-delta-bundles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Export deduplication and delta bundles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#status-page-re-transmitting-bundles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status page &amp; re-transmitting bundles
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Status page &amp; re-transmitting bundles">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#re-export-a-bundle-number-or-range" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Re-export a bundle number or range
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scheduling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scheduling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fetching-uses-host-tools-and-credentials" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fetching uses host tools and credentials
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="low-side">Low side<a class="headerlink" href="#low-side" title="Permanent link">&para;</a></h1>
+<p>The low side is ArtiGate's internet-facing <strong>exporter</strong>. Operators drive it to fetch artifacts with the native package toolchains, pack each fetch into a signed three-file bundle, and write those bundles to the export directory for the data diode to carry across to the <a href="../high-side/">high side</a>.</p>
+<p>The low side is deliberately <em>not</em> a proxy. It never serves modules to clients — <code>ServeHTTP</code> accepts only <code>/admin/*</code> routes, the dashboard UI, and the monitoring endpoints (<code>/healthz</code>, <code>/readyz</code>, <code>/metrics</code>); everything else returns <code>404</code>. Pulling is a separate concern that lives entirely on the high side.</p>
+<h2 id="running-it">Running it<a class="headerlink" href="#running-it" title="Permanent link">&para;</a></h2>
+<p>The low side is the <code>low</code> subcommand of the single <code>artigate</code> binary. It requires a base64 Ed25519 <strong>private key</strong> (created with <code>artigate keygen</code>); it is fatal to start without one.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>artigate<span class="w"> </span>low<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--listen<span class="w"> </span>:8080<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--root<span class="w"> </span>/var/lib/artigate-low<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--export-dir<span class="w"> </span>/var/spool/diode-out<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--private-key<span class="w"> </span>/etc/artigate/low.ed25519
+</code></pre></div>
+<p>On startup the server creates <code>&lt;root&gt;</code>, <code>&lt;export-dir&gt;</code>, and the Go module cache (<code>&lt;root&gt;/gopath/pkg/mod/cache/download</code>), opens two SQLite databases (<code>&lt;root&gt;/watches.db</code> for scheduled pulls and <code>&lt;root&gt;/exported.db</code> for the export-dedup index), and loads or creates <code>&lt;root&gt;/low-state.json</code> (the per-stream sequence counters).</p>
+<h3 id="common-flags">Common flags<a class="headerlink" href="#common-flags" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--listen</code></td>
+<td><code>:8080</code></td>
+<td>HTTP listen address</td>
+</tr>
+<tr>
+<td><code>--root</code></td>
+<td><code>/var/lib/artigate-low</code></td>
+<td>Low-side working directory</td>
+</tr>
+<tr>
+<td><code>--export-dir</code></td>
+<td><code>/var/spool/diode-out</code></td>
+<td>Where signed bundles are written (the diode outbound spool)</td>
+</tr>
+<tr>
+<td><code>--private-key</code></td>
+<td><em>(required)</em></td>
+<td>Base64 Ed25519 private key path</td>
+</tr>
+<tr>
+<td><code>--upstream-goproxy</code></td>
+<td><code>https://proxy.golang.org,direct</code></td>
+<td>GOPROXY for the Go fetcher; use <code>direct</code> to fetch from VCS</td>
+</tr>
+<tr>
+<td><code>--gotoolchain</code></td>
+<td><code>auto</code></td>
+<td><code>auto</code> lets <code>go</code> download a newer toolchain when a module needs it; <code>local</code> pins the installed one</td>
+</tr>
+<tr>
+<td><code>--python</code></td>
+<td><code>python3</code></td>
+<td>Interpreter used for <code>pip download</code></td>
+</tr>
+<tr>
+<td><code>--maven</code></td>
+<td><code>mvn</code></td>
+<td>Maven command</td>
+</tr>
+<tr>
+<td><code>--npm</code></td>
+<td><code>npm</code></td>
+<td>npm command</td>
+</tr>
+<tr>
+<td><code>--container-registry</code></td>
+<td><em>(empty)</em></td>
+<td>Comma-separated <code>host=baseURL</code> registry overrides, e.g. <code>docker.io=https://mirror.example.com</code></td>
+</tr>
+<tr>
+<td><code>--hf-endpoint</code></td>
+<td><em>(empty)</em></td>
+<td>Alternative Hugging Face endpoint (private mirror); empty means <code>https://huggingface.co</code></td>
+</tr>
+<tr>
+<td><code>--watch-interval</code></td>
+<td><code>60s</code></td>
+<td>How often the scheduler checks for due watches; <code>0</code> disables scheduled pulls</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code>--watch-interval</code> is a Go duration, so <code>30s</code>, <code>5m</code>, <code>2h</code> all work. The full set of flags — including the Go private-module knobs (<code>--goprivate</code>, <code>--gonoproxy</code>, <code>--gonosumdb</code>, <code>--govcs</code>, <code>--gosumdb</code>), <code>--go</code>, <code>--npm-registry</code>, and the per-ecosystem upstream overrides (<code>--crates-index</code>, <code>--terraform-registry</code>, <code>--nuget-source</code>, <code>--pypi-json</code>, <code>--conda-channel-base</code>, <code>--rubygems-url</code>, <code>--composer-repo</code>, <code>--vsx-registry</code>, <code>--galaxy-server</code>, <code>--cran-mirror</code>, <code>--snap-store</code>, <code>--osv-upstream</code>, <code>--hf-endpoint</code>, <code>--container-registry</code>, plus <code>--git</code> for Terraform <code>git::</code> module sources) — is in the <a href="../configuration/">configuration reference</a>.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Unauthenticated by default</p>
+<p>When <code>ARTIGATE_LOW_AUTH</code> is unset, the dashboard <strong>and</strong> every mutating <code>/admin/*</code> endpoint are open. Bind the low side to localhost or a trusted network, or set <code>ARTIGATE_LOW_AUTH</code> to require a form login. See <a href="../security/">Security &amp; trust</a>; for HTTPS see <a href="../tls/">TLS / HTTPS</a>.</p>
+</div>
+<h2 id="the-dashboard">The dashboard<a class="headerlink" href="#the-dashboard" title="Permanent link">&para;</a></h2>
+<p>Point a browser at the listen address (<code>/</code>, <code>/ui</code>, or <code>/ui/</code>) for a single self-contained HTML dashboard — no external assets. The navigation has three kinds of view:</p>
+<table>
+<thead>
+<tr>
+<th>View</th>
+<th>What it shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Overview</strong></td>
+<td>Every scheduled pull (watch) across all ecosystems: stream, last run, status, next run, and per-watch actions</td>
+</tr>
+<tr>
+<td>One page per ecosystem</td>
+<td>A collect form for that ecosystem, a live progress modal, an inline result box, and a "schedule the above" row</td>
+</tr>
+<tr>
+<td><strong>Status</strong></td>
+<td>The bundle ledger: next sequence per stream and every exported sequence with its archive/outbound state</td>
+</tr>
+</tbody>
+</table>
+<p>There is one ecosystem page per stream: <strong>Go</strong>, <strong>Python</strong>, <strong>Maven</strong>, <strong>npm</strong>, <strong>APT</strong>, <strong>RPM</strong>, <strong>Containers</strong>, <strong>AI Models</strong>, <strong>Crates</strong>, <strong>Terraform</strong>, <strong>Helm</strong>, <strong>NuGet</strong>, and <strong>Alpine</strong>. Each page's collect form maps directly to the matching <code>/admin/&lt;stream&gt;/collect</code> endpoint. See <a href="../ecosystems/">Ecosystems</a> for the payload each one accepts.</p>
+<p>If <code>ARTIGATE_LOW_AUTH</code> is configured, a <strong>Log out</strong> button appears (it POSTs to <code>/logout</code>), and any <code>401</code> from an expired session redirects the whole UI to <code>/login</code>.</p>
+<h2 id="collect-export">Collect &amp; export<a class="headerlink" href="#collect-export" title="Permanent link">&para;</a></h2>
+<p>A collect resolves a set of artifacts, fetches them with the host toolchain, and — if there is anything new to send — writes one signed bundle. Every ecosystem follows the same shape:</p>
+<ol>
+<li><strong>Lock the stream.</strong> Each stream has its own mutex, so two exports on the same stream can never claim the same sequence number, while different streams (say a long APT mirror and a Python collect) run concurrently.</li>
+<li><strong>Resolve</strong> the request into concrete artifacts.</li>
+<li><strong>Fetch</strong> with the native tool <em>before</em> allocating a sequence. A single artifact that fails to download is recorded and skipped — one bad version never aborts the batch. If <em>nothing</em> could be fetched, the collect errors out rather than emit an empty bundle (which would leave the high side waiting forever). Collectors whose upstream declares each file's SHA-256 up front (APT, RPM, containers, Hugging Face LFS) don't even download files the dedup index says were already forwarded.</li>
+<li><strong>Mark prior content.</strong> Every resolved file whose <code>(path, sha256)</code> was already exported on this stream is flagged as <em>prior</em>. If <strong>everything</strong> is prior, the collect is skipped — <strong>no sequence is consumed and no bundle is written</strong>.</li>
+<li><strong>Allocate → write → sign → commit.</strong> Otherwise the next sequence is taken and the bundle is built — the archive carries only the <em>new</em> files, while prior files ride in the manifest as references (a <strong>delta bundle</strong>). The manifest is signed, the sequence counter advances, and only then are the file hashes recorded in the dedup index.</li>
+</ol>
+<p>You can drive a collect from the dashboard, or directly over HTTP:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/admin/go/collect<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;modules&quot;:[&quot;rsc.io/quote@v1.5.2&quot;],&quot;resolve_deps&quot;:true}&#39;</span>
+</code></pre></div>
+<p>A buffered (non-streaming) collect responds with a JSON <code>ExportResult</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;stream&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;go&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;sequence&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;exported_modules&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">&quot;bundle_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;go-bundle-000001&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">&quot;skipped_modules&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="p">{</span><span class="nt">&quot;module&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com/broken&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;v0.1.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">}</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
+</code></pre></div>
+<p>A dedup skip instead returns <code>{"stream":"go","exported_modules":0,"skipped":true,"message":"no new content since the last export"}</code>, and a delta bundle carries a <code>"prior_files"</code> count of the manifest entries that reference already-forwarded content. Every collect body also accepts <code>"force": true</code> to bypass the dedup index entirely and produce a full, self-contained bundle.</p>
+<h3 id="what-lands-in-the-export-dir">What lands in the export dir<a class="headerlink" href="#what-lands-in-the-export-dir" title="Permanent link">&para;</a></h3>
+<p>Bundle IDs are <code>&lt;stream&gt;-bundle-&lt;seq&gt;</code> zero-padded to six digits — for example <code>go-bundle-000001</code>, <code>python-bundle-000007</code>, <code>apt-bundle-000042</code>. Each bundle is exactly <strong>three files</strong> that share that ID:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;id&gt;.tar.gz</code></td>
+<td>The artifact archive (built deterministically; delta bundles carry only the new files)</td>
+</tr>
+<tr>
+<td><code>&lt;id&gt;.manifest.json</code></td>
+<td>The manifest — the exact bytes that are signed</td>
+</tr>
+<tr>
+<td><code>&lt;id&gt;.manifest.json.sig</code></td>
+<td>Detached base64 Ed25519 signature of the manifest bytes</td>
+</tr>
+</tbody>
+</table>
+<p>All three are written atomically into <code>--export-dir</code> and then copied into the persistent archive at <code>&lt;root&gt;/bundles</code>. The diode transfer moves the copies <em>out of</em> the export dir — with the <a href="../deployment/">HTTP diode transport</a> configured (<code>ARTIGATE_DIODE_URL</code>), ArtiGate uploads them itself right after export and clears them on success; the archive copy is what makes a later re-export possible either way.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The manifest's <code>type</code> field is always the legacy string <code>"go-module-bundle"</code> for <strong>every</strong> ecosystem — the real ecosystem is carried by the <code>stream</code> field and the populated sub-manifest (<code>python</code>, <code>apt</code>, <code>npm</code>, …). The signature is over the exact on-disk manifest bytes, so any tool that rewrites that JSON breaks verification.</p>
+</div>
+<h2 id="live-progress-ndjson-streaming">Live progress (NDJSON streaming)<a class="headerlink" href="#live-progress-ndjson-streaming" title="Permanent link">&para;</a></h2>
+<p>The dashboard always POSTs collects with <code>?stream=1</code>, which switches the response from a single buffered JSON object to a live <strong>NDJSON</strong> stream (<code>Content-Type: application/x-ndjson</code>, <code>Cache-Control: no-store</code>). One JSON object is emitted per line:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>{&quot;type&quot;:&quot;log&quot;,&quot;message&quot;:&quot;Resolving the Go module graph…&quot;}
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>{&quot;type&quot;:&quot;log&quot;,&quot;message&quot;:&quot;Resolved 3 module(s); fetching…&quot;}
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>{&quot;type&quot;:&quot;log&quot;,&quot;message&quot;:&quot;→ [1/3] rsc.io/quote@v1.5.2&quot;}
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>{&quot;type&quot;:&quot;log&quot;,&quot;message&quot;:&quot;Packing 9 file(s) into a signed bundle…&quot;}
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>{&quot;type&quot;:&quot;done&quot;,&quot;result&quot;:{&quot;stream&quot;:&quot;go&quot;,&quot;sequence&quot;:1,&quot;exported_modules&quot;:3,&quot;bundle_id&quot;:&quot;go-bundle-000001&quot;}}
+</code></pre></div>
+<p>There are four event types: <code>log</code> (a human-readable progress line), <code>dl</code> (a throttled byte-progress sample for the file currently downloading, packing, or uploading — name, bytes done/total, transfer rate), a terminal <code>done</code> carrying the full <code>ExportResult</code>, and a terminal <code>error</code> carrying the error string. You can consume the same stream from the command line:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>curl<span class="w"> </span>-N<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s1">&#39;http://localhost:8080/admin/python/collect?stream=1&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;requirements&quot;:[&quot;requests&quot;]}&#39;</span>
+</code></pre></div>
+<p>In the browser this drives a shared <strong>progress modal</strong>: a spinner, a live-tailing log, a <strong>per-file progress bar</strong> (percentage, bytes, transfer rate, ETA — shown for direct HTTP downloads, bundle packing, and diode uploads once a transfer outlasts half a second), and a result box. A <strong>Stop</strong> button aborts the running collect server-side — downloads, spawned tools, and packing all cancel, nothing is exported, and no sequence number is burned; only a stop landing in the final signing moment still exports, which the stopped message calls out. Close is disabled while a collect runs, and Esc / backdrop dismissal is blocked until it finishes. A dedup skip renders uniformly as "No new content since the last export — nothing to send across the diode." The modal always refreshes the Status page afterward.</p>
+<p>With an <a href="../deployment/">HTTP diode endpoint</a> configured, each successful collect ends by uploading the bundle; a failed upload turns the result into a warning — the bundle is committed, archived, and still staged, ready to re-transmit from the Status page.</p>
+<div class="admonition tip">
+<p class="admonition-title">Tip</p>
+<p>Without <code>?stream=1</code> the collect runs buffered and emits no progress lines — the progress sink is a no-op, which is exactly how scheduled watches run. Streaming is purely a UI/observability aid; the export result is identical either way.</p>
+</div>
+<h2 id="export-deduplication-and-delta-bundles">Export deduplication and delta bundles<a class="headerlink" href="#export-deduplication-and-delta-bundles" title="Permanent link">&para;</a></h2>
+<p>ArtiGate keeps a per-stream index of every file it has ever exported — <code>(stream, sha256, path)</code> rows in SQLite at <code>&lt;root&gt;/exported.db</code>. It buys three things:</p>
+<ul>
+<li><strong>Whole-collect skip.</strong> When every resolved file is already in the index, the collect is skipped: no sequence consumed, no bundle written, no diode traffic. This is what makes a scheduled re-pull of an unchanged upstream free.</li>
+<li><strong>Delta bundles.</strong> When only some files are new, the bundle's archive carries just those; the rest are listed in the manifest as <code>prior</code> references that the high side verifies against its accumulated repository. A daily schedule over a slowly-changing mirror sends only the churn.</li>
+<li><strong>Download skip.</strong> Collectors whose upstream declares each file's SHA-256 before the bytes are fetched — APT <code>Packages</code> indexes, RPM <code>primary.xml</code>, container image digests, Hugging Face LFS files — consult the index first and skip the download entirely. The pip/mvn/npm/go-driven fetches have no usable pre-download hash, so they download as before and dedup after hashing.</li>
+</ul>
+<p><code>"force": true</code> on any collect bypasses the index for that run and produces a full, self-contained bundle — use it when a high side is rebuilt from scratch or its earlier bundles were pruned, because <strong>a delta bundle imports only on a high side that already holds this stream's earlier content</strong> (the import error names the missing prior file and this exact remedy).</p>
+<p>The index is an optimization, never correctness state: an empty file set or any store error fails safe (it exports rather than wrongly skips), and it records hashes only <em>after</em> the sequence commit succeeds. Re-export bypasses the index entirely. The full rationale is in the <a href="../architecture/">architecture</a> page.</p>
+<h2 id="status-page-re-transmitting-bundles">Status page &amp; re-transmitting bundles<a class="headerlink" href="#status-page-re-transmitting-bundles" title="Permanent link">&para;</a></h2>
+<p>The <strong>Status</strong> page (backed by <code>GET /admin/bundles</code> / <code>GET /ui/api/status</code>) shows the next sequence per stream and one row per exported sequence, with columns <strong>Stream · Sequence · Bundle · Size · Archive · Outbound</strong>:</p>
+<ul>
+<li><strong>Archive</strong> — <code>✓ kept</code> when the retained copy still exists in <code>&lt;root&gt;/bundles</code> (required for re-export), or <code>✗ not kept</code> once it has been pruned.</li>
+<li><strong>Outbound</strong> — <code>staged</code> (still in the export dir, awaiting the diode) or <code>sent</code> (forwarded — the files were moved out; this is normal, not an error).</li>
+</ul>
+<h3 id="re-export-a-bundle-number-or-range">Re-export a bundle number or range<a class="headerlink" href="#re-export-a-bundle-number-or-range" title="Permanent link">&para;</a></h3>
+<p>If a bundle is lost in transit or a high side is rebuilt, replay the exact archived bytes with <code>POST /admin/reexport</code>. This is a <strong>byte-exact replay of the archived bundle</strong> — not a re-collect and not a re-sign — so it works for every ecosystem and never touches the dedup index.</p>
+<p>The sequence spec accepts single numbers and inclusive ranges, comma-separated (<code>42,45-47</code>), capped at 10000 sequences per request. The target stream can come from the query string, a JSON body, or a raw body, and <strong>defaults to <code>go</code></strong> when unspecified.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># query form</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s1">&#39;http://localhost:8080/admin/reexport?stream=python&amp;sequences=7,10-12&#39;</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># JSON body form</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/admin/reexport<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;stream&quot;:&quot;go&quot;,&quot;sequences&quot;:&quot;42,45-47&quot;}&#39;</span>
+</code></pre></div>
+<p>Re-export takes the same per-stream lock as a fresh export (so it cannot collide with one in flight) and reports which sequences were replayed and which failed:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;stream&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;python&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;requested_ranges&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;7&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;10-12&quot;</span><span class="p">],</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;sequences&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">11</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">],</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;reexported&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;stream&quot;</span><span class="p">:</span><span class="s2">&quot;python&quot;</span><span class="p">,</span><span class="nt">&quot;sequence&quot;</span><span class="p">:</span><span class="mi">7</span><span class="p">,</span><span class="nt">&quot;exported_modules&quot;</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span><span class="nt">&quot;bundle_id&quot;</span><span class="p">:</span><span class="s2">&quot;python-bundle-000007&quot;</span><span class="p">,</span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="s2">&quot;re-exported from archive&quot;</span><span class="p">}],</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">&quot;failed&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;11: no archived bundle for python-bundle-000011&quot;</span><span class="p">]</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">}</span>
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Re-export only works while the archive copy exists. A bundle showing <code>✗ not kept</code> on the Status page has been pruned and can no longer be replayed. And because a <em>re-collect</em> after pruning would produce delta bundles referencing content the rebuilt high side lacks, recovery from a from-scratch high side is a <strong>forced</strong> collect (<code>"force": true</code>), not a normal one.</p>
+</div>
+<h2 id="scheduling">Scheduling<a class="headerlink" href="#scheduling" title="Permanent link">&para;</a></h2>
+<p>Any collect form can be turned into a recurring <strong>watch</strong> with the "Schedule the above" row — pick an interval in hours or days and the stored spec re-runs on the scheduler tick. A watch replays exactly the collect body its page would POST, so moving references (a container tag, <code>@latest</code>, <code>resolve_deps</code>) re-resolve on every run, while dedup ensures unchanged upstreams produce no new bundles. See <a href="../scheduling/">Scheduling (watches)</a> for the full model, the API, and the run-now / edit / enable / disable controls.</p>
+<h2 id="fetching-uses-host-tools-and-credentials">Fetching uses host tools and credentials<a class="headerlink" href="#fetching-uses-host-tools-and-credentials" title="Permanent link">&para;</a></h2>
+<p>The low side deliberately <strong>delegates fetching to the tools already installed on the host</strong> and runs them with the host's credentials and network access. Make sure the relevant binaries are present and configured:</p>
+<table>
+<thead>
+<tr>
+<th>Ecosystem</th>
+<th>Host tooling used</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Go</td>
+<td><code>go</code> (and <code>git</code> for VCS fetches)</td>
+</tr>
+<tr>
+<td>Python</td>
+<td><code>python3</code> / <code>pip download</code></td>
+</tr>
+<tr>
+<td>Maven</td>
+<td><code>mvn</code></td>
+</tr>
+<tr>
+<td>npm</td>
+<td><code>npm</code></td>
+</tr>
+<tr>
+<td>APT</td>
+<td><code>gpgv</code> (to verify the upstream <code>Release</code> against a supplied keyring)</td>
+</tr>
+<tr>
+<td>RPM</td>
+<td><code>gpgv</code> (optional, for repo signature verification), <code>xz</code> (for <code>.xz</code>-compressed indexes; <code>.zst</code> is decompressed in-process)</td>
+</tr>
+<tr>
+<td>Terraform</td>
+<td><code>git</code> (only for modules with <code>git::</code> sources; <code>--git</code> selects the binary)</td>
+</tr>
+<tr>
+<td>Containers, AI models, crates, Helm, NuGet, Alpine</td>
+<td>none — fetched over HTTP with the Go standard library</td>
+</tr>
+</tbody>
+</table>
+<p>Because fetching runs as native tooling, upstream credentials and proxy settings come from the host environment. In particular:</p>
+<ul>
+<li><strong>Private Go modules</strong> need Git and SSH configured on the low-side host (working <code>~/.ssh</code>, <code>~/.gitconfig</code>, credential helpers), plus the matching <code>--goprivate</code> / <code>--gonoproxy</code> / <code>--gonosumdb</code> flags so <code>go</code> fetches them directly from the VCS instead of the public proxy and sum database.</li>
+<li>ArtiGate always forces <code>GIT_TERMINAL_PROMPT=0</code>, so Git never blocks on an interactive password prompt — configure non-interactive auth (SSH keys or a credential helper) or the fetch fails fast.</li>
+<li><strong>Gated Hugging Face models</strong> need <code>ARTIGATE_HF_TOKEN</code> set in the low side's environment.</li>
+<li><strong>Private container registries</strong> take a one-shot login on the pull (the <code>auth</code> field / the Containers page form) or standing <code>ARTIGATE_CONTAINER_AUTH</code> entries (<code>host=user:password</code>, comma-separated) in the low side's environment; scheduled pulls use only the latter.</li>
+<li><strong>Private git, APT, RPM, Alpine, and Conda upstreams</strong> work the same way with <code>ARTIGATE_UPSTREAM_AUTH</code> (keyed by the mirror URL's exact host, <code>host:port</code> included) or the one-shot <code>auth</code> field on those collects; URLs embedding <code>user:pass@</code> are rejected.</li>
+<li><strong>Private Go module hosts</strong> use their own standing variable, <code>ARTIGATE_GO_AUTH</code> (same <code>host=user:password</code> format), or the one-shot <code>auth</code> field, injected into the <code>go</code>/<code>git</code> subprocesses (per-collect netrc + git credential helper) and added to <code>GOPRIVATE</code> for that collect. Go does not read <code>ARTIGATE_UPSTREAM_AUTH</code> — a standing Go credential also marks its host private, which a git/APT login on a shared host must never do. SSH-key auth via a preconfigured <code>~/.ssh</code> still works too.</li>
+</ul>
+<p>The Go <code>GO*</code> environment knobs are only applied when their flags are non-empty. Per-ecosystem fetching details live on the <a href="../ecosystems/">ecosystems</a> pages.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.top", "navigation.tracking", "navigation.sections", "toc.follow", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
