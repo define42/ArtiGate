@@ -1,0 +1,3 @@
+# Alpine 3.23 - main only
+# Core Alpine-maintained packages (no community). Architecture set separately (default x86_64).
+https://dl-cdn.alpinelinux.org/alpine/v3.23/main

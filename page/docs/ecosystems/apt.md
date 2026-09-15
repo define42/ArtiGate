@@ -19,7 +19,7 @@ A mirror is one **archive root** (one `URIs:` value) carrying **one or more suit
 The low-side dashboard mirrors an APT repository from a **deb822 source stanza** — the modern `.sources` format. Paste a stanza (or load a `.sources` file) into the "Mirror an APT repository" card, choose whether to keep only the newest version of each package, and collect.
 
 !!! tip "Built-in source lists"
-    The APT card ships ready-made source lists for Ubuntu 26.04 LTS (resolute), 24.04 LTS (noble) and 22.04 LTS (jammy) — each as a full-archive, main-only, or security-only variant — plus Docker CE (per release) and release-independent lists for Visual Studio Code and Google Chrome. Pick one under "…or start from a built-in source list" and it is pasted into the input — edit it freely (trim suites, components), then collect once or add a schedule. The built-ins set no `Signed-By`, so upstream GPG verification is skipped unless you add a keyring path yourself. The files ship in the source tree under `buildin/apt/`.
+    The APT card ships ready-made source lists for Ubuntu 26.04 LTS (resolute), 24.04 LTS (noble) and 22.04 LTS (jammy) — each as a full-archive, main-only, or security-only variant — plus Docker CE (per release) and release-independent lists for Visual Studio Code, Google Chrome and Firefox (Mozilla's own apt repository). Pick one under "…or start from a built-in source list" and it is pasted into the input — edit it freely (trim suites, components), then collect once or add a schedule. The built-ins set no `Signed-By`, so upstream GPG verification is skipped unless you add a keyring path yourself. The files ship in the source tree under `buildin/apt/`.
 
 ```text
 Types: deb

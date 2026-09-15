@@ -100,6 +100,9 @@ type LowConfig struct {
 	// CRANMirror optionally overrides the CRAN mirror R packages are fetched
 	// from; empty means https://cloud.r-project.org.
 	CRANMirror string
+	// SnapStoreURL optionally overrides the Snap Store API snaps and their
+	// assertions are fetched from; empty means https://api.snapcraft.io.
+	SnapStoreURL string
 	// PyPIJSON optionally overrides the JSON API base sdists are resolved
 	// from when a Python collect opts into source distributions; empty means
 	// https://pypi.org/pypi.

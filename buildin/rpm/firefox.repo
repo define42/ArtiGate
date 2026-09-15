@@ -1,0 +1,7 @@
+# Firefox (stable) - Mozilla yum repository (x86_64)
+[mozilla]
+name=Mozilla
+baseurl=https://packages.mozilla.org/rpm/firefox
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.mozilla.org/rpm/firefox/signing-key.gpg

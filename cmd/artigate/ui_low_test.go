@@ -121,9 +121,11 @@ func TestLowServerUIPage(t *testing.T) {
 		`id="aptnewest" type="checkbox" checked`, "newest_only",
 		"Mirror an RPM (yum/dnf) repository", `id="rpmrepo"`, `id="rpmfile"`, "loadRpmFile", "collectRpm", "/admin/rpm/collect",
 		`id="rpmnewest" type="checkbox" checked`,
-		// APT and RPM offer built-in source lists (shipped in buildin/) that a
-		// picker pastes into the collect input, ready for a run or a schedule.
-		`id="aptBuiltin"`, `id="rpmBuiltin"`, "populateBuiltins", "applyBuiltin('apt')", "applyBuiltin('rpm')",
+		// APT, RPM and Alpine offer built-in source lists (shipped in buildin/)
+		// that a picker pastes into the collect input, ready for a run or a
+		// schedule.
+		`id="aptBuiltin"`, `id="rpmBuiltin"`, `id="apkBuiltin"`,
+		"populateBuiltins", "applyBuiltin('apt')", "applyBuiltin('rpm')", "applyBuiltin('apk')",
 		// Every ecosystem offers a one-shot "full bundle" checkbox that adds
 		// force to the immediate collect (never to a schedule).
 		"applyForce", `id="goForce"`, `id="pyForce"`, `id="mvnForce"`, `id="npmForce"`,
@@ -182,8 +184,10 @@ func TestLowServerUIBuiltinSources(t *testing.T) {
 	for _, want := range []string{
 		`"label":"Ubuntu 24.04 LTS (noble) - full archive"`,
 		`"label":"Rocky Linux 9 - BaseOS"`,
+		`"label":"Alpine 3.22 - main + community"`,
 		"https://archive.ubuntu.com/ubuntu",
 		"https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/",
+		"https://dl-cdn.alpinelinux.org/alpine/v3.22/community",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered page missing built-in source %q", want)

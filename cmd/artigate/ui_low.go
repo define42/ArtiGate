@@ -214,6 +214,7 @@ const lowUIHTML = `<!DOCTYPE html>
     <button type="button" data-view="vsx" onclick="setView('vsx')">VS Code</button>
     <button type="button" data-view="galaxy" onclick="setView('galaxy')">Ansible</button>
     <button type="button" data-view="cran" onclick="setView('cran')">CRAN</button>
+    <button type="button" data-view="snap" onclick="setView('snap')">Snap</button>
     <button type="button" data-view="git" onclick="setView('git')">Git</button>
     <button type="button" data-view="osv" onclick="setView('osv')">OSV</button>
     <button type="button" data-view="uploads" onclick="setView('uploads')">Uploads</button>
@@ -660,6 +661,11 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or paste an /etc/apk/repositories file <span class="opt">&mdash; overrides the fields above (architectures still apply)</span>
         <textarea id="apkreposfile" rows="2" placeholder="https://dl-cdn.alpinelinux.org/alpine/v3.22/main&#10;https://dl-cdn.alpinelinux.org/alpine/v3.22/community" autocomplete="off"></textarea>
       </label>
+      <label class="filelabel">&hellip;or start from a built-in repository list <span class="opt">&mdash; fills the repositories box above</span>
+        <select id="apkBuiltin" class="restream" onchange="applyBuiltin('apk')">
+          <option value="">Choose a built-in repository list&hellip;</option>
+        </select>
+      </label>
       <details class="pytarget">
         <summary>Private mirror login (optional)</summary>
         <div class="pytarget-grid">
@@ -850,6 +856,35 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   </section>
 
+  <section class="view" id="view-snap" hidden>
+  <div class="card">
+    <h2>Mirror Snap packages</h2>
+    <p class="hint">List snaps &mdash; one per line, <code>name</code> for the stable channel or <code>name@channel</code> (<code>hello@edge</code>, <code>blender@4.1/stable</code>). Each snap's current revision in that channel is fetched from the Snap Store together with its store assertions (<code>.assert</code>) and, unless disabled, the base snap it runs on. On the air-gapped side install with <code>snap ack &lt;name&gt;_&lt;rev&gt;.assert &amp;&amp; snap install &lt;name&gt;_&lt;rev&gt;.snap</code> &mdash; snapd verifies the store signatures itself. Same as POSTing to <code>/admin/snap/collect</code>.</p>
+    <form class="gomod-form" onsubmit="collectSnap(event)">
+      <label class="filelabel">Snaps <span class="opt">&mdash; one per line; name or name@channel</span>
+        <textarea id="snapsnaps" rows="4" placeholder="hello&#10;core22&#10;firefox@latest/candidate" autocomplete="off"></textarea>
+      </label>
+      <label class="filelabel">Architecture <span class="opt">&mdash; one per collect; defaults to amd64</span>
+        <input id="snaparch" type="text" placeholder="amd64" autocomplete="off">
+      </label>
+      <label class="pytarget-check"><input id="snapNoBases" type="checkbox"> Only the listed snaps &mdash; skip the base snaps they run on (a target machine that already has the bases installed does not need them again)</label>
+      <label class="pytarget-check"><input id="snapForce" type="checkbox"> Full bundle &mdash; re-send even content the high side already has (for rebuilding a high side; clears after a successful collect)</label>
+      <div class="btnrow">
+        <button class="primary" type="submit" id="snapBtn">Collect &amp; export</button>
+        <button class="secondary" type="button" title="Dry run: resolve and measure this collect without exporting anything" onclick="collectSnap(event, true)">Estimate size</button>
+        <button class="secondary" type="reset" onclick="clearResult('snapResult')">Reset</button>
+      </div>
+    </form>
+    <div id="snapResult" class="rbox"></div>
+    <div class="sched">
+      <span class="sched-label">Schedule the above:</span>
+      <span class="every"><input id="snapEvery" type="number" min="1" value="1" autocomplete="off"> <select id="snapUnit" class="restream"><option value="3600">hours</option><option value="86400" selected>days</option></select></span>
+      <button type="button" class="secondary" onclick="scheduleSnap()">Add schedule</button>
+    </div>
+    <div id="snapWatches" class="watchlist"></div>
+  </div>
+  </section>
+
   <section class="view" id="view-git" hidden>
   <div class="card">
     <h2>Mirror a git repository</h2>
@@ -959,6 +994,7 @@ const lowUIHTML = `<!DOCTYPE html>
         <option value="vsx">VS Code extensions</option>
         <option value="galaxy">Ansible Galaxy</option>
         <option value="cran">CRAN</option>
+        <option value="snap">Snap</option>
         <option value="git">Git</option>
         <option value="osv">OSV</option>
         <option value="uploads">Uploads</option>
@@ -1017,7 +1053,7 @@ const lowUIHTML = `<!DOCTYPE html>
 // If the session has expired, any API call returns 401; bounce to the login page.
 (function(){const _f=window.fetch;window.fetch=async(...a)=>{const r=await _f(...a);if(r.status===401){location.href='/login';}return r;};})();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers',hf:'AI Models',crates:'Crates',terraform:'Terraform',helm:'Helm',nuget:'NuGet',apk:'Alpine',conda:'Conda',rubygems:'RubyGems',composer:'Composer',vsx:'VS Code',galaxy:'Ansible',cran:'CRAN',git:'Git',osv:'OSV',uploads:'Uploads'})[name]||name;}
+function streamLabel(name){return ({go:'Go',python:'Python',maven:'Maven',npm:'NPM',apt:'APT',rpm:'RPM',containers:'Containers',hf:'AI Models',crates:'Crates',terraform:'Terraform',helm:'Helm',nuget:'NuGet',apk:'Alpine',conda:'Conda',rubygems:'RubyGems',composer:'Composer',vsx:'VS Code',galaxy:'Ansible',cran:'CRAN',snap:'Snap',git:'Git',osv:'OSV',uploads:'Uploads'})[name]||name;}
 // clearResult hides an ecosystem's inline result box; the Reset button pairs it
 // with the form's native field reset (type="reset").
 function clearResult(id){const el=document.getElementById(id); if(el){ el.className='rbox'; el.innerHTML=''; }}
@@ -1309,7 +1345,7 @@ function outboundCell(inOutbound){
 // VIEW_STREAM maps each ecosystem view to its backend stream (now identical
 // names); views without a stream (overview, status) are absent, so it doubles as
 // the "is this an ecosystem page" test.
-const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers',hf:'hf',crates:'crates',terraform:'terraform',helm:'helm',nuget:'nuget',apk:'apk',conda:'conda',rubygems:'rubygems',composer:'composer',vsx:'vsx',galaxy:'galaxy',cran:'cran',git:'git',osv:'osv'};
+const VIEW_STREAM={go:'go',python:'python',maven:'maven',npm:'npm',apt:'apt',rpm:'rpm',containers:'containers',hf:'hf',crates:'crates',terraform:'terraform',helm:'helm',nuget:'nuget',apk:'apk',conda:'conda',rubygems:'rubygems',composer:'composer',vsx:'vsx',galaxy:'galaxy',cran:'cran',snap:'snap',git:'git',osv:'osv'};
 function setView(view){
   // The sections themselves are the source of truth (every <section class="view">
   // has id "view-<name>"), so a newly added page can never be missing here and
@@ -1423,7 +1459,7 @@ function loadRpmFile(){
 // renderLowUI injects it server-side.
 const BUILTIN_SOURCES={{BUILTIN_SOURCES}};
 // BUILTIN_INPUT maps each stream that has built-ins to its collect input field.
-const BUILTIN_INPUT={apt:'aptsrc',rpm:'rpmrepo'};
+const BUILTIN_INPUT={apt:'aptsrc',rpm:'rpmrepo',apk:'apkreposfile'};
 
 // populateBuiltins fills each ecosystem's built-in picker; a stream with no
 // entries keeps its picker row hidden.
@@ -2095,6 +2131,37 @@ async function scheduleCran(){
   createWatch('cran','CRAN: '+body.packages.slice(0,3).join(', '), body, 'cranEvery','cranUnit', showCranResult);
 }
 
+function showSnapResult(cls, html){
+  const el=document.getElementById('snapResult');
+  el.className='rbox '+cls;
+  el.innerHTML=html;
+}
+
+function snapBody(){
+  const snaps=linesOf('snapsnaps');
+  if(!snaps.length) return null;
+  const body={snaps:snaps};
+  const arch=document.getElementById('snaparch').value.trim();
+  if(arch) body.architecture=arch;
+  if(document.getElementById('snapNoBases').checked) body.no_bases=true;
+  return body;
+}
+
+async function collectSnap(ev, dry){
+  ev.preventDefault();
+  const body=snapBody();
+  if(!body){ showSnapResult('err','List at least one snap.'); return; }
+  runCollect({dry:dry, btnId:'snapBtn', showFn:showSnapResult, title:'Collecting Snap packages',
+    url:'/admin/snap/collect', body:applyForce(body,'snapForce'), forceId:'snapForce',
+    render:d=>skippedItems(collectedMsg(d,'Collected','snap(s)'), d)});
+}
+
+async function scheduleSnap(){
+  const body=snapBody();
+  if(!body){ showSnapResult('err','List at least one snap to schedule.'); return; }
+  createWatch('snap','Snap: '+body.snaps.slice(0,3).join(', '), body, 'snapEvery','snapUnit', showSnapResult);
+}
+
 function showGitResult(cls, html){
   const el=document.getElementById('gitResult');
   el.className='rbox '+cls;
@@ -2334,8 +2401,8 @@ function viewJob(id, title){
 // ---- Schedules (watches) ----
 // Each ecosystem page schedules a recurring collect from its own inputs, so the
 // spec built here is exactly what that page's collect button would POST.
-const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',npm:'npmWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches',hf:'hfWatches',crates:'crWatches',terraform:'tfWatches',helm:'helmWatches',nuget:'ngWatches',apk:'apkWatches',conda:'condaWatches',rubygems:'rubygemsWatches',composer:'composerWatches',vsx:'vsxWatches',galaxy:'galaxyWatches',cran:'cranWatches',git:'gitWatches',osv:'osvWatches'};
-const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,npm:showNpmResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult,hf:showHFResult,crates:showCrResult,terraform:showTfResult,helm:showHelmResult,nuget:showNgResult,apk:showApkResult,conda:showCondaResult,rubygems:showRubygemsResult,composer:showComposerResult,vsx:showVsxResult,galaxy:showGalaxyResult,cran:showCranResult,git:showGitResult,osv:showOsvResult};
+const WATCH_CONTAINERS={go:'goWatches',python:'pyWatches',maven:'mvnWatches',npm:'npmWatches',apt:'aptWatches',rpm:'rpmWatches',containers:'ctrWatches',hf:'hfWatches',crates:'crWatches',terraform:'tfWatches',helm:'helmWatches',nuget:'ngWatches',apk:'apkWatches',conda:'condaWatches',rubygems:'rubygemsWatches',composer:'composerWatches',vsx:'vsxWatches',galaxy:'galaxyWatches',cran:'cranWatches',snap:'snapWatches',git:'gitWatches',osv:'osvWatches'};
+const WATCH_SHOW={go:showGoResult,python:showPyResult,maven:showMvnResult,npm:showNpmResult,apt:showAptResult,rpm:showRpmResult,containers:showCtrResult,hf:showHFResult,crates:showCrResult,terraform:showTfResult,helm:showHelmResult,nuget:showNgResult,apk:showApkResult,conda:showCondaResult,rubygems:showRubygemsResult,composer:showComposerResult,vsx:showVsxResult,galaxy:showGalaxyResult,cran:showCranResult,snap:showSnapResult,git:showGitResult,osv:showOsvResult};
 
 function intervalSeconds(everyId, unitId){
   const n=parseInt(document.getElementById(everyId).value,10);

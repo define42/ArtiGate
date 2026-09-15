@@ -27,6 +27,7 @@ import (
 	"crypto/md5"  //nolint:gosec // APT metadata carries MD5Sum for legacy clients, not a security control
 	"crypto/sha1" //nolint:gosec // APT metadata carries SHA1 for legacy clients, not a security control
 	"crypto/sha256"
+	"crypto/sha3"
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
@@ -850,6 +851,8 @@ func newRepoHash(algo string) (hash.Hash, error) {
 		return sha256.New(), nil
 	case "sha512":
 		return sha512.New(), nil
+	case "sha3-384":
+		return sha3.New384(), nil // the digest type the Snap Store declares
 	case "sha1", "sha":
 		return sha1.New(), nil //nolint:gosec // verifying a legacy repo-declared checksum
 	case "md5":

@@ -2,10 +2,14 @@
 
 **Scope:** the whole `cmd/artigate` binary (~45k LOC of non-test Go across ~60 files).
 Rounds 1–2 reviewed correctness, security (the diode trust boundary above all),
-concurrency, and resource safety; round 3 (this branch) reviewed **performance,
-operations, and completeness** — throughput and latency of the diode data path, import
-and serve costs at mirror scale, disk-lifecycle gaps, and docs/test coverage drift.
-Every finding below was verified against the source, not taken on faith.
+concurrency, and resource safety; round 3 reviewed **performance, operations, and
+completeness** — throughput and latency of the diode data path, import and serve costs
+at mirror scale, disk-lifecycle gaps, and docs/test coverage drift. Round 4 (this
+branch) reviewed **everything landed after round 3**: the Snap ecosystem, container
+signatures/attestations/referrers, the diode heartbeat, version/manifest-format
+identity, the npm/maven/helm/pypi upstream-verification passthrough, `.zst` RPM
+metadata, and the built-in source lists. Every finding below was verified against the
+source, not taken on faith.
 
 **Verdict:** the security-critical core — the high-side verify-and-import pipeline, path
 containment, archive extraction, manifest signature/sequence verification, the UDP wire
@@ -34,12 +38,16 @@ per-import index regeneration, HTTP caching) recorded as P/O recommendations bel
   HTTP-ingest `.upload-*` temps reaped — they pinned the unverified quota forever),
   O3 (startup sweep of crash-stranded import staging), O4 (`lz4` added to the runtime
   image; retention + `/admin/status` docs corrected).
+- **Fixed (round 4):** M14 (helm alias serving answered from a cached per-mirror map
+  instead of an unauthenticated per-request metadata-dir scan), M15 (container
+  referrer discovery bounded by fetch attempts, not just recorded artifacts), L20
+  (snap store metadata validated at collect time, symmetric with the high side).
 - **Open, recommended:** the L-series defense-in-depth and the round-3 P/O/T/D backlog
   (see "Round 3" below; P5–P7 are the highest-value items).
 
 ## Validation baseline
 
-All green on the current branch (Go 1.26.5), re-run after the round-3 fixes:
+All green on the current branch (Go 1.26.5), re-run after the round-4 fixes:
 
 | check | result |
 |-------|--------|
@@ -815,3 +823,114 @@ incidentally — worth pinning deliberately).
   panic recovery on every long-lived loop, the watch scheduler never blocks on collects,
   per-stream queues isolate slow streams (on the low side).
 - **No TODO/FIXME debt:** zero in non-test code; the debt lives in docs and this file.
+
+---
+
+# Round 4 — the post-round-3 features
+
+**Method:** the code landed after round 3 (~5k new non-test LOC) was reviewed by seven
+parallel agents scoped per subsystem plus two cross-cutting lenses (concurrency/registry,
+unauthenticated request-cost), every finding adversarially re-verified against source by
+an independent pass, and the highest-stakes trust-boundary additions (snap assertion
+handling, heartbeat signature/replay, manifest-format probe ordering, npm pinning
+enforcement, `.zst` bounds) additionally traced by hand. Three findings survived — two
+new instances of the M11–M13 request-cost class and one validation-symmetry gap — and
+all three are **fixed in this branch**. No signature-verification, path-containment,
+injection, or crash defect was found in any of the new code.
+
+### M14 — Unauthenticated helm chart requests scanned the whole metadata directory
+
+**`helm.go`** (`resolveHelmChartAlias`, via `helmServeTarget`).
+
+Any `charts/<file>.tgz(.prov)` request whose literal file is absent fell through to an
+uncached `os.ReadDir` of the mirror's metadata directory plus a `readHelmStored`
+(ReadFile + Unmarshal + stat) **per entry** — O(charts) disk reads and JSON parses per
+request. The absent-file case is the normal one: provenance-signed charts are stored
+under the collision-safe `<name>_<version>.tgz` stem but advertised under
+`<name>-<version>.tgz`, so every legitimate `helm pull --verify` paid the scan, and an
+unauthenticated probe for any junk name walked the whole directory to say 404. Before
+the round-3-era provenance work this path was O(1).
+**Status: fixed** — a per-mirror alias map (`helmAliasCache`) built by scanning the
+metadata directory once, keyed on `index.yaml`'s (size, modtime) like `npmAuditCache`:
+every publish regenerates `index.yaml`, so a changed mirror rebuilds its map on the
+next request, and mirrors without an index are never cached (probes for nonexistent
+mirrors cannot grow the map). Regression test `TestHelmAliasIndexCache`;
+`TestHelmProvenancePipeline` keeps the end-to-end alias serving covered.
+
+### M15 — Container referrer discovery capped records, not fetch attempts
+
+**`container.go`** (`artifactCollector.capReached`).
+
+`capReached` keyed solely on `len(a.found)`, which grows only when a referrer manifest
+is successfully recorded. A referrers index whose digests all 404 (or error) recorded
+nothing, so the cap never tripped while each listed descriptor still drove one outbound
+manifest GET — an attacker-influenced registry listing thousands of dangling referrers
+(the index is only byte-capped, not count-capped) could drive tens of thousands of GETs
+per image, stalling the serialized container collect. The guard's comment claimed it
+bounded "the requests, not just the records"; that was true only for the success path.
+**Status: fixed** — the collector counts every fetch attempt (`attempts`, incremented
+in `addByTag`/`addReferrer` before each `fetchArtifactManifest`) and `capReached` stops
+discovery when either the artifact cap (64) or the attempt budget
+(`containerMaxArtifactFetches`, 4×) is exhausted; the cap warning now reports both
+numbers. The budget gates the *next* fetch only: `record` checks the found cap alone
+(`foundCapReached`), so a manifest fetched on the budget's final attempt is still
+recorded rather than thrown away with its bytes in hand. Regression tests
+`TestArtifactCollectorAttemptCapBoundsMissingReferrers` (the GET count stays within
+the budget for an all-404 referrer list) and
+`TestArtifactCollectorRecordsFinalBudgetedArtifact` (the boundary artifact is kept,
+the attempt after it is refused).
+
+### L20 — Snap store metadata was validated only on the high side
+
+**`snap.go`** (`downloadSnap`).
+
+The low side copied store-supplied free text (version, summary, publisher, license,
+base/confinement/type) into the signed `SnapPackage` unchecked, while the high side's
+`validateSnapPackage` enforces length caps and a no-control-character rule on exactly
+those fields at import. An out-of-spec upstream field would therefore be signed into a
+bundle the high side must reject — and on the strictly sequenced snap stream, the
+permanently rejected sequence number would stall every later snap import. Not
+concretely triggerable today (snapcraft constrains these fields at publish), so this
+was robustness, not an exploitable break.
+**Status: fixed** — the record checks are extracted into `validateSnapRecord`, applied
+identically by the high side (`validateSnapPackage`) and now by the low side in
+`downloadSnap`, so a bad field fails that one snap into the skipped list before
+anything is signed. Regression test `TestSnapCollectRejectsBadStoreText`.
+
+## What's solid in the new code (verified, not merely unexamined)
+
+- **Snap trust model:** the high side re-derives each archive's SHA3-384 and binds it to
+  the `snap-revision` assertion (digest, size, revision, snap-id) and the
+  `snap-declaration` name binding before publishing metadata; assertion signatures pass
+  through verbatim for snapd's own root of trust at `snap ack` time (the same
+  delegation shape as npm SRI). The assertion parser is bounded end to end (100
+  assertions, 4 MiB file cap checked before read, body-length validated against the
+  same cap, bounds-checked slicing); digests are persisted at publish so `/snap/info`
+  never re-hashes per request; every served path pairs name validation with `safeJoin`.
+  The collector is single-goroutine, digest-pinned via `downloadVerifiedFile`, bounded
+  by `snapMaxResolved`, and panic-firewalled by the job worker.
+- **Diode heartbeat:** Ed25519ph-signed with the bundle key over the full payload,
+  verified before any field is read, replay/duplicate-refused inside a freshness
+  window, size-capped on every transport (wire limit re-checked at parse; the landing
+  file read through `readFileLimit`), streams filtered to known names with positive
+  sequences, consumed only by the mutating import pass, and purely informational —
+  import correctness never depends on it. The sender loop is panic-recovered.
+- **Version / manifest format:** the format probe runs on **signature-verified** bytes
+  and precedes the full decode (a newer format may legitimately reshape known fields),
+  fails closed with an explicit upgrade error, and keeps format-0 (pre-field) bundles
+  importable. `checkManifestFields` re-checks it as a backstop.
+- **Container signatures/attestations/referrers:** the served referrers index is
+  regenerated from mirrored artifacts only (never from transferred indexes),
+  digest-gated, JSON-marshaled (injection-safe), and the manifest/blob serve reads stay
+  size-capped; per-repo blob isolation holds for artifact blobs.
+- **Upstream verification material (npm/maven/helm/pypi):** the high side recomputes
+  every integrity value from the artifact bytes it serves — upstream signatures,
+  provenance attestations, and registry keys pass through for the *client's* verifier,
+  never substituting for ArtiGate's own digest checks; the low side still refuses
+  unpinned tarballs (npm) and hash-mismatched fetches.
+- **`.zst` RPM metadata:** decompression streams through `io.LimitReader` against
+  `maxIndexPlainBytes` with single-threaded decode — the M3 bomb-budget invariant
+  holds; in-process (klauspost), so no runtime-image dependency.
+- **Built-in source lists:** `go:embed`ed prefill only — nothing is fetched without an
+  operator-triggered collect; lookups are registry-keyed (no path derived from user
+  input); all embedded URLs are https, userinfo-free.

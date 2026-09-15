@@ -246,7 +246,7 @@ A bundle is **exactly three sibling files** sharing a bundle ID. All three must 
 <bundleID>.manifest.json.sig  # detached base64 Ed25519 signature over the manifest bytes
 ```
 
-The bundle ID is `<stream>-bundle-<seq>` zero-padded to six digits, e.g. `go-bundle-000001`, `python-bundle-000042`, `apt-bundle-000001`. Each of the twenty-two **streams** — `go`, `python`, `maven`, `apt`, `rpm`, `hf`, `containers`, `npm`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `conda`, `rubygems`, `composer`, `vsx`, `galaxy`, `cran`, `git`, `osv`, `uploads` — has its own independent sequence counter, so a gap in one stream never blocks another. Bundles are written atomically (temp file + rename), so a partially-arrived bundle is simply "incomplete" and is skipped until all three files are present. See [Architecture](architecture.md) for the bundle format and signing model.
+The bundle ID is `<stream>-bundle-<seq>` zero-padded to six digits, e.g. `go-bundle-000001`, `python-bundle-000042`, `apt-bundle-000001`. Each of the twenty-three **streams** — `go`, `python`, `maven`, `apt`, `rpm`, `hf`, `containers`, `npm`, `crates`, `terraform`, `helm`, `nuget`, `apk`, `conda`, `rubygems`, `composer`, `vsx`, `galaxy`, `cran`, `snap`, `git`, `osv`, `uploads` — has its own independent sequence counter, so a gap in one stream never blocks another. Bundles are written atomically (temp file + rename), so a partially-arrived bundle is simply "incomplete" and is skipped until all three files are present. See [Architecture](architecture.md) for the bundle format and signing model.
 
 ### Strict in-order import
 

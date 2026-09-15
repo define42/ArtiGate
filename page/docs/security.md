@@ -106,6 +106,7 @@ After the verified files are installed, the high side rebuilds all served reposi
 - **Helm** — regenerates each mirror's `index.yaml` from the charts' own embedded `Chart.yaml`, with digests recomputed from the artifacts (never trusting a transferred index).
 - **NuGet** — regenerates the served v3 feed metadata from each package's own embedded `.nuspec`.
 - **Alpine** — regenerates `APKINDEX.tar.gz` from the manifest-carried stanzas of the `.apk` files now present; optionally signed with `--apk-rsa-key`.
+- **Snap** — recomputes each archive's SHA3-384 and serves a revision only when the store-signed `.assert`'s snap-revision assertion vouches for exactly those bytes (digest, size, revision, snap-id) and its snap-declaration binds that snap-id to the snap's name; the assertions pass through verbatim for snapd to signature-check at `snap ack` time.
 
 ### No upstream fetch on the high side
 

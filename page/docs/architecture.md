@@ -68,6 +68,7 @@ const (
     streamVSX        = "vsx"
     streamGalaxy     = "galaxy"
     streamCRAN       = "cran"
+    streamSnap       = "snap"
     streamGit        = "git"
 )
 ```

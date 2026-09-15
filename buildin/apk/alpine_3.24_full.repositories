@@ -1,0 +1,4 @@
+# Alpine 3.24 - main + community
+# Stable release. The architecture is chosen separately on the card (default x86_64).
+https://dl-cdn.alpinelinux.org/alpine/v3.24/main
+https://dl-cdn.alpinelinux.org/alpine/v3.24/community

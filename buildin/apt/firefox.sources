@@ -1,0 +1,6 @@
+# Firefox (stable) - Mozilla apt repository, amd64
+Types: deb
+URIs: https://packages.mozilla.org/apt
+Suites: mozilla
+Components: main
+Architectures: amd64
