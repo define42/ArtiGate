@@ -116,6 +116,8 @@ type LowConfig struct {
 	// flow. DiodeToken is its required bearer token (ARTIGATE_DIODE_TOKEN).
 	DiodeURL   string
 	DiodeToken string
+	// SFTP uploads signed bundles to a remote folder when configured.
+	SFTP *SFTPConfig
 	// DiodeHeartbeat is how often the signed stream-index heartbeat is sent
 	// over whichever diode transport is configured (ARTIGATE_DIODE_HEARTBEAT);
 	// 0 disables it. See diodeheartbeat.go.
@@ -178,6 +180,8 @@ type LowServer struct {
 	// pitcher is the built-in UDP diode sender (ARTIGATE_PITCHER_INTERFACE);
 	// nil means bundles leave via the export dir or the HTTP diode endpoint.
 	pitcher *diodePitcher
+	// sftpMu serializes heartbeat uploads sharing one remote temporary name.
+	sftpMu sync.Mutex
 	// containerRegistryBases maps a container registry name to the API base URL
 	// it is fetched from (parsed from cfg.ContainerRegistries).
 	containerRegistryBases map[string]string
@@ -226,6 +230,8 @@ func runLow(args []string) {
 	must(err)
 	cfg.DiodeHeartbeat = heartbeat
 	pitcherCfg := mustPitcherConfig(cfg.DiodeURL)
+	cfg.SFTP = mustSFTPConfig()
+	must(validateLowSFTPTransport(cfg.SFTP, cfg.DiodeURL, pitcherCfg.Interface != ""))
 
 	if cfg.PrivateKeyPath == "" {
 		log.Fatal("--private-key is required")
@@ -238,7 +244,7 @@ func runLow(args []string) {
 	defer func() { _ = ls.Close() }()
 
 	attachPitcher(ls, pitcherCfg)
-	// After the pitcher attaches (so both push transports count): re-mark
+	// After the pitcher attaches (so every push transport counts): re-mark
 	// bundles still staged from before the restart, whose in-memory failure
 	// records died with the old process.
 	ls.restoreDiodeTransferBacklog()
@@ -304,6 +310,9 @@ func serveLow(cfg LowConfig, ls *LowServer) {
 	log.Printf("low-side exporter listening on %s (TLS: %s, auth: %s)", cfg.Listen, tc.Mode, authStatus(users))
 	log.Printf("low-side go module cache: %s", ls.downloadDir)
 	log.Printf("low-side export dir: %s", cfg.ExportDir)
+	if cfg.SFTP != nil {
+		log.Printf("low-side SFTP: %s (bundles upload after export; export dir is the retry spool)", cfg.SFTP.URL)
+	}
 	if cfg.DiodeURL != "" {
 		log.Printf("low-side diode endpoint: %s (bundles upload after export; export dir is the retry spool)", cfg.DiodeURL)
 	}
@@ -818,7 +827,7 @@ type ExportResult struct {
 	// the last one carries the ecosystem metadata (and is BundleID). Unset
 	// when the collect fit in a single bundle.
 	Bundles []string `json:"bundles,omitempty"`
-	// DiodeError reports a failed upload to the HTTP diode endpoint. The
+	// DiodeError reports a failed transfer to the configured diode transport. The
 	// bundle itself is fine — committed, archived, and still staged in the
 	// export dir — so this is a "re-transmit me" signal, not a lost export.
 	DiodeError string `json:"diode_error,omitempty"`
@@ -1875,7 +1884,7 @@ func (s *LowServer) ExportSequence(stream string, seq int64) (ExportResult, erro
 	}
 	if ok {
 		// A re-transmit goes out over the same transport as the original
-		// export: the configured HTTP diode endpoint, or the export dir.
+		// export: the configured HTTP, SFTP, or UDP transport, or the export dir.
 		s.uploadBundleIfConfigured(context.Background(), &res)
 		return res, nil
 	}

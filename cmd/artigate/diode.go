@@ -408,11 +408,10 @@ func firstErr(errs ...error) error {
 // -----------------------------------------------------------------------------
 
 // uploadBundleIfConfigured hands a freshly exported (or re-exported) bundle
-// to whichever diode transport is configured: the built-in UDP pitcher or the
-// HTTP endpoint (they are mutually exclusive; with neither, the export dir is
-// the folder-diode outbox and nothing happens here). Both transports are
-// best-effort by design: the bundle is already committed and archived, so a
-// failed transfer loses nothing — it is reported (result, progress, log) and
+// to the configured UDP, HTTP, or SFTP transport (they are mutually exclusive;
+// with none, the export dir is the folder-diode outbox and nothing happens
+// here). Push transports are best-effort: the bundle is already committed and
+// archived, so a failed transfer loses nothing — it is reported (result, progress, log) and
 // the staged files stay in the export dir for a re-transmit from the Status
 // page.
 func (s *LowServer) uploadBundleIfConfigured(ctx context.Context, res *ExportResult) {
@@ -424,6 +423,8 @@ func (s *LowServer) uploadBundleIfConfigured(ctx context.Context, res *ExportRes
 		s.pitchBundle(ctx, res)
 	case s.cfg.DiodeURL != "":
 		s.uploadBundleToHTTPDiode(ctx, res)
+	case s.cfg.SFTP != nil:
+		s.uploadBundleToSFTP(ctx, res)
 	default:
 		return
 	}
@@ -465,7 +466,7 @@ const diodeRestartFailureDetail = "transfer did not complete before the process 
 
 // restoreDiodeTransferBacklog re-arms the /readyz diode-transfer check after a
 // restart. The per-bundle failure records live only in memory, but with a push
-// diode configured (UDP pitcher or HTTP endpoint) the export dir is exactly
+// diode configured (UDP pitcher, HTTP endpoint, or SFTP) the export dir is exactly
 // the retry spool: every successful transfer clears its files, so a complete
 // bundle still staged when the process starts is one whose last transfer
 // failed — or was cut short by the restart itself. Re-mark each such bundle so
@@ -474,7 +475,7 @@ const diodeRestartFailureDetail = "transfer did not complete before the process 
 // push transport the export dir is the folder-diode outbox, where staged
 // bundles are simply awaiting carriage, so nothing is inferred.
 func (s *LowServer) restoreDiodeTransferBacklog() {
-	if s.pitcher == nil && s.cfg.DiodeURL == "" {
+	if s.pitcher == nil && s.cfg.DiodeURL == "" && s.cfg.SFTP == nil {
 		return
 	}
 	streams, err := findBundleStreams(s.cfg.ExportDir)

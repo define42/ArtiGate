@@ -510,10 +510,10 @@ did arrive, so a bundle lost in its entirety — or a low side that stopped
 exporting — would otherwise be invisible. `ARTIGATE_DIODE_HEARTBEAT` sets the
 interval (default `30s`, `off` disables); delivery matches the transport —
 one more file in the export dir for a folder carrier
-(`artigate.heartbeat`), a `PUT` to the HTTP diode endpoint, a datagram on the
-built-in UDP diode — and the high side verifies and records it identically in
-all three cases. The dashboard then shows the low side's index per stream, an
-**Awaiting** column for bundles that left the low side but have not arrived
+(`artigate.heartbeat`), an SFTP upload, a `PUT` to the HTTP diode endpoint, or a
+datagram on the built-in UDP diode. The high side verifies and records it
+identically for each transport. The dashboard then shows the low side's index
+per stream, an **Awaiting** column for bundles that left the low side but have not arrived
 (in transit, or lost and needing a re-export), and the heartbeat's freshness;
 `/metrics` exposes the same as `artigate_high_low_last_sequence`,
 `artigate_high_bundles_awaiting_from_low`, and
@@ -531,7 +531,7 @@ variables — the folder flow stays the default:
 | `ARTIGATE_DIODE_URL` | low | endpoint bundles are uploaded to after every export and re-export (`PUT <url>/<file>`, archive first) |
 | `ARTIGATE_DIODE_INGEST` | high | `on` accepts bundle uploads at `PUT/POST /diode/<file>` into the landing directory (default `off`) |
 | `ARTIGATE_DIODE_TOKEN` | both | shared bearer token, at least 32 bytes and required whenever HTTP diode transport is enabled |
-| `ARTIGATE_DIODE_HEARTBEAT` | low | stream-index heartbeat interval for whichever transport is active (folder, HTTP, or UDP), default `30s` (`off` disables) |
+| `ARTIGATE_DIODE_HEARTBEAT` | low | stream-index heartbeat interval for whichever transport is active (folder, SFTP, HTTP, or UDP), default `30s` (`off` disables) |
 
 ```bash
 # low side — upload each bundle to the diode proxy (or directly to the high side)
@@ -576,6 +576,67 @@ files, so the model appears on the high side exactly once, complete. With the
 built-in UDP pitcher enabled, the split budget also respects the wire's
 block-count bound for the configured FEC geometry, so every bundle produced is
 guaranteed transmittable as configured.
+
+### SFTP transport (optional)
+
+ArtiGate can upload bundles to an SFTP server on the low side and poll an SFTP
+server directory on the high side. Configure each process independently; the
+servers can be different endpoints of your diode's file-transfer service.
+
+**Low-side uploads use the exact suffix `.writing`:**
+`go-bundle-000042.tar.gz.writing` is renamed to `go-bundle-000042.tar.gz`
+only after the upload completes. The manifest and signature follow the same
+rule. High-side polling ignores remote names starting with `.` or ending in
+`.writing`, and waits for all three ready bundle files. Each download lands
+locally as `.go-bundle-000042.tar.gz` (and likewise for its companions); the
+leading dots are removed only after all three downloads complete. The bundle
+then passes the usual signature, hash, and sequence checks before import.
+
+```bash
+# Low-side process: upload to the diode's sending endpoint.
+export ARTIGATE_SFTP_URL=sftp://artigate@low-sftp.local:22/outgoing
+export ARTIGATE_SFTP_PRIVATE_KEY=/etc/artigate/sftp-upload-key
+export ARTIGATE_SFTP_KNOWN_HOSTS=/etc/artigate/sftp-known-hosts
+./artigate low --listen 127.0.0.1:8080 \
+  --private-key /etc/artigate/low.ed25519
+```
+
+```bash
+# High-side process: poll the diode's receiving endpoint.
+export ARTIGATE_SFTP_URL=sftp://artigate@high-sftp.local:22/incoming
+export ARTIGATE_SFTP_PRIVATE_KEY=/etc/artigate/sftp-download-key
+export ARTIGATE_SFTP_KNOWN_HOSTS=/etc/artigate/sftp-known-hosts
+export ARTIGATE_SFTP_POLL_INTERVAL=10s
+./artigate high --listen 127.0.0.1:8080 \
+  --public-key /etc/artigate/high.ed25519.pub \
+  --landing /var/spool/diode-in
+```
+
+Create the remote directories before starting and provision trusted server
+host keys in the required `known_hosts` file. Use an SFTP server supporting
+`posix-rename@openssh.com` for atomic replacement of retransmitted bundles and
+heartbeats. The SFTP private key is an unencrypted SSH login key, separate from
+the Ed25519 bundle-signing key. Set
+`ARTIGATE_SFTP_PASSWORD` instead for password authentication. On the low side,
+choose one of `ARTIGATE_SFTP_URL`, `ARTIGATE_DIODE_URL`, or
+`ARTIGATE_PITCHER_INTERFACE`.
+
+Successful uploads clear the export spool and retain the archive copy. Failed
+uploads stay staged and can be retried with **re-transmit** on the Status page;
+the low side does not automatically retry them. The high side polls at startup
+and every `ARTIGATE_SFTP_POLL_INTERVAL` (default `10s`), reconnects on the next
+poll after a failure, and imports completed transfers immediately, even with
+`--import-interval=0`. `ARTIGATE_SFTP_TIMEOUT` bounds each transfer session
+(default `4h`). The signed heartbeat uses the same SFTP naming rules and its
+usual `ARTIGATE_DIODE_HEARTBEAT` interval (default `30s`); each heartbeat upload
+also has a `30s` timeout.
+
+The high side leaves remote files in place and skips bundles already imported
+or complete in its landing/quarantine directories. Manage remote retention
+outside ArtiGate. Keep ready bundle names immutable: retransmitting a bundle
+must use the same bytes. The heartbeat is replaced as its contents change.
+See the [configuration reference](https://define42.github.io/ArtiGate/configuration/#sftp-transport)
+for every SFTP setting.
 
 ### Built-in UDP diode transport (optional)
 
@@ -925,9 +986,9 @@ open when auth is enabled.
 
 The **low side** is not ready when the schedule store cannot be read
 (`watch-store`), the export spool directory is missing (`export-spool`), or a
-bundle's last diode transfer — UDP pitch or HTTP upload — failed and its files
-still sit in the outbound spool awaiting a re-transmit (`diode-transfer`; a
-successful re-export clears it).
+bundle's last diode transfer — UDP pitch, HTTP upload, or SFTP upload — failed
+and its files still sit in the outbound spool awaiting a re-transmit
+(`diode-transfer`; a successful re-export clears it).
 
 The **high side** is not ready when import status cannot be computed
 (`import-status`), a stream is blocked waiting for a missing bundle

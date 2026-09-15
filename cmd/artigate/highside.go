@@ -78,6 +78,8 @@ type HighConfig struct {
 	// bearer token on those uploads (ARTIGATE_DIODE_TOKEN).
 	DiodeIngest bool
 	DiodeToken  string
+	// SFTP polls a remote folder and downloads complete bundles into Landing.
+	SFTP *SFTPConfig
 	// AllowRemoteAdmin permits the high side's state-changing admin endpoints
 	// (POST /admin/uploads/delete, POST /admin/import) to be driven from other
 	// hosts (ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN=on). By default they are restricted
@@ -102,6 +104,7 @@ type HighServer struct {
 	statePath   string
 	mu          sync.Mutex
 	ingestMu    sync.Mutex
+	sftpMu      sync.Mutex
 	state       HighState
 	tree        treeCache
 	importKick  chan struct{}
@@ -140,6 +143,7 @@ type HighServer struct {
 // applyHighEnvConfig fills the environment-driven high-side settings (diode
 // ingest + token, remote-admin override), failing fast on an invalid value.
 func applyHighEnvConfig(cfg *HighConfig) {
+	cfg.SFTP = mustSFTPConfig()
 	ingest, err := parseOnOff(os.Getenv("ARTIGATE_DIODE_INGEST"))
 	if err != nil {
 		log.Fatalf("ARTIGATE_DIODE_INGEST: %v", err)
@@ -192,6 +196,7 @@ func runHigh(args []string) {
 	if cfg.ImportInterval > 0 {
 		go hs.importLoop(ctx)
 	}
+	hs.startSFTPPoller(ctx)
 
 	tc, err := tlsConfigFromEnv()
 	must(err)
@@ -1287,8 +1292,8 @@ func (s *HighServer) reapUnverifiedLocked(now time.Time) {
 }
 
 // reapStaleTransportTemps deletes orphaned transport temp files last modified
-// before cutoff: UDP reassembly temps and HTTP ingest upload temps whose
-// process was killed mid-transfer. Both count against the unverified storage
+// before cutoff: UDP reassembly, HTTP ingest, and hidden SFTP download temps
+// whose process was killed mid-transfer. All count against the unverified storage
 // quota, so an orphan would pin it forever. In-flight transfers keep a recent
 // mtime (writes touch the file continuously, and the catcher expires stale
 // transfers itself), so only long-abandoned temps are removed here.
@@ -1302,7 +1307,7 @@ func reapStaleTransportTemps(dir string, cutoff time.Time) (int, error) {
 	}
 	var removed int
 	for _, e := range entries {
-		if e.IsDir() || !(isUDPTempName(e.Name()) || isIngestUploadTempName(e.Name())) {
+		if e.IsDir() || !isTransportTempName(e.Name()) {
 			continue
 		}
 		if removeIfOlder(filepath.Join(dir, e.Name()), cutoff) {

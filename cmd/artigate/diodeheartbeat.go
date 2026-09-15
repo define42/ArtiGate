@@ -225,7 +225,7 @@ func (s *LowServer) buildDiodeHeartbeat(now time.Time) diodeHeartbeat {
 }
 
 // sendDiodeHeartbeat signs one heartbeat and hands it to whichever diode
-// transport is configured: the built-in UDP pitcher, the HTTP endpoint, or —
+// transport is configured: the built-in UDP pitcher, HTTP, SFTP, or —
 // with neither — the export dir, where it is one more file for the folder
 // carrier to move across.
 func (s *LowServer) sendDiodeHeartbeat(ctx context.Context, now time.Time) error {
@@ -238,6 +238,8 @@ func (s *LowServer) sendDiodeHeartbeat(ctx context.Context, now time.Time) error
 		return s.pitcher.sendHeartbeat(pkt)
 	case s.cfg.DiodeURL != "":
 		return s.uploadHeartbeatToHTTPDiode(ctx, pkt)
+	case s.cfg.SFTP != nil:
+		return s.uploadHeartbeatToSFTP(ctx, pkt)
 	default:
 		return writeBytesAtomic(filepath.Join(s.cfg.ExportDir, diodeHeartbeatFileName), pkt, 0o644)
 	}
@@ -287,6 +289,8 @@ func (s *LowServer) diodeHeartbeatDestination() string {
 		return "UDP diode"
 	case s.cfg.DiodeURL != "":
 		return "HTTP diode endpoint"
+	case s.cfg.SFTP != nil:
+		return "SFTP server"
 	default:
 		return "export dir, for the folder carrier"
 	}

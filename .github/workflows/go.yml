@@ -69,6 +69,9 @@ jobs:
       - name: Run unit tests with coverage
         run: gotestsum --junitfile junit.xml -- ./... -race -coverprofile=coverage.out -covermode=atomic
 
+      - name: Test SFTP transport
+        run: go test -race -tags=integration ./cmd/artigate -run SFTP
+
       - name: Show coverage in job summary
         if: ${{ !cancelled() }}
         run: |

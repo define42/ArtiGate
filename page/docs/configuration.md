@@ -172,7 +172,7 @@ artigate high \
 
 ## Environment variables
 
-There are **no** environment variables for `keygen` or `hashpw`. The TLS variables and the failure-webhook variables apply to **both** `low` and `high` (both call the same `tlsConfigFromEnv` / webhook setup). The auth and cookie variables apply to the **low side only** — the high side has no auth. The diode-transport variables split by side (`ARTIGATE_DIODE_URL` low, `ARTIGATE_DIODE_INGEST` high, the token both; `ARTIGATE_PITCHER_*` low, `ARTIGATE_CATCHER_*` high), `ARTIGATE_HF_TOKEN` is low-side only, and `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN` is high-side only.
+There are **no** environment variables for `keygen` or `hashpw`. The TLS variables and the failure-webhook variables apply to **both** `low` and `high` (both call the same `tlsConfigFromEnv` / webhook setup). The auth and cookie variables apply to the **low side only** — the high side has no auth. The diode-transport variables split by side (`ARTIGATE_DIODE_URL` low, `ARTIGATE_DIODE_INGEST` high, the token both; `ARTIGATE_PITCHER_*` low, `ARTIGATE_CATCHER_*` high). `ARTIGATE_SFTP_*` configures uploads on the low side or downloads on the high side. `ARTIGATE_HF_TOKEN` is low-side only, and `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN` is high-side only.
 
 ### Low-side authentication
 
@@ -213,9 +213,59 @@ The optional HTTP transfer between the sides — see [Deployment](deployment.md)
 | `ARTIGATE_DIODE_INGEST` | high | `off` | `on`/`1`/`true`/`yes` accepts bundle uploads at `PUT/POST /diode/<file>` into the landing directory; any other non-off value is fatal |
 | `ARTIGATE_DIODE_TOKEN` | both | unset | Shared bearer token: at least 32 bytes, no whitespace, and required whenever `ARTIGATE_DIODE_URL` or `ARTIGATE_DIODE_INGEST=on` enables HTTP transport; compared in constant time |
 
+### SFTP transport
+
+Set `ARTIGATE_SFTP_URL` separately for each process: `low` uploads every export
+and re-export; `high` polls a remote directory and downloads ready bundles into
+its local `--landing` directory. Each side can use its own SFTP server and
+credentials, for example the sending and receiving endpoints of a diode's
+file-transfer service. Create the remote directory before starting ArtiGate.
+Use an SFTP server supporting `posix-rename@openssh.com` for atomic replacement
+of retransmitted bundles and heartbeats. Without that extension, standard
+rename can fail when a ready destination already exists; ArtiGate preserves
+the existing file and reports the transfer failure.
+
+| Variable | Side | Default | Meaning |
+|---|---|---|---|
+| `ARTIGATE_SFTP_URL` | both | unset (disabled) | `sftp://user@host:22/absolute/path`; sets the SSH username, server, and remote directory. Port defaults to `22`. Keep passwords out of the URL |
+| `ARTIGATE_SFTP_PRIVATE_KEY` | both | unset | Path to an unencrypted SSH private key for SFTP login; separate from the Ed25519 manifest-signing key |
+| `ARTIGATE_SFTP_PASSWORD` | both | unset | Password authentication as an alternative to a private key |
+| `ARTIGATE_SFTP_KNOWN_HOSTS` | both | unset (**required** for SFTP) | Path to a provisioned OpenSSH `known_hosts` file containing trusted server host keys |
+| `ARTIGATE_SFTP_POLL_INTERVAL` | high | `10s` | Positive duration between remote directory polls; also controls retries after a connection/download failure |
+| `ARTIGATE_SFTP_TIMEOUT` | both | `4h` | Positive duration limiting a whole transfer session, including connection setup; heartbeat uploads also have a `30s` timeout |
+| `ARTIGATE_DIODE_HEARTBEAT` | low | `30s` | Signed stream-index heartbeat interval for any transport, including SFTP; `off` disables |
+
+At least one SFTP authentication method is required. On the low side,
+`ARTIGATE_SFTP_URL`, `ARTIGATE_DIODE_URL`, and `ARTIGATE_PITCHER_INTERFACE` are
+mutually exclusive. On the high side, SFTP polling can coexist with HTTP ingest
+and the UDP catcher.
+
+#### Completion and retry rules
+
+- **Low:** upload each archive, manifest, and signature as `<filename>.writing`,
+  then rename it to `<filename>` after the upload completes. For example,
+  `go-bundle-000042.tar.gz.writing` becomes `go-bundle-000042.tar.gz`.
+- **High:** ignore remote names starting with `.` or ending in `.writing`.
+  Wait until a bundle's three ready files are present. Download each file as
+  `.<filename>` in `--landing`, then remove the leading dots after all three
+  downloads complete.
+  Completed bundles are imported immediately, including when
+  `--import-interval=0`; SFTP polling is controlled separately.
+- Poll once at startup, then at the configured interval. Connection or
+  download failures are retried at the next poll. Successful low-side uploads
+  clear the export spool; failures retain it and require a **re-transmit** from
+  the Status page. Archive copies remain available for re-export.
+- The high side reads remote files without deleting them. Bundles already
+  imported or complete in the landing/quarantine directories are skipped.
+  Operators manage remote retention. Ready bundle filenames must be immutable;
+  a retransmission under the same name must contain the same bytes.
+- `artigate.heartbeat` follows the same temporary-name rules, with its ready
+  file replaced on each update. Signature, hash, and sequence verification
+  remains mandatory for imported bundles.
+
 ### Built-in UDP data diode
 
-The direct one-way-fiber transport — see [Built-in UDP diode](data-diode.md) for how it works, Docker permissions, and tuning. Naming the interface enables each side; every value is validated at startup and a bad one is fatal. `ARTIGATE_DIODE_URL` and `ARTIGATE_PITCHER_INTERFACE` are mutually exclusive.
+The direct one-way-fiber transport — see [Built-in UDP diode](data-diode.md) for how it works, Docker permissions, and tuning. Naming the interface enables each side; every value is validated at startup and a bad one is fatal. `ARTIGATE_DIODE_URL`, `ARTIGATE_SFTP_URL`, and `ARTIGATE_PITCHER_INTERFACE` are mutually exclusive on the low side.
 
 | Variable | Side | Default | Meaning |
 |---|---|---|---|
@@ -317,9 +367,11 @@ Validation (all fatal at startup):
 
 ## Configuration surface at a glance
 
-The file paths, listen addresses, and behaviour toggles are **flag-only**; TLS and low-side auth are **env-only**. There is deliberately no flag for TLS and no env var for paths/listen addresses.
+Repository paths, listen addresses, and import/watch intervals are **flag-only**;
+TLS, low-side auth, and transport connections are **env-only**. SFTP credentials
+and the remote directory are configured through environment variables.
 
 - **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags (including `--git`), the upstream overrides (`--pypi-json`, `--hf-endpoint`, `--crates-index`, `--terraform-registry`, `--nuget-source`, `--osv-upstream`, `--conda-channel-base`, `--rubygems-url`, `--composer-repo`, `--vsx-registry`, `--galaxy-server`, `--cran-mirror`, `--snap-store`, `--npm-registry`, `--container-registry`), `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`, `--apk-key-name`.
-- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_LOW_ALLOW_UNAUTHENTICATED`, `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`, `ARTIGATE_CONTAINER_AUTH`, `ARTIGATE_GO_AUTH`, `ARTIGATE_UPSTREAM_AUTH`, `ARTIGATE_WEBHOOK_URL`, `ARTIGATE_WEBHOOK_TOKEN`.
+- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_LOW_ALLOW_UNAUTHENTICATED`, `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_SFTP_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`, `ARTIGATE_CONTAINER_AUTH`, `ARTIGATE_GO_AUTH`, `ARTIGATE_UPSTREAM_AUTH`, `ARTIGATE_WEBHOOK_URL`, `ARTIGATE_WEBHOOK_TOKEN`.
 
 See also: [Deployment](deployment.md) for production topologies, [Security & trust](security.md) for the trust model, and [TLS / HTTPS](tls.md) for the full TLS matrix.
