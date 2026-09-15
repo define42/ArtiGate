@@ -1516,6 +1516,197 @@ func TestMergeContainerRepoDigestPinnedIndexes(t *testing.T) {
 	}
 }
 
+func TestMergeContainerRepoTagRefreshKeepsDigestPins(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		withIndex    bool
+		sameManifest bool
+	}{
+		{name: "single manifest"},
+		{name: "multi-platform index", withIndex: true},
+		{name: "indexes sharing a manifest", withIndex: true, sameManifest: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pub, _ := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			oldFixture := makeFakeImage("old layer")
+			newFixture := makeFakeImage("new layer")
+			if tc.sameManifest {
+				newFixture = oldFixture
+				// An index-only change still changes the digest clients pin.
+				newFixture.index = append([]byte("\n"), oldFixture.index...)
+			}
+			stage := func(fix fakeImage) ContainerImage {
+				t.Helper()
+				img := ContainerImage{
+					Tag: "latest", Digest: fix.manifestDigest,
+					MediaType: mtDockerManifest, Size: int64(len(fix.manifest)),
+					Blobs: []ContainerBlob{
+						{Digest: containerSHA(fix.config), Size: int64(len(fix.config))},
+						{Digest: containerSHA(fix.layer), Size: int64(len(fix.layer))},
+					},
+				}
+				for _, body := range [][]byte{fix.manifest, fix.config, fix.layer} {
+					covR2WriteFile(t, hs.containerBlobPath(containerSHA(body)), body)
+				}
+				if tc.withIndex {
+					img.Index = &ContainerIndex{
+						Digest: containerSHA(fix.index), MediaType: mtDockerList, Size: int64(len(fix.index)),
+					}
+					covR2WriteFile(t, hs.containerBlobPath(img.Index.Digest), fix.index)
+				}
+				return img
+			}
+			oldImage, newImage := stage(oldFixture), stage(newFixture)
+			oldDigest := containerImageServedDigest(oldImage)
+			artifact := makeFakeArtifact("application/vnd.in-toto+json", "old attestation", "application/vnd.in-toto+json", nil)
+			oldImage.Artifacts = []ContainerArtifact{{
+				Subject: oldDigest, Digest: artifact.digest, MediaType: mtOCIManifest,
+				ArtifactType: "application/vnd.in-toto+json", Size: int64(len(artifact.manifest)),
+				Blobs: []ContainerBlob{
+					{Digest: containerSHA(artifact.config), Size: int64(len(artifact.config))},
+					{Digest: containerSHA(artifact.layer), Size: int64(len(artifact.layer))},
+				},
+			}}
+			for _, body := range [][]byte{artifact.manifest, artifact.config, artifact.layer} {
+				covR2WriteFile(t, hs.containerBlobPath(containerSHA(body)), body)
+			}
+			const name = "docker.io/library/refresh"
+			merge := func(img ContainerImage) {
+				t.Helper()
+				if err := hs.mergeContainerRepo(ContainerRepo{
+					Registry: "docker.io", Repository: "library/refresh", Images: []ContainerImage{img},
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			request := func(method, path string) *httptest.ResponseRecorder {
+				rec := httptest.NewRecorder()
+				hs.ServeHTTP(rec, httptest.NewRequest(method, "/v2/"+name+"/"+path, nil))
+				return rec
+			}
+			oldBody, newBody := oldFixture.manifest, newFixture.manifest
+			if tc.withIndex {
+				oldBody, newBody = oldFixture.index, newFixture.index
+			}
+			merge(oldImage)
+			before := request(http.MethodGet, "manifests/"+oldDigest)
+			if before.Code != http.StatusOK || before.Body.String() != string(oldBody) {
+				t.Fatalf("initial digest pull = %d %s", before.Code, before.Body.String())
+			}
+			merge(newImage)
+			for path, body := range map[string][]byte{
+				"manifests/latest":                                  newBody,
+				"manifests/" + oldDigest:                            oldBody,
+				"manifests/" + oldFixture.manifestDigest:            oldFixture.manifest,
+				"blobs/" + containerSHA(oldFixture.config):          oldFixture.config,
+				"blobs/" + containerSHA(oldFixture.layer):           oldFixture.layer,
+				"manifests/" + artifact.digest:                      artifact.manifest,
+				"blobs/" + containerSHA(artifact.config):            artifact.config,
+				"blobs/" + containerSHA(artifact.layer):             artifact.layer,
+				"manifests/" + containerImageServedDigest(newImage): newBody,
+			} {
+				resp := request(http.MethodGet, path)
+				if resp.Code != http.StatusOK || resp.Body.String() != string(body) {
+					t.Errorf("GET %s after tag refresh = %d %s, want original content", path, resp.Code, resp.Body.String())
+				}
+				if got := resp.Header().Get("Docker-Content-Digest"); got != containerSHA(body) {
+					t.Errorf("GET %s digest = %q, want %q", path, got, containerSHA(body))
+				}
+			}
+			head := request(http.MethodHead, "manifests/"+oldDigest)
+			if head.Code != http.StatusOK || head.Header().Get("Docker-Content-Digest") != oldDigest || head.Body.Len() != 0 {
+				t.Errorf("HEAD old digest after refresh = %d %v %s", head.Code, head.Header(), head.Body.String())
+			}
+			refs := request(http.MethodGet, "referrers/"+oldDigest)
+			var index ociReferrersIndex
+			if err := json.Unmarshal(refs.Body.Bytes(), &index); err != nil {
+				t.Fatal(err)
+			}
+			if refs.Code != http.StatusOK || len(index.Manifests) != 1 || index.Manifests[0].Digest != artifact.digest {
+				t.Errorf("old digest referrers after refresh = %d %+v", refs.Code, index)
+			}
+			tags := request(http.MethodGet, "tags/list")
+			var listing struct {
+				Tags []string `json:"tags"`
+			}
+			if err := json.Unmarshal(tags.Body.Bytes(), &listing); err != nil {
+				t.Fatal(err)
+			}
+			if tags.Code != http.StatusOK || len(listing.Tags) != 1 || listing.Tags[0] != "latest" {
+				t.Errorf("tags after refresh = %d %+v", tags.Code, listing)
+			}
+		})
+	}
+}
+
+func TestMergeContainerRepoTagRefreshDeduplicatesPins(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		existingPin bool
+	}{
+		{name: "tag only"},
+		{name: "existing digest pin", existingPin: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pub, _ := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			oldImage := ContainerImage{Tag: "latest", Digest: containerSHA([]byte("old")), MediaType: mtDockerManifest, Size: 1}
+			newImage := ContainerImage{Tag: "latest", Digest: containerSHA([]byte("new")), MediaType: mtDockerManifest, Size: 1}
+			merge := func(t *testing.T, imgs ...ContainerImage) ContainerRepo {
+				t.Helper()
+				if err := hs.mergeContainerRepo(ContainerRepo{
+					Registry: "docker.io", Repository: "library/refresh", Images: imgs,
+				}); err != nil {
+					t.Fatal(err)
+				}
+				repo, err := hs.loadContainerRepoIndex("docker.io/library/refresh")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return repo
+			}
+			merge(t, oldImage)
+			if tc.existingPin {
+				pin := oldImage
+				pin.Tag = ""
+				merge(t, pin)
+			}
+			for _, step := range []struct {
+				name     string
+				image    ContainerImage
+				wantPins int
+			}{
+				{name: "refresh", image: newImage, wantPins: 1},
+				{name: "repeat refresh", image: newImage, wantPins: 1},
+				{name: "revert", image: oldImage, wantPins: 2},
+				{name: "refresh again", image: newImage, wantPins: 2},
+				{name: "revert again", image: oldImage, wantPins: 2},
+			} {
+				repo := merge(t, step.image)
+				pins := map[string]bool{}
+				for _, img := range repo.Images {
+					if img.Tag != "" {
+						if img.Tag != "latest" || img.Digest != step.image.Digest {
+							t.Errorf("%s: current tag = %+v, want %+v", step.name, img, step.image)
+						}
+						continue
+					}
+					if pins[img.Digest] {
+						t.Errorf("%s: duplicate digest pin %s", step.name, img.Digest)
+					}
+					pins[img.Digest] = true
+				}
+				if len(pins) != step.wantPins || len(repo.Images) != step.wantPins+1 {
+					t.Errorf("%s: images = %+v, want current tag and %d digest pins", step.name, repo.Images, step.wantPins)
+				}
+			}
+		})
+	}
+}
+
 // TestArtifactCollectorCapStopsFetching fills the collector to the artifact
 // cap and checks further discovery performs no upstream requests at all —
 // the cap bounds the fetches, not just the recorded artifacts.

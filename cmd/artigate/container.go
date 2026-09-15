@@ -2010,7 +2010,8 @@ func containerImageServedDigest(img ContainerImage) string {
 }
 
 // mergeContainerRepo merges newly imported images into the repo's index: a
-// re-imported tag moves to its new digest, and digest-pinned images accumulate.
+// re-imported tag moves to its new digest while its old image remains available
+// by digest. Digest-pinned images accumulate.
 func (s *HighServer) mergeContainerRepo(repo ContainerRepo) error {
 	name := repo.Registry + "/" + repo.Repository
 	merged, err := s.loadContainerRepoIndex(name)
@@ -2031,6 +2032,7 @@ func (s *HighServer) mergeContainerRepo(repo ContainerRepo) error {
 	}
 	for _, img := range repo.Images {
 		if i, ok := byKey[key(img)]; ok {
+			merged.Images = preserveMovedContainerImage(merged.Images, byKey, merged.Images[i], img)
 			merged.Images[i] = img
 		} else {
 			byKey[key(img)] = len(merged.Images)
@@ -2048,6 +2050,22 @@ func (s *HighServer) mergeContainerRepo(repo ContainerRepo) error {
 		return containerImageServedDigest(merged.Images[i]) < containerImageServedDigest(merged.Images[j])
 	})
 	return writeJSONAtomic(s.containerRepoIndexPath(name), merged, 0o644)
+}
+
+// preserveMovedContainerImage keeps a tag's previous image reachable when the
+// tag moves. The full record retains its index, blobs, and attached artifacts;
+// an existing digest pin already supplies that image's repository reference.
+func preserveMovedContainerImage(images []ContainerImage, byKey map[string]int, previous, next ContainerImage) []ContainerImage {
+	if next.Tag == "" || containerImageServedDigest(previous) == containerImageServedDigest(next) {
+		return images
+	}
+	previous.Tag = ""
+	key := "digest:" + containerImageServedDigest(previous)
+	if _, pinned := byKey[key]; pinned {
+		return images
+	}
+	byKey[key] = len(images)
+	return append(images, previous)
 }
 
 func (s *HighServer) loadContainerRepoIndex(name string) (ContainerRepo, error) {

@@ -307,12 +307,22 @@ func TestCovReg_MergeContainerRepo(t *testing.T) {
 	d2 := containerSHA([]byte("manifest-2"))
 	pin := containerSHA([]byte("pinned"))
 
-	// First import: one tag.
-	if err := hs.mergeContainerRepo(ContainerRepo{
+	// Re-importing the same tag and digest keeps just the tagged record.
+	first := ContainerRepo{
 		Registry: "docker.io", Repository: "library/alpine",
 		Images: []ContainerImage{{Tag: "3.20", Digest: d1}},
-	}); err != nil {
+	}
+	for range 2 {
+		if err := hs.mergeContainerRepo(first); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repo, err := hs.loadContainerRepoIndex("docker.io/library/alpine")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(repo.Images) != 1 || repo.Images[0].Tag != "3.20" {
+		t.Fatalf("unchanged tag import created a pin: %+v", repo.Images)
 	}
 	// Second import: the tag moves to a new digest, and a digest-pinned image is added.
 	if err := hs.mergeContainerRepo(ContainerRepo{
@@ -322,11 +332,11 @@ func TestCovReg_MergeContainerRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repo, err := hs.loadContainerRepoIndex("docker.io/library/alpine")
+	repo, err = hs.loadContainerRepoIndex("docker.io/library/alpine")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(repo.Images) != 2 {
+	if len(repo.Images) != 3 {
 		t.Fatalf("merged images = %+v", repo.Images)
 	}
 	byKey := map[string]string{}
@@ -334,14 +344,16 @@ func TestCovReg_MergeContainerRepo(t *testing.T) {
 		if img.Tag != "" {
 			byKey["tag:"+img.Tag] = img.Digest
 		} else {
-			byKey["pin"] = img.Digest
+			byKey["digest:"+img.Digest] = img.Digest
 		}
 	}
 	if byKey["tag:3.20"] != d2 {
 		t.Errorf("re-imported tag should move to %s, got %s", d2, byKey["tag:3.20"])
 	}
-	if byKey["pin"] != pin {
-		t.Errorf("digest pin = %s, want %s", byKey["pin"], pin)
+	for _, digest := range []string{d1, pin} {
+		if byKey["digest:"+digest] != digest {
+			t.Errorf("missing digest pin %s after tag refresh", digest)
+		}
 	}
 }
 
