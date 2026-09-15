@@ -5,11 +5,156 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestHighServerImportInvalidatesPayloadTrees(t *testing.T) {
+	t.Parallel()
+	pub, priv := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	docs := filepath.Join(hs.uploadsDir(), "docs")
+	if err := os.MkdirAll(docs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(docs, "a.txt"), []byte("a"))
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	for _, eco := range []string{streamGo, streamPython} {
+		if got := getTree(t, srv.URL, eco, ""); len(got) != 0 {
+			t.Fatalf("initial %s tree = %+v, want empty", eco, got)
+		}
+	}
+	if got := treeLabels(getTree(t, srv.URL, streamUploads, "docs")); got != "a.txt" {
+		t.Fatalf("initial uploads tree = %q, want a.txt", got)
+	}
+	// Direct disk changes stay hidden in an unrelated ecosystem's warm cache.
+	writeFile(t, filepath.Join(docs, "b.txt"), []byte("b"))
+
+	// Legacy Python bundles use the Go sequencing stream. Invalidation must
+	// follow their payload too, or a warmed Python tree misses the new wheel.
+	writeSignedPythonBundle(t, hs.cfg.Landing, priv, 1, 0, map[string]string{
+		"requests-2.32.4-py3-none-any.whl": "wheel-requests",
+	})
+	mustImportNext(t, hs)
+	if got := treeLabels(getTree(t, srv.URL, streamPython, "")); got != "requests" {
+		t.Errorf("Python tree after import = %q, want requests", got)
+	}
+	if got := treeLabels(getTree(t, srv.URL, streamUploads, "docs")); got != "a.txt" {
+		t.Errorf("Python import refreshed unrelated uploads tree: %q", got)
+	}
+
+	writeSignedBundle(t, hs.cfg.Landing, priv, 2, 1, []moduleSpec{{"example.com/mod", "v1.0.0"}})
+	mustImportNext(t, hs)
+	if got := treeLabels(getTree(t, srv.URL, streamGo, "")); got != "example.com" {
+		t.Errorf("Go tree after import = %q, want example.com", got)
+	}
+	if got := treeLabels(getTree(t, srv.URL, streamUploads, "docs")); got != "a.txt" {
+		t.Errorf("Go import refreshed unrelated uploads tree: %q", got)
+	}
+}
+
+func TestHighServerImportAdditionalFilesInvalidateTrees(t *testing.T) {
+	for _, contentPart := range []bool{false, true} {
+		name := "project records"
+		if contentPart {
+			name = "content part without records"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			pub, priv := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			srv := httptest.NewServer(hs)
+			defer srv.Close()
+			for _, eco := range []string{streamPython, streamUploads} {
+				if got := getTree(t, srv.URL, eco, ""); len(got) != 0 {
+					t.Fatalf("initial %s tree = %+v, want empty", eco, got)
+				}
+			}
+			stage := t.TempDir()
+			packages := filepath.Join(stage, "python", "packages")
+			if err := os.MkdirAll(packages, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(packages, "demo-1.0-py3-none-any.whl"), []byte("wheel-demo"))
+			files, projects, _, err := collectPythonDist(packages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Extra verified files are installed even without an Uploads record.
+			const uploadPath = "uploads/docs/readme.txt"
+			upload := filepath.Join(stage, filepath.FromSlash(uploadPath))
+			if err := os.MkdirAll(filepath.Dir(upload), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, upload, []byte("readme"))
+			uploadFile, err := hashManifestFile(upload, uploadPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := BundleManifest{
+				Type: manifestType, Format: manifestFormatCurrent, Stream: streamPython,
+				Sequence: 1, BundleID: bundleIDFor(streamPython, 1),
+				Created: time.Unix(0, 0).UTC(), Generator: "test",
+				Files: append(files, uploadFile), Python: &PythonManifest{Projects: projects},
+			}
+			if contentPart {
+				manifest.Python = nil
+				manifest.Part = &BundlePartInfo{Index: 1, Count: 2}
+			}
+			signAndWriteBundle(t, hs.cfg.Landing, priv, manifest, stage)
+			if result := mustImportNext(t, hs); !result.Imported {
+				t.Fatalf("bundle was not imported: %+v", result)
+			}
+			if got := treeLabels(getTree(t, srv.URL, streamPython, "")); got != "demo" {
+				t.Errorf("Python tree after import = %q, want demo", got)
+			}
+			if got := treeLabels(getTree(t, srv.URL, streamUploads, "docs")); got != "readme.txt" {
+				t.Errorf("uploads tree after import = %q, want readme.txt", got)
+			}
+		})
+	}
+}
+
+func TestBundleTreeStreamsGoRelocation(t *testing.T) {
+	t.Parallel()
+	file := ManifestFile{Path: "uploads/docs/readme.txt"}
+	for _, tc := range []struct {
+		name     string
+		manifest BundleManifest
+	}{
+		{
+			name: "module records",
+			manifest: BundleManifest{
+				Modules: []ManifestMod{{Files: map[string]ManifestFile{"info": file}}},
+				Files:   []ManifestFile{file},
+			},
+		},
+		{
+			name: "content part without records",
+			manifest: BundleManifest{
+				Stream: streamGo, Part: &BundlePartInfo{Index: 1, Count: 2},
+				Files: []ManifestFile{file},
+			},
+		},
+		{
+			name: "checksum database",
+			manifest: BundleManifest{
+				Stream: streamGo,
+				Files:  []ManifestFile{{Path: "sumdb/sum.golang.org/latest"}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bundleTreeStreams(tc.manifest); !slices.Equal(got, []string{streamGo}) {
+				t.Errorf("affected trees = %v, want only Go after relocation", got)
+			}
+		})
+	}
+}
 
 func TestHighServerImportStatusCachedSnapshot(t *testing.T) {
 	t.Parallel()

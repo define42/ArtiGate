@@ -8,6 +8,7 @@ package main
 // embedded below. Rebuild it with `make ui`.
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -62,27 +63,100 @@ type UITreeNode struct {
 	Count      int    `json:"count,omitempty"`
 }
 
-// treeCache memoizes the (expensive, whole-mirror) filesystem scans behind the
-// dashboard tree and search endpoints. The mirror only changes when a bundle
-// imports or an upload is deleted — both invalidate the cache — so the TTL is
-// just a backstop against direct on-disk mutation, not the freshness mechanism;
-// without invalidation a large mirror would be re-walked every few seconds for
-// as long as anyone (unauthenticated) polls the dashboard.
+// treeCache memoizes filesystem scans per ecosystem. Scans are request-driven;
+// imports and upload deletions invalidate only the affected ecosystem, and the
+// TTL is a backstop against direct on-disk mutation. The mutex protects cache
+// bookkeeping only, so a dashboard scan cannot block import invalidation.
 type treeCache struct {
-	mu     sync.Mutex
-	expiry time.Time
-	trees  map[string]uiTree
+	mu      sync.Mutex
+	entries map[string]*treeCacheEntry
+}
+
+type treeCacheEntry struct {
+	generation uint64
+	expiry     time.Time
+	tree       uiTree
+	building   chan struct{} // non-nil while one request builds this ecosystem
 }
 
 // treeCacheTTL bounds how long a scan is reused when nothing invalidated it.
 const treeCacheTTL = time.Minute
 
-// invalidate drops the memoized scan so the next dashboard request sees the
-// repository as just changed by an import or an upload deletion.
-func (c *treeCache) invalidate() {
+// invalidate releases an ecosystem's snapshot and prevents any scan already
+// in progress from publishing an inventory that predates this mutation.
+func (c *treeCache) invalidate(stream string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.expiry = time.Time{}
+	if entry := c.entries[stream]; entry != nil {
+		entry.generation++
+		entry.tree = nil
+		entry.expiry = time.Time{}
+	}
+}
+
+// get shares one scan among concurrent requests for an ecosystem. Snapshots
+// are immutable after publication; readers can use them without holding mu.
+func (c *treeCache) get(ctx context.Context, stream string, scan func() (uiTree, error)) (uiTree, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		entry := c.entryLocked(stream)
+		if time.Now().Before(entry.expiry) {
+			tree := entry.tree
+			c.mu.Unlock()
+			return tree, nil
+		}
+		if done := entry.building; done != nil {
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-done:
+				continue
+			}
+		}
+		generation := entry.generation
+		entry.building = make(chan struct{})
+		// Drop the cache's reference before rebuilding. Only active readers
+		// need to retain the old inventory while the replacement is scanned.
+		entry.tree = nil
+		entry.expiry = time.Time{}
+		c.mu.Unlock()
+
+		fresh, err := scan()
+
+		c.mu.Lock()
+		stale := entry.generation != generation
+		if !stale && err == nil {
+			entry.tree = fresh
+			entry.expiry = time.Now().Add(treeCacheTTL)
+		}
+		close(entry.building)
+		entry.building = nil
+		c.mu.Unlock()
+		if stale {
+			// An import or deletion completed during the scan. Retry against
+			// that generation instead of caching or returning a stale result.
+			continue
+		}
+		return fresh, err
+	}
+}
+
+// entryLocked returns the stream's cache state, creating it on first use.
+// The caller must hold c.mu.
+func (c *treeCache) entryLocked(stream string) *treeCacheEntry {
+	if c.entries == nil {
+		c.entries = make(map[string]*treeCacheEntry)
+	}
+	entry := c.entries[stream]
+	if entry == nil {
+		entry = &treeCacheEntry{}
+		c.entries[stream] = entry
+	}
+	return entry
 }
 
 // renderHighUI stamps the binary's version into the dashboard shell's header,
@@ -223,29 +297,23 @@ func joinWithAnd(items []string) string {
 }
 
 // handleUITree returns the immediate children of a node in a package tree.
-// eco selects the ecosystem ("go" or "python"); path is the parent node's path
+// eco selects the ecosystem; path is the parent node's path
 // (empty for the tree root).
 func (s *HighServer) handleUITree(w http.ResponseWriter, r *http.Request) {
-	eco := r.URL.Query().Get("eco")
+	eco, ok := ecosystemFor(r.URL.Query().Get("eco"))
+	if !ok {
+		// Preserve the original dashboard's Go fallback for unknown keys.
+		eco = goEcosystem()
+	}
 	path := r.URL.Query().Get("path")
 
-	trees, err := s.cachedTrees()
+	tree, err := s.cachedTree(r.Context(), eco)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	writeJSON(w, map[string][]UITreeNode{"nodes": ecoTreeChildren(trees, eco, path)})
-}
-
-// ecoTreeChildren renders one node's children from an ecosystem's scanned
-// tree. An unknown eco key keeps rendering the Go tree, as it did before the
-// dashboard grew per-ecosystem views.
-func ecoTreeChildren(trees map[string]uiTree, eco, path string) []UITreeNode {
-	if t, ok := trees[eco]; ok {
-		return t.children(path)
-	}
-	return trees[streamGo].children(path)
+	writeJSON(w, map[string][]UITreeNode{"nodes": tree.children(path)})
 }
 
 // uiTree is one ecosystem's scanned dashboard inventory; it renders the
@@ -342,35 +410,12 @@ func (h *searchHits) add(name string, node UITreeNode) {
 	}
 }
 
-// cachedTrees returns the mirrored inventory across ecosystems, memoized for a
-// few seconds so a burst of lazy expand requests reuses one scan.
-func (s *HighServer) cachedTrees() (map[string]uiTree, error) {
-	s.tree.mu.Lock()
-	defer s.tree.mu.Unlock()
-	if time.Now().Before(s.tree.expiry) {
-		return s.tree.trees, nil
-	}
-	fresh, err := s.scanEcoTrees()
-	if err != nil {
-		return nil, err
-	}
-	s.tree.trees = fresh
-	s.tree.expiry = time.Now().Add(treeCacheTTL)
-	return fresh, nil
-}
-
-// scanEcoTrees walks every registered ecosystem's repository tree once.
-func (s *HighServer) scanEcoTrees() (map[string]uiTree, error) {
-	ecos := ecosystems()
-	trees := make(map[string]uiTree, len(ecos))
-	for _, e := range ecos {
-		t, err := e.scanTree(s)
-		if err != nil {
-			return nil, err
-		}
-		trees[e.stream] = t
-	}
-	return trees, nil
+// cachedTree loads only the selected ecosystem, reusing its snapshot for lazy
+// tree expansion and search until invalidation or expiry.
+func (s *HighServer) cachedTree(ctx context.Context, eco ecosystem) (uiTree, error) {
+	return s.tree.get(ctx, eco.stream, func() (uiTree, error) {
+		return eco.scanTree(s)
+	})
 }
 
 // -----------------------------------------------------------------------------
@@ -417,15 +462,11 @@ func (s *HighServer) handleUISearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, resp)
 		return
 	}
-	trees, err := s.cachedTrees()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	for _, e := range ecosystems() {
-		tree, ok := trees[e.stream]
-		if !ok {
-			continue
+		tree, err := s.cachedTree(r.Context(), e)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		nodes, total := tree.search(query, uiSearchHitLimit)
 		if total == 0 {

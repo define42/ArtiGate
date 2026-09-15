@@ -10,6 +10,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -406,6 +408,38 @@ func TestUploadsTreeAndDetail(t *testing.T) {
 	}
 	if resp := deleteUpload(t, srv, "..", "passwd"); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("traversal delete status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestUploadsDeleteInvalidatesOnlyUploads(t *testing.T) {
+	t.Parallel()
+	ls, priv := newAptLowServer(t)
+	hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+	res := collectUpload(t, ls, "docs", []uploadPair{{"readme.md", "# hi"}})
+	importNextUploads(t, ls, hs, res.BundleID)
+	writeSignedBundle(t, hs.cfg.Landing, priv, 1, 0, []moduleSpec{{"example.com/mod", "v1.0.0"}})
+	mustImportNext(t, hs)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	if got := treeLabels(getTree(t, srv.URL, streamUploads, "docs")); got != "readme.md" {
+		t.Fatalf("initial uploads tree = %q, want readme.md", got)
+	}
+	if got := treeLabels(getTree(t, srv.URL, streamGo, "")); got != "example.com" {
+		t.Fatalf("initial Go tree = %q, want example.com", got)
+	}
+	// An unrelated direct disk mutation reveals whether deletion unnecessarily
+	// rebuilds the Go inventory as well as the uploads inventory.
+	if err := os.RemoveAll(filepath.Join(hs.goModuleDir(), "example.com")); err != nil {
+		t.Fatal(err)
+	}
+	if resp := deleteUpload(t, srv, "docs", "readme.md"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200", resp.StatusCode)
+	}
+	if got := getTree(t, srv.URL, streamUploads, "docs"); len(got) != 0 {
+		t.Errorf("uploads tree after deletion = %+v, want empty", got)
+	}
+	if got := treeLabels(getTree(t, srv.URL, streamGo, "")); got != "example.com" {
+		t.Errorf("upload deletion refreshed unrelated Go tree: %q", got)
 	}
 }
 

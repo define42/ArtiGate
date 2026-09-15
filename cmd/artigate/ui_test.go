@@ -133,6 +133,37 @@ func TestHighServerUITreePython(t *testing.T) {
 	}
 }
 
+// Browsing Go must not pre-scan uploads. A file added before uploads' first
+// request must be visible there, including when reached through global search.
+func TestHighServerUITreeScansRequestedEcosystem(t *testing.T) {
+	t.Parallel()
+	for _, view := range []string{streamGo, "", "unknown"} {
+		t.Run("eco="+view, func(t *testing.T) {
+			t.Parallel()
+			pub, _ := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			docs := filepath.Join(hs.uploadsDir(), "docs")
+			if err := os.MkdirAll(docs, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(docs, "before.txt"), []byte("before"))
+			srv := httptest.NewServer(hs)
+			defer srv.Close()
+
+			if nodes := getTree(t, srv.URL, view, ""); len(nodes) != 0 {
+				t.Fatalf("empty Go tree = %+v", nodes)
+			}
+			writeFile(t, filepath.Join(docs, "after.txt"), []byte("after"))
+			if groups := getSearch(t, srv.URL, "after.txt"); len(groups) != 1 || groups[0].Eco != streamUploads {
+				t.Fatalf("first uploads search missed newly added file: %+v", groups)
+			}
+			if nodes := getTree(t, srv.URL, streamUploads, "docs"); treeLabels(nodes) != "after.txt,before.txt" {
+				t.Fatalf("first uploads tree = %+v", nodes)
+			}
+		})
+	}
+}
+
 func getDetail(t *testing.T, base, eco, path string) UIDetail {
 	t.Helper()
 	code, body := httpGet(t, base+"/ui/api/detail?eco="+eco+"&path="+url.QueryEscape(path))

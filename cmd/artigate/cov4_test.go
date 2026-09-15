@@ -412,7 +412,7 @@ func TestCov4_FirstPomIn(t *testing.T) {
 	}
 }
 
-// TestCov4_CachedListsError drives cachedTrees's error-return branch by making
+// TestCov4_CachedListsError drives cachedTree's error-return branch by making
 // the Go module tree unreadable so listGoModules's WalkDir fails.
 func TestCov4_CachedListsError(t *testing.T) {
 	if os.Geteuid() == 0 {
@@ -432,14 +432,14 @@ func TestCov4_CachedListsError(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 
-	if _, err := hs.cachedTrees(); err == nil {
-		t.Fatal("cachedTrees should propagate the WalkDir permission error")
+	if _, err := hs.cachedTree(t.Context(), goEcosystem()); err == nil {
+		t.Fatal("cachedTree should propagate the WalkDir permission error")
 	}
 }
 
 // TestCov4_TreeCacheInvalidation pins the dashboard scan cache's contract: a
 // warmed cache serves the memoized scan (the mirror only changes on import or
-// upload deletion), and invalidate() makes the next request re-scan so those
+// upload deletion), and invalidate(stream) makes the next request re-scan so those
 // mutations are visible immediately instead of after the TTL.
 func TestCov4_TreeCacheInvalidation(t *testing.T) {
 	pub, _ := newTestKeys(t)
@@ -450,10 +450,10 @@ func TestCov4_TreeCacheInvalidation(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(uploadsDir, "a.txt"), []byte("a"))
 
-	docsFiles := func(trees map[string]uiTree) int {
-		return len(trees["uploads"].children("docs"))
+	docsFiles := func(tree uiTree) int {
+		return len(tree.children("docs"))
 	}
-	first, err := hs.cachedTrees()
+	first, err := hs.cachedTree(t.Context(), uploadsEcosystem())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +463,7 @@ func TestCov4_TreeCacheInvalidation(t *testing.T) {
 
 	// A direct disk write is invisible while the cache is warm…
 	writeFile(t, filepath.Join(uploadsDir, "b.txt"), []byte("b"))
-	cached, err := hs.cachedTrees()
+	cached, err := hs.cachedTree(t.Context(), uploadsEcosystem())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,8 +472,8 @@ func TestCov4_TreeCacheInvalidation(t *testing.T) {
 	}
 
 	// …and visible immediately after the mutation paths invalidate the cache.
-	hs.tree.invalidate()
-	fresh, err := hs.cachedTrees()
+	hs.tree.invalidate(streamUploads)
+	fresh, err := hs.cachedTree(t.Context(), uploadsEcosystem())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -562,13 +562,22 @@ on every export and every re-export. **Fixed:** `linkOrCopyFile` (`lowside.go`) 
 the immutable signed files (tmp-link + rename, so replay stays idempotent), falling back to
 the copy on EXDEV/no-hardlink filesystems.
 
-### P4 — Dashboard tree cache re-walked the whole mirror every 3 seconds
-`cachedTrees` memoized the full 22-ecosystem inventory scan (per-version stats + reads in
-several ecosystems) for only 3 s, so any unauthenticated dashboard/tree/search poll kept a
-large mirror permanently re-scanning. The mirror only changes on import or upload deletion.
-**Fixed:** both mutation paths call `treeCache.invalidate()` (`highside.go`, `uploads.go`),
-and the TTL is now a 60 s backstop for direct on-disk mutation (`ui.go`); test
-`TestCov4_TreeCacheInvalidation`.
+### P4 — Dashboard navigation rebuilt and retained the whole inventory
+`cachedTrees` scanned every ecosystem on a cache miss, even for a single-ecosystem tree
+request. The 60 s TTL and global invalidation after every import repeatedly rebuilt the
+whole inventory while retaining the old snapshot. Scans held the invalidation mutex,
+which could delay import completion. These scans were request-driven; an idle dashboard
+did not initiate a periodic scan.
+**Interim fix:** `cachedTree` caches each ecosystem separately. Import invalidation follows
+the manifest's ecosystem records and installed file namespaces (including legacy mixed
+bundles and content-only parts), and upload deletion invalidates only uploads. Snapshots
+are built outside the cache mutex, concurrent requests share one scan per ecosystem,
+and a generation check discards and retries scans
+invalidated during construction. Invalidated or expired snapshots are released by the
+cache before replacement; active readers may still retain them. The TTL remains a 60 s
+backstop for direct on-disk mutation.
+**Remaining:** an indexed, paginated catalog. Global search still visits every ecosystem,
+tree expansion scans inventory slices, and flat roots can return every package.
 
 ### O1 — `landing/imported/` and `landing/duplicates/` grew forever
 Every imported bundle's three files were moved to `landing/imported` (`highside.go:847`) and

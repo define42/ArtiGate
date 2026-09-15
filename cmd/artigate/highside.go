@@ -1036,13 +1036,42 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 	if err := s.commitImportedStateLocked(stream, bundleID, manifest.Sequence); err != nil {
 		return BundleManifest{}, err
 	}
-	// The freshly installed artifacts must show up in the dashboard tree right
-	// away, not after the scan cache's TTL.
-	s.tree.invalidate()
+	for _, affectedStream := range bundleTreeStreams(manifest) {
+		s.tree.invalidate(affectedStream)
+	}
 	if err := moveImportedFilesFromDir(bundleDir, filepath.Join(s.cfg.Landing, "imported"), manifest.BundleID); err != nil {
 		log.Printf("move imported files: %v", err)
 	}
 	return manifest, nil
+}
+
+// bundleTreeStreams identifies inventories changed by installed files and
+// regenerated metadata. Records may span ecosystems, and files need not be
+// referenced by a record. Use actual destination roots, including Go's
+// relocation, and retain only registered ecosystems.
+func bundleTreeStreams(manifest BundleManifest) []string {
+	registry := ecosystems()
+	affected := make(map[string]bool, len(registry))
+	for _, e := range registry {
+		affected[e.stream] = e.manifestContent(manifest)
+	}
+	goFiles := goBundleFilePaths(manifest)
+	for _, f := range manifest.Files {
+		root, _, _ := strings.Cut(f.Path, "/")
+		if goFiles[f.Path] {
+			root = streamGo
+		}
+		if _, registered := affected[root]; registered {
+			affected[root] = true
+		}
+	}
+	var streams []string
+	for _, e := range registry {
+		if affected[e.stream] {
+			streams = append(streams, e.stream)
+		}
+	}
+	return streams
 }
 
 func validateBundleArtifactSizes(paths ...string) error {
@@ -1744,16 +1773,7 @@ func validateManifestModules(mods []ManifestMod, seen map[string]bool) error {
 }
 
 func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManifest) error {
-	goFiles := goFilePaths(manifest.Modules)
-	// A content part carries no module records to derive placement from; on
-	// the go stream every file it delivers is a module file and belongs under
-	// the go/ subtree, where the split's final bundle will verify it as prior.
-	if manifest.Part != nil && manifestStream(manifest) == streamGo {
-		goFiles = allManifestFilePaths(manifest.Files)
-	}
-	// Checksum-database files ride in go bundles without a module record;
-	// they belong under the go/ subtree too, where serveGoSumDB reads them.
-	goFiles = withGoSumDBFilePaths(goFiles, manifest)
+	goFiles := goBundleFilePaths(manifest)
 	if err := s.installVerifiedFiles(staging, manifest.Files, goFiles); err != nil {
 		return err
 	}
@@ -1770,6 +1790,20 @@ func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManife
 	}
 	// Complete markers are written only after all files are installed.
 	return s.writeCompleteMarkers(manifest.Modules)
+}
+
+// goBundleFilePaths identifies files relocated under go/ during installation.
+func goBundleFilePaths(manifest BundleManifest) map[string]bool {
+	goFiles := goFilePaths(manifest.Modules)
+	// A content part carries no module records to derive placement from; on
+	// the go stream every file it delivers is a module file and belongs under
+	// the go/ subtree, where the split's final bundle will verify it as prior.
+	if manifest.Part != nil && manifestStream(manifest) == streamGo {
+		goFiles = allManifestFilePaths(manifest.Files)
+	}
+	// Checksum-database files ride in go bundles without a module record;
+	// they belong under the go/ subtree too, where serveGoSumDB reads them.
+	return withGoSumDBFilePaths(goFiles, manifest)
 }
 
 // allManifestFilePaths returns the set of every listed file path.

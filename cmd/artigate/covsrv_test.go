@@ -262,16 +262,16 @@ func TestCovSrv_ServeUIMethodGuards(t *testing.T) {
 	}
 }
 
-// TestCovSrv_CachedListsCacheHit calls cachedTrees twice so the second call
+// TestCovSrv_CachedListsCacheHit calls cachedTree twice so the second call
 // returns the memoized copy.
 func TestCovSrv_CachedListsCacheHit(t *testing.T) {
 	pub, _ := newTestKeys(t)
 	hs := newTestHighServer(t, pub)
-	if _, err := hs.cachedTrees(); err != nil {
-		t.Fatalf("first cachedTrees: %v", err)
+	if _, err := hs.cachedTree(t.Context(), goEcosystem()); err != nil {
+		t.Fatalf("first cachedTree: %v", err)
 	}
-	if _, err := hs.cachedTrees(); err != nil {
-		t.Fatalf("cached cachedTrees: %v", err)
+	if _, err := hs.cachedTree(t.Context(), goEcosystem()); err != nil {
+		t.Fatalf("cached cachedTree: %v", err)
 	}
 }
 
