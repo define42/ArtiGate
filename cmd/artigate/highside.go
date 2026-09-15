@@ -133,10 +133,9 @@ type HighServer struct {
 	// npmAudit memoizes the regenerated npm bulk-audit index (see
 	// osvnpmaudit.go) so audit requests do not re-parse it from disk.
 	npmAudit npmAuditCache
-	// pyDigests memoizes each wheel's SHA-256 and Requires-Python so the
-	// unauthenticated /simple/<project>/ page does not re-hash and re-open
-	// every wheel on every pip request (see pyProjectFiles).
-	pyDigests pyDigestCache
+	// pyIndex groups Python artifacts by project and persists their verified
+	// digests and extracted metadata (see python_index.go).
+	pyIndex pyProjectIndex
 	// detailDigests memoizes artifact SHA-256 digests for the unauthenticated
 	// /ui/api/detail panel, so repeated detail requests do not re-hash the
 	// selected artifact on every hit (see detailDigestCache).
@@ -1803,6 +1802,14 @@ func goFilePaths(mods []ManifestMod) map[string]bool {
 // under the go/ subtree; every other ecosystem's paths already carry their own
 // prefix and install at the download root.
 func (s *HighServer) installVerifiedFiles(staging string, files []ManifestFile, goFiles map[string]bool) error {
+	pythonFiles := pythonPackageFiles(files, goFiles)
+	if len(pythonFiles) > 0 {
+		s.pyIndex.mu.Lock()
+		defer s.pyIndex.mu.Unlock()
+		if err := s.ensurePythonIndexLocked(); err != nil {
+			return err
+		}
+	}
 	for _, f := range files {
 		base := s.downloadDir
 		if goFiles[f.Path] {
@@ -1811,6 +1818,9 @@ func (s *HighServer) installVerifiedFiles(staging string, files []ManifestFile, 
 		if err := installVerifiedFile(staging, base, f); err != nil {
 			return err
 		}
+	}
+	if len(pythonFiles) > 0 {
+		return s.publishPythonIndexLocked(pythonFiles)
 	}
 	return nil
 }

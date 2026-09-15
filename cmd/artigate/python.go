@@ -34,7 +34,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -414,28 +413,17 @@ func (s *HighServer) pythonDir() string {
 	return filepath.Join(s.downloadDir, "python", "packages")
 }
 
-// scanPyFiles lists every wheel present in the high-side package store.
+// scanPyFiles lists indexed wheels and source distributions for the root page
+// and dashboard. Project lookups use the project map directly.
 func (s *HighServer) scanPyFiles() ([]pyFileEntry, error) {
-	entries, err := os.ReadDir(s.pythonDir())
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
+	if err := s.lockPythonIndex(); err != nil {
 		return nil, err
 	}
+	defer s.pyIndex.mu.RUnlock()
 	var out []pyFileEntry
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if project, version, ok := parseWheelFilename(e.Name()); ok {
-			out = append(out, pyFileEntry{filename: e.Name(), project: project, version: version})
-			continue
-		}
-		// Source distributions sit beside the wheels for projects mirrored
-		// through the sdist opt-in.
-		if project, version, ok := parseSdistFilename(e.Name()); ok && version != "" {
-			out = append(out, pyFileEntry{filename: e.Name(), project: project, version: version})
+	for project, files := range s.pyIndex.state.Projects {
+		for _, f := range files {
+			out = append(out, pyFileEntry{filename: f.Filename, project: project, version: f.Version})
 		}
 	}
 	return out, nil
@@ -551,80 +539,6 @@ type pyProjectFile struct {
 	sha256         string
 	requiresPython string
 	provenance     bool
-}
-
-// pyDigestCache memoizes each wheel's SHA-256 and Requires-Python. The
-// unauthenticated /simple/<project>/ page pip fetches for every requirement
-// would otherwise re-hash and re-open every wheel of the project on each
-// request — O(total wheel bytes) per hit. A wheel is immutable once imported
-// and only ever replaced atomically, so (size, modtime) is a sound key: any
-// content change moves at least one of them, and a mismatch re-hashes.
-type pyDigestCache struct {
-	mu      sync.Mutex
-	entries map[string]pyDigestEntry
-}
-
-type pyDigestEntry struct {
-	size           int64
-	modTime        time.Time
-	sha256         string
-	requiresPython string
-}
-
-// get returns the wheel's cached SHA-256 and Requires-Python, recomputing them
-// only when the file is new or its size/modtime changed since last seen.
-func (c *pyDigestCache) get(abs string) (sha256, requiresPython string, err error) {
-	fi, err := os.Stat(abs)
-	if err != nil {
-		return "", "", err
-	}
-	c.mu.Lock()
-	if e, ok := c.entries[abs]; ok && e.size == fi.Size() && e.modTime.Equal(fi.ModTime()) {
-		c.mu.Unlock()
-		return e.sha256, e.requiresPython, nil
-	}
-	c.mu.Unlock()
-
-	sum, err := sha256File(abs)
-	if err != nil {
-		return "", "", err
-	}
-	rp := requiresPythonFor(abs)
-
-	c.mu.Lock()
-	if c.entries == nil {
-		c.entries = make(map[string]pyDigestEntry)
-	}
-	c.entries[abs] = pyDigestEntry{size: fi.Size(), modTime: fi.ModTime(), sha256: sum, requiresPython: rp}
-	c.mu.Unlock()
-	return sum, rp, nil
-}
-
-// pyProjectFiles hashes and reads the metadata of every wheel of one project,
-// sorted by filename. Digests are memoized (see pyDigestCache) so a repeated
-// request does not re-hash unchanged wheels.
-func (s *HighServer) pyProjectFiles(project string) ([]pyProjectFile, error) {
-	files, err := s.scanPyFiles()
-	if err != nil {
-		return nil, err
-	}
-	var out []pyProjectFile
-	for _, f := range files {
-		if f.project != project {
-			continue
-		}
-		abs := filepath.Join(s.pythonDir(), f.filename)
-		sum, rp, err := s.pyDigests.get(abs)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, pyProjectFile{
-			filename: f.filename, version: f.version, sha256: sum, requiresPython: rp,
-			provenance: fileExists(abs + ".provenance"),
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].filename < out[j].filename })
-	return out, nil
 }
 
 func (s *HighServer) handlePySimpleProject(w http.ResponseWriter, r *http.Request, urlPath string) {

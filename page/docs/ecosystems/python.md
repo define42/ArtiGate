@@ -139,7 +139,9 @@ The signed bundle manifest carries a `python` block grouping distribution files 
 
 ## High side — serving the Simple Repository API
 
-Distribution files live flat on disk at `<root>/python/packages`. The high side lists every file there that parses as a wheel — plus every source distribution mirrored through the sdist opt-in — and regenerates all index HTML on each request.
+Distribution files live flat on disk at `<root>/cache/download/python/packages`. During import, the high side maintains a project-to-files index in `<root>/python-index.json`, together with verified SHA-256 digests and `Requires-Python` extracted from the artifacts. Project requests read only that project's entries; missing projects do not require a directory scan. Unchanged artifacts reuse their saved digests and metadata after restart.
+
+Older repositories without an index, corrupt indexes, and package-directory changes trigger a shared rebuild. File size, modification time, and permissions are checked before reusing cached metadata; changed files are read again. Index snapshots are written before an import is marked complete. Snapshot writes scale with the inventory size, while ordinary project lookups scale with the selected project's files.
 
 !!! note "Routes sit at the server root"
     Unlike npm (`/npm/`) or Maven (`/maven/`), the Python routes are **un-namespaced** — `/simple/` and `/packages/` at the server root, not under a `/python/` prefix.
@@ -174,7 +176,7 @@ Served as legacy PEP 503 **HTML** with `Content-Type: text/html; charset=utf-8` 
 
 The path segment is PEP 503-normalized (lowercase; runs of `-`, `_`, `.` collapse to a single `-`), so lookups are **case- and separator-insensitive**: `/simple/typing_extensions/`, `/simple/Typing-Extensions/`, and `/simple/typing.extensions/` all resolve to the same project (`typing-extensions`). If no distribution file matches, it returns `404 not found`.
 
-Each link's `href` includes the SHA-256 as a URL fragment (the PEP 503 hash), computed live from the file on disk, and a `data-requires-python` attribute when the distribution's own metadata declares `Requires-Python`:
+Each link's `href` includes the verified SHA-256 as a URL fragment (the PEP 503 hash), and a `data-requires-python` attribute when the distribution's own metadata declares `Requires-Python`:
 
 ```html
 <h1>Links for requests</h1>

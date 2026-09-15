@@ -816,7 +816,7 @@ func (s *HighServer) pythonDetail(filename string) (UIDetail, error) {
 	}
 	// The wheel's digest comes from the same cache the /simple project pages
 	// use, so a wheel is hashed at most once across both endpoints.
-	if sum, _, err := s.pyDigests.get(abs); err == nil {
+	if sum, err := s.pythonFileDigest(filename); err == nil {
 		fields = append(fields, UIDetailField{Label: "SHA-256", Value: sum, Mono: true})
 	}
 	title := project
