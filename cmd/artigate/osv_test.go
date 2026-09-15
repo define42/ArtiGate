@@ -640,6 +640,123 @@ func TestOsvLowToHighPipeline(t *testing.T) {
 	}
 }
 
+func TestOsvSnapshotReversion(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		addEcosystem bool
+	}{
+		{name: "alone"},
+		{name: "with_new_ecosystem", addEcosystem: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			up, ls, priv := osvTestSetup(t)
+			hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+			srv := httptest.NewServer(hs)
+			defer srv.Close()
+
+			a := osvTestNpmZip(t)
+			b := osvTestZip(t, map[string]string{"MAL-2024-1.json": osvTestMAL})
+			names := []string{"npm"}
+			for i, snapshot := range [][]byte{a, b, a} {
+				up.set("npm", snapshot)
+				if i == 2 && tt.addEcosystem {
+					names = append(names, "Alpine:v3.20")
+				}
+				res, err := ls.CollectOsv(t.Context(), OsvCollectRequest{Ecosystems: names})
+				if err != nil {
+					t.Fatalf("snapshot %d collect: %v", i+1, err)
+				}
+				if res.Skipped || res.BundleID == "" {
+					t.Errorf("snapshot %d: changed contents skipped: %+v", i+1, res)
+				} else {
+					m := readBundleManifest(t, ls, res.BundleID)
+					for _, f := range m.Files {
+						if f.Prior {
+							t.Errorf("snapshot %d: changed or newly added file %s marked prior", i+1, f.Path)
+						}
+					}
+					transferAptBundle(t, ls, hs, res.BundleID)
+					if imp, err := hs.ImportNext(); err != nil || !imp.Imported {
+						t.Errorf("snapshot %d import: %+v, %v", i+1, imp, err)
+					}
+				}
+				if code, body := httpGet(t, srv.URL+"/osv/npm/all.zip"); code != http.StatusOK || body != string(snapshot) {
+					t.Errorf("snapshot %d: served status %d and %d byte(s), want current upstream contents", i+1, code, len(body))
+				}
+			}
+
+			// A full bundle after the reversion must still import in sequence.
+			// Continue here even after an earlier failure to catch a stale prior
+			// reference wedging the stream against subsequent full imports.
+			forced, err := ls.CollectOsv(t.Context(), OsvCollectRequest{Ecosystems: names, Force: true})
+			if err != nil {
+				t.Fatalf("forced collect after reversion: %v", err)
+			}
+			if forced.Skipped || forced.Sequence != 4 || forced.PriorFiles != 0 {
+				t.Errorf("forced collect = %+v, want full bundle at sequence 4", forced)
+			}
+			transferAptBundle(t, ls, hs, forced.BundleID)
+			if imp, err := hs.ImportNext(); err != nil || !imp.Imported {
+				t.Fatalf("forced import after reversion remains blocked: %+v, %v", imp, err)
+			}
+			if code, body := httpGet(t, srv.URL+"/osv/npm/all.zip"); code != http.StatusOK || body != string(a) {
+				t.Fatalf("forced import served status %d and %d byte(s), want reverted snapshot", code, len(body))
+			}
+
+			unchanged, err := ls.CollectOsv(t.Context(), OsvCollectRequest{Ecosystems: names})
+			if err != nil {
+				t.Fatalf("unchanged collect after reversion: %v", err)
+			}
+			if !unchanged.Skipped || unchanged.BundleID != "" {
+				t.Fatalf("unchanged collect = %+v, want skipped", unchanged)
+			}
+
+			// npm now really holds A on both sides and can safely be prior
+			// while another ecosystem is added or updated.
+			alpine := osvTestZip(t, map[string]string{
+				"CVE-2024-0002.json": strings.ReplaceAll(osvTestAlpine, "CVE-2024-0001", "CVE-2024-0002"),
+			})
+			up.set("Alpine:v3.20", alpine)
+			res, err := ls.CollectOsv(t.Context(), OsvCollectRequest{Ecosystems: []string{"npm", "Alpine:v3.20"}})
+			if err != nil {
+				t.Fatalf("collect with unchanged npm: %v", err)
+			}
+			if res.Skipped || res.PriorFiles != 1 {
+				t.Fatalf("collect with unchanged npm = %+v, want one prior file", res)
+			}
+			m := readBundleManifest(t, ls, res.BundleID)
+			if len(m.Files) != 2 {
+				t.Fatalf("manifest has %d files, want 2", len(m.Files))
+			}
+			for _, f := range m.Files {
+				wantPrior := f.Path == osvDBRel("npm")
+				if f.Prior != wantPrior {
+					t.Errorf("file %s prior = %t, want %t", f.Path, f.Prior, wantPrior)
+				}
+				if wantPrior && f.SHA256 != aptSHA256(a) {
+					t.Errorf("npm prior hash = %s, want reverted snapshot hash %s", f.SHA256, aptSHA256(a))
+				}
+			}
+			transferAptBundle(t, ls, hs, res.BundleID)
+			if imp, err := hs.ImportNext(); err != nil || !imp.Imported {
+				t.Fatalf("import with unchanged npm: %+v, %v", imp, err)
+			}
+			for name, want := range map[string][]byte{"npm": a, "Alpine:v3.20": alpine} {
+				if code, body := httpGet(t, srv.URL+"/osv/"+name+"/all.zip"); code != http.StatusOK || body != string(want) {
+					t.Errorf("%s: served status %d and %d byte(s), want current upstream contents", name, code, len(body))
+				}
+			}
+			status, err := hs.ImportStatus()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := status.Stream(streamOsv).LastImportedSequence; got != 5 {
+				t.Errorf("last imported sequence = %d, want 5", got)
+			}
+		})
+	}
+}
+
 func TestOsvCollectRequestValidation(t *testing.T) {
 	if _, err := validateOsvRequest(OsvCollectRequest{}); err == nil {
 		t.Error("empty request accepted")

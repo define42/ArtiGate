@@ -17,11 +17,10 @@ package main
 //     Hugging Face LFS) consult the index first and emit a prior reference
 //     without downloading at all.
 //
-// Rows are path-qualified: a hit means "this exact bundle path with this exact
-// content was forwarded", which is precisely the claim a prior reference makes
-// and the high side verifies. Rows migrated from the legacy hash-only schema
-// carry an empty path and match any path with that hash; the first export that
-// touches such content re-records it path-qualified.
+// Immutable files use path-qualified historical rows. Mutable paths instead
+// match only their latest delivered contents: an older snapshot no longer
+// describes the receiver after a replacement. Legacy hash-only rows may match
+// immutable paths, but cannot establish the current state of a mutable path.
 //
 // It uses the same pure-Go SQLite driver as the watch store (rather than a JSON
 // set rewritten whole on every collect) so lookups and inserts stay O(new) as
@@ -29,9 +28,9 @@ package main
 // independent of the rolling bundle archive: rebuilding it from archived
 // manifests would let archive pruning forget shipped content and re-ship it.
 // Re-export never consults or updates it. The index is an optimization, not
-// correctness state — callers fail safe (export or download anyway) on any
-// store error — so keeping it here, separate from the stdlib-JSON sequence
-// state, keeps a SQLite problem from ever wedging the core export pipeline.
+// correctness state. Lookup failures cause callers to export or download
+// anyway. Before writing mutable replacements, callers must durably invalidate
+// their old entries so a failed export or record cannot leave stale dedup hits.
 
 import (
 	"database/sql"
@@ -58,6 +57,15 @@ const forwardedSchema = `CREATE TABLE IF NOT EXISTS forwarded_files (
   PRIMARY KEY (stream, sha256, path)
 ) WITHOUT ROWID`
 
+// Mutable history has no export ordering, so existing historical rows cannot
+// seed this table. An upgrade safely re-exports each mutable path once.
+const mutableForwardedSchema = `CREATE TABLE IF NOT EXISTS mutable_forwarded_files (
+  stream TEXT NOT NULL,
+  path   TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  PRIMARY KEY (stream, path)
+) WITHOUT ROWID`
+
 // OpenExportedStore opens (creating if needed) the exported-content database at
 // path, mirroring the watch store's single-writer setup, and folds in any
 // legacy hash-only index.
@@ -69,7 +77,7 @@ func OpenExportedStore(path string) (*ExportedStore, error) {
 	// SQLite has a single writer; serialize all access so the collectors never
 	// collide on "database is locked", waiting briefly if contended.
 	db.SetMaxOpenConns(1)
-	for _, stmt := range []string{"PRAGMA busy_timeout=5000", forwardedSchema} {
+	for _, stmt := range []string{"PRAGMA busy_timeout=5000", forwardedSchema, mutableForwardedSchema} {
 		if _, err := db.Exec(stmt); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("init exported db: %w", err)
@@ -124,11 +132,18 @@ func (s *ExportedStore) Close() error {
 const forwardedQuery = `SELECT 1 FROM forwarded_files
 	WHERE stream = ? AND sha256 = ? AND (path = ? OR path = '') LIMIT 1`
 
+const mutableForwardedQuery = `SELECT 1 FROM mutable_forwarded_files
+	WHERE stream = ? AND sha256 = ? AND path = ?`
+
 // IsForwarded reports whether one file (bundle path plus content hash) is
-// already recorded for the stream.
+// already recorded for the stream. Mutable files must match the latest export.
 func (s *ExportedStore) IsForwarded(stream, path, sha256 string) (bool, error) {
+	query := forwardedQuery
+	if mutableRepoPath(path) {
+		query = mutableForwardedQuery
+	}
 	var one int
-	switch err := s.db.QueryRow(forwardedQuery, stream, sha256, path).Scan(&one); {
+	switch err := s.db.QueryRow(query, stream, sha256, path).Scan(&one); {
 	case err == nil:
 		return true, nil
 	case errors.Is(err, sql.ErrNoRows):
@@ -150,9 +165,18 @@ func (s *ExportedStore) ForwardedFlags(stream string, files []ManifestFile) ([]b
 		return nil, err
 	}
 	defer func() { _ = stmt.Close() }()
+	mutableStmt, err := s.db.Prepare(mutableForwardedQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = mutableStmt.Close() }()
 	for i, f := range files {
+		query := stmt
+		if mutableRepoPath(f.Path) {
+			query = mutableStmt
+		}
 		var one int
-		switch err := stmt.QueryRow(stream, f.SHA256, f.Path).Scan(&one); {
+		switch err := query.QueryRow(stream, f.SHA256, f.Path).Scan(&one); {
 		case err == nil:
 			flags[i] = true
 		case errors.Is(err, sql.ErrNoRows):
@@ -163,10 +187,41 @@ func (s *ExportedStore) ForwardedFlags(stream string, files []ManifestFile) ([]b
 	return flags, nil
 }
 
+// InvalidateMutable forgets delivered mutable paths before a bundle is written.
+// If writing, committing its sequence, or recording the new contents fails,
+// future collects safely resend those paths, including after a restart. Prior
+// references do not replace anything and must retain their current entries.
+func (s *ExportedStore) InvalidateMutable(stream string, files []ManifestFile) error {
+	var paths []string
+	for _, f := range files {
+		if !f.Prior && mutableRepoPath(f.Path) {
+			paths = append(paths, f.Path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Prepare("DELETE FROM mutable_forwarded_files WHERE stream = ? AND path = ?")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, path := range paths {
+		if _, err := stmt.Exec(stream, path); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Record adds every file (path plus hash) to the stream's index in one
-// transaction. It is idempotent via the primary key; recording a prior file
-// again also gives content migrated from the legacy schema its path-qualified
-// row.
+// transaction, updating the latest contents of delivered mutable files. Prior
+// references do not establish mutable state because they deliver no bytes.
 func (s *ExportedStore) Record(stream string, files []ManifestFile) error {
 	if len(files) == 0 {
 		return nil
@@ -181,9 +236,20 @@ func (s *ExportedStore) Record(stream string, files []ManifestFile) error {
 		return err
 	}
 	defer func() { _ = stmt.Close() }()
+	mutableStmt, err := tx.Prepare(`INSERT INTO mutable_forwarded_files (stream, sha256, path) VALUES (?, ?, ?)
+		ON CONFLICT (stream, path) DO UPDATE SET sha256 = excluded.sha256`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = mutableStmt.Close() }()
 	for _, f := range files {
 		if _, err := stmt.Exec(stream, f.SHA256, f.Path); err != nil {
 			return err
+		}
+		if !f.Prior && mutableRepoPath(f.Path) {
+			if _, err := mutableStmt.Exec(stream, f.SHA256, f.Path); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()

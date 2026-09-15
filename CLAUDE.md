@@ -22,7 +22,7 @@ golangci-lint run          # REQUIRED — do not skip; CI runs this and fails th
 
 You must **always validate with golangci-lint** — never push Go changes without
 running it and getting `0 issues`. It is not optional and `go vet` is not a
-substitute: the CI lint job (`golangci-lint-action`, **pinned to v2.12.2**, config
+substitute: the CI lint job (`golangci-lint-action`, **pinned to v2.13.2**, config
 in `.golangci.yml`) enables a strict linter set — including complexity limits
 (`gocognit`/`cyclop`/`funlen`/`nestif`), `revive`, `gocritic`, `errorlint`,
 `gochecknoglobals`, `gochecknoinits`, and the `gofmt`/`gofumpt`/`goimports`
@@ -34,16 +34,16 @@ loop to an already-borderline function (many hover near the limit) will trip
 the config.
 
 Install and run the **same version CI uses** (the toolchain must match `go.mod`,
-currently Go 1.26.x — the module requires a newer Go than a typical system
+currently Go 1.27.1 — the module requires a newer Go than a typical system
 default, so set `GOTOOLCHAIN` explicitly):
 
 ```bash
-GOTOOLCHAIN=go1.26.5 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
-GOTOOLCHAIN=go1.26.5 "$(go env GOPATH)/bin/golangci-lint" run
+GOTOOLCHAIN=go1.27.1 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+GOTOOLCHAIN=go1.27.1 "$(go env GOPATH)/bin/golangci-lint" run
 ```
 
 (CI itself sets `GOTOOLCHAIN=local` only because its runner pre-installs the
-`go.mod` toolchain; locally, pass `GOTOOLCHAIN=go1.26.5` so the right compiler is
+`go.mod` toolchain; locally, pass `GOTOOLCHAIN=go1.27.1` so the right compiler is
 used.)
 
 ## Architecture notes worth keeping in mind

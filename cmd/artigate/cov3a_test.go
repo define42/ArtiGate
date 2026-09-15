@@ -329,6 +329,45 @@ func TestCov3A_InstallVerifiedFileBranches(t *testing.T) {
 	}
 }
 
+func TestCov3A_InstallVerifiedFileMutablePrior(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{name: "OSV snapshot", path: "osv/npm/all.zip"},
+		{name: "upload", path: "uploads/advisories.json"},
+		{name: "sumdb latest", path: "sumdb/sum.golang.org/latest"},
+		{name: "sumdb lookup", path: "sumdb/sum.golang.org/lookup/example.com/mod@v1.0.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			base, staging := t.TempDir(), t.TempDir()
+			dst := filepath.Join(base, filepath.FromSlash(tc.path))
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			original, replacement := []byte("snapshot A"), []byte("snapshot B")
+			prior := ManifestFile{Path: tc.path, SHA256: cov3ASHA(original), Size: int64(len(original)), Prior: true}
+
+			writeFile(t, dst, original)
+			if err := installVerifiedFile(staging, base, prior); err != nil {
+				t.Fatalf("matching prior contents rejected: %v", err)
+			}
+
+			// A newer snapshot can have the same size while changing its bytes.
+			writeFile(t, dst, replacement)
+			if err := installVerifiedFile(staging, base, prior); err == nil || !strings.Contains(err.Error(), "sha256") {
+				t.Fatalf("stale prior contents = %v, want a hash-mismatch error", err)
+			}
+			got, err := os.ReadFile(dst)
+			if err != nil || !bytes.Equal(got, replacement) {
+				t.Fatalf("rejected prior changed repository contents: %q, %v", got, err)
+			}
+		})
+	}
+}
+
 // TestCov3A_InstallVerifiedFileMovesFromStaging pins the install fast path: a
 // fresh file is renamed out of staging (no second byte copy of the artifact),
 // and a mutable path replaces its predecessor the same way. Staging and the

@@ -1286,6 +1286,9 @@ func (s *LowServer) exportSequencedBundle(ctx context.Context, stream string, fi
 	if err != nil {
 		return ExportResult{}, err
 	}
+	if err := s.exported.InvalidateMutable(stream, files); err != nil {
+		return ExportResult{}, fmt.Errorf("invalidate mutable export index %s: %w", stream, err)
+	}
 	res, err := write(seq)
 	if err != nil {
 		return ExportResult{}, err
@@ -1537,7 +1540,8 @@ func deliveredFiles(files []ManifestFile) []ManifestFile {
 
 // recordForwarded adds every file to the stream's permanent exported index. It
 // logs but does not fail on error: the bundle is already committed, and a
-// missed update only forgoes a future skip.
+// missed update only forgoes a future skip. Mutable entries were invalidated
+// before writing the bundle, so an error cannot preserve stale contents.
 func (s *LowServer) recordForwarded(stream string, files []ManifestFile) {
 	if len(files) == 0 {
 		return

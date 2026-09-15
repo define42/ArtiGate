@@ -1737,13 +1737,10 @@ func mutableRepoPath(p string) bool {
 }
 
 // requirePriorFile verifies a delta bundle's claim that an earlier bundle
-// already delivered this file. Existence and size are checked, not the hash:
-// the content was verified byte-for-byte when it first landed, files in the
-// repository are immutable, and re-hashing every prior file would make a large
-// mirror's delta import cost as much as a full one. A miss means the earlier
-// bundles of this stream were never imported here (or the repository was
-// rebuilt) — recovered by importing them, or by a forced full re-collect on
-// the low side.
+// already delivered this file. Immutable files need only an existence and size
+// check: their contents were verified on arrival and cannot be replaced by a
+// later bundle. Mutable paths also need a hash check because a newer snapshot
+// may have replaced the referenced content without changing its size.
 func requirePriorFile(dst string, f ManifestFile) error {
 	st, err := os.Stat(dst)
 	if errors.Is(err, os.ErrNotExist) {
@@ -1754,6 +1751,16 @@ func requirePriorFile(dst string, f ManifestFile) error {
 	}
 	if st.Size() != f.Size {
 		return fmt.Errorf("prior file %s: size %d on disk does not match manifest size %d", f.Path, st.Size(), f.Size)
+	}
+	if !mutableRepoPath(f.Path) {
+		return nil
+	}
+	existing, err := sha256File(dst)
+	if err != nil {
+		return fmt.Errorf("prior file %s: %w", f.Path, err)
+	}
+	if existing != f.SHA256 {
+		return fmt.Errorf("prior file %s: sha256 %s on disk does not match manifest sha256 %s", f.Path, existing, f.SHA256)
 	}
 	return nil
 }

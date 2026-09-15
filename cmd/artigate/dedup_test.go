@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -97,6 +98,131 @@ func TestForwardedIndex(t *testing.T) {
 	}
 }
 
+func assertForwardedState(t *testing.T, store *ExportedStore, stream string, files []ManifestFile, want []bool) {
+	t.Helper()
+	flags, err := store.ForwardedFlags(stream, files)
+	if err != nil || !slices.Equal(flags, want) {
+		t.Errorf("ForwardedFlags(%s) = %v, %v; want %v", stream, flags, err, want)
+	}
+	for i, f := range files {
+		if got, err := store.IsForwarded(stream, f.Path, f.SHA256); err != nil || got != want[i] {
+			t.Errorf("IsForwarded(%s, %s, %s) = %v, %v; want %v", stream, f.Path, f.SHA256, got, err, want[i])
+		}
+	}
+}
+
+// A mutable path describes the receiver's current contents, so a previously
+// delivered hash stops matching when another snapshot replaces it.
+func TestForwardedIndexMutableSnapshots(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{name: "osv", path: "osv/npm/all.zip"},
+		{name: "upload", path: "uploads/database.zip"},
+		{name: "sumdb", path: "sumdb/sum.golang.org/latest"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "exported.db")
+			store, err := OpenExportedStore(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			a, b := mf(tc.path, "a"), mf(tc.path, "b")
+			otherPath := mf(tc.path+".other", "a")
+			for _, f := range []ManifestFile{a, b} {
+				if err := store.Record(streamOsv, []ManifestFile{f}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertForwardedState(t, store, streamOsv, []ManifestFile{a, b, otherPath}, []bool{false, true, false})
+			assertForwardedState(t, store, streamNpm, []ManifestFile{b}, []bool{false})
+			if err := store.Record(streamNpm, []ManifestFile{a}); err != nil {
+				t.Fatal(err)
+			}
+			assertForwardedState(t, store, streamOsv, []ManifestFile{a, b}, []bool{false, true})
+			assertForwardedState(t, store, streamNpm, []ManifestFile{a, b}, []bool{true, false})
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = OpenExportedStore(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertForwardedState(t, store, streamOsv, []ManifestFile{a, b}, []bool{false, true})
+			if err := store.Record(streamOsv, []ManifestFile{a}); err != nil {
+				t.Fatal(err)
+			}
+			assertForwardedState(t, store, streamOsv, []ManifestFile{a, b}, []bool{true, false})
+			if n, err := store.Count(streamOsv); err != nil || n != 2 {
+				t.Errorf("Count after A/B/A = %d, %v; want 2 historical hashes", n, err)
+			}
+		})
+	}
+}
+
+func TestForwardedIndexMutablePriorDoesNotReplaceContents(t *testing.T) {
+	ls := newBareLowServer(t)
+	a, b := mf("osv/npm/all.zip", "a"), mf("osv/npm/all.zip", "b")
+	if err := ls.exported.Record(streamOsv, []ManifestFile{b}); err != nil {
+		t.Fatal(err)
+	}
+	a.Prior = true
+	unknown := mf("osv/PyPI/all.zip", "c")
+	unknown.Prior = true
+	if err := ls.exported.Record(streamOsv, []ManifestFile{a, unknown}); err != nil {
+		t.Fatal(err)
+	}
+	assertForwardedState(t, ls.exported, streamOsv, []ManifestFile{a, b, unknown}, []bool{false, true, false})
+}
+
+// Historical rows have no export order. Upgrades must re-deliver a mutable
+// snapshot once, while retaining the old membership semantics for artifacts.
+func TestForwardedIndexMutableMigration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "exported.db")
+	legacy, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = legacy.Close() })
+	for _, stmt := range []string{
+		forwardedSchema,
+		`CREATE TABLE exported_content (stream TEXT NOT NULL, sha256 TEXT NOT NULL, PRIMARY KEY (stream, sha256)) WITHOUT ROWID`,
+	} {
+		if _, err := legacy.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, b := mf("osv/npm/all.zip", "a"), mf("osv/npm/all.zip", "b")
+	immutable := mf("npm/packages/a.tgz", "a")
+	for _, f := range []ManifestFile{a, b, immutable} {
+		if _, err := legacy.Exec(`INSERT INTO forwarded_files (stream, sha256, path) VALUES (?, ?, ?)`, streamOsv, f.SHA256, f.Path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wildcard := mf("osv/PyPI/all.zip", "c")
+	if _, err := legacy.Exec(`INSERT INTO exported_content (stream, sha256) VALUES (?, ?)`, streamOsv, wildcard.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenExportedStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	immutableWildcard := mf("npm/packages/legacy.tgz", "c")
+	assertForwardedState(t, store, streamOsv,
+		[]ManifestFile{a, b, wildcard, immutable, immutableWildcard},
+		[]bool{false, false, false, true, true})
+	if err := store.Record(streamOsv, []ManifestFile{a}); err != nil {
+		t.Fatal(err)
+	}
+	assertForwardedState(t, store, streamOsv, []ManifestFile{a, b, wildcard}, []bool{true, false, false})
+}
+
 // TestLegacyExportedMigration proves an index written by the hash-only schema
 // still suppresses re-sending: its rows migrate with an empty path (matching
 // any path with that hash), the legacy table is dropped, and the next record
@@ -169,6 +295,85 @@ func TestExportedIndexFailsSafe(t *testing.T) {
 	if ls.priorFileCheck(streamNpm, false)("npm/packages/a.tgz", strings.Repeat("a", 64)) {
 		t.Error("a store error must fail safe (download, not skip)")
 	}
+}
+
+// Once a replacement could have crossed the diode, an interrupted export
+// must never leave its predecessor eligible for a prior reference.
+func TestMutableExportFailureInvalidatesPriorContents(t *testing.T) {
+	for _, failure := range []string{"write", "commit", "record"} {
+		t.Run(failure, func(t *testing.T) {
+			ls := newBareLowServer(t)
+			a := mf("osv/npm/all.zip", "a")
+			unchanged := mf("osv/PyPI/all.zip", "c")
+			if err := ls.exported.Record(streamOsv, []ManifestFile{a, unchanged}); err != nil {
+				t.Fatal(err)
+			}
+			stage := t.TempDir()
+			b := stageTestFile(t, stage, a.Path, "replacement snapshot")
+			unchanged.Prior = true
+			files := []ManifestFile{b, unchanged}
+			_, err := ls.exportSequencedBundle(t.Context(), streamOsv, files, func(seq int64) (ExportResult, error) {
+				if failure == "write" {
+					return ExportResult{}, errors.New("injected bundle write failure")
+				}
+				id := bundleIDFor(streamOsv, seq)
+				if err := ls.writeBundleArtifacts(t.Context(), id, stage, []byte("{}"), files); err != nil {
+					t.Fatal(err)
+				}
+				switch failure {
+				case "commit":
+					blocker := filepath.Join(ls.cfg.Root, "state-blocker")
+					writeFile(t, blocker, []byte("x"))
+					ls.statePath = filepath.Join(blocker, "low-state.json")
+				case "record":
+					if err := ls.exported.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return ExportResult{Stream: streamOsv, Sequence: seq, BundleID: id}, nil
+			})
+			if (err != nil) != (failure != "record") {
+				t.Fatalf("export with %s failure: %v", failure, err)
+			}
+			if err := ls.exported.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err := OpenExportedStore(filepath.Join(ls.cfg.Root, "exported.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			assertForwardedState(t, store, streamOsv, []ManifestFile{a, b, unchanged}, []bool{false, false, true})
+		})
+	}
+}
+
+func TestMutableExportInvalidationFailurePreventsWrite(t *testing.T) {
+	ls := newBareLowServer(t)
+	a := mf("osv/npm/all.zip", "a")
+	if err := ls.exported.Record(streamOsv, []ManifestFile{a}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ls.exported.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wrote := false
+	_, err := ls.exportSequencedBundle(t.Context(), streamOsv, []ManifestFile{mf(a.Path, "b")}, func(_ int64) (ExportResult, error) {
+		wrote = true
+		return ExportResult{}, nil
+	})
+	if err == nil || wrote {
+		t.Fatalf("export with unavailable mutable index: err=%v, wrote=%v; want error before writing", err, wrote)
+	}
+	if got := ls.peekSequence(streamOsv); got != 1 {
+		t.Errorf("next sequence = %d, want 1 after refusing export", got)
+	}
+	store, err := OpenExportedStore(filepath.Join(ls.cfg.Root, "exported.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	assertForwardedState(t, store, streamOsv, []ManifestFile{a}, []bool{true})
 }
 
 // stageTestFile writes one file under stage and returns its manifest entry.
