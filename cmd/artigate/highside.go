@@ -27,6 +27,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -38,6 +39,10 @@ import (
 // produces consecutive bundles, so ten thousand outstanding predecessors is
 // already far beyond a credible delivery reordering window.
 const maxFutureSequenceGap int64 = 10_000
+
+// Each round imports at most one bundle per stream. Yield after a bounded
+// number of rounds so the next pass discovers newly arrived streams too.
+const maxImportRoundsPerPass = 16
 
 const (
 	// rejectedRetention bounds how long terminally rejected bundles occupy the
@@ -102,13 +107,20 @@ type HighServer struct {
 	publicKey   ed25519.PublicKey
 	downloadDir string
 	statePath   string
-	mu          sync.Mutex
-	ingestMu    sync.Mutex
-	sftpMu      sync.Mutex
-	state       HighState
-	tree        treeCache
-	importKick  chan struct{}
-	importOnce  sync.Once
+	// importMu serializes import passes and SFTP publication. Helpers suffixed
+	// Locked require this mutex; they may perform disk I/O.
+	importMu sync.Mutex
+	// mu protects only in-memory state and the immutable status snapshot.
+	// Never hold it while doing I/O or acquiring importMu.
+	mu         sync.Mutex
+	status     ImportStatus
+	statusErr  error
+	ingestMu   sync.Mutex
+	sftpMu     sync.Mutex
+	state      HighState
+	tree       treeCache
+	importKick chan struct{}
+	importOnce sync.Once
 	// metrics holds the in-memory import/reject/gap counters the /metrics
 	// endpoint reports; notifier posts failure webhooks (nil when unconfigured).
 	metrics  *highMetrics
@@ -264,6 +276,9 @@ func NewHighServer(cfg HighConfig, pub ed25519.PublicKey) (*HighServer, error) {
 	if err := hs.loadState(); err != nil {
 		return nil, err
 	}
+	// Seed monitoring from durable state and files already waiting at startup.
+	// A scan error is reported by monitoring and retried by the next import.
+	_, _ = hs.refreshImportStatusLocked()
 	return hs, nil
 }
 
@@ -663,23 +678,73 @@ func (st ImportStatus) Stream(name string) StreamImportStatus {
 }
 
 func (s *HighServer) ImportStatus() (ImportStatus, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.importMu.Lock()
+	defer s.importMu.Unlock()
 	if err := s.quarantineFutureBundlesLocked(); err != nil {
+		_, _ = s.refreshImportStatusLocked()
 		return ImportStatus{}, err
 	}
-	return s.importStatusLocked()
+	return s.refreshImportStatusLocked()
 }
 
-// importStatusReadOnly reports the same per-stream status as ImportStatus but
-// without the quarantine sweep, so an unauthenticated observer (the /metrics
-// scrape, /readyz, the dashboard overview poll, and the /admin/status and
-// /admin/missing monitoring endpoints) reports state without moving files on
-// disk or firing quarantine webhooks.
+// importStatusReadOnly serves the last published snapshot without waiting for
+// the importer or scanning disk. Heartbeats are overlaid at read time so their
+// age and newly advertised streams remain current even during a long import.
 func (s *HighServer) importStatusReadOnly() (ImportStatus, error) {
 	s.mu.Lock()
+	status, err := s.status, s.statusErr
+	s.mu.Unlock()
+	return status.withHeartbeat(s.heartbeat.snapshot()), err
+}
+
+// refreshImportStatusLocked publishes a complete immutable snapshot, including
+// scan failures. Monitoring retains the last good data when a scan fails.
+func (s *HighServer) refreshImportStatusLocked() (ImportStatus, error) {
+	status, err := s.importStatusLocked()
+	s.mu.Lock()
+	if err == nil {
+		s.status = status
+	}
+	s.statusErr = err
+	s.mu.Unlock()
+	return s.importStatusReadOnly()
+}
+
+func (st ImportStatus) withHeartbeat(hb diodeHeartbeatSnapshot) ImportStatus {
+	st.Streams = slices.Clone(st.Streams)
+	st.DiodeHeartbeat = hb.status(time.Now().UTC())
+	seen := make(map[string]bool, len(st.Streams))
+	for i := range st.Streams {
+		stream := &st.Streams[i]
+		stream.MissingRanges = slices.Clone(stream.MissingRanges)
+		stream.QuarantinedSequences = slices.Clone(stream.QuarantinedSequences)
+		stream.setLowLastSequence(hb.hb.Streams[stream.Stream])
+		seen[stream.Stream] = true
+	}
+	for name, last := range hb.hb.Streams {
+		if seen[name] || !isKnownStream(name) {
+			continue
+		}
+		stream := StreamImportStatus{Stream: name, NextExpectedSequence: 1}
+		stream.setLowLastSequence(last)
+		st.Streams = append(st.Streams, stream)
+	}
+	sort.Slice(st.Streams, func(i, j int) bool { return st.Streams[i].Stream < st.Streams[j].Stream })
+	return st
+}
+
+func (st *StreamImportStatus) setLowLastSequence(last int64) {
+	st.LowLastSequence = last
+	st.AwaitingFromLow = nil
+	if last > st.HighestSeenSequence {
+		st.AwaitingFromLow = rangesToStrings([]SequenceRange{{Start: st.HighestSeenSequence + 1, End: last}})
+	}
+}
+
+func (s *HighServer) importedSequence(stream string) int64 {
+	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.importStatusLocked()
+	return s.state.Imported[stream]
 }
 
 // knownStreamsLocked returns supported streams that have imported state or
@@ -687,11 +752,13 @@ func (s *HighServer) importStatusReadOnly() (ImportStatus, error) {
 // filename prefixes can never create importer streams.
 func (s *HighServer) knownStreamsLocked() ([]string, error) {
 	set := map[string]bool{}
+	s.mu.Lock()
 	for stream := range s.state.Imported {
 		if isKnownStream(stream) {
 			set[stream] = true
 		}
 	}
+	s.mu.Unlock()
 	for _, dir := range []string{s.cfg.Landing, s.cfg.Quarantine} {
 		byStream, err := findBundleStreams(dir)
 		if err != nil {
@@ -711,18 +778,44 @@ func (s *HighServer) knownStreamsLocked() ([]string, error) {
 	return streams, nil
 }
 
-// ImportNext runs one full import pass and records its completion time and
+// ImportNext runs one bounded import pass and records its completion time and
 // outcome for the /readyz pipeline/backlog checks, whichever path triggered it
-// (the background loop, a diode-ingest kick, or a manual /admin/import).
-func (s *HighServer) ImportNext() (ImportResult, error) {
-	res, err := s.importPass()
-	s.metrics.recordImportPass(err, time.Now().UTC())
+// (the background loop, a diode-ingest kick, or a manual /admin/import). Further
+// batches are scheduled on the coalescing worker when the turn limit is reached.
+func (s *HighServer) ImportNext() (res ImportResult, err error) {
+	s.importMu.Lock()
+	defer s.importMu.Unlock()
+	s.metrics.beginImportPass()
+	// The completion record must be published before another pass can start.
+	// Also clear activity on panic before the worker's outer recovery runs.
+	completed := false
+	defer func() {
+		passErr := err
+		if !completed {
+			passErr = errors.New("import pass panicked")
+		}
+		s.metrics.recordImportPass(passErr, time.Now().UTC())
+	}()
+	res, err = s.importPass()
+	completed = true
 	return res, err
 }
 
-func (s *HighServer) importPass() (ImportResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *HighServer) importPass() (result ImportResult, err error) {
+	// Refresh on every exit, including a sweep or import failure, so partial
+	// progress and filesystem errors remain visible to monitoring.
+	defer func() {
+		status, statusErr := s.refreshImportStatusLocked()
+		err = errors.Join(err, statusErr)
+		if statusErr == nil {
+			s.observeGapsAndNotify(status)
+			result.Message = importWaitMessage(status)
+			if len(result.RejectedBundles) > 0 {
+				result.Message = fmt.Sprintf("rejected invalid bundle(s): %s; %s",
+					strings.Join(result.RejectedBundles, ", "), result.Message)
+			}
+		}
+	}()
 
 	// A folder carrier delivers the low side's heartbeat as a landing file;
 	// consume it here — the one sweep allowed to remove files — so the status
@@ -731,43 +824,49 @@ func (s *HighServer) importPass() (ImportResult, error) {
 	if err := s.quarantineFutureBundlesLocked(); err != nil {
 		return ImportResult{}, err
 	}
-	streams, err := s.knownStreamsLocked()
+	status, err := s.refreshImportStatusLocked()
 	if err != nil {
 		return ImportResult{}, err
 	}
 
-	var imported, rejected []string
-	var streamErrors []error
-	for _, stream := range streams {
-		drained, fatalErr := s.drainStreamLocked(stream)
-		imported = append(imported, drained.imported...)
-		rejected = append(rejected, drained.rejected...)
-		if fatalErr != nil {
-			return ImportResult{
-				Imported: len(imported) > 0, ImportedBundles: imported, RejectedBundles: rejected,
-			}, fatalErr
-		}
-		if drained.operationalErr != nil {
-			streamErrors = append(streamErrors, drained.operationalErr)
-		}
-	}
-
+	var more bool
+	result, more, err = s.drainStreamsLocked(status.Streams)
 	s.reapUnverifiedLocked(time.Now())
+	if more {
+		// Preserve progress with timer-based importing disabled: one diode
+		// notification (or manual request) must drain more than one batch.
+		s.requestImport()
+	}
+	return result, err
+}
 
-	status, err := s.importStatusLocked()
-	if err != nil {
-		return ImportResult{}, err
+// drainStreamsLocked gives each stream one bundle per turn. Bound a pass to
+// the backlog seen at its start so continuous arrivals cannot extend it forever.
+// A gap, rejection or operational error retires that stream for this pass.
+func (s *HighServer) drainStreamsLocked(streams []StreamImportStatus) (ImportResult, bool, error) {
+	var result ImportResult
+	var failures []error
+	streams = slices.DeleteFunc(slices.Clone(streams), func(st StreamImportStatus) bool { return !st.ReadyToImport })
+	for round := 0; round < maxImportRoundsPerPass && len(streams) > 0; round++ {
+		pending := make([]StreamImportStatus, 0, len(streams))
+		for _, stream := range streams {
+			turn, fatalErr := s.importStreamTurnLocked(stream.Stream)
+			result.ImportedBundles = append(result.ImportedBundles, turn.imported...)
+			result.RejectedBundles = append(result.RejectedBundles, turn.rejected...)
+			result.Imported = len(result.ImportedBundles) > 0
+			if fatalErr != nil {
+				return result, false, errors.Join(append(failures, fatalErr)...)
+			}
+			if turn.operationalErr != nil {
+				failures = append(failures, turn.operationalErr)
+			}
+			if len(turn.imported) > 0 && s.importedSequence(stream.Stream) < stream.HighestSeenSequence {
+				pending = append(pending, stream)
+			}
+		}
+		streams = pending
 	}
-	s.observeGapsAndNotify(status)
-	message := importWaitMessage(status)
-	if len(rejected) > 0 {
-		message = fmt.Sprintf("rejected invalid bundle(s): %s; %s", strings.Join(rejected, ", "), message)
-	}
-	result := ImportResult{
-		Imported: len(imported) > 0, ImportedBundles: imported,
-		RejectedBundles: rejected, Message: message,
-	}
-	return result, errors.Join(streamErrors...)
+	return result, len(streams) > 0, errors.Join(failures...)
 }
 
 // observeGapsAndNotify updates the gap-age state from a fresh import status and
@@ -792,24 +891,22 @@ type streamDrainResult struct {
 	operationalErr error
 }
 
-// drainStreamLocked imports one stream until it reaches a gap or failure.
+// importStreamTurnLocked imports at most one bundle from a stream.
 // Invalid bytes are rejected; retryable failures stay in place.
-func (s *HighServer) drainStreamLocked(stream string) (streamDrainResult, error) {
+func (s *HighServer) importStreamTurnLocked(stream string) (streamDrainResult, error) {
 	var result streamDrainResult
-	for {
-		next := s.state.Imported[stream] + 1
-		id := bundleIDFor(stream, next)
-		bundleDir, ok := s.findBundleDirLocked(id)
-		if !ok {
-			return result, nil
-		}
-		manifest, err := s.importBundleFromDirLocked(bundleDir, stream, id, next)
-		if err == nil {
-			result.imported = append(result.imported, manifest.BundleID)
-			continue
-		}
-		return s.handleStreamImportError(result, bundleDir, id, err)
+	next := s.importedSequence(stream) + 1
+	id := bundleIDFor(stream, next)
+	bundleDir, ok := s.findBundleDirLocked(id)
+	if !ok {
+		return result, nil
 	}
+	manifest, err := s.importBundleFromDirLocked(bundleDir, stream, id, next)
+	if err == nil {
+		result.imported = append(result.imported, manifest.BundleID)
+		return result, nil
+	}
+	return s.handleStreamImportError(result, bundleDir, id, err)
 }
 
 func (s *HighServer) handleStreamImportError(result streamDrainResult, bundleDir, id string, err error) (streamDrainResult, error) {
@@ -889,6 +986,8 @@ func importWaitMessage(status ImportStatus) string {
 		if st.BlockingMissing > 0 {
 			waits = append(waits, fmt.Sprintf("%s waiting for %d (missing %s)",
 				st.Stream, st.BlockingMissing, strings.Join(st.MissingRanges, ",")))
+		} else if st.ReadyToImport {
+			waits = append(waits, fmt.Sprintf("%s ready to import %d", st.Stream, st.NextExpectedSequence))
 		}
 	}
 	if len(waits) == 0 {
@@ -933,7 +1032,7 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 	// failed save it would file this bundle under duplicates/ as already
 	// imported while the on-disk state still wants it — and duplicates/ is
 	// never searched, wedging the stream there after a restart. On a failed
-	// save, roll back so memory matches disk; the bundle stays in landing and
+	// save, leave memory unchanged; the bundle stays in landing and
 	// the next pass retries the whole import (installs are idempotent).
 	if err := s.commitImportedStateLocked(stream, bundleID, manifest.Sequence); err != nil {
 		return BundleManifest{}, err
@@ -962,20 +1061,71 @@ func validateBundleArtifactSizes(paths ...string) error {
 }
 
 func (s *HighServer) commitImportedStateLocked(stream, bundleID string, sequence int64) error {
-	prevSeq, hadStream := s.state.Imported[stream]
-	prevAt := s.state.ImportedAt
-	s.state.Imported[stream] = sequence
-	s.state.ImportedAt = time.Now().UTC()
-	if err := s.saveStateLocked(); err != nil {
-		if hadStream {
-			s.state.Imported[stream] = prevSeq
-		} else {
-			delete(s.state.Imported, stream)
-		}
-		s.state.ImportedAt = prevAt
+	s.mu.Lock()
+	state := s.state
+	state.Imported = copyInt64Map(state.Imported)
+	s.mu.Unlock()
+	state.Imported[stream] = sequence
+	state.ImportedAt = time.Now().UTC()
+	if err := writeJSONAtomic(s.statePath, state, stateFileMode); err != nil {
 		return fmt.Errorf("bundle %s: files installed but import state was not persisted (will retry): %w", bundleID, err)
 	}
-	s.metrics.recordImport(stream, s.state.ImportedAt)
+	s.mu.Lock()
+	s.state = state
+	s.mu.Unlock()
+	s.publishImportedStatusLocked(stream, sequence)
+	s.metrics.recordImport(stream, state.ImportedAt)
+	return nil
+}
+
+// publishImportedStatusLocked advances the cached progress after a durable
+// commit without rescanning the entire backlog for every imported bundle.
+func (s *HighServer) publishImportedStatusLocked(stream string, sequence int64) {
+	_, ready := s.findBundleDirLocked(bundleIDFor(stream, sequence+1))
+	s.mu.Lock()
+	status := s.status
+	s.mu.Unlock()
+	status.Streams = slices.Clone(status.Streams)
+	for i := range status.Streams {
+		st := &status.Streams[i]
+		if st.Stream != stream {
+			continue
+		}
+		st.LastImportedSequence = sequence
+		st.NextExpectedSequence = sequence + 1
+		st.HighestSeenSequence = max(st.HighestSeenSequence, sequence)
+		st.ReadyToImport = ready
+		st.BlockingMissing = 0
+		if !ready && st.HighestSeenSequence > sequence {
+			st.BlockingMissing = sequence + 1
+		}
+		// A previously missing bundle may have arrived during this pass.
+		st.MissingRanges = missingAfterSequence(st.MissingRanges, sequence)
+		first := sort.Search(len(st.QuarantinedSequences), func(i int) bool {
+			return st.QuarantinedSequences[i] > sequence
+		})
+		st.QuarantinedSequences = st.QuarantinedSequences[first:]
+		break
+	}
+	s.mu.Lock()
+	s.status = status
+	s.mu.Unlock()
+}
+
+// missingAfterSequence removes the durably imported prefix without mutating
+// slices shared with older snapshots. Ranges come from rangesToStrings.
+func missingAfterSequence(ranges []string, sequence int64) []string {
+	for i, text := range ranges {
+		gap, _ := parseSequenceRangePart(text)
+		if gap.Start > sequence {
+			return ranges[i:]
+		}
+		if gap.End > sequence {
+			out := slices.Clone(ranges[i:])
+			out[0] = (SequenceRange{Start: sequence + 1, End: gap.End}).String()
+			return out
+		}
+	}
 	return nil
 }
 
@@ -1128,8 +1278,8 @@ func (s *HighServer) checkManifestFields(manifest BundleManifest, stream, bundle
 		return fmt.Errorf("stream mismatch: got %q, want %q", gotStream, stream)
 	case manifest.Sequence != expectedSeq:
 		return fmt.Errorf("sequence mismatch: got %d, want %d", manifest.Sequence, expectedSeq)
-	case manifest.PreviousSequence != s.state.Imported[stream]:
-		return fmt.Errorf("previous sequence mismatch: got %d, want %d", manifest.PreviousSequence, s.state.Imported[stream])
+	case manifest.PreviousSequence != s.importedSequence(stream):
+		return fmt.Errorf("previous sequence mismatch: got %d, want %d", manifest.PreviousSequence, s.importedSequence(stream))
 	case manifest.BundleID != bundleID:
 		return fmt.Errorf("bundle_id mismatch: got %q, want %q", manifest.BundleID, bundleID)
 	}
@@ -1155,7 +1305,7 @@ func (s *HighServer) sortLandingStreamsLocked(byStream map[string][]int64) error
 			}
 			continue
 		}
-		next := s.state.Imported[stream] + 1
+		next := s.importedSequence(stream) + 1
 		for _, seq := range seqs {
 			if err := s.sortLandingBundleLocked(stream, seq, next); err != nil {
 				return err
@@ -1190,7 +1340,7 @@ func (s *HighServer) sortLandingBundleLocked(stream string, seq, next int64) err
 			fmt.Sprintf("sequence %d is more than %d ahead of next expected sequence %d", seq, maxFutureSequenceGap, next))
 	case seq > next:
 		return moveBundleFiles(s.cfg.Landing, s.cfg.Quarantine, id)
-	case seq <= s.state.Imported[stream]:
+	case seq <= s.importedSequence(stream):
 		return moveBundleFiles(s.cfg.Landing, filepath.Join(s.cfg.Landing, "duplicates"), id)
 	}
 	return nil
@@ -1204,7 +1354,7 @@ func (s *HighServer) rejectInvalidQuarantineLocked() error {
 		return err
 	}
 	for stream, seqs := range byStream {
-		next := s.state.Imported[stream] + 1
+		next := s.importedSequence(stream) + 1
 		for _, seq := range seqs {
 			if isKnownStream(stream) && !(seq > next && seq-next > maxFutureSequenceGap) {
 				continue
@@ -1240,7 +1390,7 @@ func (s *HighServer) rejectBundleLocked(srcDir, bundleID, reason string) error {
 	// Every rejection path — import-time signature/hash failures and sort-time
 	// unsupported/too-far bundles — funnels through here, so it is the single
 	// place to count rejections and notify. Delivery is async and never blocks
-	// the import that holds s.mu.
+	// the import that holds s.importMu.
 	stream := streamOfBundleID(bundleID)
 	s.metrics.recordReject(stream)
 	s.notifier.notify("bundle_rejected", map[string]any{
@@ -1262,7 +1412,7 @@ func streamOfBundleID(bundleID string) string {
 // can never import on its own: terminally rejected bundles past their retention,
 // and orphaned partial landing sets. Quarantine is deliberately never reaped —
 // it holds valid future bundles waiting for an earlier one to fill a gap.
-// Callers hold s.mu.
+// Callers hold s.importMu.
 func (s *HighServer) reapUnverifiedLocked(now time.Time) {
 	if n, err := reapFilesOlderThan(filepath.Join(s.cfg.Root, "rejected"), now.Add(-rejectedRetention)); err != nil {
 		log.Printf("reap rejected: %v", err)
@@ -1432,48 +1582,37 @@ func (s *HighServer) importStatusLocked() (ImportStatus, error) {
 	if err != nil {
 		return ImportStatus{}, err
 	}
-	// The heartbeat may name streams nothing has arrived for — every bundle
-	// still crossing (or lost on) the diode — which must show as awaiting.
-	hb := s.heartbeat.snapshot()
-	streams = withHeartbeatStreams(streams, hb.hb.Streams)
 	out := ImportStatus{
 		Version:        versionString(),
 		ManifestFormat: manifestFormatCurrent,
-		DiodeHeartbeat: hb.status(time.Now().UTC()),
 		Streams:        make([]StreamImportStatus, 0, len(streams)),
 	}
 	for _, stream := range streams {
-		out.Streams = append(out.Streams, s.streamStatusLocked(stream, landing[stream], quarantined[stream], hb.hb.Streams[stream]))
+		out.Streams = append(out.Streams, s.streamStatusLocked(stream, landing[stream], quarantined[stream]))
 	}
 	return out, nil
 }
 
-func (s *HighServer) streamStatusLocked(stream string, landing, quarantined []int64, lowLast int64) StreamImportStatus {
+func (s *HighServer) streamStatusLocked(stream string, landing, quarantined []int64) StreamImportStatus {
 	present := map[int64]bool{}
-	maxSeen := s.state.Imported[stream]
+	last := s.importedSequence(stream)
+	maxSeen := last
 	maxSeen = markPresentComplete(s.cfg.Landing, stream, landing, present, maxSeen)
 	maxSeen = markPresentComplete(s.cfg.Quarantine, stream, quarantined, present, maxSeen)
 
-	next := s.state.Imported[stream] + 1
+	next := last + 1
 	missing := missingRanges(next, maxSeen, present)
 	st := StreamImportStatus{
 		Stream:               stream,
-		LastImportedSequence: s.state.Imported[stream],
+		LastImportedSequence: last,
 		NextExpectedSequence: next,
 		HighestSeenSequence:  maxSeen,
 		MissingRanges:        rangesToStrings(missing),
 		QuarantinedSequences: filterCompleteSequences(s.cfg.Quarantine, stream, quarantined),
 		ReadyToImport:        present[next],
-		LowLastSequence:      lowLast,
 	}
 	if !present[next] && maxSeen >= next {
 		st.BlockingMissing = next
-	}
-	// Everything above the highest bundle seen here, up to the low side's
-	// reported index, has left the low side but not arrived. (A lowLast below
-	// maxSeen just means the heartbeat predates the newest arrival.)
-	if lowLast > maxSeen {
-		st.AwaitingFromLow = rangesToStrings([]SequenceRange{{Start: maxSeen + 1, End: lowLast}})
 	}
 	return st
 }

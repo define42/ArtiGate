@@ -227,12 +227,14 @@ func checkStreamGaps(status ImportStatus, gapSince map[string]time.Time, now tim
 
 // checkImportBacklog fails when complete bundles sit ready to import but no
 // import pass has completed within the grace window — nothing is draining
-// them (a dead loop, or a manual deployment awaiting POST /admin/import). A
-// backlog mid-drain never trips it: the draining pass holds the status lock,
-// so by the time this check can read the status the pass has finished and
-// refreshed the pass clock.
+// them (a dead loop, or a manual deployment awaiting POST /admin/import).
+// Cached status can report a backlog while a healthy import is still working,
+// so active passes are exempt from the idle-completion deadline.
 func checkImportBacklog(status ImportStatus, snap highSnapshot, interval time.Duration, now time.Time) readyCheck {
 	c := readyCheck{name: "import-backlog"}
+	if snap.importPassActive {
+		return c
+	}
 	var waiting []string
 	for _, st := range status.Streams {
 		if st.ReadyToImport {
@@ -250,12 +252,17 @@ func checkImportBacklog(status ImportStatus, snap highSnapshot, interval time.Du
 }
 
 // checkImportPipeline fails when the last completed import pass failed, or —
-// with background import enabled — when passes stop completing at all (the
-// loop goroutine died, or every pass hangs).
+// with background import enabled — when the importer stays idle beyond its
+// grace window. An active pass has no completion deadline: a single large
+// bundle may take arbitrarily long, so this check cannot detect a hung bundle.
 func checkImportPipeline(snap highSnapshot, interval time.Duration, now time.Time) readyCheck {
 	c := readyCheck{name: "import-pipeline"}
 	if snap.lastImportPassErr != "" {
 		c.fail = "last import pass failed: " + snap.lastImportPassErr
+		return c
+	}
+	if snap.importPassActive {
+		c.info = "import pass running"
 		return c
 	}
 	if interval <= 0 {

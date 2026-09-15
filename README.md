@@ -992,11 +992,23 @@ and its files still sit in the outbound spool awaiting a re-transmit
 
 The **high side** is not ready when import status cannot be computed
 (`import-status`), a stream is blocked waiting for a missing bundle
-(`stream-gaps`), complete bundles sit ready to import with no import pass
+(`stream-gaps`), complete bundles sit ready to import with no active import and no pass
 completing inside the grace window — three `--import-interval`s, at least a
-minute (`import-backlog`), import passes stopped completing or the last pass
+minute (`import-backlog`), import passes stopped running or the last pass
 failed (`import-pipeline`), or the shared unverified-transport quota is
 exhausted so the diode cannot land new bundles (`transport-quota`).
+
+Import status on `/readyz`, `/metrics`, `/admin/status`, `/admin/missing`, and
+the dashboard comes from a cached snapshot, refreshed at startup and around
+each import pass, with progress published after each durable bundle commit.
+These endpoints can respond while extraction and installation are running.
+Heartbeats and their ages remain live. Folder arrivals appear on the next
+scan. Imports rotate between streams after each bundle, preserving each
+stream's sequence order. Each pass handles at most 16 bundles per stream and
+automatically schedules a continuation for the remaining backlog, even with
+timer-based importing disabled.
+An active import does not fail readiness just because it exceeds the idle
+grace window. A single bundle that hangs therefore needs separate supervision.
 
 ```console
 $ curl -s http://high:8080/readyz

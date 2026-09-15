@@ -356,15 +356,20 @@ func directoryRegularFileBytesExcept(dir string, skip func(string) bool) (int64,
 			continue
 		}
 		info, err := entry.Info()
+		if errors.Is(err, os.ErrNotExist) {
+			// Import can move or remove a bundle after the directory listing.
+			continue
+		}
 		if err != nil {
 			return 0, err
 		}
-		if info.Mode().IsRegular() {
-			if info.Size() > math.MaxInt64-total {
-				return 0, errors.New("unverified storage size overflow")
-			}
-			total += info.Size()
+		if !info.Mode().IsRegular() {
+			continue
 		}
+		if info.Size() > math.MaxInt64-total {
+			return 0, errors.New("unverified storage size overflow")
+		}
+		total += info.Size()
 	}
 	return total, nil
 }

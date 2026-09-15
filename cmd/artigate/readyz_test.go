@@ -341,6 +341,11 @@ func TestHighReadyzBacklogUndrained(t *testing.T) {
 	pub, priv := newTestKeys(t)
 	hs := newTestHighServer(t, pub)
 	writeSignedStreamBundle(t, hs.cfg.Landing, priv, streamGo, 1, 0)
+	// Monitoring serves the last scan; discovering folder arrivals is the
+	// importer's responsibility.
+	if _, err := hs.ImportStatus(); err != nil {
+		t.Fatal(err)
+	}
 
 	// A just-landed bundle is within the grace window: still ready.
 	if code, body := getReady(t, hs, "/readyz"); code != http.StatusOK {
@@ -360,6 +365,65 @@ func TestHighReadyzBacklogUndrained(t *testing.T) {
 	}
 	if code, body := getReady(t, hs, "/readyz"); code != http.StatusOK {
 		t.Errorf("after import: GET /readyz = %d\n%s", code, body)
+	}
+}
+
+func TestHighReadyzActiveImport(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name     string
+		interval time.Duration
+	}{
+		{name: "manual", interval: 0},
+		{name: "background", interval: 10 * time.Second},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			now := time.Unix(1720000000, 0).UTC()
+			status := ImportStatus{Streams: []StreamImportStatus{
+				{Stream: streamGo, ReadyToImport: true},
+			}}
+			metrics := newHighMetrics()
+			metrics.recordImportPass(nil, now.Add(-10*time.Minute))
+			metrics.beginImportPass()
+
+			// A pass may spend longer than the grace window importing a large
+			// bundle. Reading the cached backlog must not mark it stalled.
+			if c := checkImportBacklog(status, metrics.snapshot(), tt.interval, now); !c.ok() {
+				t.Errorf("active import backlog: %+v", c)
+			}
+			if c := checkImportPipeline(metrics.snapshot(), tt.interval, now); !c.ok() {
+				t.Errorf("active import pipeline: %+v", c)
+			}
+
+			metrics.recordImportPass(errors.New("state save failed"), now)
+			if c := checkImportPipeline(metrics.snapshot(), tt.interval, now); c.ok() || !strings.Contains(c.fail, "state save failed") {
+				t.Errorf("completed failed import: %+v", c)
+			}
+			if c := checkImportBacklog(status, metrics.snapshot(), tt.interval, now.Add(10*time.Minute)); c.ok() {
+				t.Errorf("completed failed import still treated as active: %+v", c)
+			}
+
+			// Starting a retry does not hide the last completed failure.
+			metrics.beginImportPass()
+			if c := checkImportPipeline(metrics.snapshot(), tt.interval, now); c.ok() || !strings.Contains(c.fail, "state save failed") {
+				t.Errorf("retry hid completed import error: %+v", c)
+			}
+			metrics.recordImportPass(nil, now)
+			if c := checkImportPipeline(metrics.snapshot(), tt.interval, now); !c.ok() {
+				t.Errorf("completed successful import: %+v", c)
+			}
+
+			// Finishing clears the active exemption. Idle importers still
+			// fail after the grace window when work remains undrained.
+			later := now.Add(10 * time.Minute)
+			if c := checkImportBacklog(status, metrics.snapshot(), tt.interval, later); c.ok() {
+				t.Errorf("idle importer backlog remained ready: %+v", c)
+			}
+			if c := checkImportPipeline(metrics.snapshot(), tt.interval, later); c.ok() != (tt.interval == 0) {
+				t.Errorf("idle importer pipeline: %+v", c)
+			}
+		})
 	}
 }
 

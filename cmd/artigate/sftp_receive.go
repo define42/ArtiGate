@@ -131,21 +131,21 @@ func sftpReadyBundles(files map[string]os.FileInfo) []string {
 	return ids
 }
 
-// sftpBundlePresentLocked is called with mu held, since the importer can move
+// sftpBundlePresentLocked is called with importMu held, since the importer can move
 // files between the landing and quarantine directories while serving requests.
 func (s *HighServer) sftpBundlePresentLocked(id string) bool {
 	stream, seq, _ := parseBundleName(id + ".manifest.json")
-	return seq <= s.state.Imported[stream] || bundleCompleteInDir(s.cfg.Landing, id) || bundleCompleteInDir(s.cfg.Quarantine, id)
+	return seq <= s.importedSequence(stream) || bundleCompleteInDir(s.cfg.Landing, id) || bundleCompleteInDir(s.cfg.Quarantine, id)
 }
 
 func (s *HighServer) receiveSFTPBundle(client *sftp.Client, id string, files map[string]os.FileInfo) (bool, error) {
-	// Share the ingest quota lock with HTTP while staging. Keep mu free
+	// Share the ingest quota lock with HTTP while staging. Keep importMu free
 	// during network I/O so clients and the importer remain responsive.
 	s.ingestMu.Lock()
 	defer s.ingestMu.Unlock()
-	s.mu.Lock()
+	s.importMu.Lock()
 	present := s.sftpBundlePresentLocked(id)
-	s.mu.Unlock()
+	s.importMu.Unlock()
 	if present {
 		return false, nil
 	}
@@ -157,8 +157,8 @@ func (s *HighServer) receiveSFTPBundle(client *sftp.Client, id string, files map
 			return false, err
 		}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.importMu.Lock()
+	defer s.importMu.Unlock()
 	if s.sftpBundlePresentLocked(id) {
 		return false, nil
 	}
@@ -197,8 +197,8 @@ func (s *HighServer) receiveSFTPHeartbeat(client *sftp.Client, info os.FileInfo)
 	if err := s.stageSFTPFile(client, info, diodeMaxHeartbeatPacketBytes); err != nil {
 		return fmt.Errorf("receive SFTP heartbeat: %w", err)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.importMu.Lock()
+	defer s.importMu.Unlock()
 	if err := os.Rename(tmp, filepath.Join(s.cfg.Landing, diodeHeartbeatFileName)); err != nil {
 		return err
 	}

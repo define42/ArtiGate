@@ -48,7 +48,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -487,25 +486,4 @@ func envHeartbeatInterval(name string) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be at least 1s, got %s", name, d)
 	}
 	return d, nil
-}
-
-// withHeartbeatStreams returns the sorted union of the known streams and the
-// heartbeat's streams, so a stream whose every bundle was lost on the diode —
-// nothing imported, nothing landed — still appears in the status as awaiting.
-func withHeartbeatStreams(streams []string, hb map[string]int64) []string {
-	if len(hb) == 0 {
-		return streams
-	}
-	have := make(map[string]bool, len(streams))
-	for _, stream := range streams {
-		have[stream] = true
-	}
-	out := streams
-	for stream := range hb {
-		if !have[stream] {
-			out = append(out, stream)
-		}
-	}
-	sort.Strings(out)
-	return out
 }

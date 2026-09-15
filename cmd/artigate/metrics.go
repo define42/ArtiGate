@@ -7,10 +7,9 @@ package main
 // stream last collect or import, how much quota and disk is left, and are the
 // nightly schedules succeeding.
 //
-// Everything derivable from on-disk state (sequence numbers, bundle counts and
-// bytes, quota usage, disk space, schedule rows) is computed live at scrape
-// time from the same status functions the dashboard uses, so /metrics never
-// drifts from reality. The handful of facts that are not on disk — schedule and
+// Disk state uses the same status functions as the dashboard, including the
+// high side's cached import snapshot so scraping cannot wait for an import.
+// The handful of facts that are not on disk — schedule and
 // import outcome counters, per-stream last-success timestamps, and how long a
 // gap has been open — live in the small in-memory lowMetrics/highMetrics values
 // below, updated at the same choke points that fire the webhooks. Counters
@@ -243,6 +242,7 @@ type highMetrics struct {
 	importErrors      int64
 	lastImportPassEnd time.Time
 	lastImportPassErr string
+	importPassActive  bool
 }
 
 func newHighMetrics() *highMetrics {
@@ -283,16 +283,29 @@ func (m *highMetrics) recordImportError() {
 	m.importErrors++
 }
 
+// beginImportPass marks the serialized importer active. Waiting callers must
+// acquire the import lock before calling it; only the running pass is active.
+// Safe on a nil receiver.
+func (m *highMetrics) beginImportPass() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.importPassActive = true
+}
+
 // recordImportPass notes the completion of one full import pass (ImportNext),
 // whatever triggered it — the background loop, a diode-ingest kick, or a
-// manual /admin/import. /readyz fails when passes stop completing or the last
-// one failed. Safe on a nil receiver.
+// manual /admin/import. /readyz fails when the importer stays idle beyond its
+// grace window or the last pass failed. Safe on a nil receiver.
 func (m *highMetrics) recordImportPass(err error, at time.Time) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.importPassActive = false
 	m.lastImportPassEnd = at
 	m.lastImportPassErr = ""
 	if err != nil {
@@ -336,6 +349,7 @@ type highSnapshot struct {
 	importErrors      int64
 	lastImportPassEnd time.Time
 	lastImportPassErr string
+	importPassActive  bool
 }
 
 func (m *highMetrics) snapshot() highSnapshot {
@@ -350,6 +364,7 @@ func (m *highMetrics) snapshot() highSnapshot {
 		importErrors:      m.importErrors,
 		lastImportPassEnd: m.lastImportPassEnd,
 		lastImportPassErr: m.lastImportPassErr,
+		importPassActive:  m.importPassActive,
 	}
 }
 

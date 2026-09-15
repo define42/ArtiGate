@@ -58,6 +58,36 @@ func TestParseOnOff(t *testing.T) {
 	}
 }
 
+func TestDirectoryRegularFileBytesExceptRemovedEntry(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for name, content := range map[string]string{"imported": "already imported", "waiting": "wait"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed := false
+	total, err := directoryRegularFileBytesExcept(dir, func(name string) bool {
+		if name == "imported" {
+			// Simulate an import removing a file after ReadDir and before Info.
+			if err := os.Remove(filepath.Join(dir, name)); err != nil {
+				t.Fatal(err)
+			}
+			removed = true
+		}
+		return false
+	})
+	if err != nil {
+		t.Fatalf("quota scan during import: %v", err)
+	}
+	if !removed {
+		t.Fatal("quota scan did not encounter the imported file")
+	}
+	if total != 4 {
+		t.Errorf("remaining quota bytes = %d, want 4", total)
+	}
+}
+
 func TestValidateDiodeToken(t *testing.T) {
 	valid := strings.Repeat("a", minDiodeTokenBytes)
 	if err := validateDiodeToken(valid); err != nil {
