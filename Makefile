@@ -53,6 +53,10 @@ fmt: ## Format the code (gofmt)
 ui: ## Compile the high-side TypeScript UI (cmd/artigate/ui/app.ts -> app.js)
 	cd cmd/artigate/ui && npx -y -p typescript tsc -p tsconfig.json
 
+.PHONY: ui-test
+ui-test: ## Run dashboard behavior tests against the compiled JavaScript (Node.js 22+)
+	node --test cmd/artigate/ui/app.test.mjs
+
 .PHONY: run
 run: ## Build and start the low+high stack with docker compose
 	$(COMPOSE) up --build

@@ -38,6 +38,12 @@ let selectedLeaf = null;
 // view the sidebar has selected, so clearing the search restores it.
 let searchActive = false;
 let searchTimer = 0;
+// Trees and search share a panel. Each load gets a new identity, even when
+// refreshing the same view or returning to it before an older load finishes.
+let contentRequest = 0;
+// Selecting the same leaf again is also a new request; clearing details
+// invalidates any response still in flight for the previous selection.
+let detailRequest = 0;
 function esc(value) {
     const map = {
         "&": "&amp;",
@@ -431,6 +437,7 @@ function downloadRow(links) {
     return row;
 }
 async function selectLeaf(el, node, eco) {
+    const request = ++detailRequest;
     if (selectedLeaf) {
         selectedLeaf.classList.remove("selected");
     }
@@ -445,13 +452,19 @@ async function selectLeaf(el, node, eco) {
         if (!resp.ok) {
             throw new Error(`HTTP ${resp.status}`);
         }
-        renderDetail((await resp.json()));
+        const detail = (await resp.json());
+        if (request !== detailRequest) {
+            return;
+        }
+        renderDetail(detail);
         if (eco === "uploads") {
             panel.appendChild(uploadActions(node.path));
         }
     }
     catch (err) {
-        setMessage(panel, `Failed to load details: ${err.message}`);
+        if (request === detailRequest) {
+            setMessage(panel, `Failed to load details: ${err.message}`);
+        }
     }
 }
 // splitUploadPath splits a tree path "folder/name" into its two parts.
@@ -517,6 +530,8 @@ function hideLayers() {
     }
 }
 function clearDetail() {
+    ++detailRequest;
+    selectedLeaf?.classList.remove("selected");
     selectedLeaf = null;
     setMessage(byId("detail"), "Select a version to see its details.");
     hideLayers();
@@ -561,10 +576,18 @@ function expandableNode(node, eco, repoEco) {
             return;
         }
         loaded = true;
+        const request = contentRequest;
         setMessage(children, "loading…");
         fetchChildren(eco, node.path)
-            .then((child) => renderNodes(children, child, eco, repoEco))
+            .then((child) => {
+            if (request === contentRequest) {
+                renderNodes(children, child, eco, repoEco);
+            }
+        })
             .catch((err) => {
+            if (request !== contentRequest) {
+                return;
+            }
             loaded = false; // allow retry on next open
             setMessage(children, `failed to load: ${err.message}`);
         });
@@ -575,23 +598,30 @@ function menuButtons() {
     return document.querySelectorAll("nav button[data-view]");
 }
 async function loadTree() {
+    const request = ++contentRequest;
+    const view = currentView;
     const tree = byId("tree");
-    byId("treeTitle").textContent = VIEW_TITLES[currentView];
+    byId("treeTitle").textContent = VIEW_TITLES[view];
     // APT/RPM set up per repository, so the top "Set me up" button is hidden:
     // RPM repo nodes and APT component nodes carry their own instead.
     // (Containers group by upstream registry at the top level, so they keep the
     // whole-ecosystem button.) Uploads need no client setup at all — each file's
     // detail panel shows its plain download URL.
-    const perRepo = currentView === "apt" || currentView === "rpm";
-    byId("guideBtn").hidden = perRepo || currentView === "uploads";
+    const perRepo = view === "apt" || view === "rpm";
+    byId("guideBtn").hidden = perRepo || view === "uploads";
     clearDetail();
     setMessage(tree, "loading…");
     try {
-        const nodes = await fetchChildren(currentView, "");
-        renderNodes(tree, nodes, currentView, perRepo ? currentView : undefined);
+        const nodes = await fetchChildren(view, "");
+        if (request !== contentRequest) {
+            return;
+        }
+        renderNodes(tree, nodes, view, perRepo ? view : undefined);
     }
     catch (err) {
-        setMessage(tree, `Failed to load tree: ${err.message}`);
+        if (request === contentRequest) {
+            setMessage(tree, `Failed to load tree: ${err.message}`);
+        }
     }
 }
 // applyView shows a view unconditionally: setView skips the work when the
@@ -607,6 +637,8 @@ function applyView(view) {
     byId("view-overview").hidden = !overview;
     byId("view-tree").hidden = overview;
     if (overview) {
+        ++contentRequest;
+        clearDetail();
         void loadStatus();
     }
     else {
@@ -681,7 +713,9 @@ async function runSearch(q) {
         }
         return;
     }
+    const request = ++contentRequest;
     searchActive = true;
+    const isCurrent = () => request === contentRequest && searchActive && searchBox().value.trim() === q;
     byId("view-overview").hidden = true;
     byId("view-tree").hidden = false;
     byId("guideBtn").hidden = true;
@@ -695,13 +729,15 @@ async function runSearch(q) {
             throw new Error(`HTTP ${resp.status}`);
         }
         const data = (await resp.json());
-        if (!searchActive || searchBox().value.trim() !== q) {
+        if (!isCurrent()) {
             return; // stale response: a newer query or a cleared box owns the panel
         }
         renderSearchResults(tree, data);
     }
     catch (err) {
-        setMessage(tree, `Search failed: ${err.message}`);
+        if (isCurrent()) {
+            setMessage(tree, `Search failed: ${err.message}`);
+        }
     }
 }
 function renderSearchResults(container, data) {

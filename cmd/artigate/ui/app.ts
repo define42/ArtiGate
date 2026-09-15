@@ -176,6 +176,12 @@ let selectedLeaf: HTMLElement | null = null;
 // view the sidebar has selected, so clearing the search restores it.
 let searchActive = false;
 let searchTimer = 0;
+// Trees and search share a panel. Each load gets a new identity, even when
+// refreshing the same view or returning to it before an older load finishes.
+let contentRequest = 0;
+// Selecting the same leaf again is also a new request; clearing details
+// invalidates any response still in flight for the previous selection.
+let detailRequest = 0;
 
 function esc(value: unknown): string {
   const map: Record<string, string> = {
@@ -604,6 +610,7 @@ function downloadRow(links: DownloadLink[]): HTMLElement {
 }
 
 async function selectLeaf(el: HTMLElement, node: TreeNode, eco: View): Promise<void> {
+  const request = ++detailRequest;
   if (selectedLeaf) {
     selectedLeaf.classList.remove("selected");
   }
@@ -619,12 +626,18 @@ async function selectLeaf(el: HTMLElement, node: TreeNode, eco: View): Promise<v
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
     }
-    renderDetail((await resp.json()) as Detail);
+    const detail = (await resp.json()) as Detail;
+    if (request !== detailRequest) {
+      return;
+    }
+    renderDetail(detail);
     if (eco === "uploads") {
       panel.appendChild(uploadActions(node.path));
     }
   } catch (err) {
-    setMessage(panel, `Failed to load details: ${(err as Error).message}`);
+    if (request === detailRequest) {
+      setMessage(panel, `Failed to load details: ${(err as Error).message}`);
+    }
   }
 }
 
@@ -694,6 +707,8 @@ function hideLayers(): void {
 }
 
 function clearDetail(): void {
+  ++detailRequest;
+  selectedLeaf?.classList.remove("selected");
   selectedLeaf = null;
   setMessage(byId("detail"), "Select a version to see its details.");
   hideLayers();
@@ -743,10 +758,18 @@ function expandableNode(node: TreeNode, eco: View, repoEco?: RepoEco): HTMLEleme
       return;
     }
     loaded = true;
+    const request = contentRequest;
     setMessage(children, "loading…");
     fetchChildren(eco, node.path)
-      .then((child) => renderNodes(children, child, eco, repoEco))
+      .then((child) => {
+        if (request === contentRequest) {
+          renderNodes(children, child, eco, repoEco);
+        }
+      })
       .catch((err: unknown) => {
+        if (request !== contentRequest) {
+          return;
+        }
         loaded = false; // allow retry on next open
         setMessage(children, `failed to load: ${(err as Error).message}`);
       });
@@ -760,22 +783,29 @@ function menuButtons(): NodeListOf<HTMLButtonElement> {
 }
 
 async function loadTree(): Promise<void> {
+  const request = ++contentRequest;
+  const view = currentView;
   const tree = byId("tree");
-  byId("treeTitle").textContent = VIEW_TITLES[currentView];
+  byId("treeTitle").textContent = VIEW_TITLES[view];
   // APT/RPM set up per repository, so the top "Set me up" button is hidden:
   // RPM repo nodes and APT component nodes carry their own instead.
   // (Containers group by upstream registry at the top level, so they keep the
   // whole-ecosystem button.) Uploads need no client setup at all — each file's
   // detail panel shows its plain download URL.
-  const perRepo = currentView === "apt" || currentView === "rpm";
-  byId("guideBtn").hidden = perRepo || currentView === "uploads";
+  const perRepo = view === "apt" || view === "rpm";
+  byId("guideBtn").hidden = perRepo || view === "uploads";
   clearDetail();
   setMessage(tree, "loading…");
   try {
-    const nodes = await fetchChildren(currentView, "");
-    renderNodes(tree, nodes, currentView, perRepo ? (currentView as RepoEco) : undefined);
+    const nodes = await fetchChildren(view, "");
+    if (request !== contentRequest) {
+      return;
+    }
+    renderNodes(tree, nodes, view, perRepo ? (view as RepoEco) : undefined);
   } catch (err) {
-    setMessage(tree, `Failed to load tree: ${(err as Error).message}`);
+    if (request === contentRequest) {
+      setMessage(tree, `Failed to load tree: ${(err as Error).message}`);
+    }
   }
 }
 
@@ -792,6 +822,8 @@ function applyView(view: View): void {
   byId("view-overview").hidden = !overview;
   byId("view-tree").hidden = overview;
   if (overview) {
+    ++contentRequest;
+    clearDetail();
     void loadStatus();
   } else {
     void loadTree();
@@ -872,7 +904,10 @@ async function runSearch(q: string): Promise<void> {
     }
     return;
   }
+  const request = ++contentRequest;
   searchActive = true;
+  const isCurrent = (): boolean =>
+    request === contentRequest && searchActive && searchBox().value.trim() === q;
   byId("view-overview").hidden = true;
   byId("view-tree").hidden = false;
   byId("guideBtn").hidden = true;
@@ -886,12 +921,14 @@ async function runSearch(q: string): Promise<void> {
       throw new Error(`HTTP ${resp.status}`);
     }
     const data = (await resp.json()) as SearchResponse;
-    if (!searchActive || searchBox().value.trim() !== q) {
+    if (!isCurrent()) {
       return; // stale response: a newer query or a cleared box owns the panel
     }
     renderSearchResults(tree, data);
   } catch (err) {
-    setMessage(tree, `Search failed: ${(err as Error).message}`);
+    if (isCurrent()) {
+      setMessage(tree, `Search failed: ${(err as Error).message}`);
+    }
   }
 }
 
