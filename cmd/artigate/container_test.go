@@ -828,6 +828,190 @@ func TestLowToHighContainerPipeline(t *testing.T) {
 	assertContainerRegistryReadOnly(t, srv.URL)
 }
 
+func TestCollectContainersExportsMetadataForExistingContent(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		repo string
+		tag  string
+	}{
+		{name: "new tag", repo: "library/review", tag: "stable"},
+		{name: "new repository", repo: "library/review-copy", tag: "v1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			img := makeFakeImage("shared-review-layer")
+			mux, requireToken, up := newFakeRegistry(t)
+			registerFakeImage(mux, "library/review", "v1", img, requireToken)
+			if tt.repo == "library/review" {
+				mux.HandleFunc("/v2/"+tt.repo+"/manifests/"+tt.tag, fakeRegistryServe(img.index, mtDockerList, requireToken))
+			} else {
+				registerFakeImage(mux, tt.repo, tt.tag, img, requireToken)
+			}
+			ls, priv := newContainerLowServer(t, map[string]string{"docker.io": up.URL})
+			hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+			srv := httptest.NewServer(hs)
+			t.Cleanup(srv.Close)
+
+			first, err := ls.CollectContainers(t.Context(), ContainerCollectRequest{Images: []string{"review:v1"}})
+			if err != nil {
+				t.Fatalf("first collect: %v", err)
+			}
+			if first.Skipped || first.Sequence != 1 || first.PriorFiles != 0 {
+				t.Fatalf("first collect = %+v, want full bundle at sequence 1", first)
+			}
+			transferAptBundle(t, ls, hs, first.BundleID)
+			if _, err := hs.ImportNext(); err != nil {
+				t.Fatalf("import first bundle: %v", err)
+			}
+
+			ref := "docker.io/" + tt.repo + ":" + tt.tag
+			dry, err := ls.CollectContainers(withDryRunCollect(t.Context()), ContainerCollectRequest{Images: []string{ref}})
+			if err != nil {
+				t.Fatalf("dry run new metadata: %v", err)
+			}
+			if !dry.DryRun || dry.Skipped || dry.BundleID != "" || dry.Sequence != 0 || dry.Estimate == nil {
+				t.Fatalf("dry run new metadata = %+v, want an export estimate without a bundle", dry)
+			}
+			if dry.Estimate.NewFiles != 0 || dry.Estimate.NewBytes != 0 || dry.Estimate.Bundles != 1 || dry.PriorFiles != 4 {
+				t.Fatalf("dry run estimate = %+v, want one bundle with four prior files and no new content", dry.Estimate)
+			}
+			if seq := ls.peekSequence(streamContainers); seq != 2 {
+				t.Fatalf("next sequence after dry run = %d, want 2", seq)
+			}
+			second, err := ls.CollectContainers(t.Context(), ContainerCollectRequest{Images: []string{ref}})
+			if err != nil {
+				t.Fatalf("collect new metadata: %v", err)
+			}
+			if second.Skipped || second.Sequence != 2 || second.ExportedModules != 1 || second.PriorFiles != 4 {
+				t.Fatalf("collect new metadata = %+v, want metadata-only bundle at sequence 2 with four prior files", second)
+			}
+			m := readBundleManifest(t, ls, second.BundleID)
+			assertContentAddressedFiles(t, m.Files, 4)
+			for _, f := range m.Files {
+				if !f.Prior {
+					t.Errorf("metadata-only bundle delivers existing blob %s", f.Path)
+				}
+			}
+			if names := listArchiveEntries(t, ls.cfg.ExportDir, second.BundleID); len(names) != 0 {
+				t.Errorf("metadata-only archive contains files: %v", names)
+			}
+			if m.Containers == nil || len(m.Containers.Repos) != 1 {
+				t.Fatalf("metadata-only bundle repos = %+v", m.Containers)
+			}
+			repo := m.Containers.Repos[0]
+			if repo.Registry != "docker.io" || repo.Repository != tt.repo || len(repo.Images) != 1 || repo.Images[0].Tag != tt.tag {
+				t.Fatalf("metadata-only bundle repo = %+v", repo)
+			}
+			transferAptBundle(t, ls, hs, second.BundleID)
+			if _, err := hs.ImportNext(); err != nil {
+				t.Fatalf("import metadata-only bundle: %v", err)
+			}
+			assertHTTPBody(t, srv.URL+"/v2/docker.io/library/review/manifests/v1", string(img.index))
+			assertHTTPBody(t, srv.URL+"/v2/docker.io/"+tt.repo+"/manifests/"+tt.tag, string(img.index))
+			assertHTTPBody(t, srv.URL+"/v2/docker.io/"+tt.repo+"/blobs/"+containerSHA(img.layer), string(img.layer))
+
+			// Remember both identities across a restart, including the original
+			// tag when it is collected separately from the newer metadata.
+			if err := ls.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ls, err = NewLowServer(ls.cfg, priv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ls.containerRegistryBases = map[string]string{"docker.io": up.URL}
+			t.Cleanup(func() { _ = ls.Close() })
+			for _, image := range []string{ref, "review:v1"} {
+				repeated, err := ls.CollectContainers(t.Context(), ContainerCollectRequest{Images: []string{image}})
+				if err != nil {
+					t.Fatalf("repeat collect %s: %v", image, err)
+				}
+				if !repeated.Skipped || repeated.Sequence != 0 || repeated.BundleID != "" {
+					t.Fatalf("repeat collect %s = %+v, want skipped", image, repeated)
+				}
+			}
+			if seq := ls.peekSequence(streamContainers); seq != 3 {
+				t.Errorf("next sequence = %d, want 3 after skipped repeats", seq)
+			}
+			forced, err := ls.CollectContainers(t.Context(), ContainerCollectRequest{Images: []string{ref}, Force: true})
+			if err != nil {
+				t.Fatalf("forced collect: %v", err)
+			}
+			if forced.Skipped || forced.Sequence != 3 || forced.PriorFiles != 0 {
+				t.Fatalf("forced collect = %+v, want full bundle at sequence 3", forced)
+			}
+			if names := listArchiveEntries(t, ls.cfg.ExportDir, forced.BundleID); len(names) != 4 {
+				t.Errorf("forced archive contains %d files, want all four blobs", len(names))
+			}
+		})
+	}
+}
+
+func TestCollectContainersExportsTagChangesToExistingContent(t *testing.T) {
+	a := makeFakeImage("review-layer-a")
+	b := makeFakeImage("review-layer-b")
+	mux, requireToken, up := newFakeRegistry(t)
+	const repo = "library/review"
+	registerFakeImage(mux, repo, "v1", a, requireToken)
+	// The two images share their config, which is already registered above.
+	mux.HandleFunc("/v2/"+repo+"/manifests/v2", fakeRegistryServe(b.index, mtDockerList, requireToken))
+	mux.HandleFunc("/v2/"+repo+"/manifests/"+b.manifestDigest, fakeRegistryServe(b.manifest, mtDockerManifest, requireToken))
+	mux.HandleFunc("/v2/"+repo+"/blobs/"+containerSHA(b.layer), fakeRegistryServe(b.layer, "application/octet-stream", requireToken))
+	var stable atomic.Pointer[fakeImage]
+	stable.Store(&a)
+	mux.HandleFunc("/v2/"+repo+"/manifests/stable", func(w http.ResponseWriter, r *http.Request) {
+		fakeRegistryServe(stable.Load().index, mtDockerList, requireToken)(w, r)
+	})
+	ls, priv := newContainerLowServer(t, map[string]string{"docker.io": up.URL})
+	hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+	srv := httptest.NewServer(hs)
+	t.Cleanup(srv.Close)
+
+	first, err := ls.CollectContainers(t.Context(), ContainerCollectRequest{Images: []string{"review:stable", "review:v2"}})
+	if err != nil {
+		t.Fatalf("initial collect: %v", err)
+	}
+	if first.Skipped || first.Sequence != 1 || first.ExportedModules != 2 {
+		t.Fatalf("initial collect = %+v, want both images at sequence 1", first)
+	}
+	transferAptBundle(t, ls, hs, first.BundleID)
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("import initial bundle: %v", err)
+	}
+	assertHTTPBody(t, srv.URL+"/v2/docker.io/"+repo+"/manifests/stable", string(a.index))
+
+	moveStable := func(img *fakeImage, wantSequence int64) {
+		t.Helper()
+		stable.Store(img)
+		res, err := ls.CollectContainers(t.Context(), ContainerCollectRequest{Images: []string{"review:stable"}})
+		if err != nil {
+			t.Fatalf("collect moved tag: %v", err)
+		}
+		if res.Skipped || res.Sequence != wantSequence || res.PriorFiles != 4 {
+			t.Fatalf("collect moved tag = %+v, want metadata-only bundle at sequence %d", res, wantSequence)
+		}
+		if names := listArchiveEntries(t, ls.cfg.ExportDir, res.BundleID); len(names) != 0 {
+			t.Errorf("moved-tag archive contains files: %v", names)
+		}
+		transferAptBundle(t, ls, hs, res.BundleID)
+		if _, err := hs.ImportNext(); err != nil {
+			t.Fatalf("import moved-tag bundle: %v", err)
+		}
+		assertHTTPBody(t, srv.URL+"/v2/docker.io/"+repo+"/manifests/stable", string(img.index))
+		repeated, err := ls.CollectContainers(t.Context(), ContainerCollectRequest{Images: []string{"review:stable"}})
+		if err != nil {
+			t.Fatalf("repeat moved tag: %v", err)
+		}
+		if !repeated.Skipped || repeated.Sequence != 0 || repeated.BundleID != "" {
+			t.Fatalf("repeat moved tag = %+v, want skipped", repeated)
+		}
+		if seq := ls.peekSequence(streamContainers); seq != wantSequence+1 {
+			t.Errorf("next sequence = %d, want %d after skipped repeat", seq, wantSequence+1)
+		}
+	}
+	moveStable(&b, 2)
+	moveStable(&a, 3)
+}
+
 // assertManifestByTag pulls a manifest by tag and checks the body and the
 // Docker-Content-Digest / Content-Type headers docker relies on. A tag whose
 // upstream reference was a multi-platform index serves the preserved index

@@ -6,8 +6,8 @@ package main
 // i.e. forwarded across the diode — keyed by bundle path and content hash.
 // Collectors use it three ways:
 //
-//   - Skip: a collect whose entire resolved file set is already recorded
-//     produces no bundle and burns no sequence number.
+//   - Skip: a collect whose entire resolved file set and metadata are already
+//     recorded produces no bundle and burns no sequence number.
 //   - Delta: when only part of the set is new, the bundle's archive carries
 //     just the new files; the recorded ones ride along in the manifest
 //     as prior references (ManifestFile.Prior) the high side verifies against
@@ -40,9 +40,16 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver, registered as "sqlite"
 )
 
-// ExportedStore records, per stream, the files already forwarded.
+// ExportedStore records, per stream, the files and metadata already forwarded.
 type ExportedStore struct {
 	db *sql.DB
+}
+
+// ExportMetadata identifies one metadata record and its content hash. Keys
+// name mutable receiver state, such as a repository's container tag mapping.
+type ExportMetadata struct {
+	Key    string
+	SHA256 string
 }
 
 // forwardedSchema is a pure key table. The primary key is ordered
@@ -66,6 +73,15 @@ const mutableForwardedSchema = `CREATE TABLE IF NOT EXISTS mutable_forwarded_fil
   PRIMARY KEY (stream, path)
 ) WITHOUT ROWID`
 
+// Metadata describes current receiver state, so only its latest hash can
+// suppress an export. Historical hashes would incorrectly skip reversions.
+const forwardedMetadataSchema = `CREATE TABLE IF NOT EXISTS forwarded_metadata (
+  stream TEXT NOT NULL,
+  key    TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  PRIMARY KEY (stream, key)
+) WITHOUT ROWID`
+
 // OpenExportedStore opens (creating if needed) the exported-content database at
 // path, mirroring the watch store's single-writer setup, and folds in any
 // legacy hash-only index.
@@ -77,7 +93,7 @@ func OpenExportedStore(path string) (*ExportedStore, error) {
 	// SQLite has a single writer; serialize all access so the collectors never
 	// collide on "database is locked", waiting briefly if contended.
 	db.SetMaxOpenConns(1)
-	for _, stmt := range []string{"PRAGMA busy_timeout=5000", forwardedSchema, mutableForwardedSchema} {
+	for _, stmt := range []string{"PRAGMA busy_timeout=5000", forwardedSchema, mutableForwardedSchema, forwardedMetadataSchema} {
 		if _, err := db.Exec(stmt); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("init exported db: %w", err)
@@ -250,6 +266,84 @@ func (s *ExportedStore) Record(stream string, files []ManifestFile) error {
 			if _, err := mutableStmt.Exec(stream, f.SHA256, f.Path); err != nil {
 				return err
 			}
+		}
+	}
+	return tx.Commit()
+}
+
+// MetadataChanged reports whether any metadata record differs from the latest
+// one forwarded for the stream. Missing records always require an export.
+func (s *ExportedStore) MetadataChanged(stream string, metadata []ExportMetadata) (bool, error) {
+	if len(metadata) == 0 {
+		return false, nil
+	}
+	stmt, err := s.db.Prepare("SELECT sha256 FROM forwarded_metadata WHERE stream = ? AND key = ?")
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, m := range metadata {
+		var sha256 string
+		switch err := stmt.QueryRow(stream, m.Key).Scan(&sha256); {
+		case err == nil:
+			if sha256 != m.SHA256 {
+				return true, nil
+			}
+		case errors.Is(err, sql.ErrNoRows):
+			return true, nil
+		default:
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// InvalidateMetadata forgets each supplied key before writing a metadata
+// bundle. A failed write, sequence commit, or record then safely causes a
+// future collect to resend the metadata, including after a restart.
+func (s *ExportedStore) InvalidateMetadata(stream string, metadata []ExportMetadata) error {
+	if len(metadata) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Prepare("DELETE FROM forwarded_metadata WHERE stream = ? AND key = ?")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, m := range metadata {
+		if _, err := stmt.Exec(stream, m.Key); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// RecordMetadata records the latest metadata after a successful sequence
+// commit. Records are applied in order in one transaction, so the last value
+// for a repeated key describes the receiver's current state.
+func (s *ExportedStore) RecordMetadata(stream string, metadata []ExportMetadata) error {
+	if len(metadata) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Prepare(`INSERT INTO forwarded_metadata (stream, key, sha256) VALUES (?, ?, ?)
+		ON CONFLICT (stream, key) DO UPDATE SET sha256 = excluded.sha256`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, m := range metadata {
+		if _, err := stmt.Exec(stream, m.Key, m.SHA256); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()

@@ -75,7 +75,7 @@ type CollectEstimate struct {
 // sequence and writing bundles, it plans the split and reports what would
 // happen. Only the split plan can fail — with the same error a real collect
 // would hit, which is precisely what a dry run is for.
-func (s *LowServer) dryRunExportResult(ctx context.Context, stream string, files []ManifestFile) (ExportResult, error) {
+func (s *LowServer) dryRunExportResult(ctx context.Context, stream string, files []ManifestFile, metadataChanged bool) (ExportResult, error) {
 	est := &CollectEstimate{TotalFiles: len(files)}
 	for _, f := range files {
 		est.TotalBytes += f.Size
@@ -85,7 +85,7 @@ func (s *LowServer) dryRunExportResult(ctx context.Context, stream string, files
 		}
 	}
 	res := ExportResult{Stream: stream, DryRun: true, Estimate: est, PriorFiles: est.TotalFiles - est.NewFiles}
-	if est.NewFiles == 0 {
+	if est.NewFiles == 0 && !metadataChanged {
 		res.Skipped = true
 		res.Message = fmt.Sprintf("dry run: all %d file(s) (%s) already forwarded; a collect would skip", est.TotalFiles, formatBytes(est.TotalBytes))
 		emitProgress(ctx, "Dry run: nothing new — every resolved file has already been forwarded on this stream.")
@@ -97,6 +97,10 @@ func (s *LowServer) dryRunExportResult(ctx context.Context, stream string, files
 	}
 	est.Bundles = len(chunks)
 	est.EstimatedArchiveBytes = estimateArchiveBytes(files, chunks)
+	if est.NewFiles == 0 {
+		est.Bundles = 1
+		est.EstimatedArchiveBytes = bundlePackBaseOverheadBytes
+	}
 	res.Message = dryRunMessage(est)
 	emitProgress(ctx, "Dry run: %d file(s) resolved, %s total; %s", est.TotalFiles, formatBytes(est.TotalBytes), res.Message)
 	return res, nil
@@ -117,6 +121,10 @@ func estimateArchiveBytes(files []ManifestFile, chunks [][]int) int64 {
 
 // dryRunMessage renders the operator-facing one-line summary of an estimate.
 func dryRunMessage(est *CollectEstimate) string {
+	if est.NewFiles == 0 && est.Bundles == 1 {
+		return fmt.Sprintf("dry run: changed metadata would cross the diode in 1 bundle (≤ %s archived); all %d file(s) already forwarded",
+			formatBytes(est.EstimatedArchiveBytes), est.TotalFiles)
+	}
 	msg := fmt.Sprintf("dry run: %d new file(s), %s of new content would cross the diode in %d bundle(s) (≤ %s archived)",
 		est.NewFiles, formatBytes(est.NewBytes), est.Bundles, formatBytes(est.EstimatedArchiveBytes))
 	if prior := est.TotalFiles - est.NewFiles; prior > 0 {

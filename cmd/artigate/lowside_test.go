@@ -7,6 +7,7 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -622,4 +623,103 @@ func TestLowToHighPipeline(t *testing.T) {
 	if code, body := httpGet(t, srv.URL+"/go/example.com/foo/bar/@v/list"); code != http.StatusOK || !strings.Contains(body, "v1.0.0") {
 		t.Errorf("high list after pipeline: status %d body %q", code, body)
 	}
+}
+
+// A newer mapping may reach the receiver even when an export cannot finish.
+// Neither that mapping nor its predecessor may suppress a later retry.
+func TestMetadataExportFailureInvalidatesPriorMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		wantError string
+	}{
+		{name: "write", wantError: "injected bundle write failure"},
+		{name: "commit", wantError: "not persisted"},
+		{name: "record"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ls := newBareLowServer(t)
+			old := ExportMetadata{Key: "docker.io/library/review:tag:stable", SHA256: strings.Repeat("a", 64)}
+			next := ExportMetadata{Key: old.Key, SHA256: strings.Repeat("b", 64)}
+			unchanged := ExportMetadata{Key: "docker.io/library/review:tag:v1", SHA256: old.SHA256}
+			if err := ls.exported.RecordMetadata(streamContainers, []ExportMetadata{old, unchanged}); err != nil {
+				t.Fatal(err)
+			}
+			stage := t.TempDir()
+			wrote := false
+			_, err := ls.exportSequencedBundle(t.Context(), streamContainers, nil, func(seq int64) (ExportResult, error) {
+				wrote = true
+				assertMetadataChanged(t, ls.exported, streamContainers, []ExportMetadata{old}, true)
+				assertMetadataChanged(t, ls.exported, streamContainers, []ExportMetadata{next}, true)
+				if tt.name == "write" {
+					return ExportResult{}, errors.New("injected bundle write failure")
+				}
+				id := bundleIDFor(streamContainers, seq)
+				if err := ls.writeBundleArtifacts(t.Context(), id, stage, []byte("{}"), nil); err != nil {
+					t.Fatal(err)
+				}
+				switch tt.name {
+				case "commit":
+					blocker := filepath.Join(ls.cfg.Root, "state-blocker")
+					writeFile(t, blocker, []byte("x"))
+					ls.statePath = filepath.Join(blocker, "low-state.json")
+				case "record":
+					if err := ls.exported.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return ExportResult{Stream: streamContainers, Sequence: seq, BundleID: id}, nil
+			}, next)
+			if !wrote {
+				t.Fatal("metadata export never reached the writer")
+			}
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("metadata record failure should leave the committed export successful: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("export error = %v, want %q", err, tt.wantError)
+			}
+			if err := ls.exported.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err := OpenExportedStore(filepath.Join(ls.cfg.Root, "exported.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			assertMetadataChanged(t, store, streamContainers, []ExportMetadata{old}, true)
+			assertMetadataChanged(t, store, streamContainers, []ExportMetadata{next}, true)
+			assertMetadataChanged(t, store, streamContainers, []ExportMetadata{unchanged}, false)
+		})
+	}
+}
+
+func TestMetadataExportInvalidationFailurePreventsWrite(t *testing.T) {
+	ls := newBareLowServer(t)
+	old := ExportMetadata{Key: "docker.io/library/review:tag:stable", SHA256: strings.Repeat("a", 64)}
+	next := ExportMetadata{Key: old.Key, SHA256: strings.Repeat("b", 64)}
+	if err := ls.exported.RecordMetadata(streamContainers, []ExportMetadata{old}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ls.exported.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wrote := false
+	_, err := ls.exportSequencedBundle(t.Context(), streamContainers, nil, func(_ int64) (ExportResult, error) {
+		wrote = true
+		return ExportResult{}, nil
+	}, next)
+	if err == nil || !strings.Contains(err.Error(), "invalidate export metadata index") || wrote {
+		t.Fatalf("export with unavailable metadata index: err=%v, wrote=%v; want invalidation error before writing", err, wrote)
+	}
+	if got := ls.peekSequence(streamContainers); got != 1 {
+		t.Errorf("next sequence = %d, want 1 after refusing export", got)
+	}
+	store, err := OpenExportedStore(filepath.Join(ls.cfg.Root, "exported.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	assertMetadataChanged(t, store, streamContainers, []ExportMetadata{old}, false)
+	assertMetadataChanged(t, store, streamContainers, []ExportMetadata{next}, true)
 }

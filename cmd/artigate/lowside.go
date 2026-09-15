@@ -813,8 +813,8 @@ type ExportResult struct {
 	ExportedModules int    `json:"exported_modules"`
 	BundleID        string `json:"bundle_id,omitempty"`
 	// Skipped is set when a collect produced no bundle because every resolved
-	// file had already been forwarded on this stream. No sequence number is
-	// consumed.
+	// file and tracked metadata record had already been forwarded on this
+	// stream. No sequence number is consumed.
 	Skipped bool `json:"skipped,omitempty"`
 	// PriorFiles counts manifest entries that reference content already
 	// forwarded on this stream (a delta bundle): listed and verified on
@@ -1213,11 +1213,13 @@ func (s *LowServer) commitSequence(stream string, seq int64) error {
 // stream, but first applies export dedup: files whose content this stream has
 // already forwarded are marked prior (listed in the manifest, left out of the
 // archive), and when nothing at all is new it writes no bundle and burns no
-// sequence number, returning a skipped result. force disables both, producing
-// a full self-contained bundle. write builds and writes the ecosystem's bundle
-// for the allocated sequence; baseDir is the root its file paths are relative
-// to. The caller must hold the stream lock (every collector does) so the
-// peek/commit stay race-free.
+// sequence number, returning a skipped result. Optional metadata tracks the
+// latest ecosystem records independently of file bytes: changed metadata can
+// export a bundle whose files are all prior references. force disables dedup,
+// producing a full self-contained bundle. write builds and writes the
+// ecosystem's bundle for the allocated sequence; baseDir is the root its file
+// paths are relative to. The caller must hold the stream lock (every collector
+// does) so the peek/commit stay race-free.
 //
 // A collect whose new content would overflow the transport's per-archive
 // limit (a full safetensors repository easily exceeds diodeMaxArchiveBytes)
@@ -1238,21 +1240,24 @@ func (s *LowServer) commitSequence(stream string, seq int64) error {
 // A dry-run collect (?dry_run=1, carried on ctx) stops right after the dedup
 // marking: it answers with a size estimate of what would have been exported
 // and touches nothing — see dryRunExportResult.
-func (s *LowServer) exportIfNew(ctx context.Context, stream, baseDir string, files []ManifestFile, force bool, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
+func (s *LowServer) exportIfNew(ctx context.Context, stream, baseDir string, files []ManifestFile, force bool, write func(seq int64) (ExportResult, error), metadata ...ExportMetadata) (ExportResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ExportResult{}, fmt.Errorf("collect stopped before export: %w", err)
 	}
 	if !force {
 		s.markPriorFiles(stream, files)
 	}
+	metadataChanged := (force && len(metadata) > 0) || s.hasNewMetadata(stream, metadata)
 	if isDryRunCollect(ctx) {
-		return s.dryRunExportResult(ctx, stream, files)
+		return s.dryRunExportResult(ctx, stream, files, metadataChanged)
 	}
 	delivered := countDelivered(files)
-	if delivered == 0 {
+	if delivered == 0 && !metadataChanged {
 		return ExportResult{Stream: stream, Skipped: true, Message: "no new content since the last export"}, nil
 	}
-	if prior := len(files) - delivered; prior > 0 {
+	if delivered == 0 {
+		emitProgress(ctx, "All %d file(s) already forwarded; exporting changed metadata", len(files))
+	} else if prior := len(files) - delivered; prior > 0 {
 		emitProgress(ctx, "%d of %d file(s) already forwarded; the bundle carries the %d new one(s)", prior, len(files), delivered)
 	}
 	chunks, err := splitDeliveredFiles(files, s.bundleSplitBudget())
@@ -1262,7 +1267,7 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream, baseDir string, fil
 	parts, err := s.exportContentParts(ctx, stream, baseDir, files, chunks)
 	var res ExportResult
 	if err == nil {
-		res, err = s.exportSequencedBundle(ctx, stream, files, write)
+		res, err = s.exportSequencedBundle(ctx, stream, files, write, metadata...)
 	}
 	if err != nil {
 		if n := len(parts.ids); n > 0 {
@@ -1276,18 +1281,34 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream, baseDir string, fil
 	return res, nil
 }
 
+// hasNewMetadata fails safe on lookup errors: an unknown metadata state must
+// never suppress an export. Invalidation still has to succeed before writing.
+func (s *LowServer) hasNewMetadata(stream string, metadata []ExportMetadata) bool {
+	changed, err := s.exported.MetadataChanged(stream, metadata)
+	if err != nil {
+		log.Printf("export metadata index %s: %v; exporting without metadata dedup", stream, err)
+		return true
+	}
+	return changed
+}
+
 // exportSequencedBundle allocates the stream's next sequence, writes one
-// bundle for it, commits the claim, records the files as forwarded, and hands
-// the bundle to the configured diode transport. It is the tail every exported
-// bundle goes through — a collect's only bundle, each content part of a split,
-// and the split's final ecosystem bundle.
-func (s *LowServer) exportSequencedBundle(ctx context.Context, stream string, files []ManifestFile, write func(seq int64) (ExportResult, error)) (ExportResult, error) {
+// bundle for it, commits the claim, records the files and optional metadata as
+// forwarded, and hands the bundle to the configured diode transport. It is
+// the tail every exported bundle goes through — a collect's only bundle, each
+// content part of a split, and the split's final ecosystem bundle. Only the
+// final ecosystem bundle may invalidate and record metadata; content parts
+// cannot establish the receiver's repository or tag state.
+func (s *LowServer) exportSequencedBundle(ctx context.Context, stream string, files []ManifestFile, write func(seq int64) (ExportResult, error), metadata ...ExportMetadata) (ExportResult, error) {
 	seq, err := s.allocateSequence(stream)
 	if err != nil {
 		return ExportResult{}, err
 	}
 	if err := s.exported.InvalidateMutable(stream, files); err != nil {
 		return ExportResult{}, fmt.Errorf("invalidate mutable export index %s: %w", stream, err)
+	}
+	if err := s.exported.InvalidateMetadata(stream, metadata); err != nil {
+		return ExportResult{}, fmt.Errorf("invalidate export metadata index %s: %w", stream, err)
 	}
 	res, err := write(seq)
 	if err != nil {
@@ -1304,6 +1325,9 @@ func (s *LowServer) exportSequencedBundle(ctx context.Context, stream string, fi
 	// content is not durably part of the stream, so a retry must re-export it
 	// rather than see it as already forwarded and skip.
 	s.recordForwarded(stream, files)
+	if err := s.exported.RecordMetadata(stream, metadata); err != nil {
+		log.Printf("export metadata index %s: record failed: %v", stream, err)
+	}
 	// With a diode transport configured, hand the bundle over now; a failed
 	// transfer is reported on the result, never fatal (the bundle is
 	// committed and archived, ready to re-transmit).

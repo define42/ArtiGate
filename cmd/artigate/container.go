@@ -52,6 +52,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1217,16 +1218,44 @@ func (s *LowServer) CollectContainers(ctx context.Context, req ContainerCollectR
 	if len(repos) == 0 {
 		return ExportResult{}, fmt.Errorf("no images could be fetched: %s", summarizeFailures(failed))
 	}
+	metadata, err := containerExportMetadata(repos)
+	if err != nil {
+		return ExportResult{}, err
+	}
 
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 	res, err := s.exportIfNew(ctx, streamContainers, stageRoot, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeContainerBundle(ctx, seq, stageRoot, files, repos)
-	})
+	}, metadata...)
 	if err != nil {
 		return ExportResult{}, err
 	}
 	res.SkippedModules = failed
 	return res, nil
+}
+
+// containerExportMetadata tracks each repository's current tag or digest
+// record separately from its globally shared immutable blobs. Hash the full
+// image record so index and attached-artifact metadata changes also export.
+func containerExportMetadata(repos []ContainerRepo) ([]ExportMetadata, error) {
+	var metadata []ExportMetadata
+	for _, repo := range repos {
+		for _, img := range repo.Images {
+			// Referrers may arrive in a different order without any change.
+			img.Artifacts = slices.Clone(img.Artifacts)
+			sort.Slice(img.Artifacts, func(i, j int) bool { return img.Artifacts[i].Digest < img.Artifacts[j].Digest })
+			body, err := json.Marshal(img)
+			if err != nil {
+				return nil, fmt.Errorf("encode container export metadata: %w", err)
+			}
+			sum := sha256.Sum256(body)
+			metadata = append(metadata, ExportMetadata{
+				Key:    repo.Registry + "/" + repo.Repository + ":" + containerImageKey(img),
+				SHA256: hex.EncodeToString(sum[:]),
+			})
+		}
+	}
+	return metadata, nil
 }
 
 // parseContainerCollectRefs parses and de-duplicates the requested references.
@@ -2009,6 +2038,13 @@ func containerImageServedDigest(img ContainerImage) string {
 	return img.Digest
 }
 
+func containerImageKey(img ContainerImage) string {
+	if img.Tag != "" {
+		return "tag:" + img.Tag
+	}
+	return "digest:" + containerImageServedDigest(img)
+}
+
 // mergeContainerRepo merges newly imported images into the repo's index: a
 // re-imported tag moves to its new digest while its old image remains available
 // by digest. Digest-pinned images accumulate.
@@ -2020,22 +2056,16 @@ func (s *HighServer) mergeContainerRepo(repo ContainerRepo) error {
 	} else if err != nil {
 		return err
 	}
-	key := func(img ContainerImage) string {
-		if img.Tag != "" {
-			return "tag:" + img.Tag
-		}
-		return "digest:" + containerImageServedDigest(img)
-	}
 	byKey := map[string]int{}
 	for i, img := range merged.Images {
-		byKey[key(img)] = i
+		byKey[containerImageKey(img)] = i
 	}
 	for _, img := range repo.Images {
-		if i, ok := byKey[key(img)]; ok {
+		if i, ok := byKey[containerImageKey(img)]; ok {
 			merged.Images = preserveMovedContainerImage(merged.Images, byKey, merged.Images[i], img)
 			merged.Images[i] = img
 		} else {
-			byKey[key(img)] = len(merged.Images)
+			byKey[containerImageKey(img)] = len(merged.Images)
 			merged.Images = append(merged.Images, img)
 		}
 	}
