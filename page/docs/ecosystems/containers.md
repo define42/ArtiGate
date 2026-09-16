@@ -205,7 +205,17 @@ Update the high side before collecting index artifacts or subjectless artifact n
 
 A successful image pull can still have incomplete attachment discovery. Each collected image therefore has a separate observation with state `complete`, `incomplete`, or `unknown`, counts of collected artifacts and checked subjects, a check time, the last complete check for that digest, and up to 16 distinct issues. Additional issues are counted in `issues_dropped`. These states describe discovery coverage; they do **not** verify signatures or establish trust.
 
-Collect responses include `container_discovery` records, including when export deduplication produces no new bundle. `GET /admin/containers/discovery` returns the durable low-side observations as `{"records": [...]}`. The Containers dashboard shows them with incomplete observations first. Each record names its registry, repository, served digest, and current tags. The snapshot is written atomically to `<low-root>/containers/discovery.json`; history remains available by digest after tags move. Last-success times never transfer to a different digest.
+Collect responses include `container_discovery` records, including when export deduplication produces no new bundle. `GET /admin/containers/discovery` returns a page of durable low-side observations in `records`, with `total`, `next_cursor`, `as_of`, and `stale_after_seconds`. The Containers dashboard defaults to current references and provides repository, coverage, freshness, and history filters with Previous/Next page controls. Each record names its registry, repository, served digest, and current tags. The snapshot is written atomically to `<low-root>/containers/discovery.json`; history remains available by digest after tags move. Last-success times never transfer to a different digest.
+
+`lifecycle` is `active` for records with current collected tags or an explicitly collected digest pin, `historical` for tracked records whose tags have moved away and which have no pin, or `unknown` for older tagless records whose reference intent was not recorded. Explicit pins remain active when tags move. Recollect an older reference to record its intent; choose All observations or Unclassified older records to inspect legacy data. These labels describe recorded collection references, not whether an image is currently deployed.
+
+`freshness` is separate from coverage: a complete observation can become stale. It is `fresh` before the selected age threshold, `stale` at or after it, and `unknown` when the check time is absent or in the future. Known ages appear as `age_seconds`. The default threshold is 24 hours; the dashboard also offers 1 hour and 7 days. Freshness is evaluated at the response's `as_of` time, which remains fixed while following its cursors.
+
+The API defaults to 100 records per page, allows at most 250, and caps response bodies at 1 MiB. Filter by exact `repository=registry/repository`, `state`, `lifecycle`, or `freshness`; omit a filter or use `all` to include all values. Set `limit` and a whole-second `stale_after` duration between `1s` and `8760h`. Pass `next_cursor` as `cursor` with the same filters and page limit. Records have stable repository/digest ordering. A changed snapshot returns `409`; restart without the cursor. Invalid or repeated parameters return `400`. The dashboard restarts on the first page and explains when observations changed.
+
+```bash
+curl 'http://low-host:8080/admin/containers/discovery?lifecycle=active&freshness=stale&stale_after=24h&limit=50'
+```
 
 Issue codes are `referrers_api`, `referrers_fallback`, `legacy_fetch`, `artifact_fetch`, `artifact_invalid`, `discovery_limit`, and `cancelled`. Issues contain only a fixed code and an optional subject digest, never upstream URLs or error bodies. An absent legacy cosign tag is normal; a failed lookup or an unavailable artifact advertised by discovery makes the observation incomplete. Retry collection after correcting the cause. Existing imported attachments remain available.
 
@@ -213,7 +223,18 @@ If the root image or its required graph cannot be collected, the existing collec
 
 State, count, or issue changes cross the diode in signed metadata even when the image bytes are unchanged. Timestamp-only changes do not force another bundle. The high-side image details expose `container_discovery` and display the most recently **exported** observation, which may be older than the latest low-side check. Previously imported images without observations display `unknown`. Dry runs report `unknown` and do not update durable status or last-success times.
 
-Prometheus exposes aggregate `artigate_low_container_discovery_records{state}` and `artigate_low_container_discovery_issues{code}` gauges, artifact counts by state, omitted-issue counts, newest check/success timestamps, and a `status_read_error` gauge under the same prefix. Labels never contain repository names, digests, or free-form errors. Alert on `artigate_low_container_discovery_records{state="incomplete"} > 0` and `artigate_low_container_discovery_status_read_error > 0`. Records include retained digest history; a historical incomplete record remains until that digest is collected successfully.
+Prometheus retains the all-history `artigate_low_container_discovery_records{state}` and `artigate_low_container_discovery_issues{code}` gauges, artifact counts by state, omitted-issue counts, and newest check/success timestamps. `artigate_low_container_discovery_records_by_lifecycle{lifecycle,state}` separates current, historical, and unclassified records. `artigate_low_container_discovery_current_records{state,freshness}` counts only current tags and explicit digest pins, with a fixed 24-hour freshness threshold independent of dashboard filters. Labels never contain repository names, digests, or free-form errors.
+
+Use the current-reference gauges for operational alerts, and inspect unknown freshness or unclassified records separately:
+
+```promql
+sum(artigate_low_container_discovery_current_records{state="incomplete"}) > 0
+sum(artigate_low_container_discovery_current_records{freshness="stale"}) > 0
+sum(artigate_low_container_discovery_current_records{freshness="unknown"}) > 0
+artigate_low_container_discovery_status_read_error > 0
+```
+
+Historical incomplete observations stay inspectable without contributing to current-reference alerts. A failed root collection still appears through collection errors and leaves its old check time unchanged, so its current observation eventually becomes stale.
 
 ### Offline integrity checks and repair
 
@@ -225,6 +246,8 @@ artigate containers check --root /var/lib/artigate-high --repository docker.io/l
 ```
 
 The default is strictly read-only and makes no network requests. It verifies repository identities, manifest bytes, SHA-256 digests, declared sizes, configs and layers, required artifact graphs, tag mappings, and derived artifact indexes. It does not require unmirrored platform siblings from a preserved image index. A missing root is an error; an existing root with no container repositories reports zero repositories.
+
+Repository indexes are decoded incrementally without a separate 64 MiB diagnostic limit. Report-only scans release each repository's decoded metadata and rebuilt index before proceeding; they retain the report and a compact cache of verified blob digests. Repair retains repository fingerprints during validation, checks every fingerprint before writes begin, then reloads and repairs one repository at a time. Memory for decoded metadata therefore depends on the largest repository rather than all repository indexes combined. Ambiguous duplicate membership or tag keys are rejected.
 
 To rebuild derived artifact metadata and native subject relationships from verified stored manifests:
 
@@ -284,6 +307,8 @@ oras cp --recursive --to-oci-layout <high-host>/ghcr.io/org/artifact:v1 ./artifa
 ```
 
 Legacy cosign signature tags remain separate from that native graph and can be verified against the mirror with the original public key. CI exercises real ORAS discovery/copy/pull and local-key cosign verification through a signed low-to-high transfer, using a local upstream registry. It also runs the unmodified, pinned OCI Distribution v1.1.1 pull and discovery conformance workflows, including native referrers and tag pagination. A fixture gateway sends the suite's setup writes to a local upstream and waits for signed import before forwarding every read assertion to the high side. Push and content-management workflows are disabled. CI retains the HTML and JUnit reports.
+
+CI also creates modern Cosign signatures and attestations in the Sigstore bundle format, discovers their native subjects through the high side, and checks that bundle bytes survive transfer exactly. Cosign verifies the high-side registry directly, then verifies downloaded high-side manifests and bundles in a Docker container with `--network=none`, explicit public keys, read-only inputs, and no host trust cache. Wrong keys, changed manifest bytes, and modified signed predicates must fail. These deterministic tests cover local-key trust; keyless certificate and transparency-proof verification requires separate trust material and is outside their scope.
 
 ### HTTPS vs. insecure-registries
 

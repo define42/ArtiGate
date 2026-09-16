@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"slices"
@@ -55,10 +55,10 @@ type containerIntegrityChecker struct {
 }
 
 type containerIntegrityRepair struct {
-	file     string
-	original []byte
-	fields   map[string]json.RawMessage
-	index    *containerArtifactIndex
+	file        string
+	fingerprint [sha256.Size]byte
+	fields      map[string]json.RawMessage
+	index       *containerArtifactIndex
 }
 
 // checkContainerIntegrity is offline: it never starts a server, creates a root,
@@ -79,16 +79,11 @@ func checkContainerIntegrity(ctx context.Context, options containerIntegrityOpti
 		return report, err
 	}
 	checker := containerIntegrityChecker{root: root, verified: make(map[string]containerIntegrityBlob)}
-	repairs := make([]containerIntegrityRepair, 0, len(names))
-	for _, name := range names {
-		if err := ctx.Err(); err != nil {
-			return report, err
-		}
-		result, repair := checker.checkRepository(ctx, name)
-		report.Repositories = append(report.Repositories, result)
-		repairs = append(repairs, repair)
-	}
+	repairs, err := checker.scanRepositories(ctx, names, options.Repair, &report)
 	report.BlobsChecked = len(checker.verified)
+	if err != nil {
+		return report, err
+	}
 	if options.Repair && containerIntegrityCanRepair(report.Repositories) {
 		if err := checker.applyRepairs(ctx, repairs, &report); err != nil {
 			return report, err
@@ -100,6 +95,21 @@ func checkContainerIntegrity(ctx context.Context, options containerIntegrityOpti
 		}
 	}
 	return report, ctx.Err()
+}
+
+func (c *containerIntegrityChecker) scanRepositories(ctx context.Context, names []string, repair bool, report *containerIntegrityReport) ([]containerIntegrityRepair, error) {
+	var plans []containerIntegrityRepair
+	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		result, plan := c.checkRepository(ctx, name, false)
+		report.Repositories = append(report.Repositories, result)
+		if repair {
+			plans = append(plans, plan)
+		}
+	}
+	return plans, nil
 }
 
 func containerIntegrityRepositoryNames(ctx context.Context, root *os.Root, repository string) ([]string, error) {
@@ -138,10 +148,10 @@ func containerIntegritySelectedRepository(root *os.Root, repository string) ([]s
 	return []string{repository}, nil
 }
 
-func (c *containerIntegrityChecker) checkRepository(ctx context.Context, name string) (containerIntegrityRepository, containerIntegrityRepair) {
+func (c *containerIntegrityChecker) checkRepository(ctx context.Context, name string, prepareRepair bool) (containerIntegrityRepository, containerIntegrityRepair) {
 	result := containerIntegrityRepository{Name: name, Issues: []containerIntegrityIssue{}}
 	repair := containerIntegrityRepair{file: path.Join(containerIntegrityRepos, name, "_index.json")}
-	stored, err := c.readRepository(name, &repair)
+	stored, err := c.readRepository(ctx, name, &repair, prepareRepair)
 	if err != nil {
 		result.addIssue("repository_invalid", err, false)
 		return result, repair
@@ -151,27 +161,30 @@ func (c *containerIntegrityChecker) checkRepository(ctx context.Context, name st
 		result.addIssue("index_invalid", err, false)
 		return result, repair
 	}
-	repair.index = newContainerArtifactIndex()
+	rebuilt := newContainerArtifactIndex()
 	for _, digest := range sortedMapKeys(records) {
 		artifact, err := c.checkArtifact(ctx, records[digest])
 		if err != nil {
 			result.addIssue("content_invalid", fmt.Errorf("artifact %s: %w", digest, err), false)
 			continue
 		}
-		repair.index.Artifacts[digest] = artifact
+		rebuilt.Artifacts[digest] = artifact
 	}
 	for _, img := range stored.Images {
-		if err := c.checkImage(ctx, img, repair.index); err != nil {
+		if err := c.checkImage(ctx, img, rebuilt); err != nil {
 			result.addIssue("content_invalid", fmt.Errorf("image %s: %w", img.Digest, err), false)
 		}
 	}
-	if err := validateStoredContainerGraph(repair.index); err != nil {
+	if err := validateStoredContainerGraph(rebuilt); err != nil {
 		result.addIssue("graph_incomplete", err, false)
 	}
-	if err := containerIntegrityTags(stored, repair.index); err != nil {
+	if err := containerIntegrityTags(stored, rebuilt); err != nil {
 		result.addIssue("tags_ambiguous", err, false)
 	}
-	containerIntegrityIndexIssue(stored.ArtifactIndex, repair.index, &result)
+	containerIntegrityIndexIssue(stored.ArtifactIndex, rebuilt, &result)
+	if prepareRepair {
+		repair.index = rebuilt
+	}
 	return result, repair
 }
 
@@ -179,16 +192,13 @@ func (r *containerIntegrityRepository) addIssue(code string, err error, repairab
 	r.Issues = append(r.Issues, containerIntegrityIssue{Code: code, Detail: err.Error(), Repairable: repairable})
 }
 
-func (c *containerIntegrityChecker) readRepository(name string, repair *containerIntegrityRepair) (containerRepoFile, error) {
+func (c *containerIntegrityChecker) readRepository(ctx context.Context, name string, repair *containerIntegrityRepair, preserveFields bool) (containerRepoFile, error) {
 	var stored containerRepoFile
 	if !validContainerName(name) {
 		return stored, fmt.Errorf("invalid repository path %q", name)
 	}
-	body, err := c.readRegularFile(repair.file, 64<<20)
+	stored, fields, fingerprint, err := c.readRepositoryJSON(ctx, repair.file, preserveFields)
 	if err != nil {
-		return stored, err
-	}
-	if err := json.Unmarshal(body, &stored); err != nil {
 		return stored, err
 	}
 	if stored.Registry+"/"+stored.Repository != name {
@@ -197,17 +207,8 @@ func (c *containerIntegrityChecker) readRepository(name string, repair *containe
 	if len(stored.Images) == 0 {
 		return stored, errors.New("repository has no image or artifact roots")
 	}
-	if err := json.Unmarshal(body, &repair.fields); err != nil {
-		return stored, err
-	}
-	if stored.ArtifactIndex != nil {
-		decoder := json.NewDecoder(bytes.NewReader(repair.fields["artifact_index"]))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(new(containerArtifactIndex)); err != nil {
-			return stored, fmt.Errorf("artifact index contains unsupported metadata that repair must preserve: %w", err)
-		}
-	}
-	repair.original = body
+	repair.fields = fields
+	repair.fingerprint = fingerprint
 	return stored, nil
 }
 
@@ -325,11 +326,16 @@ func containerIntegrityIndexIssue(previous, rebuilt *containerArtifactIndex, res
 		result.addIssue("index_missing", errors.New("legacy repository has no derived artifact index"), true)
 		return
 	}
-	a, _ := json.Marshal(previous)
-	b, _ := json.Marshal(rebuilt)
-	if !bytes.Equal(a, b) {
+	if previous.Version != rebuilt.Version || !maps.Equal(previous.Tags, rebuilt.Tags) ||
+		!maps.EqualFunc(previous.Artifacts, rebuilt.Artifacts, containerIntegrityArtifactsEqual) {
 		result.addIssue("index_inconsistent", errors.New("derived artifact index differs from verified manifest metadata"), true)
 	}
+}
+
+func containerIntegrityArtifactsEqual(a, b ContainerArtifact) bool {
+	return a.Subject == b.Subject && a.Tag == b.Tag && a.Digest == b.Digest &&
+		a.MediaType == b.MediaType && a.ArtifactType == b.ArtifactType && a.Size == b.Size &&
+		maps.Equal(a.Annotations, b.Annotations) && slices.Equal(a.Blobs, b.Blobs) && slices.Equal(a.Manifests, b.Manifests)
 }
 
 func (c *containerIntegrityChecker) checkArtifact(ctx context.Context, record ContainerArtifact) (ContainerArtifact, error) {
@@ -451,6 +457,12 @@ func (c *containerIntegrityChecker) readManifest(ctx context.Context, record Con
 	if err != nil {
 		return document.ociManifest, err
 	}
+	// A repair's second pass parses manifests again. Verify these exact bytes
+	// even when the blob's earlier streaming hash is in the scan cache.
+	sum := sha256.Sum256(body)
+	if int64(len(body)) != record.Size || "sha256:"+hex.EncodeToString(sum[:]) != record.Digest {
+		return document.ociManifest, errors.New("manifest changed after its content check")
+	}
 	if err := json.Unmarshal(body, &document); err != nil {
 		return document.ociManifest, err
 	}
@@ -546,7 +558,7 @@ func containerIntegrityCanRepair(repositories []containerIntegrityRepository) bo
 }
 
 func (c *containerIntegrityChecker) applyRepairs(ctx context.Context, repairs []containerIntegrityRepair, report *containerIntegrityReport) error {
-	if err := c.checkRepairSources(repairs); err != nil {
+	if err := c.checkRepairSources(ctx, repairs); err != nil {
 		return err
 	}
 	for i, repair := range repairs {
@@ -556,7 +568,11 @@ func (c *containerIntegrityChecker) applyRepairs(ctx context.Context, repairs []
 		if len(report.Repositories[i].Issues) == 0 {
 			continue
 		}
-		if err := c.applyRepair(repair); err != nil {
+		prepared, err := c.prepareRepair(ctx, report.Repositories[i].Name, repair)
+		if err != nil {
+			return err
+		}
+		if err := c.applyRepair(prepared); err != nil {
 			return err
 		}
 		report.Repositories[i].Repaired = true
@@ -565,19 +581,37 @@ func (c *containerIntegrityChecker) applyRepairs(ctx context.Context, repairs []
 	return nil
 }
 
-func (c *containerIntegrityChecker) checkRepairSources(repairs []containerIntegrityRepair) error {
+func (c *containerIntegrityChecker) prepareRepair(ctx context.Context, name string, plan containerIntegrityRepair) (containerIntegrityRepair, error) {
+	result, prepared := c.checkRepository(ctx, name, true)
+	if err := ctx.Err(); err != nil {
+		return prepared, err
+	}
+	if prepared.fingerprint != plan.fingerprint {
+		return prepared, containerIntegritySourceChanged(plan.file)
+	}
+	if !containerIntegrityCanRepair([]containerIntegrityRepository{result}) {
+		return prepared, fmt.Errorf("repository no longer passes repair validation: %s", plan.file)
+	}
+	return prepared, nil
+}
+
+func (c *containerIntegrityChecker) checkRepairSources(ctx context.Context, repairs []containerIntegrityRepair) error {
 	// Check every source before the first write. This detects an accidentally
 	// running importer; stopping the high side remains required for the check.
 	for _, repair := range repairs {
-		current, err := c.root.ReadFile(repair.file)
+		current, err := c.repositoryFingerprint(ctx, repair.file)
 		if err != nil {
 			return err
 		}
-		if !bytes.Equal(current, repair.original) {
-			return fmt.Errorf("repository changed during check: %s; stop the high side before repair", repair.file)
+		if current != repair.fingerprint {
+			return containerIntegritySourceChanged(repair.file)
 		}
 	}
 	return nil
+}
+
+func containerIntegritySourceChanged(file string) error {
+	return fmt.Errorf("repository changed during check: %s; stop the high side before repair", file)
 }
 
 func (c *containerIntegrityChecker) applyRepair(repair containerIntegrityRepair) error {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -455,5 +456,236 @@ func TestContainerIntegrityRefusesUnknownIndexMetadata(t *testing.T) {
 	_, after := integrityReadIndex(t, hs)
 	if !bytes.Equal(before, after) {
 		t.Fatal("repair dropped unknown artifact metadata")
+	}
+}
+
+func TestContainerIntegrityLargeRepositoryIndex(t *testing.T) {
+	hs, _, _ := integrityFixture(t)
+	_, body := integrityReadIndex(t, hs)
+	name := hs.containerRepoIndexPath(artifactStoreRepo)
+	file, err := os.OpenFile(name, os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Valid JSON formatting takes this repository beyond the old diagnostic-
+	// only 64 MiB cap without allocating a second huge metadata fixture under
+	// -race. The benchmark separately exercises actual attachment history.
+	padding := bytes.Repeat([]byte(" "), 64<<10)
+	for range 1025 {
+		if _, err := file.Write(padding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := file.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(name)
+	if err != nil || before.Size() <= 64<<20 {
+		t.Fatalf("large fixture: %v (%v)", before, err)
+	}
+	if report := integrityCheck(t, hs, false); !report.OK || report.Repaired != 0 {
+		t.Fatalf("valid large repository rejected: %+v", report)
+	}
+	after, err := os.Stat(name)
+	if err != nil || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatalf("report-only scan changed the index: %v (%v)", after, err)
+	}
+}
+
+func TestContainerIntegrityStreamingJSONValidation(t *testing.T) {
+	for _, mode := range []string{"second value", "trailing garbage", "truncated object", "malformed unknown field", "unknown index field"} {
+		t.Run(mode, func(t *testing.T) {
+			hs, _, _ := integrityFixture(t)
+			_, before := integrityReadIndex(t, hs)
+			body := bytes.TrimSpace(before)
+			switch mode {
+			case "second value":
+				body = append(body, []byte(` {"extra":true}`)...)
+			case "trailing garbage":
+				body = append(body, []byte(" nonsense")...)
+			case "truncated object":
+				body = body[:len(body)-1]
+			case "malformed unknown field":
+				body = append(body[:len(body)-1], []byte(`,"unknown":{"items":[1,]}}`)...)
+			case "unknown index field":
+				body = bytes.Replace(body, []byte(`"artifact_index": {`), []byte(`"artifact_index": {"unsupported":true,`), 1)
+			}
+			name := hs.containerRepoIndexPath(artifactStoreRepo)
+			if err := os.WriteFile(name, body, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if report := integrityCheck(t, hs, true); report.OK || report.Repaired != 0 {
+				t.Fatalf("invalid repository JSON accepted: %+v", report)
+			}
+			after, err := os.ReadFile(name)
+			if err != nil || !bytes.Equal(body, after) {
+				t.Fatalf("failed scan changed repository: %v", err)
+			}
+		})
+	}
+}
+
+type integrityCancelReader struct {
+	reader io.Reader
+	cancel context.CancelFunc
+}
+
+func (r integrityCancelReader) Read(buffer []byte) (int, error) {
+	n, err := r.reader.Read(buffer)
+	r.cancel()
+	return n, err
+}
+
+func TestContainerIntegrityStreamingCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reader := integrityCancelReader{reader: strings.NewReader(strings.Repeat(" ", 4096) + `{}`), cancel: cancel}
+	decoder := json.NewDecoder(containerIntegrityReader{ctx: ctx, reader: reader})
+	var stored containerRepoFile
+	_, err := decodeContainerIntegrityRepository(decoder, &stored, false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("streaming read ignored cancellation: %v", err)
+	}
+}
+
+func TestContainerIntegrityRepairDetectsChangedSource(t *testing.T) {
+	hs, _, _ := integrityFixture(t)
+	stored, _ := integrityReadIndex(t, hs)
+	stored.ArtifactIndex = nil
+	integrityWriteIndex(t, hs, stored)
+	root, err := os.OpenRoot(hs.cfg.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	checker := containerIntegrityChecker{root: root, verified: make(map[string]containerIntegrityBlob)}
+	result, plan := checker.checkRepository(t.Context(), artifactStoreRepo, false)
+	if len(result.Issues) != 1 || !containerIntegrityCanRepair([]containerIntegrityRepository{result}) {
+		t.Fatalf("invalid repair fixture: %+v", result)
+	}
+	_, original := integrityReadIndex(t, hs)
+	changed := bytes.Clone(original)
+	changed = append(changed, '\n') // Even a formatting-only edit invalidates the snapshot.
+	if err := os.WriteFile(hs.containerRepoIndexPath(artifactStoreRepo), changed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := containerIntegrityReport{Repositories: []containerIntegrityRepository{result}}
+	err = checker.applyRepairs(t.Context(), []containerIntegrityRepair{plan}, &report)
+	if err == nil || !strings.Contains(err.Error(), "repository changed") || report.Repaired != 0 {
+		t.Fatalf("changed source was not rejected: report=%+v err=%v", report, err)
+	}
+	_, after := integrityReadIndex(t, hs)
+	if !bytes.Equal(changed, after) {
+		t.Fatal("repair overwrote the intervening source change")
+	}
+}
+
+func TestContainerIntegrityRejectsDuplicateMembershipKeys(t *testing.T) {
+	for _, mode := range []string{"repository identity", "repository artifact index", "artifact map", "artifact digest", "artifact alias"} {
+		t.Run(mode, func(t *testing.T) {
+			hs, _, artifact := integrityFixture(t)
+			stored, before := integrityReadIndex(t, hs)
+			body := bytes.TrimSpace(before)
+			switch mode {
+			case "repository identity":
+				body = append(body[:len(body)-1], []byte(`,"registry":"docker.io"}`)...)
+			case "repository artifact index":
+				body = append(body[:len(body)-1], []byte(`,"artifact_index":null}`)...)
+			case "artifact map":
+				body = bytes.Replace(body, []byte(`"artifact_index": {`), []byte(`"artifact_index": {"artifacts":{},`), 1)
+			case "artifact digest":
+				record, err := json.Marshal(stored.ArtifactIndex.Artifacts[artifact.digest])
+				if err != nil {
+					t.Fatal(err)
+				}
+				prefix := []byte(`"artifacts": {`)
+				duplicate := append([]byte(`"artifacts": {"`+artifact.digest+`":`), record...)
+				duplicate = append(duplicate, ',')
+				body = bytes.Replace(body, prefix, duplicate, 1)
+			case "artifact alias":
+				body = bytes.Replace(body, []byte(`"tags": {`), []byte(`"tags": {"attachment":"`+artifact.digest+`",`), 1)
+			}
+			if !json.Valid(body) {
+				t.Fatal("duplicate-key fixture must otherwise be valid JSON")
+			}
+			name := hs.containerRepoIndexPath(artifactStoreRepo)
+			if err := os.WriteFile(name, body, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if report := integrityCheck(t, hs, true); report.OK || report.Repaired != 0 || containerIntegrityCanRepair(report.Repositories) {
+				t.Fatalf("ambiguous membership accepted: %+v", report)
+			}
+			after, err := os.ReadFile(name)
+			if err != nil || !bytes.Equal(body, after) {
+				t.Fatalf("repair rewrote ambiguous source metadata: %v", err)
+			}
+		})
+	}
+}
+
+func TestContainerIntegrityRepairRechecksManifestBytes(t *testing.T) {
+	hs, _, artifact := integrityFixture(t)
+	stored, _ := integrityReadIndex(t, hs)
+	stored.ArtifactIndex = nil
+	integrityWriteIndex(t, hs, stored)
+	root, err := os.OpenRoot(hs.cfg.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	checker := containerIntegrityChecker{root: root, verified: make(map[string]containerIntegrityBlob)}
+	result, plan := checker.checkRepository(t.Context(), artifactStoreRepo, false)
+	if len(result.Issues) != 1 || !containerIntegrityCanRepair([]containerIntegrityRepository{result}) {
+		t.Fatalf("invalid repair fixture: %+v", result)
+	}
+	_, before := integrityReadIndex(t, hs)
+	// The file keeps its old size and still parses, but no longer hashes to
+	// the recorded digest. An earlier cached hash must not authorize new bytes.
+	changed := bytes.Replace(artifact.manifest, []byte("original"), []byte("modified"), 1)
+	if err := os.WriteFile(hs.containerBlobPath(artifact.digest), changed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := containerIntegrityReport{Repositories: []containerIntegrityRepository{result}}
+	err = checker.applyRepairs(t.Context(), []containerIntegrityRepair{plan}, &report)
+	if err == nil || report.Repaired != 0 {
+		t.Fatalf("changed manifest bytes accepted for repair: report=%+v err=%v", report, err)
+	}
+	_, after := integrityReadIndex(t, hs)
+	if !bytes.Equal(before, after) {
+		t.Fatal("repair published metadata from a modified manifest")
+	}
+}
+
+func TestContainerIntegrityPreservesUnknownLargeNumbers(t *testing.T) {
+	hs, _, _ := integrityFixture(t)
+	stored, _ := integrityReadIndex(t, hs)
+	stored.ArtifactIndex = nil
+	integrityWriteIndex(t, hs, stored)
+	_, before := integrityReadIndex(t, hs)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(before, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["future_metadata"] = json.RawMessage(`{"large":1e1000,"nested":[-1e1000,true,null,{"other":1e999}]}`)
+	if err := writeJSONAtomic(hs.containerRepoIndexPath(artifactStoreRepo), fields, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if report := integrityCheck(t, hs, false); report.OK || !containerIntegrityCanRepair(report.Repositories) {
+		t.Fatalf("unknown numbers were constrained during report-only scan: %+v", report)
+	}
+	if report := integrityCheck(t, hs, true); !report.OK || report.Repaired != 1 {
+		t.Fatalf("unknown numbers were constrained during repair: %+v", report)
+	}
+	_, after := integrityReadIndex(t, hs)
+	var afterFields map[string]json.RawMessage
+	if err := json.Unmarshal(after, &afterFields); err != nil {
+		t.Fatal(err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, afterFields["future_metadata"]); err != nil || compact.String() != string(fields["future_metadata"]) {
+		t.Fatalf("unknown numeric metadata changed: %s (%v)", compact.String(), err)
 	}
 }

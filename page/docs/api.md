@@ -259,7 +259,19 @@ Container collect results also include `container_discovery`, an array of `{regi
 
 #### Container discovery — `GET /admin/containers/discovery`
 
-Returns `{"records": [...]}` with the same record shape, retaining the latest low-side observation for each repository and served digest across restarts and tag moves. Uses the normal low-side admin authentication. Other methods return `405`; unreadable or corrupt durable status returns `500` with a generic error. This endpoint reports discovery coverage, not signature verification. High-side container detail responses separately expose the most recently exported observation as `container_discovery`.
+Returns `{records, total, next_cursor, as_of, stale_after_seconds}`, retaining the latest low-side observation for each repository and served digest across restarts and tag moves. Records additionally expose `lifecycle` (`active`, `historical`, `unknown`), `freshness` (`fresh`, `stale`, `unknown`), optional `age_seconds`, and recorded digest-pin intent through `pinned`. Current tags and explicitly collected digest pins are active. Older tagless records without reference tracking remain unclassified. Coverage and freshness are independent.
+
+| Query parameter | Meaning |
+|---|---|
+| `repository` | Exact registry/repository, e.g. `docker.io/library/alpine`; omitted or empty means all |
+| `state` | `complete`, `incomplete`, `unknown`, or `all` |
+| `lifecycle` | `active`, `historical`, `unknown`, or `all` |
+| `freshness` | `fresh`, `stale`, `unknown`, or `all` |
+| `stale_after` | Whole-second Go duration from `1s` to `8760h`; default `24h` |
+| `limit` | 1–250 records; default 100; response also bounded to 1 MiB |
+| `cursor` | Previous `next_cursor`; preserve the same filters and limit |
+
+Filters default to all. Cursor pages share a snapshot revision and fixed `as_of` freshness time; a changed snapshot returns `409` and requires restarting pagination. Invalid, repeated, or unknown query parameters return `400`. Uses normal low-side admin authentication. Other methods return `405`; unreadable/corrupt status or an individual record too large for a page returns `500`. This endpoint reports discovery coverage, not signature verification. High-side container detail responses separately expose the most recently exported observation as `container_discovery`.
 
 #### AI models — `POST /admin/hf/collect`
 

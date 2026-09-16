@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestContainerDiscoveryDetailLegacyAndIncomplete(t *testing.T) {
@@ -84,5 +85,60 @@ func TestContainerDiscoveryMetricsAndAPIUseDurableStatus(t *testing.T) {
 	metrics = doLowReq(t, ls, http.MethodGet, "/metrics", "")
 	if api.Code != http.StatusInternalServerError || !strings.Contains(metrics.Body.String(), "artigate_low_container_discovery_status_read_error 1") {
 		t.Fatal("unreadable discovery status was presented as healthy")
+	}
+}
+
+func TestContainerDiscoveryCurrentMetricsExcludeHistoryAndIncludePins(t *testing.T) {
+	low, _ := newContainerLowServer(t, nil)
+	status := func(state string, age time.Duration) *ContainerDiscoveryStatus {
+		checked := time.Now().UTC().Add(-age).Format(time.RFC3339Nano)
+		result := &ContainerDiscoveryStatus{State: state, CheckedAt: checked}
+		if state == containerDiscoveryComplete {
+			result.LastSuccessAt = checked
+		}
+		return result
+	}
+	oldDigest := containerSHA([]byte("old tag"))
+	pinDigest := containerSHA([]byte("explicit pin"))
+	repo := ContainerRepo{Registry: "docker.io", Repository: "library/alerts", Images: []ContainerImage{
+		{Tag: "latest", Digest: oldDigest, Discovery: status(containerDiscoveryIncomplete, 72*time.Hour)},
+		{Digest: pinDigest, Discovery: status(containerDiscoveryComplete, 48*time.Hour)},
+	}}
+	if _, err := low.updateContainerDiscovery(t.Context(), []ContainerRepo{repo}); err != nil {
+		t.Fatal(err)
+	}
+	repo.Images = []ContainerImage{
+		{Tag: "latest", Digest: containerSHA([]byte("new tag")), Discovery: status(containerDiscoveryComplete, time.Hour)},
+		{Tag: "no-observation", Digest: containerSHA([]byte("unknown observation"))},
+	}
+	if _, err := low.updateContainerDiscovery(t.Context(), []ContainerRepo{repo}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := low.loadContainerDiscovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDigest := containerSHA([]byte("legacy tagless"))
+	snapshot.Records[repo.Registry+"/"+repo.Repository+"@"+legacyDigest] = ContainerDiscoveryRecord{
+		Registry: repo.Registry, Repository: repo.Repository, Digest: legacyDigest, Tags: []string{},
+		Discovery: status(containerDiscoveryComplete, time.Hour),
+	}
+	if err := writeJSONAtomic(low.containerDiscoveryPath(), snapshot, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metrics := doLowReq(t, low, http.MethodGet, "/metrics", "")
+	for _, want := range []string{
+		`artigate_low_container_discovery_records{state="incomplete"} 1`,
+		`artigate_low_container_discovery_records_by_lifecycle{lifecycle="historical",state="incomplete"} 1`,
+		`artigate_low_container_discovery_records_by_lifecycle{lifecycle="unknown",state="complete"} 1`,
+		`artigate_low_container_discovery_current_records{state="incomplete",freshness="fresh"} 0`,
+		`artigate_low_container_discovery_current_records{state="incomplete",freshness="stale"} 0`,
+		`artigate_low_container_discovery_current_records{state="complete",freshness="fresh"} 1`,
+		`artigate_low_container_discovery_current_records{state="complete",freshness="stale"} 1`,
+		`artigate_low_container_discovery_current_records{state="unknown",freshness="unknown"} 1`,
+	} {
+		if !strings.Contains(metrics.Body.String(), want) {
+			t.Errorf("metrics missing %s; got %s", want, metrics.Body.String())
+		}
 	}
 }

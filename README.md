@@ -963,12 +963,16 @@ artigate_disk_free_bytes{dir="export"} 5.36870912e+10
 ```
 
 Container attachment coverage is tracked separately from collect success. The
-Containers dashboard and `GET /admin/containers/discovery` show durable complete,
-incomplete, or unknown observations. Aggregate gauges include
-`artigate_low_container_discovery_records{state="incomplete"}`,
-`artigate_low_container_discovery_issues{code="artifact_fetch"}`, and
-`artigate_low_container_discovery_status_read_error`. These report discovery,
-not signature verification. See [container operations](page/docs/ecosystems/containers.md#attachment-discovery-status).
+Containers dashboard and paginated `GET /admin/containers/discovery` distinguish
+current tags and explicit digest pins from retained history, with repository,
+coverage, and freshness filters. Use
+`artigate_low_container_discovery_current_records{state="incomplete"}` and
+`artigate_low_container_discovery_current_records{freshness="stale"}` for current
+reference alerts; freshness metrics use a 24-hour threshold. Older unclassified
+records and historical failures remain inspectable. The original all-history
+gauges and `artigate_low_container_discovery_status_read_error` remain available.
+These report discovery, not signature verification. See
+[container operations](page/docs/ecosystems/containers.md#attachment-discovery-status).
 
 With the high side stopped, `artigate containers check --root HIGH_ROOT` verifies
 stored OCI content without changing it or making network requests. Add `--json`

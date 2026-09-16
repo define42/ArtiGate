@@ -7,12 +7,18 @@ const script = readFileSync(new URL("app.js", import.meta.url), "utf8");
 const lowSource = readFileSync(new URL("../ui_low.go", import.meta.url), "utf8");
 
 function containerStatusUI() {
-  const elements = new Map(["ctrDiscoverySummary", "ctrDiscoveryRecords", "ctrDiscoveryRefresh"].map(id => [id, { textContent: "", innerHTML: "", disabled: false }]));
+  const defaults = { Lifecycle: "active", State: "all", Freshness: "all", StaleAfter: "24h" };
+  const fields = ["Summary", "Records", "Refresh", "Previous", "Next", "Repository", ...Object.keys(defaults)];
+  const elements = new Map(fields.map(field => ["ctrDiscovery" + field, {
+    textContent: "", innerHTML: "", disabled: false, value: defaults[field] || "",
+    setAttribute(name, value) { this[name] = value; },
+  }]));
   const pending = [];
   const context = vm.createContext({
     document: { getElementById: id => elements.get(id) },
-    fetch: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    fetch: url => new Promise((resolve, reject) => pending.push({ url, resolve, reject })),
     collectedMsg: () => "Collected image.",
+    URLSearchParams,
   });
   const escape = lowSource.split("\n").find(line => line.startsWith("function esc("));
   const helpers = lowSource.slice(lowSource.indexOf("function containerCollectResult("), lowSource.indexOf("async function scheduleContainers("));
@@ -44,19 +50,67 @@ test("container discovery refresh rejects stale results and keeps existing data 
   const { context, elements, pending } = containerStatusUI();
   const old = context.loadContainerDiscovery();
   const current = context.loadContainerDiscovery();
-  pending[1].resolve({ ok: true, json: async () => ({ records: [{ repository: "current", discovery: { state: "incomplete" } }] }) });
+  pending[1].resolve({ ok: true, json: async () => ({ records: [{ repository: "current", discovery: { state: "incomplete" } }], total: 1 }) });
   await current;
   pending[0].resolve({ ok: true, json: async () => ({ records: [] }) });
   await old;
   const box = elements.get("ctrDiscoveryRecords");
   assert.match(box.innerHTML, /current/);
-  assert.match(elements.get("ctrDiscoverySummary").textContent, /1 incomplete/);
+  assert.match(elements.get("ctrDiscoverySummary").textContent, /Showing 1–1 of 1/);
   const failed = context.loadContainerDiscovery();
   pending[2].reject(new Error("private upstream URL"));
   await failed;
   assert.match(box.innerHTML, /current/);
-  assert.equal(elements.get("ctrDiscoverySummary").textContent, "Discovery status could not be loaded. Try refreshing.");
+  assert.equal(elements.get("ctrDiscoverySummary").textContent, "Discovery status could not be loaded. Try refreshing. Previous results remain displayed.");
   assert.equal(elements.get("ctrDiscoveryRefresh").disabled, false);
+});
+
+test("container discovery pages beyond 100 observations and navigates back", async () => {
+  const { context, elements, pending } = containerStatusUI();
+  const page = async (direction, start, count, cursor) => {
+    const promise = context.loadContainerDiscovery(direction);
+    const request = pending.at(-1);
+    request.resolve({ ok: true, json: async () => ({ total: 121, next_cursor: cursor, records: Array.from({ length: count }, (_, i) => ({ repository: "item-" + (start + i), lifecycle: "active", freshness: "stale", discovery: { state: "complete" } })) }) });
+    await promise;
+    return new URL(request.url, "http://localhost").searchParams;
+  };
+  const first = await page("reset", 0, 50, "cursor-1");
+  assert.equal(first.get("limit"), "50");
+  assert.equal(first.get("lifecycle"), "active");
+  assert.equal(elements.get("ctrDiscoveryPrevious").disabled, true);
+  assert.equal((await page("next", 50, 50, "cursor-2")).get("cursor"), "cursor-1");
+  assert.equal((await page("next", 100, 21, "")).get("cursor"), "cursor-2");
+  assert.match(elements.get("ctrDiscoverySummary").textContent, /Showing 101–121 of 121/);
+  assert.match(elements.get("ctrDiscoveryRecords").innerHTML, /item-120/);
+  assert.match(elements.get("ctrDiscoveryRecords").innerHTML, /Current reference · Stale/);
+  assert.equal(elements.get("ctrDiscoveryNext").disabled, true);
+  assert.equal((await page("previous", 50, 50, "cursor-2")).get("cursor"), "cursor-1");
+  assert.match(elements.get("ctrDiscoverySummary").textContent, /Showing 51–100 of 121/);
+});
+
+test("container discovery resets pagination when filters change or the snapshot expires", async () => {
+  const { context, elements, pending } = containerStatusUI();
+  let promise = context.loadContainerDiscovery();
+  pending[0].resolve({ ok: true, json: async () => ({ total: 2, next_cursor: "old-page", records: [{}] }) });
+  await promise;
+  elements.get("ctrDiscoveryRepository").value = "docker.io/library/alpine";
+  promise = context.loadContainerDiscovery("next");
+  let query = new URL(pending[1].url, "http://localhost").searchParams;
+  assert.equal(query.get("repository"), "docker.io/library/alpine");
+  assert.equal(query.has("cursor"), false);
+  pending[1].resolve({ ok: true, json: async () => ({ total: 2, next_cursor: "new-page", records: [{}] }) });
+  await promise;
+  promise = context.loadContainerDiscovery("next");
+  pending[2].resolve({ ok: false, status: 409 });
+  await flush();
+  query = new URL(pending[3].url, "http://localhost").searchParams;
+  assert.equal(query.has("cursor"), false);
+  pending[3].resolve({ ok: true, json: async () => ({ total: 1, records: [{ repository: "updated" }] }) });
+  await promise;
+  assert.match(elements.get("ctrDiscoverySummary").textContent, /Observations changed; returned to the first page/);
+  assert.match(elements.get("ctrDiscoveryRecords").innerHTML, /updated/);
+  assert.equal(elements.get("ctrDiscoveryPrevious").disabled, true);
+  assert.equal(elements.get("ctrDiscoveryRecords")["aria-busy"], "false");
 });
 
 // Only the DOM operations used by tree/detail rendering are needed here. Run

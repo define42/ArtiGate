@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -46,6 +45,13 @@ type ContainerDiscoveryRecord struct {
 	Digest     string                    `json:"digest"`
 	Tags       []string                  `json:"tags"`
 	Discovery  *ContainerDiscoveryStatus `json:"discovery"`
+	// ReferenceTracking distinguishes observations made before reference
+	// provenance was recorded. Pins stay active when tags subsequently move.
+	Pinned            bool   `json:"pinned,omitempty"`
+	ReferenceTracking bool   `json:"reference_tracking,omitempty"`
+	Lifecycle         string `json:"lifecycle,omitempty"`
+	Freshness         string `json:"freshness,omitempty"`
+	AgeSeconds        *int64 `json:"age_seconds,omitempty"`
 }
 
 type containerDiscoverySnapshot struct {
@@ -232,10 +238,14 @@ func (s *LowServer) loadContainerDiscovery() (containerDiscoverySnapshot, error)
 	if snapshot.Version != 1 || snapshot.Records == nil {
 		return snapshot, errors.New("invalid container discovery snapshot")
 	}
-	for _, record := range snapshot.Records {
+	for key, record := range snapshot.Records {
 		if err := validateContainerDiscovery(record.Discovery); err != nil {
 			return snapshot, err
 		}
+		// Lifecycle and freshness are computed for a query, never trusted as
+		// durable state from an older writer.
+		record.Lifecycle, record.Freshness, record.AgeSeconds = "", "", nil
+		snapshot.Records[key] = record
 	}
 	return snapshot, nil
 }
@@ -251,21 +261,7 @@ func (s *LowServer) updateContainerDiscovery(ctx context.Context, repos []Contai
 	var keys []string
 	for _, repo := range repos {
 		for i := range repo.Images {
-			image := &repo.Images[i]
-			key := repo.Registry + "/" + repo.Repository + "@" + containerImageServedDigest(*image)
-			previous := snapshot.Records[key]
-			if image.Discovery != nil && image.Discovery.State != containerDiscoveryComplete && previous.Discovery != nil {
-				image.Discovery.LastSuccessAt = previous.Discovery.LastSuccessAt
-			}
-			record := ContainerDiscoveryRecord{
-				Registry: repo.Registry, Repository: repo.Repository, Digest: containerImageServedDigest(*image),
-				Tags: slices.Clone(previous.Tags), Discovery: image.Discovery,
-			}
-			if record.Tags == nil {
-				record.Tags = []string{}
-			}
-			moveContainerDiscoveryTag(snapshot.Records, &record, image.Tag)
-			snapshot.Records[key] = record
+			key := updateContainerDiscoveryImage(snapshot.Records, repo.Registry, repo.Repository, &repo.Images[i])
 			keys = append(keys, key)
 		}
 	}
@@ -277,10 +273,30 @@ func (s *LowServer) updateContainerDiscovery(ctx context.Context, repos []Contai
 	// A later reference may move a tag off an earlier digest in this batch.
 	// Resolve returned records only after every tag association is final.
 	records := make([]ContainerDiscoveryRecord, 0, len(keys))
+	asOf := time.Now().UTC()
 	for _, key := range keys {
-		records = append(records, snapshot.Records[key])
+		records = append(records, enrichContainerDiscoveryRecord(snapshot.Records[key], asOf, containerDiscoveryDefaultStaleAfter))
 	}
 	return records, nil
+}
+
+func updateContainerDiscoveryImage(records map[string]ContainerDiscoveryRecord, registry, repository string, image *ContainerImage) string {
+	key := registry + "/" + repository + "@" + containerImageServedDigest(*image)
+	previous := records[key]
+	if image.Discovery != nil && image.Discovery.State != containerDiscoveryComplete && previous.Discovery != nil {
+		image.Discovery.LastSuccessAt = previous.Discovery.LastSuccessAt
+	}
+	record := ContainerDiscoveryRecord{
+		Registry: registry, Repository: repository, Digest: containerImageServedDigest(*image),
+		Tags: slices.Clone(previous.Tags), Discovery: image.Discovery,
+		Pinned: previous.Pinned || image.Tag == "", ReferenceTracking: true,
+	}
+	if record.Tags == nil {
+		record.Tags = []string{}
+	}
+	moveContainerDiscoveryTag(records, &record, image.Tag)
+	records[key] = record
+	return key
 }
 
 func moveContainerDiscoveryTag(records map[string]ContainerDiscoveryRecord, next *ContainerDiscoveryRecord, tag string) {
@@ -289,6 +305,9 @@ func moveContainerDiscoveryTag(records map[string]ContainerDiscoveryRecord, next
 	}
 	for key, record := range records {
 		if record.Registry == next.Registry && record.Repository == next.Repository && record.Digest != next.Digest {
+			if slices.Contains(record.Tags, tag) {
+				record.ReferenceTracking = true
+			}
 			record.Tags = slices.DeleteFunc(record.Tags, func(old string) bool { return old == tag })
 			records[key] = record
 		}
@@ -304,27 +323,5 @@ func (s *LowServer) containerDiscoveryRecords() ([]ContainerDiscoveryRecord, err
 	if err != nil {
 		return nil, err
 	}
-	records := make([]ContainerDiscoveryRecord, 0, len(snapshot.Records))
-	keys := make([]string, 0, len(snapshot.Records))
-	for key := range snapshot.Records {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	for _, key := range keys {
-		records = append(records, snapshot.Records[key])
-	}
-	return records, nil
-}
-
-func (s *LowServer) handleContainerDiscovery(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	records, err := s.containerDiscoveryRecords()
-	if err != nil {
-		http.Error(w, "container discovery status unavailable", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]any{"records": records})
+	return sortedContainerDiscoveryRecords(snapshot, time.Now().UTC(), containerDiscoveryDefaultStaleAfter), nil
 }

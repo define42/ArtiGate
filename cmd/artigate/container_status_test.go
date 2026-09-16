@@ -151,6 +151,9 @@ func TestContainerDiscoveryMixedPinnedAndMovedTag(t *testing.T) {
 					if !slices.Equal(record.Tags, want) {
 						t.Fatalf("mixed batch digest %s tags = %q, want %q", record.Digest, record.Tags, want)
 					}
+					if record.Lifecycle != "active" || record.Pinned != (record.Digest == oldDigest) {
+						t.Fatalf("mixed batch lost active explicit pin: %+v", record)
+					}
 				}
 			}
 		})

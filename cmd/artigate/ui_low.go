@@ -120,6 +120,10 @@ const lowUIHTML = `<!DOCTYPE html>
   .filelabel textarea { color: #e6e6e6; background: #0f1115; border: 1px solid #3a4150; border-radius: 6px; padding: .5rem .6rem; font-family: ui-monospace, monospace; font-size: .82rem; resize: vertical; }
   .gomod-form button.primary { align-self: flex-start; }
   .btnrow { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
+  .discovery-filters { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,180px),1fr)); gap: .7rem; margin: .8rem 0; }
+  .discovery-filters input[type=text], .discovery-filters select { width: 100%; min-width: 0; box-sizing: border-box; }
+  .discovery-controls button:disabled { opacity: .6; cursor: default; }
+  .discovery-controls :focus-visible, .discovery-filters :focus-visible { outline: 2px solid #7ee2a8; outline-offset: 3px; }
   button.primary:disabled { opacity: .6; cursor: progress; }
   .pytarget { border: 1px solid #2a2f3a; border-radius: 6px; padding: .2rem .7rem; }
   .pytarget summary { cursor: pointer; color: #c7cedb; font-size: .85rem; padding: .35rem 0; }
@@ -492,8 +496,30 @@ const lowUIHTML = `<!DOCTYPE html>
   </div>
   <div class="card">
     <h2>Attachment discovery</h2>
-    <p class="hint">Latest observations for each collected image digest. Incomplete discovery keeps known attachments available; retry collection after resolving the reported issue. Discovery status does not verify signatures.</p>
-    <button id="ctrDiscoveryRefresh" class="secondary" type="button" onclick="loadContainerDiscovery()">Refresh discovery status</button>
+    <p class="hint">Current references include collected tags and explicit digest pins. Older observations remain available under All observations or History. Discovery coverage and freshness are separate; neither verifies signatures.</p>
+    <form class="discovery-filters" onsubmit="event.preventDefault();loadContainerDiscovery()">
+      <label class="filelabel" for="ctrDiscoveryRepository">Repository
+        <input id="ctrDiscoveryRepository" type="text" placeholder="All repositories" autocomplete="off" aria-describedby="ctrDiscoveryFilterHint">
+      </label>
+      <label class="filelabel" for="ctrDiscoveryLifecycle">References
+        <select id="ctrDiscoveryLifecycle" class="restream" onchange="loadContainerDiscovery()"><option value="active">Current references</option><option value="all">All observations</option><option value="historical">History</option><option value="unknown">Unclassified older records</option></select>
+      </label>
+      <label class="filelabel" for="ctrDiscoveryState">Discovery coverage
+        <select id="ctrDiscoveryState" class="restream" onchange="loadContainerDiscovery()"><option value="all">All states</option><option value="incomplete">Incomplete</option><option value="complete">Complete</option><option value="unknown">Unknown</option></select>
+      </label>
+      <label class="filelabel" for="ctrDiscoveryFreshness">Freshness
+        <select id="ctrDiscoveryFreshness" class="restream" onchange="loadContainerDiscovery()"><option value="all">All check ages</option><option value="stale">Stale</option><option value="fresh">Fresh</option><option value="unknown">Unknown</option></select>
+      </label>
+      <label class="filelabel" for="ctrDiscoveryStaleAfter">Stale after
+        <select id="ctrDiscoveryStaleAfter" class="restream" onchange="loadContainerDiscovery()"><option value="24h">24 hours</option><option value="1h">1 hour</option><option value="168h">7 days</option></select>
+      </label>
+    </form>
+    <p id="ctrDiscoveryFilterHint" class="hint">Filter by a full repository name, such as docker.io/library/alpine, then refresh. Older tagless records may be unclassified; collect their references again to classify them.</p>
+    <div class="btnrow discovery-controls">
+      <button id="ctrDiscoveryRefresh" class="secondary" type="button" onclick="loadContainerDiscovery()">Refresh discovery status</button>
+      <button id="ctrDiscoveryPrevious" class="secondary" type="button" onclick="loadContainerDiscovery('previous')" disabled>Previous page</button>
+      <button id="ctrDiscoveryNext" class="secondary" type="button" onclick="loadContainerDiscovery('next')" disabled>Next page</button>
+    </div>
     <p id="ctrDiscoverySummary" class="hint" role="status" aria-live="polite">Open this page to load discovery status.</p>
     <div id="ctrDiscoveryRecords"></div>
   </div>
@@ -1735,6 +1761,11 @@ function containerDiscoveryHTML(record){
     cancelled:'Attachment discovery was canceled'
   };
   let html='<details class="pytarget"><summary>'+state+' — <code style="overflow-wrap:anywhere">'+esc(reference)+'</code></summary>';
+  if(record.lifecycle){
+    const lifecycle=record.lifecycle==='active'?'Current reference':record.lifecycle==='historical'?'History':'Reference status unknown';
+    const freshness=record.freshness==='fresh'?'Fresh':record.freshness==='stale'?'Stale':'Freshness unknown';
+    html+='<p><b>'+lifecycle+' · '+freshness+'</b>'+(record.pinned?' · Collected by digest':'')+'</p>';
+  }
   if(record.tags && record.tags.length) html+='<p class="hint">Current tags: '+esc(record.tags.join(', '))+'</p>';
   html+='<p class="hint">Checked: '+esc(status.checked_at||'Not recorded')+'<br>Last complete discovery: '+esc(status.last_success_at||'Not recorded')+'</p>';
   if(status.checked_at) html+='<p>'+esc(status.artifacts||0)+' artifact(s) collected; '+esc(status.subjects||0)+' subject(s) checked.</p>';
@@ -1746,32 +1777,63 @@ function containerDiscoveryHTML(record){
 }
 
 let ctrDiscoveryRequest=0;
-async function loadContainerDiscovery(){
+let ctrDiscoveryPage={cursor:'', previous:[], next:'', offset:0, count:0};
+function containerDiscoveryQuery(){
+  const params=new URLSearchParams({limit:'50'});
+  for(const [field,param] of [['Repository','repository'],['Lifecycle','lifecycle'],['State','state'],['Freshness','freshness'],['StaleAfter','stale_after']]){
+    const value=document.getElementById('ctrDiscovery'+field).value.trim();
+    if(value && value!=='all') params.set(param,value);
+  }
+  return params;
+}
+function containerDiscoveryTarget(direction){
+  const page=ctrDiscoveryPage;
+  if(direction==='next' && page.next) return {cursor:page.next,previous:[...page.previous,{cursor:page.cursor,offset:page.offset}],offset:page.offset+page.count};
+  if(direction==='previous' && page.previous.length) return {...page.previous[page.previous.length-1],previous:page.previous.slice(0,-1)};
+  return {cursor:'',previous:[],offset:0};
+}
+function containerDiscoveryControls(busy){
+  document.getElementById('ctrDiscoveryRefresh').disabled=busy;
+  document.getElementById('ctrDiscoveryPrevious').disabled=busy || !ctrDiscoveryPage.previous.length;
+  document.getElementById('ctrDiscoveryNext').disabled=busy || !ctrDiscoveryPage.next;
+}
+async function loadContainerDiscovery(direction='reset', restarted=false){
   const request=++ctrDiscoveryRequest;
   const summary=document.getElementById('ctrDiscoverySummary');
   const recordsBox=document.getElementById('ctrDiscoveryRecords');
-  const button=document.getElementById('ctrDiscoveryRefresh');
-  button.disabled=true;
+  const params=containerDiscoveryQuery();
+  const query=params.toString();
+  if(direction!=='reset' && ctrDiscoveryPage.query!==query) direction='reset';
+  const target=containerDiscoveryTarget(direction);
+  if(target.cursor) params.set('cursor',target.cursor);
+  if(direction==='reset') ctrDiscoveryPage={cursor:'', previous:[], next:'', offset:0, count:0};
+  containerDiscoveryControls(true);
+  recordsBox.setAttribute('aria-busy','true');
   summary.textContent='Loading attachment discovery status…';
   try{
-    const response=await fetch('/admin/containers/discovery',{cache:'no-store'});
+    const response=await fetch('/admin/containers/discovery?'+params.toString(),{cache:'no-store'});
+    if(request!==ctrDiscoveryRequest) return;
+    if(response.status===409 && target.cursor && !restarted){
+      await loadContainerDiscovery('reset',true);
+      return;
+    }
+    if(response.status===400) throw new Error('filters');
     if(!response.ok) throw new Error('Discovery status could not be loaded. Try refreshing.');
     const data=await response.json();
     if(request!==ctrDiscoveryRequest) return;
     const records=data.records||[];
-    const incomplete=records.filter(record=>record.discovery && record.discovery.state==='incomplete').length;
-    records.sort((a,b)=>{
-      const ap=a.discovery && a.discovery.state==='incomplete'?1:0;
-      const bp=b.discovery && b.discovery.state==='incomplete'?1:0;
-      return bp-ap || String(b.discovery && b.discovery.checked_at||'').localeCompare(String(a.discovery && a.discovery.checked_at||''));
-    });
-    summary.textContent=records.length?records.length+' image observation(s); '+incomplete+' incomplete.'+(records.length>100?' Showing 100, with incomplete observations first.':''):'No discovery observations recorded yet. Collect an image to record its attachment status.';
-    recordsBox.innerHTML=records.slice(0,100).map(containerDiscoveryHTML).join('');
+    ctrDiscoveryPage={...target,query,next:data.next_cursor||'',count:records.length};
+    const range=records.length?'Showing '+(target.offset+1)+'–'+(target.offset+records.length)+' of '+data.total+' matching observations.':'No observations match these filters. Choose All observations or collect a reference to record its status.';
+    summary.textContent=(restarted?'Observations changed; returned to the first page. ':'')+range+(data.as_of?' Status as of '+data.as_of+'.':'');
+    recordsBox.innerHTML=records.map(containerDiscoveryHTML).join('');
   }catch(error){
     if(request!==ctrDiscoveryRequest) return;
-    summary.textContent='Discovery status could not be loaded. Try refreshing.';
+    summary.textContent=(error.message==='filters'?'Check the repository name and selected filters.':'Discovery status could not be loaded. Try refreshing.')+(recordsBox.innerHTML?' Previous results remain displayed.':'');
   }finally{
-    if(request===ctrDiscoveryRequest) button.disabled=false;
+    if(request===ctrDiscoveryRequest){
+      containerDiscoveryControls(false);
+      recordsBox.setAttribute('aria-busy','false');
+    }
   }
 }
 

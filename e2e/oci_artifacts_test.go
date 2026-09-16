@@ -38,6 +38,9 @@ func TestOCIArtifacts(t *testing.T) {
 	t.Run("legacy_cosign_signature", func(t *testing.T) {
 		testOCILegacySignature(t, pair, oras, cosign, strings.TrimPrefix(upstream, "http://"))
 	})
+	t.Run("native_cosign_bundles", func(t *testing.T) {
+		testOCIModernCosign(t, pair, oras, cosign, strings.TrimPrefix(upstream, "http://"))
+	})
 }
 
 func startOCIRegistry(t *testing.T) string {

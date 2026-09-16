@@ -60,7 +60,8 @@ func containerDiscoveryIssueMessage(code string) string {
 
 // collectContainerDiscoveryMetrics uses only bounded state/code labels. Image
 // digests, repository names and failure messages belong in the status API.
-// Alert: artigate_low_container_discovery_records{state="incomplete"} > 0
+// Alert: sum(artigate_low_container_discovery_current_records{state="incomplete"}) > 0
+// Alert: sum(artigate_low_container_discovery_current_records{freshness="stale"}) > 0
 func (s *LowServer) collectContainerDiscoveryMetrics(p *promWriter) {
 	records, err := s.containerDiscoveryRecords()
 	readError := float64(0)
@@ -73,6 +74,36 @@ func (s *LowServer) collectContainerDiscoveryMetrics(p *promWriter) {
 		return
 	}
 	writeContainerDiscoveryMetrics(p, records)
+	writeContainerDiscoveryCurrentMetrics(p, records)
+}
+
+// Current-reference alerts deliberately exclude retained historical observations.
+// Existing all-history gauges keep their meaning for compatible dashboards.
+func writeContainerDiscoveryCurrentMetrics(p *promWriter, records []ContainerDiscoveryRecord) {
+	type key struct{ lifecycle, state, freshness string }
+	counts := make(map[key]int)
+	for _, record := range records {
+		state := containerDiscoveryUnknown
+		if record.Discovery != nil {
+			state = normalizedContainerDiscoveryState(record.Discovery.State)
+		}
+		counts[key{lifecycle: record.Lifecycle, state: state}]++
+		if record.Lifecycle == "active" {
+			counts[key{lifecycle: "active", state: state, freshness: record.Freshness}]++
+		}
+	}
+	for _, state := range []string{"complete", "incomplete", "unknown"} {
+		for _, lifecycle := range []string{"active", "historical", "unknown"} {
+			p.metric("artigate_low_container_discovery_records_by_lifecycle", "gauge",
+				"Durable discovery observations by reference lifecycle and coverage state.",
+				float64(counts[key{lifecycle: lifecycle, state: state}]), "lifecycle", lifecycle, "state", state)
+		}
+		for _, freshness := range []string{"fresh", "stale", "unknown"} {
+			p.metric("artigate_low_container_discovery_current_records", "gauge",
+				"Current tag and explicitly pinned digest observations by coverage and freshness; stale after 24 hours.",
+				float64(counts[key{lifecycle: "active", state: state, freshness: freshness}]), "state", state, "freshness", freshness)
+		}
+	}
 }
 
 func writeContainerDiscoveryMetrics(p *promWriter, records []ContainerDiscoveryRecord) {
