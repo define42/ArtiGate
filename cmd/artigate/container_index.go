@@ -87,6 +87,18 @@ func (s *HighServer) mergeContainerArtifacts(index *containerArtifactIndex, imag
 			}
 		}
 	}
+	return validateStoredContainerGraph(index)
+}
+
+func validateStoredContainerGraph(index *containerArtifactIndex) error {
+	for _, artifact := range index.Artifacts {
+		for _, child := range artifact.Manifests {
+			stored, ok := index.Artifacts[child.Digest]
+			if !ok || stored.Size != child.Size || stored.MediaType != child.MediaType {
+				return fmt.Errorf("artifact index %s has an incomplete child %s", artifact.Digest, child.Digest)
+			}
+		}
+	}
 	return nil
 }
 
@@ -134,7 +146,7 @@ func (s *HighServer) storedContainerArtifact(record ContainerArtifact) (Containe
 	if mediaType == "" {
 		mediaType = record.MediaType
 	}
-	if !isContainerManifestType(mediaType) {
+	if !isContainerDocumentType(mediaType) {
 		return ContainerArtifact{}, fmt.Errorf("unsupported manifest media type %q", mediaType)
 	}
 	artifact := ContainerArtifact{
@@ -143,6 +155,11 @@ func (s *HighServer) storedContainerArtifact(record ContainerArtifact) (Containe
 	}
 	if manifest.Subject != nil && containerDigestRE.MatchString(manifest.Subject.Digest) {
 		artifact.Subject = manifest.Subject.Digest
+	}
+	if isContainerIndexType(mediaType) {
+		artifact.ArtifactType = manifest.ArtifactType
+		artifact.Manifests, err = storedContainerIndexChildren(manifest.Manifests, record.Manifests)
+		return artifact, err
 	}
 	// Retain only config/layer references actually present in this manifest
 	// and authorized by the imported artifact metadata, preserving repository
@@ -158,6 +175,24 @@ func (s *HighServer) storedContainerArtifact(record ContainerArtifact) (Containe
 		artifact.Blobs = append(artifact.Blobs, ContainerBlob{Digest: desc.Digest, Size: desc.Size})
 	}
 	return artifact, nil
+}
+
+func storedContainerIndexChildren(descriptors []ociDescriptor, authorized []ContainerIndex) ([]ContainerIndex, error) {
+	byDigest := make(map[string]ContainerIndex, len(authorized))
+	for _, child := range authorized {
+		byDigest[child.Digest] = child
+	}
+	children := make([]ContainerIndex, 0, len(descriptors))
+	for _, desc := range descriptors {
+		child, ok := byDigest[desc.Digest]
+		if !ok || !containerDigestRE.MatchString(desc.Digest) || desc.Size <= 0 ||
+			child.Size != desc.Size || child.MediaType != desc.MediaType ||
+			(!isContainerManifestType(desc.MediaType) && !isContainerIndexType(desc.MediaType)) {
+			return nil, fmt.Errorf("unrecorded or invalid artifact index child %q", desc.Digest)
+		}
+		children = append(children, child)
+	}
+	return children, nil
 }
 
 // retainContainerArtifacts preserves dashboard associations when a refresh

@@ -104,7 +104,7 @@ type ContainerRepo struct {
 	artifactIndex *containerArtifactIndex
 }
 
-// ContainerImage is one resolved linux/amd64 image manifest. Digest is the
+// ContainerImage is one resolved linux/amd64 image or opaque OCI artifact. Digest is the
 // SHA-256 of the stored manifest blob; Blobs lists the config and layers it
 // references (all stored content-addressed under containers/blobs/).
 type ContainerImage struct {
@@ -132,8 +132,8 @@ type ContainerIndex struct {
 
 // ContainerArtifact is one attached artifact mirrored alongside an image: a
 // cosign/sigstore signature, an in-toto/SLSA attestation, or an SBOM. It is
-// an OCI image manifest stored like any other (content-addressed, with its
-// config and layer blobs). In bundle metadata Subject records the discovery
+// an OCI manifest or index stored by digest with its referenced content.
+// In bundle metadata Subject records the discovery
 // association, including legacy cosign tags and BuildKit entries. The high
 // side derives native OCI subject relationships from the stored manifest.
 type ContainerArtifact struct {
@@ -150,6 +150,9 @@ type ContainerArtifact struct {
 	Size         int64             `json:"size"`
 	Annotations  map[string]string `json:"annotations,omitempty"`
 	Blobs        []ContainerBlob   `json:"blobs,omitempty"`
+	// Manifests records the required children of an artifact index. Every
+	// child is also an artifact record, so its manifest remains pullable.
+	Manifests []ContainerIndex `json:"manifests,omitempty"`
 }
 
 type ContainerBlob struct {
@@ -815,6 +818,9 @@ func (c *containerClient) fetchContainerManifest(ctx context.Context, ref imageR
 	if err := json.Unmarshal(body, &index); err != nil {
 		return resolvedImage{}, fmt.Errorf("%s: parse manifest index: %w", ref, err)
 	}
+	if isContainerArtifactDocument(index, mediaType) {
+		return resolvedImage{Manifest: body, MediaType: mediaType, Digest: digest}, nil
+	}
 	desc, err := pickAmd64Manifest(index.Manifests)
 	if err != nil {
 		return resolvedImage{}, fmt.Errorf("%s: %w", ref, err)
@@ -920,60 +926,6 @@ func (c *containerClient) fetchArtifactManifest(ctx context.Context, ref imageRe
 // the OCI referrers fallback tag).
 func cosignArtifactTag(subject, suffix string) string {
 	return strings.Replace(subject, ":", "-", 1) + suffix
-}
-
-// fetchReferrers lists the referrer descriptors upstream holds for a subject
-// digest: the OCI 1.1 referrers API where the registry has it, else the
-// fallback referrers tag clients maintain where it does not. Discovery
-// failures return nil — attached artifacts are best-effort extras on top of
-// the image pull.
-func (c *containerClient) fetchReferrers(ctx context.Context, ref imageRef, subject string) []ociDescriptor {
-	if descs, ok := c.fetchReferrersAPI(ctx, ref, subject); ok {
-		return descs
-	}
-	return c.fetchReferrersFallbackTag(ctx, ref, subject)
-}
-
-// fetchReferrersAPI queries GET /v2/<repo>/referrers/<digest>. ok reports
-// whether the registry answered the API at all — a 200 with an empty index
-// still ends discovery, matching the spec's client flow.
-func (c *containerClient) fetchReferrersAPI(ctx context.Context, ref imageRef, subject string) ([]ociDescriptor, bool) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	resp, err := c.get(ctx, ref, "referrers/"+subject, mtOCIIndex)
-	if err != nil {
-		return nil, false
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return nil, false
-	}
-	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, mtOCIIndex) {
-		return nil, false
-	}
-	var index ociManifest
-	if json.Unmarshal(body, &index) != nil {
-		return nil, false
-	}
-	return index.Manifests, true
-}
-
-// fetchReferrersFallbackTag reads the sha256-<hex> fallback tag — an index of
-// referrer descriptors — that OCI 1.1 clients maintain on registries without
-// the referrers API. Each listed manifest is later fetched and verified by
-// its own digest, so a stale fallback index can only omit or add entries,
-// never alter content.
-func (c *containerClient) fetchReferrersFallbackTag(ctx context.Context, ref imageRef, subject string) []ociDescriptor {
-	body, mediaType, _, found, err := c.fetchArtifactManifest(ctx, ref, cosignArtifactTag(subject, ""))
-	if err != nil || !found || !isContainerIndexType(mediaType) {
-		return nil
-	}
-	var index ociManifest
-	if json.Unmarshal(body, &index) != nil {
-		return nil
-	}
-	return index.Manifests
 }
 
 // resolveConstraintTag resolves a version-constraint reference to the newest
@@ -1084,8 +1036,8 @@ func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRe
 	if !containerDigestRE.MatchString(desc.Digest) {
 		return ManifestFile{}, fmt.Errorf("%s: unsupported blob digest %q (only sha256 is supported)", ref, desc.Digest)
 	}
-	if desc.Size <= 0 {
-		return ManifestFile{}, fmt.Errorf("%s: blob %s has no size in the manifest", ref, desc.Digest)
+	if desc.Size < 0 {
+		return ManifestFile{}, fmt.Errorf("%s: blob %s has a negative size in the manifest", ref, desc.Digest)
 	}
 	rel := containerBlobRel(desc.Digest)
 	mf := ManifestFile{Path: rel, SHA256: strings.TrimPrefix(desc.Digest, "sha256:"), Size: desc.Size}
@@ -1159,8 +1111,9 @@ func writeVerifiedBlob(abs string, r io.Reader, wantSize int64, wantSHA string) 
 // -----------------------------------------------------------------------------
 
 // ContainerCollectRequest is the body of POST /admin/containers/collect:
-// docker-style image references, e.g. "alpine:3.20" or
-// "ghcr.io/org/app@sha256:...". Only linux/amd64 is mirrored.
+// docker-style OCI references, e.g. "alpine:3.20" or
+// "ghcr.io/org/app@sha256:...". Runnable images select linux/amd64;
+// opaque artifacts retain their required manifest and blob graph.
 type ContainerCollectRequest struct {
 	Images []string `json:"images"`
 	// Auth optionally authenticates this pull against one private registry.
@@ -1224,7 +1177,7 @@ func (s *LowServer) CollectContainers(ctx context.Context, req ContainerCollectR
 	}
 	defer os.RemoveAll(stageRoot)
 
-	emitProgress(ctx, "Resolving %d image reference(s) (linux/amd64)…", len(refs))
+	emitProgress(ctx, "Resolving %d OCI reference(s) (images: linux/amd64)…", len(refs))
 	repos, files, failed := s.mirrorContainerImages(ctx, refs, stageRoot, req.Force, creds)
 	if len(repos) == 0 {
 		return ExportResult{}, fmt.Errorf("no images could be fetched: %s", summarizeFailures(failed))
@@ -1436,6 +1389,9 @@ func (c *containerClient) mirrorContainerImage(ctx context.Context, ref imageRef
 	if err := json.Unmarshal(resolved.Manifest, &m); err != nil {
 		return ContainerImage{}, nil, fmt.Errorf("%s: parse image manifest: %w", ref, err)
 	}
+	if isContainerArtifactDocument(m, resolved.MediaType) {
+		return c.mirrorContainerArtifact(ctx, ref, resolved, stageRoot, seenFile)
+	}
 	if m.Config.Digest == "" || len(m.Layers) == 0 {
 		return ContainerImage{}, nil, fmt.Errorf("%s: image manifest has no config or layers", ref)
 	}
@@ -1572,17 +1528,11 @@ func (c *containerClient) collectImageArtifacts(ctx context.Context, ref imageRe
 	if resolved.IndexDigest != "" {
 		col.skip[resolved.IndexDigest] = true
 	}
+	col.seedImageSubject(ctx, resolved)
 	for _, entry := range indexAttestationEntries(resolved.Entries, resolved.Digest) {
 		col.addBuildkitAttestation(ctx, resolved.Digest, entry)
 	}
-	for _, subject := range artifactSubjects(resolved) {
-		for _, suffix := range []string{".sig", ".att", ".sbom"} {
-			col.addByTag(ctx, subject, cosignArtifactTag(subject, suffix))
-		}
-		for _, desc := range c.fetchReferrers(ctx, ref, subject) {
-			col.addReferrer(ctx, subject, desc)
-		}
-	}
+	col.discover(ctx, artifactSubjects(resolved))
 	return col.list(), col.files
 }
 
@@ -1749,24 +1699,13 @@ func (a *artifactCollector) record(
 	if a.foundCapReached(ctx) {
 		return
 	}
-	art, files, err := a.stageArtifact(
-		ctx,
-		subject,
-		tag,
-		body,
-		mediaType,
-		digest,
-		desc,
-		requireSubject,
-	)
+	err := a.collectGraph(ctx, subject, tag, body, mediaType, digest, desc, requireSubject)
 	if err != nil {
 		emitProgress(ctx, "    ⚠ artifact %s: %v", artifactLabel(tag, digest), err)
 		return
 	}
-	a.files = append(a.files, files...)
-	a.found[digest] = &art
-	a.order = append(a.order, digest)
-	emitProgress(ctx, "    ⊕ %s %s (%d blob(s))", containerArtifactKind(art), artifactLabel(tag, digest), len(art.Blobs))
+	art := a.found[digest]
+	emitProgress(ctx, "    ⊕ %s %s (%d blob(s))", containerArtifactKind(*art), artifactLabel(tag, digest), len(art.Blobs))
 }
 
 // stageArtifact parses one fetched artifact manifest and stages it with its
@@ -1779,21 +1718,24 @@ func (a *artifactCollector) stageArtifact(
 	desc *ociDescriptor,
 	requireSubject bool,
 ) (ContainerArtifact, []ManifestFile, error) {
-	if !isContainerManifestType(mediaType) {
+	if !isContainerManifestType(mediaType) && !isContainerIndexType(mediaType) {
 		return ContainerArtifact{}, nil, fmt.Errorf("unsupported artifact media type %q", mediaType)
 	}
 	var m ociManifest
 	if err := json.Unmarshal(body, &m); err != nil {
 		return ContainerArtifact{}, nil, fmt.Errorf("parse artifact manifest: %w", err)
 	}
+	if m.Subject != nil && !containerDigestRE.MatchString(m.Subject.Digest) {
+		return ContainerArtifact{}, nil, fmt.Errorf("invalid artifact subject %q", m.Subject.Digest)
+	}
 	if m.Subject == nil {
 		if requireSubject {
 			return ContainerArtifact{}, nil, errors.New("referrer manifest has no subject")
 		}
-	} else if m.Subject.Digest != subject {
+	} else if subject != "" && m.Subject.Digest != subject {
 		return ContainerArtifact{}, nil, fmt.Errorf("artifact subject %q does not match queried subject %q", m.Subject.Digest, subject)
 	}
-	blobs, files, err := a.c.downloadArtifactBlobs(ctx, a.ref, m, a.stageRoot, a.seenFile)
+	blobs, children, files, err := a.stageArtifactContent(ctx, m, mediaType)
 	if err != nil {
 		return ContainerArtifact{}, nil, err
 	}
@@ -1808,11 +1750,16 @@ func (a *artifactCollector) stageArtifact(
 		// Native OCI metadata comes only from the immutable manifest.
 		annotations = containerArtifactAnnotations(m, desc)
 		artifactType = containerArtifactType(m, desc)
+	} else if subject == "" {
+		subject = m.Subject.Digest
+	}
+	if isContainerIndexType(mediaType) {
+		artifactType = m.ArtifactType
 	}
 	return ContainerArtifact{
 		Subject: subject, Tag: tag, Digest: digest, MediaType: mediaType,
 		ArtifactType: artifactType, Size: int64(len(body)),
-		Annotations: annotations, Blobs: blobs,
+		Annotations: annotations, Blobs: blobs, Manifests: children,
 	}, append(files, manifestFile), nil
 }
 
@@ -2041,10 +1988,10 @@ func validateContainerArtifact(a ContainerArtifact, seen map[string]bool, shaByP
 	if a.Tag != "" && !containerTagRE.MatchString(a.Tag) {
 		return fmt.Errorf("invalid container artifact tag %q", a.Tag)
 	}
-	if !containerDigestRE.MatchString(a.Subject) {
+	if a.Subject != "" && !containerDigestRE.MatchString(a.Subject) {
 		return fmt.Errorf("invalid container artifact subject %q", a.Subject)
 	}
-	if !isContainerManifestType(a.MediaType) {
+	if !isContainerDocumentType(a.MediaType) {
 		return fmt.Errorf("invalid container artifact media type %q", a.MediaType)
 	}
 	if err := requireContainerBlobListed(a.Digest, seen, shaByPath); err != nil {
@@ -2052,6 +1999,14 @@ func validateContainerArtifact(a ContainerArtifact, seen map[string]bool, shaByP
 	}
 	for _, b := range a.Blobs {
 		if err := requireContainerBlobListed(b.Digest, seen, shaByPath); err != nil {
+			return err
+		}
+	}
+	for _, child := range a.Manifests {
+		if !isContainerManifestType(child.MediaType) && !isContainerIndexType(child.MediaType) {
+			return fmt.Errorf("invalid artifact child media type %q", child.MediaType)
+		}
+		if err := requireContainerBlobListed(child.Digest, seen, shaByPath); err != nil {
 			return err
 		}
 	}

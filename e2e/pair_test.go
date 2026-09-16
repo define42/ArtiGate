@@ -22,17 +22,19 @@ type pairConfig struct {
 	// bundles into the landing directory itself.
 	httpDiode bool
 	// lowOnly starts no high side (dashboard/login tests).
-	lowOnly        bool
-	importInterval string // high --import-interval, default 1s
-	watchInterval  string // low --watch-interval, default 0 (disabled)
-	highEnv        []string
-	lowEnv         []string
+	lowOnly           bool
+	importInterval    string // high --import-interval, default 1s
+	watchInterval     string // low --watch-interval, default 0 (disabled)
+	containerRegistry string // low --container-registry override for a local fixture
+	highEnv           []string
+	lowEnv            []string
 }
 
 // testPair is a dedicated low/high pair plus the on-disk paths tests reach
 // into (delivering, tampering with, or inspecting bundles directly).
 type testPair struct {
 	*Stack
+
 	HighRoot  string
 	Landing   string
 	ExportDir string
@@ -111,7 +113,7 @@ func startPairLow(t *testing.T, p *testPair, cfg pairConfig, token string) {
 	}
 	low, err := startServer(p.Bin, cfg.name+"-low", filepath.Join(p.WorkDir, cfg.name+"-low.log"),
 		func(port int) []string {
-			return []string{
+			args := []string{
 				"low",
 				"--listen", fmt.Sprintf("127.0.0.1:%d", port),
 				"--root", p.LowRoot,
@@ -119,6 +121,10 @@ func startPairLow(t *testing.T, p *testPair, cfg pairConfig, token string) {
 				"--private-key", p.PrivKey,
 				"--watch-interval", orDefault(cfg.watchInterval, "0"),
 			}
+			if cfg.containerRegistry != "" {
+				args = append(args, "--container-registry", cfg.containerRegistry)
+			}
+			return args
 		}, env)
 	if err != nil {
 		t.Fatalf("%s low side: %v", cfg.name, err)

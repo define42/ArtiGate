@@ -17,6 +17,8 @@ Drive a collect with `POST /admin/containers/collect`. The request body (max 1 M
 
 References are parsed docker-style and de-duplicated before fetching. Each reference may carry a tag, a digest, or a version constraint in the tag slot. `force: true` bypasses the export-dedup index — every blob is downloaded and packed even when already forwarded, producing a full self-contained bundle. An optional `auth` object supplies a one-time login for a private registry (see [Private registries](#private-registries)).
 
+The `images` list also accepts opaque OCI artifacts, such as documents published with `oras push`. A nonstandard config media type, or an explicit `artifactType` without a standard image-config media type, identifies an opaque artifact. Its config is preserved as bytes, including non-JSON or empty content. Indexes with an `artifactType`, a native `subject`, or no platform descriptors are treated as artifact indexes and retain all required children. Manifests with Docker/OCI image-config media types continue to undergo the `linux/amd64` platform check, even when they also carry an artifact type or subject.
+
 ### Image reference forms
 
 | Form | Example | Meaning |
@@ -179,11 +181,19 @@ Imported images are merged into a persistent **per-repository index** at:
 
 Collection discovers attachments through the OCI referrers API and its tag fallback, legacy cosign `.sig`/`.att`/`.sbom` tags, and BuildKit attestation entries. Native referrer manifests must declare the queried digest in their OCI `subject` field; missing or mismatched subjects are skipped with a warning. Legacy cosign and BuildKit attachments may omit `subject`.
 
+Referrer discovery follows `Link: rel="next"` pages within the same registry, repository, and subject endpoint. It stops at 100 pages, 4,096 listed descriptors, or 4 MiB per response. Only an initial API `404` selects the legacy fallback index tag. Authentication failures, invalid responses, unsafe pagination links, and exhausted retries produce a **discovery incomplete** warning in the collect's progress/job log and the server log. Successfully discovered pages are retained. Transient `429` and selected `5xx` responses receive up to three attempts; a `Retry-After` longer than two seconds is reported for a later collection instead of retried prematurely.
+
+Both manifest and index referrers are supported. Every required child of an artifact index must be collected and verified before that index is included in the bundle. A missing child, descriptor mismatch, or traversal limit skips the entire new required graph, while other attachments may still succeed. Optional attachments are then discovered on each collected manifest or index, so signatures attached to SBOMs also cross the diode. Index membership alone does not create an OCI `subject` relationship.
+
+Traversal is bounded to 64 artifact documents, 256 artifact-manifest fetch attempts, and 16 levels of required index children per requested reference. Repeated digests are reused and index cycles are rejected. Exceeding a limit emits a warning. The limits also apply to directly collected artifacts; if their required graph cannot be completed, that reference fails collection. Zero-length blobs are accepted only when their actual size and digest verify.
+
 The repository stores each artifact by immutable digest and resolves its mutable tags in one repository-wide map. When a signature tag changes, the tag serves the new artifact and the old artifact remains pullable by digest, including its blobs. A refresh that discovers fewer attachments, including a failed discovery request, preserves previously imported artifacts. Absence from a collection does not delete an attachment.
 
 `GET /v2/<name>/referrers/<digest>` advertises only matching `subject` relationships found in the stored manifest bytes. Artifact type and annotations also come from those bytes. A legacy cosign tag or a BuildKit index annotation alone does not create an OCI referrer; these artifacts remain available through their imported tags or digests. `?artifactType=...` filters the native referrers. Artifact tags stay out of `tags/list`, which lists collected image tags.
 
 Existing repository indexes are rebuilt automatically on first access or import, using stored manifests, and the upgraded index is saved atomically. No re-collection is needed for native relationship repair. Old indexes did not record when conflicting signature tags were observed: migration preserves their first effective mapping and logs the conflict; collecting the image again resolves that tag from upstream. A missing or corrupt stored artifact prevents migration and leaves the existing index intact.
+
+Update the high side before collecting index artifacts or subjectless artifact nodes with the updated low side: older importers reject these new graph records.
 
 ### Routes
 
@@ -224,6 +234,15 @@ docker pull <high-host>/ghcr.io/org/app:v1
 ```
 
 The same form works with `podman` and `containerd` — a read-only registry is all a pull needs. Because the served name is `<registry>/<repository>`, `docker.io` and `ghcr.io` content stay in separate namespaces and never collide.
+
+For a collected opaque artifact, ORAS can pull its files or copy its native attachment graph:
+
+```bash
+oras pull <high-host>/ghcr.io/org/artifact:v1
+oras cp --recursive --to-oci-layout <high-host>/ghcr.io/org/artifact:v1 ./artifact-layout:v1
+```
+
+Legacy cosign signature tags remain separate from that native graph and can be verified against the mirror with the original public key. CI exercises real ORAS discovery/copy/pull and local-key cosign verification through a signed low-to-high transfer, using a local upstream registry.
 
 ### HTTPS vs. insecure-registries
 

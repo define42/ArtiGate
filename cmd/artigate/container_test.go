@@ -1592,7 +1592,7 @@ func TestValidateContainerArtifactsAndIndex(t *testing.T) {
 		{"artifact blob missing from files", func(r []ContainerRepo) { r[0].Images[0].Artifacts[0].Blobs[0].Digest = missing }},
 		{"invalid artifact subject", func(r []ContainerRepo) { r[0].Images[0].Artifacts[0].Subject = "not-a-digest" }},
 		{"invalid artifact tag", func(r []ContainerRepo) { r[0].Images[0].Artifacts[0].Tag = "bad tag" }},
-		{"artifact media type not a manifest", func(r []ContainerRepo) { r[0].Images[0].Artifacts[0].MediaType = mtOCIIndex }},
+		{"unsupported artifact media type", func(r []ContainerRepo) { r[0].Images[0].Artifacts[0].MediaType = "application/octet-stream" }},
 		{"index blob missing from files", func(r []ContainerRepo) { r[0].Images[0].Index.Digest = missing }},
 		{"index media type not an index", func(r []ContainerRepo) { r[0].Images[0].Index.MediaType = mtOCIManifest }},
 	}

@@ -212,6 +212,10 @@ and environment variable.
   tags and BuildKit associations remain available separately. Artifacts that
   fail to fetch are skipped with a warning, and previously imported artifacts
   remain available by digest. Signature tags move when a new version arrives.
+  Discovery follows paginated referrers and reports partial failures. OCI
+  index attachments and nested attachments retain their required manifests
+  and blobs; a missing required child rejects that attachment. The same
+  collect endpoint accepts opaque OCI artifacts, including empty blobs.
 
   The tag position also takes a **version constraint**, resolved against the
   upstream tag list at collect time to the newest matching version:

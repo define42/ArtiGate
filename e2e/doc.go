@@ -10,7 +10,10 @@
 // with its real client tool: pip, go, mvn+java, npm+node, cargo, terraform
 // (or tofu), helm, dotnet, apt-get+dpkg-deb, dnf+rpm, apk (inside an Alpine
 // container), docker, huggingface_hub's CLI, micromamba (or conda),
-// bundler, composer, ansible-galaxy, Rscript, git, and curl.
+// bundler, composer, ansible-galaxy, Rscript, git, oras, cosign, and curl.
+// OCI artifact tests use a pinned local Distribution registry container,
+// native referrer graphs, and temporary cosign keys: signing and verification
+// need no external identity provider or transparency-log service.
 //
 // Beyond the per-stream client round-trips, the suite exercises the parts of
 // the system that sit between the low and high sides. These do not lean on any

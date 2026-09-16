@@ -346,6 +346,14 @@ The [container store](ecosystems/containers.md) is a good illustration of the on
 
 The shard key is `containerBlobShardHex(hex)` — the first 3 hex characters of the digest — and the bundle-relative path is `containers/blobs/sha256/<first3hex>/<full64hex>`. The `_index.json` name cannot collide with real content because a repository path component may not start with `_`. Per-repo isolation still holds over the shared store: a served repo can expose only blobs its own index references. Other ecosystems follow the same "verified artifacts on disk, metadata derived on demand" shape — and content addressing is what makes [delta bundles](#export-deduplication-and-delta-bundles) cheap, since a shared layer or model blob is forwarded exactly once.
 
+## OCI client implementation choice
+
+ArtiGate currently keeps its bounded OCI collector and validates interoperability with pinned ORAS and cosign clients. A focused evaluation of `oras-go` v2.6.2 found that its registry and authentication APIs are useful, but replacing collection would still require adapters for signed bundle records, prior-file deduplication, dry-run accounting, progress, and complete publication of required artifact graphs.
+
+Three isolated compatibility checks against that version confirmed policy differences that an adapter would need to handle: platform selection replaces the copied root index with the selected manifest; default graph copying skips foreign layers; and subject links are traversed as successors, so copying an attachment can also copy its subject graph. ArtiGate preserves upstream image index bytes, rejects foreign image layers, and controls traversal explicitly. See the pinned [copy implementation](https://github.com/oras-project/oras-go/blob/v2.6.2/copy.go) and [content graph traversal](https://github.com/oras-project/oras-go/blob/v2.6.2/content/graph.go).
+
+The evaluation therefore deferred a production dependency. Revisit it when a bounded remote-client adapter demonstrably removes protocol code while passing the bundle/dedup tests and real-client interoperability suite. `oras-go` v2.6.2 is Apache-2.0 licensed and declares three direct dependencies; these were reviewed, but none were added to ArtiGate. See its [module requirements](https://github.com/oras-project/oras-go/blob/v2.6.2/go.mod) and [license](https://github.com/oras-project/oras-go/blob/v2.6.2/LICENSE).
+
 ## Where to go next
 
 - [Low side](low-side.md) — collecting, re-exporting, watches, and the export dir.
