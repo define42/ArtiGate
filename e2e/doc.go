@@ -8,9 +8,25 @@
 // via a one-package miniature repository built from real
 // dl-cdn.alpinelinux.org artifacts — Alpine), and validates every stream
 // with its real client tool: pip, go, mvn+java, npm+node, cargo, terraform
-// (or tofu), helm, dotnet, apt-get+dpkg-deb, dnf+rpm, apk (inside an Alpine
+// (or tofu), helm, dotnet, apt-get+dpkg, dnf+rpm, apk (inside an Alpine
 // container), docker, huggingface_hub's CLI, micromamba (or conda),
-// bundler, composer, ansible-galaxy, Rscript, git, oras, cosign, and curl.
+// bundler, composer, ansible-galaxy, Rscript, git, oras, cosign, Ollama,
+// VSCodium, snap, and curl. Conda and CRAN require their real clients in strict
+// mode. Package assertions check installed content and run the installed
+// software where appropriate; GGUF coverage includes CPU inference, and VSX
+// coverage installs and lists the exact mirrored extension version.
+//
+// On Linux, receiver clients run in fresh network and PID namespaces with a
+// bridge to only the high-side HTTP endpoint. They receive a clean environment
+// and private HOME/cache directories; inherited proxy and extra-index settings
+// cannot supply missing mirror content. TestReceiverIsolation checks successful
+// high-side access, blocked upstream/redirect access, and environment isolation.
+// Container clients run with Docker's network disabled. Image pulls use a fresh
+// Docker daemon and layer store; APT/RPM/APK use prepared base containers. Snap
+// installs, verifies assertions, and executes in an Ubuntu VM with no network
+// device. Downloading tools, container bases and the pinned VM image is setup;
+// the subsequent receiver operations cannot reach those upstreams. The Python
+// source-distribution flow also fetches its build requirements from the mirror.
 // OCI artifact tests use a pinned local Distribution registry container,
 // native referrer graphs, and temporary cosign keys: signing and verification
 // need no external identity provider or transparency-log service.
@@ -43,9 +59,11 @@
 //   - the scheduled-collect subsystem (watch_test.go), the low-side session
 //     login (auth_test.go), and the low/high dashboards (ui_test.go).
 //
-// The built-in UDP data-diode transport (pitcher/catcher) is covered by the
-// integration tests in cmd/artigate (diode_udp_test.go) rather than by this
-// suite. TestLowToHighOverUDPDiode runs the whole loop over the real
+// TestUDPDiode additionally uses real low/high processes and the built-in UDP
+// pitcher/catcher transport over an isolated IPv6 multicast link, then retrieves
+// imported content with an isolated curl receiver. The cmd/artigate integration
+// tests in diode_udp_test.go provide further transport coverage.
+// TestLowToHighOverUDPDiode runs the whole loop over the real
 // pitcher/catcher socket path — the low side collects and pitches, the catcher
 // listening on loopback lands the bundle and kicks the import, and the high
 // side verifies (signature, sequence, hashes) and serves it;
@@ -60,16 +78,23 @@
 // `go build ./...`, `go vet ./...`, `go test ./...`, and golangci-lint runs
 // are unaffected. Run the suite with:
 //
-//	make e2e    # == go test -tags e2e -v -count=1 -timeout 25m ./e2e
+//	make e2e         # local run, optional unavailable flows may skip
+//	make e2e-strict  # race detector, complete required matrix, zero skips
 //
-// The suite needs network access and the client toolchains on PATH. A
-// missing tool skips its test locally; in CI, ARTIGATE_E2E_REQUIRE_ALL=1
-// turns those skips into failures so a runner-image change cannot silently
-// hollow out coverage. Knobs (all environment variables):
+// Setup and low-side collection need network access and client toolchains on
+// PATH. Missing tools or transient upstream failures after the retry skip
+// locally; ARTIGATE_E2E_REQUIRE_ALL=1 makes both fail. CI runs with -json -race
+// and uses check_report.py to reject every skipped test/subtest, missing required
+// flow, and incomplete result stream. required_flows.json records the explicit
+// required matrix; its regression test requires every top-level E2E test to be
+// listed. CI uploads the raw JSON events and coverage report and adds the flow
+// results to its job summary. make e2e-strict writes those reports to /tmp by
+// default (override E2E_RESULTS and E2E_REPORT make variables).
+// Knobs (all environment variables):
 //
 //	ARTIGATE_E2E_BIN         use this artigate binary instead of building one
 //	ARTIGATE_E2E_WORKDIR     server roots/logs here instead of a temp dir
 //	ARTIGATE_E2E_KEEP        "1" keeps the temp workdir after a green run
-//	ARTIGATE_E2E_REQUIRE_ALL "1" fails (not skips) when a client tool is missing
+//	ARTIGATE_E2E_REQUIRE_ALL "1" fails on missing tools or unavailable upstreams
 //	ARTIGATE_E2E_HF_GGUF     override the GGUF model ref ("org/name:quant")
 package e2e

@@ -6,9 +6,10 @@ name: E2E
 # Docker Hub, huggingface.co, conda.anaconda.org, rubygems.org,
 # repo.packagist.org, open-vsx.org, galaxy.ansible.com, cloud.r-project.org,
 # github.com), and validates with the real client tools (pip, go, mvn+java,
-# npm+node, apt-get+dpkg-deb, dnf+rpm, docker, huggingface_hub, curl,
+# npm+node, apt-get+dpkg, dnf+rpm, docker, huggingface_hub, curl, ollama,
 # micromamba, bundler, composer+php, ansible-galaxy, Rscript, git, oras,
-# cosign). OCI artifacts use a local registry and temporary signing keys. See
+# cosign, codium, snap). Receiver clients have no upstream network access.
+# OCI artifacts use a local registry and temporary signing keys. See
 # e2e/doc.go.
 
 on:
@@ -31,7 +32,7 @@ jobs:
     # toolchains (python, node, maven, docker) and apt-installed dnf, whose
     # behavior shifts between images — bump deliberately.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -41,11 +42,14 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install client tools (dnf, rpm, huggingface_hub CLI, terraform, R, ansible, micromamba)
+      - name: Install client tools and receiver isolation dependencies
         run: |
           sudo apt-get update
           # ruby-bundler: the runner image ships ruby but no bundler binary.
-          sudo apt-get install -y --no-install-recommends dnf rpm r-base-core ruby-bundler
+          sudo apt-get install -y --no-install-recommends \
+            dnf rpm r-base-core ruby-bundler util-linux iproute2 zstd \
+            qemu-system-x86 qemu-utils xorriso \
+            libnss3 libatk-bridge2.0-0 libxkbcommon0 libgbm1 libasound2t64
           if command -v pipx >/dev/null 2>&1; then
             pipx install huggingface_hub
             pipx install ansible-core
@@ -62,6 +66,50 @@ jobs:
           # micromamba: single static binary, the lightest real conda client.
           curl -fsSL "https://micro.mamba.pm/api/micromamba/linux-64/latest" \
             | sudo tar -xj -C /usr/local bin/micromamba
+
+      - name: Enable and check isolated receiver namespaces
+        run: |
+          # Ubuntu 24.04 restricts unprivileged user namespaces by default.
+          # This setting only affects this disposable runner; receivers still
+          # run with isolated network/PID namespaces and a high-side-only bridge.
+          if sysctl kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          unshare --user --map-root-user --net --pid --fork --kill-child=KILL --mount-proc ip link set lo up
+          # Use hardware acceleration for the disconnected Snap VM if present.
+          if [ -e /dev/kvm ]; then
+            sudo chmod a+rw /dev/kvm
+          fi
+
+      - name: Cache verified Snap VM base image
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/artigate-e2e/vm/noble-20260911-amd64.img
+          key: snap-vm-amd64-612b2c0cc1bc413a
+
+      - name: Install pinned Ollama and VSCodium clients
+        run: |
+          receiver_tools="${RUNNER_TEMP}/receiver-clients"
+          mkdir -p "$receiver_tools/ollama" "$receiver_tools/vscodium"
+          curl -fsSL --retry 3 \
+            https://github.com/ollama/ollama/releases/download/v0.34.1/ollama-linux-amd64.tar.zst \
+            -o "$receiver_tools/ollama.tar.zst"
+          printf '%s  %s\n' \
+            f361dc3992ec07e4ad429f4bb2d10d4663ba2c295f9a9a688c7d52f4ba650034 \
+            "$receiver_tools/ollama.tar.zst" | sha256sum -c -
+          # CPU inference keeps the release's bin/../lib layout. GPU runtimes
+          # are unnecessary on this runner and consume several extra GB.
+          tar --zstd -xf "$receiver_tools/ollama.tar.zst" -C "$receiver_tools/ollama" \
+            --exclude='lib/ollama/cuda_*' --exclude='lib/ollama/vulkan'
+          curl -fsSL --retry 3 \
+            https://github.com/VSCodium/vscodium/releases/download/1.135.06055/VSCodium-linux-x64-1.135.06055.tar.gz \
+            -o "$receiver_tools/vscodium.tar.gz"
+          printf '%s  %s\n' \
+            c09d8ac8dd7f52b09ee159ee24b440541dfd8f937a0f6f88cc428c78e48ee1f2 \
+            "$receiver_tools/vscodium.tar.gz" | sha256sum -c -
+          tar -xzf "$receiver_tools/vscodium.tar.gz" -C "$receiver_tools/vscodium"
+          printf '%s\n' "$receiver_tools/ollama/bin" "$receiver_tools/vscodium/bin" >> "$GITHUB_PATH"
+          rm "$receiver_tools/ollama.tar.zst" "$receiver_tools/vscodium.tar.gz"
 
       - name: Install pinned OCI clients
         run: |
@@ -124,6 +172,10 @@ jobs:
           ansible-galaxy --version | head -1
           Rscript --version
           micromamba --version
+          ollama --version
+          codium --version
+          qemu-system-x86_64 --version | head -1
+          xorriso -version
           git --version
           # Availability preflight. ck retries transient upstream errors so a
           # brief outage does not fail the whole suite: curl --retry covers
@@ -168,7 +220,10 @@ jobs:
           ck -o /dev/null -H "Snap-Device-Series: 16" "https://api.snapcraft.io/v2/snaps/info/hello"
           ck -o /dev/null "https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack"
 
-      - name: Run end-to-end suite
+      - name: Test required-flow coverage gate
+        run: python3 -B -m unittest discover -s e2e -p check_report_test.py -v
+
+      - name: Run required end-to-end suite with race detector
         env:
           ARTIGATE_E2E_REQUIRE_ALL: "1"
           ARTIGATE_E2E_WORKDIR: ${{ runner.temp }}/artigate-e2e
@@ -179,7 +234,28 @@ jobs:
           # through to the low server, and an unset secret keeps today's
           # anonymous behavior.
           ARTIGATE_HF_TOKEN: ${{ secrets.ARTIGATE_HF_TOKEN }}
-        run: go test -tags e2e -v -count=1 -timeout 25m ./e2e
+        run: |
+          set -o pipefail
+          go test -tags e2e -json -race -count=1 -timeout 45m ./e2e \
+            | tee "${RUNNER_TEMP}/artigate-e2e-results.jsonl"
+
+      - name: Require every flow and reject all skips
+        if: always()
+        run: |
+          python3 e2e/check_report.py \
+            --input "${RUNNER_TEMP}/artigate-e2e-results.jsonl" \
+            --report "${RUNNER_TEMP}/artigate-e2e-coverage.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload required-flow coverage and test events
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-required-flow-coverage
+          path: |
+            ${{ runner.temp }}/artigate-e2e-results.jsonl
+            ${{ runner.temp }}/artigate-e2e-coverage.json
+          if-no-files-found: error
 
       - name: Upload server logs
         if: failure()

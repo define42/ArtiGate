@@ -377,6 +377,10 @@ and environment variable.
   revision index at `/snap/info/<name>`) — on the air-gapped machine,
   `snap ack <name>_<rev>.assert && snap install <name>_<rev>.snap` installs
   with snapd's own signature verification, no `--dangerous` needed.
+  For a fresh classic Linux receiver, also mirror the `snapd` runtime snap
+  explicitly and install it and the base before the application. Automatic
+  collection follows declared bases; it does not infer implicit snapd runtime
+  or content-interface prerequisites.
 - **Git** — a clone URL (plus an optional mirror name and ref list). The low
   side speaks the smart HTTP protocol as a pure-Go client — no git binary
   beside the signing key — fetches every selected branch and tag as one
@@ -1114,7 +1118,9 @@ edge-triggered (one notification per gap; the gap then ages via
   on the low side), verified against the API-declared SHA-256, and built by
   clients at install time.
 - **Java/Maven**: release versions only; SNAPSHOT and dynamic/range versions are
-  rejected.
+  rejected. The low side needs Maven 3.6.3+ and JDK 8+; collection uses the
+  pinned Maven Dependency Plugin 3.11.0 to include transitive build-plugin
+  dependencies needed by a receiver with an empty local repository.
 - **NPM**: registry tarballs only — dependencies resolved to git or file URLs
   are skipped (and reported). Resolution needs npm 7 or newer on the low side
   (lockfile v2+). The high side regenerates all packument metadata from each
@@ -1221,24 +1227,29 @@ edge-triggered (one notification per gap; the gap then ages via
 
 ## End-to-end tests
 
-Beyond the offline unit suite (`go test ./...`), an opt-in end-to-end suite
-builds the real binary, starts a low+high pair wired over the HTTP diode
-transport, collects **every stream from its real upstream** (PyPI,
-proxy.golang.org, Maven Central, npmjs, cli.github.com, Docker Hub,
-huggingface.co, osv.dev), and validates each with its real client tool — pip,
-`go`, `mvn`+`java`, npm+node (including a real `npm audit` against the
-mirrored OSV data), `apt-get`+`dpkg-deb`, `dnf`+`rpm`, `docker`,
-huggingface_hub's CLI, and `curl`:
+Beyond the offline unit suite (`go test ./...`), the end-to-end suite builds
+the real binary, starts low/high processes, transfers signed bundles, and
+consumes the high-side repositories with native clients. It covers all 23
+ecosystems, including actual APT/RPM/APK installation, Docker pull/run,
+ORAS/Cosign discovery and verification, Ollama CPU inference, VSCodium extension
+installation, and Snap assertion verification and installation in a disposable
+VM. A separate flow exercises the real UDP multicast pitcher/catcher transport.
+
+Receiver clients use fresh homes/caches and isolated networks that can reach
+only the high-side endpoint. Docker pulls use a fresh daemon and layer store;
+the Snap VM has no network device. Tool and base-image provisioning happens
+before isolation, while the low side retains upstream access for collection.
 
 ```bash
-make e2e        # == go test -tags e2e -v -count=1 -timeout 25m ./e2e
+make e2e         # local run; unavailable tools/upstreams may skip
+make e2e-strict  # full required-flow matrix, race detection, zero skips
 ```
 
-It needs network access and the client toolchains on PATH; a missing tool
-skips its test locally (CI sets `ARTIGATE_E2E_REQUIRE_ALL=1` to fail
-instead). CI runs it on every PR via `.github/workflows/e2e.yml`. See
-`e2e/doc.go` for all knobs (`ARTIGATE_E2E_BIN`, `ARTIGATE_E2E_WORKDIR`,
-`ARTIGATE_E2E_KEEP`, `ARTIGATE_E2E_HF_GGUF`).
+Linux network namespaces and the client toolchains are required. CI runs the
+strict suite on every PR, fails unavailable required flows, and rejects skips,
+missing tests, or incomplete result streams. The explicit matrix is in
+`e2e/required_flows.json`; JSON events and the coverage report are retained as
+CI artifacts. See `e2e/doc.go` for setup details and environment knobs.
 
 ## Documentation
 

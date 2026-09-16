@@ -31,7 +31,7 @@ func TestHFRepo(t *testing.T) {
 		"HF_HOME=" + filepath.Join(tmp, "hf-home"),
 		"HF_HUB_DISABLE_TELEMETRY=1",
 	}
-	run(t, tmp, env, cli, "download", repo, "--local-dir", dest)
+	newReceiver(t, stack.HighURL).Run(t, tmp, env, cli, "download", repo, "--local-dir", dest)
 
 	cfgBytes, err := os.ReadFile(filepath.Join(dest, "config.json"))
 	if err != nil {
@@ -63,12 +63,12 @@ const defaultGGUF = "bartowski/SmolLM2-135M-Instruct-GGUF:Q4_K_M"
 // TestHFGGUF mirrors one GGUF quantization (resolved through Hugging Face's
 // Ollama-compatible endpoint) and validates the two ways the high side
 // serves it: the raw /hf/.../<tag>.gguf download used by llama.cpp/vLLM,
-// and the /v2 manifest+blob pair an ollama client pulls. Running an actual
-// ollama daemon is deliberately out of scope (it would need a ~GB install
-// plus TLS/--insecure plumbing); the bytes and protocol are asserted
-// directly instead.
+// and a real Ollama pull followed by CPU inference. Its fresh daemon and CLI
+// share a receiver namespace that can reach only the high side and loopback.
 func TestHFGGUF(t *testing.T) {
 	stack.Prepare(t)
+	ollama := requireTool(t, "ollama")
+	curl := requireTool(t, "curl")
 
 	ref := os.Getenv("ARTIGATE_E2E_HF_GGUF")
 	if ref == "" {
@@ -125,6 +125,7 @@ func TestHFGGUF(t *testing.T) {
 	if code != 200 || string(prefix) != "GGUF" {
 		t.Fatalf("GET %s: HTTP %d, first bytes %q; want 200 and GGUF magic", blobURL, code, prefix)
 	}
+	consumeGGUFWithOllama(t, ollama, curl, stack.HighHost+"/"+ref)
 }
 
 func splitGGUFRef(ref string) (org, name, quant string, err error) {

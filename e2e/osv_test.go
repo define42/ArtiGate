@@ -25,6 +25,7 @@ const lodashAdvisoryID = "GHSA-35jh-r3h4-6jhm"
 // reaching the public registry.
 func TestOsv(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 
 	res := stack.Collect(t, "osv", map[string]any{"ecosystems": []string{"npm"}})
 	if res.ExportedModules != 1 {
@@ -79,12 +80,12 @@ fund=false
 update-notifier=false
 `, stack.HighURL, filepath.Join(tmp, "npm-cache")))
 	env := []string{"HOME=" + filepath.Join(tmp, "home")}
-	run(t, proj, env, npm, "install", "lodash@4.17.20", "--package-lock-only", "--no-audit", "--no-fund")
+	rx.Run(t, proj, env, npm, "install", "lodash@4.17.20", "--package-lock-only", "--no-audit", "--no-fund")
 
 	// A vulnerable dependency makes `npm audit` exit non-zero and name the
 	// package — the CLI gzip-POSTs the bulk endpoint and renders our OSV-fed
 	// response.
-	out, err := runAllowFail(t, proj, env, npm, "audit")
+	out, err := rx.RunAllowFail(t, proj, env, npm, "audit")
 	if err == nil {
 		t.Fatalf("npm audit reported no vulnerabilities for lodash@4.17.20:\n%s", out)
 	}

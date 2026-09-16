@@ -57,6 +57,7 @@ func TestTerraform(t *testing.T) {
 	}
 
 	high := tfE2EStartTLSHigh(t, res.BundleID)
+	rx := newReceiver(t, "https://"+high.host)
 	caFile := tfE2EServerCertPEM(t, high.host)
 
 	tmp := t.TempDir()
@@ -86,7 +87,7 @@ resource "null_resource" "probe" {}
 		"CHECKPOINT_DISABLE=1",
 		"TF_IN_AUTOMATION=1",
 	}
-	out := run(t, tmp, env, terraform, "init", "-backend=false", "-input=false", "-no-color")
+	out := rx.Run(t, tmp, env, terraform, "init", "-backend=false", "-input=false", "-no-color")
 	if !strings.Contains(out, "hashicorp/null v"+tfE2EProviderVersion) ||
 		!strings.Contains(out, "has been successfully initialized") {
 		t.Fatalf("terraform init did not install the mirrored provider:\n%s", out)
@@ -96,7 +97,7 @@ resource "null_resource" "probe" {}
 	}
 	// validate loads the provider plugin from the mirrored zip — proof the
 	// artifact is a working binary, not just a well-hashed blob.
-	out = run(t, tmp, env, terraform, "validate", "-no-color")
+	out = rx.Run(t, tmp, env, terraform, "validate", "-no-color")
 	if !strings.Contains(out, "Success!") {
 		t.Fatalf("terraform validate: %s", out)
 	}

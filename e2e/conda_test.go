@@ -3,9 +3,9 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
-	"io/fs"
-	"os/exec"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,14 +13,14 @@ import (
 
 // TestConda mirrors a tiny, dependency-free noarch package from the real
 // conda-forge channel across the diode, checks the regenerated repodata, and
-// — when a conda-family client is installed — solves an environment from the
-// mirror alone.
+// solves an environment with a real conda-family client from the mirror alone.
 //
 // Fetching conda-forge's noarch repodata is a multi-hundred-megabyte
 // download (~27 MB as .zst, far larger decompressed), which makes this the
 // slowest collect in the suite.
 func TestConda(t *testing.T) {
 	stack.Prepare(t)
+	client := requireTool(t, "micromamba", "mamba", "conda")
 
 	res := stack.Collect(t, "conda", map[string]any{
 		"channel":  "conda-forge",
@@ -47,14 +47,6 @@ func TestConda(t *testing.T) {
 		t.Fatalf("repodata.json info.subdir = %q, %v", repodata.Info.Subdir, err)
 	}
 
-	// Optional client step. requireTool would skip the whole test and hide
-	// the protocol-level assertions above on runners without a conda client,
-	// so the lookup is local and a missing tool only logs.
-	client := condaClientPath()
-	if client == "" {
-		t.Log("no micromamba/mamba/conda on PATH; skipping the client solve step")
-		return
-	}
 	tmp := t.TempDir()
 	envDir := filepath.Join(tmp, "env")
 	clientEnv := []string{
@@ -66,35 +58,43 @@ func TestConda(t *testing.T) {
 	// trailing platform name and query only that subdir): the mirror carries
 	// no platform subdir for this host, and clients would otherwise pair the
 	// channel with the native platform.
-	run(t, tmp, clientEnv, client, "create", "-y", "-p", envDir,
+	newReceiver(t, stack.HighURL).Run(t, tmp, clientEnv, client, "create", "-y", "-p", envDir,
 		"--override-channels", "-c", stack.HighURL+"/conda/conda-forge/noarch",
 		"font-ttf-dejavu-sans-mono")
-	if !condaDirHasFiles(envDir) {
-		t.Fatalf("client env at %s contains no files", envDir)
-	}
+	assertCondaFontInstalled(t, envDir)
 }
 
-// condaClientPath returns the first conda-family client on PATH, or "".
-func condaClientPath() string {
-	for _, name := range []string{"micromamba", "mamba", "conda"} {
-		if p, err := exec.LookPath(name); err == nil {
-			return p
-		}
+// The installed record and actual font payload prove extraction; an empty
+// environment's conda-meta/history file alone must not satisfy the test.
+func assertCondaFontInstalled(t *testing.T, dir string) {
+	t.Helper()
+	records, err := filepath.Glob(filepath.Join(dir, "conda-meta", "font-ttf-dejavu-sans-mono-*.json"))
+	if err != nil || len(records) != 1 {
+		t.Fatalf("installed font package records = %v, %v", records, err)
 	}
-	return ""
-}
-
-// condaDirHasFiles reports whether dir contains at least one regular file
-// anywhere below it — the font package installs only data files, so any file
-// proves the solve fetched and extracted the mirrored archive.
-func condaDirHasFiles(dir string) bool {
-	found := false
-	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			found = true
-			return filepath.SkipAll
+	data, err := os.ReadFile(records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record struct {
+		Name  string   `json:"name"`
+		Files []string `json:"files"`
+	}
+	if err := json.Unmarshal(data, &record); err != nil || record.Name != "font-ttf-dejavu-sans-mono" {
+		t.Fatalf("installed font package record name=%q: %v", record.Name, err)
+	}
+	for _, file := range record.Files {
+		// The conda-forge archive's info/files names fonts/DejaVuSans.ttf,
+		// despite the package itself being named dejavu-sans-mono.
+		if file != "fonts/DejaVuSans.ttf" {
+			continue
 		}
-		return nil
-	})
-	return found
+		font, err := os.ReadFile(filepath.Join(dir, file))
+		if err != nil || len(font) < 1024 || !bytes.HasPrefix(font, []byte{0, 1, 0, 0}) {
+			t.Fatalf("installed %s is not a TrueType font: bytes=%d, %v", file, len(font), err)
+		}
+		t.Logf("verified installed %s: %d bytes of TrueType data", file, len(font))
+		return
+	}
+	t.Fatal("installed package record has no fonts/DejaVuSans.ttf payload")
 }

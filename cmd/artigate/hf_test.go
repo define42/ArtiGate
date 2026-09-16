@@ -738,7 +738,7 @@ func TestLowToHighHFPipeline(t *testing.T) {
 
 	// Blobs by digest; the model file supports range requests (ollama resumes).
 	assertHTTPBody(t, srv.URL+"/v2/unsloth/gpt-oss-20b-GGUF/blobs/"+containerSHA(gpt.gguf), string(gpt.gguf))
-	assertHFRangeRequest(t, srv.URL+"/v2/unsloth/gpt-oss-20b-GGUF/blobs/"+containerSHA(gpt.gguf), string(gpt.gguf))
+	assertHFOllamaDownload(t, srv.URL+"/v2/unsloth/gpt-oss-20b-GGUF/blobs/"+containerSHA(gpt.gguf), string(gpt.gguf))
 
 	// tags/list.
 	code, got := httpGet(t, srv.URL+"/v2/unsloth/gpt-oss-20b-GGUF/tags/list")
@@ -780,6 +780,22 @@ func TestLowToHighHFPipeline(t *testing.T) {
 	if putResp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("PUT manifest = %d, want 405", putResp.StatusCode)
 	}
+}
+
+func assertHFOllamaDownload(t *testing.T, url, full string) {
+	t.Helper()
+	// Ollama first resolves Location even when the blob response is 200,
+	// then fetches byte ranges from that URL. Exercise that actual sequence.
+	direct, err := http.Get(url) //nolint:noctx // test request
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = direct.Body.Close()
+	location, err := direct.Location()
+	if direct.StatusCode != http.StatusOK || err != nil || location.String() != url {
+		t.Fatalf("Ollama direct download URL: status=%d Location=%q error=%v", direct.StatusCode, direct.Header.Get("Location"), err)
+	}
+	assertHFRangeRequest(t, location.String(), full)
 }
 
 // assertHFRangeRequest fetches the first four bytes of a blob and expects a

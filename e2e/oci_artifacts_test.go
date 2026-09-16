@@ -120,13 +120,14 @@ func testOCINativeArtifacts(t *testing.T, pair *testPair, oras, upstreamHost str
 	nestedDigest := ociManifestDigest(t, filepath.Join(dir, "nested-manifest.json"))
 
 	collectOCIArtifact(t, pair, "artifacts/native:v1")
+	rx := newReceiver(t, pair.HighURL)
 	highRef := pair.HighHost + "/" + ociFixtureRegistryName + "/artifacts/native:v1"
-	discovered := runStdout(t, dir, env, oras, "discover", "--plain-http", "--format", "json", highRef)
+	discovered := rx.RunStdout(t, dir, env, oras, "discover", "--plain-http", "--format", "json", highRef)
 	assertOCIDiscoveryGraph(t, discovered, rootDigest, attestationDigest, nestedDigest)
-	run(t, dir, env, oras, "cp", "--recursive", "--from-plain-http", "--to-oci-layout", highRef, "copied:v1")
-	copied := runStdout(t, dir, env, oras, "discover", "--oci-layout", "--format", "json", "copied:v1")
+	rx.Run(t, dir, env, oras, "cp", "--recursive", "--from-plain-http", "--to-oci-layout", highRef, "copied:v1")
+	copied := rx.RunStdout(t, dir, env, oras, "discover", "--oci-layout", "--format", "json", "copied:v1")
 	assertOCIDiscoveryGraph(t, copied, rootDigest, attestationDigest, nestedDigest)
-	run(t, dir, env, oras, "pull", "--oci-layout", "--output", "pulled", "copied:v1")
+	rx.Run(t, dir, env, oras, "pull", "--oci-layout", "--output", "pulled", "copied:v1")
 	for _, file := range []string{"payload.txt", "empty.txt"} {
 		want, err := os.ReadFile(filepath.Join(dir, file))
 		if err != nil {
@@ -155,11 +156,12 @@ func testOCILegacySignature(t *testing.T, pair *testPair, oras, cosign, upstream
 	sigTag := strings.Replace(digest, ":", "-", 1) + ".sig"
 	sigDigest := strings.TrimSpace(runStdout(t, dir, env, oras, "resolve", "--plain-http", upstreamRepo+":"+sigTag))
 	collectOCIArtifact(t, pair, "artifacts/signed:v1")
+	rx := newReceiver(t, pair.HighURL)
 	highRepo := pair.HighHost + "/" + ociFixtureRegistryName + "/artifacts/signed"
-	if got := strings.TrimSpace(runStdout(t, dir, env, oras, "resolve", "--plain-http", highRepo+":"+sigTag)); got != sigDigest {
+	if got := strings.TrimSpace(rx.RunStdout(t, dir, env, oras, "resolve", "--plain-http", highRepo+":"+sigTag)); got != sigDigest {
 		t.Fatalf("mirrored legacy signature digest = %s, want %s", got, sigDigest)
 	}
-	verification := runStdout(t, dir, env, cosign, "verify", "--key", "cosign.pub", "--allow-http-registry",
+	verification := rx.RunStdout(t, dir, env, cosign, "verify", "--key", "cosign.pub", "--allow-http-registry",
 		"--insecure-ignore-tlog", "--offline", "--new-bundle-format=false", highRepo+"@"+digest)
 	var claims []struct {
 		Critical struct {
@@ -171,12 +173,12 @@ func testOCILegacySignature(t *testing.T, pair *testPair, oras, cosign, upstream
 	if err := json.Unmarshal([]byte(verification), &claims); err != nil || len(claims) != 1 || claims[0].Critical.Image.Digest != digest {
 		t.Fatalf("cosign did not verify the mirrored digest: %s (error %v)", verification, err)
 	}
-	discovered := runStdout(t, dir, env, oras, "discover", "--plain-http", "--format", "json", highRepo+"@"+digest)
+	discovered := rx.RunStdout(t, dir, env, oras, "discover", "--plain-http", "--format", "json", highRepo+"@"+digest)
 	assertOCIDiscoveryGraph(t, discovered, digest)
 	// Legacy signatures remain tag-addressable, but must not masquerade as
 	// native subject edges and break ORAS's recursive graph traversal.
-	run(t, dir, env, oras, "cp", "--recursive", "--from-plain-http", "--to-oci-layout", highRepo+"@"+digest, "copied:v1")
-	assertOCIDiscoveryGraph(t, runStdout(t, dir, env, oras, "discover", "--oci-layout", "--format", "json", "copied:v1"), digest)
+	rx.Run(t, dir, env, oras, "cp", "--recursive", "--from-plain-http", "--to-oci-layout", highRepo+"@"+digest, "copied:v1")
+	assertOCIDiscoveryGraph(t, rx.RunStdout(t, dir, env, oras, "discover", "--oci-layout", "--format", "json", "copied:v1"), digest)
 }
 
 // A local fixture failure must fail CI rather than use the external-upstream

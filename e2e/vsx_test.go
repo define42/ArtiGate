@@ -7,8 +7,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"os/exec"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,10 +20,11 @@ const errorLensVersion = "3.16.0"
 // TestVSX mirrors a real extension from open-vsx.org across the diode and
 // consumes it through the served Marketplace gallery protocol: an exact-id
 // extensionquery must advertise a VSIXPackage asset, and that asset must
-// download as a zip. When a VS Code-compatible client is installed, it also
-// installs the extension against the mirror's gallery.
+// download as a zip. A real VS Code-compatible client then installs the pinned
+// extension while restricted to the high-side mirror.
 func TestVSX(t *testing.T) {
 	stack.Prepare(t)
+	client := requireTool(t, "codium", "codium-insiders", "code-oss")
 
 	res := stack.Collect(t, "vsx", map[string]any{
 		"extensions": []string{"usernamehw.errorlens@" + errorLensVersion},
@@ -49,6 +51,9 @@ func TestVSX(t *testing.T) {
 		t.Fatalf("extensionquery status %d: %s", code, body)
 	}
 	source := vsxPackageSource(t, body)
+	if !strings.HasPrefix(source, stack.HighURL+"/vsx/") {
+		t.Fatalf("gallery advertised an asset outside the high side: %s", source)
+	}
 
 	// The advertised package asset downloads as a non-trivial zip archive.
 	code, prefix, length := httpGetPrefix(t, source, 2)
@@ -62,7 +67,7 @@ func TestVSX(t *testing.T) {
 		t.Fatalf("vsix from %s is implausibly small: %d bytes", source, length)
 	}
 
-	vsxMaybeInstallWithClient(t)
+	vsxInstallWithClient(t, client)
 }
 
 // vsxPostJSON posts a JSON body and returns status and response body (the
@@ -130,31 +135,58 @@ func vsxPackageSource(t *testing.T, body []byte) string {
 	return ""
 }
 
-// vsxMaybeInstallWithClient drives a real VS Code-compatible client against
-// the mirror's gallery when one is on PATH. The protocol assertions above
-// carry the stream's coverage, so a missing client only logs — it must not
-// skip them.
-func vsxMaybeInstallWithClient(t *testing.T) {
+func vsxInstallWithClient(t *testing.T, client string) {
 	t.Helper()
-	var client string
-	for _, name := range []string{"codium", "codium-insiders", "code-oss"} {
-		if p, err := exec.LookPath(name); err == nil {
-			client = p
-			break
-		}
-	}
-	if client == "" {
-		t.Log("no codium/codium-insiders/code-oss on PATH; skipping the real-client install step")
-		return
-	}
 	tmp := t.TempDir()
 	extDir := filepath.Join(tmp, "ext")
-	env := []string{"VSCODE_GALLERY_SERVICE_URL=" + stack.HighURL + "/vsx/gallery"}
-	run(t, tmp, env, client, "--install-extension", "usernamehw.errorlens",
-		"--user-data-dir", tmp, "--extensions-dir", extDir)
+	userDir := filepath.Join(tmp, "user")
+	writeFile(t, filepath.Join(userDir, "User", "settings.json"), `{"telemetry.telemetryLevel":"off","extensions.autoCheckUpdates":false,"extensions.autoUpdate":false,"update.mode":"none"}`)
+	env := vsxGalleryEnvironment(stack.HighURL)
+	receiver := newReceiver(t, stack.HighURL)
+	args := []string{"--no-sandbox", "--user-data-dir", userDir, "--extensions-dir", extDir}
+	pinned := "usernamehw.errorlens@" + errorLensVersion
+	receiver.Run(t, tmp, env, client, append(args, "--install-extension", pinned, "--force")...)
+	installed := receiver.RunStdout(t, tmp, env, client, append(args, "--list-extensions", "--show-versions")...)
+	if !strings.Contains(installed, pinned) {
+		t.Fatalf("client does not list the installed pinned extension: %s", installed)
+	}
 	matches, err := filepath.Glob(filepath.Join(extDir, "usernamehw.errorlens-*"))
-	if err != nil || len(matches) == 0 {
+	if err != nil || len(matches) != 1 {
 		t.Fatalf("no usernamehw.errorlens-* directory under %s (matches %v, err %v)", extDir, matches, err)
 	}
-	t.Logf("%s installed the extension from the mirror: %v", client, matches)
+	vsxCheckInstalledManifest(t, matches[0])
+}
+
+func vsxGalleryEnvironment(base string) []string {
+	return []string{
+		"VSCODE_GALLERY_SERVICE_URL=" + base + "/vsx/gallery",
+		"VSCODE_GALLERY_ITEM_URL=" + base + "/vsx/item",
+		"VSCODE_GALLERY_CONTROL_URL=" + base + "/vsx/gallery/control",
+		"VSCODE_GALLERY_LATEST_URL_TEMPLATE=" + base + "/vsx/gallery/{publisher}/{name}/latest",
+		"VSCODE_GALLERY_EXTENSION_URL_TEMPLATE=" + base + "/vsx/assets/{publisher}/{name}/{version}/Microsoft.VisualStudio.Code.Manifest",
+		"VSCODE_GALLERY_RESOURCE_URL_TEMPLATE=" + base + "/vsx/assets/{publisher}/{name}/{version}/{path}",
+	}
+}
+
+func vsxCheckInstalledManifest(t *testing.T, dir string) {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Publisher string `json:"publisher"`
+		Name      string `json:"name"`
+		Version   string `json:"version"`
+		Main      string `json:"main"`
+	}
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Publisher != "usernamehw" || manifest.Name != "errorlens" || manifest.Version != errorLensVersion || manifest.Main == "" {
+		t.Fatalf("unexpected installed extension manifest: %s", body)
+	}
+	if _, err := os.Stat(filepath.Join(dir, manifest.Main)); err != nil {
+		t.Fatalf("installed extension entry point is missing: %v", err)
+	}
 }

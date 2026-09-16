@@ -45,12 +45,13 @@ func testOCIModernCosign(t *testing.T, pair *testPair, oras, cosign, upstreamHos
 		"--bundle", "attestation.sigstore.json", upstreamRepo+"@"+digest)
 
 	collectOCIArtifact(t, pair, "artifacts/modern-cosign:v1")
+	rx := newReceiver(t, pair.HighURL)
 	highRepo := pair.HighHost + "/" + ociFixtureRegistryName + "/artifacts/modern-cosign"
 	// These real Cosign registry commands must discover native bundles through
 	// high. The fully isolated verification below is the network-boundary proof.
-	run(t, dir, env, cosign, "verify", "--key", "trusted.pub", "--allow-http-registry",
+	rx.Run(t, dir, env, cosign, "verify", "--key", "trusted.pub", "--allow-http-registry",
 		"--new-bundle-format=true", "--insecure-ignore-tlog", "--offline", highRepo+"@"+digest)
-	run(t, dir, env, cosign, "verify-attestation", "--key", "trusted.pub", "--allow-http-registry",
+	rx.Run(t, dir, env, cosign, "verify-attestation", "--key", "trusted.pub", "--allow-http-registry",
 		"--new-bundle-format=true", "--insecure-ignore-tlog", "--offline", "--type", cosignFixturePredicate, highRepo+"@"+digest)
 
 	// Only public keys and bytes obtained from high enter this directory. Private
@@ -59,12 +60,12 @@ func testOCIModernCosign(t *testing.T, pair *testPair, oras, cosign, upstreamHos
 	for _, key := range []string{"trusted.pub", "wrong.pub"} {
 		ociWriteFile(t, filepath.Join(verifyDir, key), readOCIFile(t, filepath.Join(dir, key)))
 	}
-	run(t, verifyDir, env, oras, "manifest", "fetch", "--plain-http", "--output", "root.json", highRepo+"@"+digest)
+	rx.Run(t, verifyDir, env, oras, "manifest", "fetch", "--plain-http", "--output", "root.json", highRepo+"@"+digest)
 	if got := ociManifestDigest(t, filepath.Join(verifyDir, "root.json")); got != digest {
 		t.Fatalf("high manifest digest = %s, want %s", got, digest)
 	}
 	ociWriteFile(t, filepath.Join(verifyDir, "tampered-root.json"), append(readOCIFile(t, filepath.Join(verifyDir, "root.json")), '\n'))
-	bundles := fetchHighCosignBundles(t, verifyDir, env, oras, highRepo, digest)
+	bundles := fetchHighCosignBundles(t, rx, verifyDir, env, oras, highRepo, digest)
 	for _, tc := range []struct {
 		name, predicate, source string
 	}{
@@ -112,9 +113,9 @@ func testOCIModernCosign(t *testing.T, pair *testPair, oras, cosign, upstreamHos
 
 // fetchHighCosignBundles checks native OCI subjects, predicate annotations,
 // descriptors, and exact content hashes before returning high-side bundle files.
-func fetchHighCosignBundles(t *testing.T, dir string, env []string, oras, repo, rootDigest string) map[string]string {
+func fetchHighCosignBundles(t *testing.T, rx *receiver, dir string, env []string, oras, repo, rootDigest string) map[string]string {
 	t.Helper()
-	discovered := runStdout(t, dir, env, oras, "discover", "--plain-http", "--format", "json", repo+"@"+rootDigest)
+	discovered := rx.RunStdout(t, dir, env, oras, "discover", "--plain-http", "--format", "json", repo+"@"+rootDigest)
 	var root ociDiscoveryNode
 	if err := json.Unmarshal([]byte(discovered), &root); err != nil {
 		t.Fatal(err)
@@ -124,7 +125,7 @@ func fetchHighCosignBundles(t *testing.T, dir string, env []string, oras, repo, 
 	}
 	bundles := make(map[string]string, 2)
 	for _, referrer := range root.Referrers {
-		manifest := runStdout(t, dir, env, oras, "manifest", "fetch", "--plain-http", repo+"@"+referrer.Digest)
+		manifest := rx.RunStdout(t, dir, env, oras, "manifest", "fetch", "--plain-http", repo+"@"+referrer.Digest)
 		var m struct {
 			ArtifactType string            `json:"artifactType"`
 			Annotations  map[string]string `json:"annotations"`
@@ -147,7 +148,7 @@ func fetchHighCosignBundles(t *testing.T, dir string, env []string, oras, repo, 
 		}
 		layer := m.Layers[0]
 		filename := strings.TrimPrefix(layer.Digest, "sha256:") + ".sigstore.json"
-		run(t, dir, env, oras, "blob", "fetch", "--plain-http", "--output", filename, repo+"@"+layer.Digest)
+		rx.Run(t, dir, env, oras, "blob", "fetch", "--plain-http", "--output", filename, repo+"@"+layer.Digest)
 		if got := ociManifestDigest(t, filepath.Join(dir, filename)); got != layer.Digest ||
 			int64(len(readOCIFile(t, filepath.Join(dir, filename)))) != layer.Size {
 			t.Fatalf("high bundle does not match descriptor %s", layer.Digest)

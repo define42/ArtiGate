@@ -16,6 +16,7 @@ import (
 // high side's own /healthz over HTTP.
 func TestPython(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 	python := requireTool(t, "python3")
 
 	res := stack.Collect(t, "python", map[string]any{
@@ -29,9 +30,9 @@ func TestPython(t *testing.T) {
 
 	tmp := t.TempDir()
 	venv := filepath.Join(tmp, "venv")
-	run(t, tmp, nil, python, "-m", "venv", venv)
+	rx.Run(t, tmp, nil, python, "-m", "venv", venv)
 	pipEnv := []string{"PIP_DISABLE_PIP_VERSION_CHECK=1", "PIP_NO_INPUT=1"}
-	run(t, tmp, pipEnv, filepath.Join(venv, "bin", "pip"), "install",
+	rx.Run(t, tmp, pipEnv, filepath.Join(venv, "bin", "pip"), "install",
 		"--no-cache-dir",
 		"--index-url", stack.HighURL+"/simple/",
 		"requests=="+requestsVersion)
@@ -41,7 +42,7 @@ func TestPython(t *testing.T) {
 r = requests.get(%q, timeout=10)
 print(r.status_code, r.text.strip())
 `, stack.HighURL+"/healthz"))
-	out := runStdout(t, tmp, nil, filepath.Join(venv, "bin", "python"), "main.py")
+	out := rx.RunStdout(t, tmp, nil, filepath.Join(venv, "bin", "python"), "main.py")
 	if strings.TrimSpace(out) != "200 ok" {
 		t.Fatalf("main.py printed %q, want %q", strings.TrimSpace(out), "200 ok")
 	}
@@ -61,13 +62,15 @@ const termcolorSdistVersion = "1.1.0"
 // it would against PyPI.
 func TestPythonSDist(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 	python := requireTool(t, "python3")
 
 	res := stack.Collect(t, "python", map[string]any{
-		"sdists": []string{"termcolor==" + termcolorSdistVersion},
+		"sdists":       []string{"termcolor==" + termcolorSdistVersion},
+		"requirements": []string{"setuptools==75.6.0", "wheel==0.45.1"},
 	})
-	if res.ExportedModules != 1 {
-		t.Fatalf("expected exactly the pinned sdist project, got %d unit(s)", res.ExportedModules)
+	if res.ExportedModules != 3 {
+		t.Fatalf("expected the sdist and two build tools, got %d unit(s)", res.ExportedModules)
 	}
 	stack.WaitImported(t, "python", res.Sequence)
 
@@ -80,17 +83,17 @@ func TestPythonSDist(t *testing.T) {
 
 	tmp := t.TempDir()
 	venv := filepath.Join(tmp, "venv")
-	run(t, tmp, nil, python, "-m", "venv", venv)
+	rx.Run(t, tmp, nil, python, "-m", "venv", venv)
 	pipEnv := []string{"PIP_DISABLE_PIP_VERSION_CHECK=1", "PIP_NO_INPUT=1"}
-	// A real air-gapped client builds sdists with its own preinstalled build
-	// tooling; model that by seeding setuptools from the public index and
-	// building without isolation — the mirror only has to serve the sdist.
-	run(t, tmp, pipEnv, filepath.Join(venv, "bin", "pip"), "install", "--no-cache-dir", "setuptools")
-	run(t, tmp, pipEnv, filepath.Join(venv, "bin", "pip"), "install",
+	// Build tools also cross the diode: even bootstrapping an sdist consumer
+	// must work with an empty environment and only the high side reachable.
+	rx.Run(t, tmp, pipEnv, filepath.Join(venv, "bin", "pip"), "install", "--no-cache-dir",
+		"--index-url", stack.HighURL+"/simple/", "setuptools==75.6.0", "wheel==0.45.1")
+	rx.Run(t, tmp, pipEnv, filepath.Join(venv, "bin", "pip"), "install",
 		"--no-cache-dir", "--no-deps", "--no-build-isolation",
 		"--index-url", stack.HighURL+"/simple/",
 		"termcolor=="+termcolorSdistVersion)
-	out := runStdout(t, tmp, nil, filepath.Join(venv, "bin", "python"), "-c",
+	out := rx.RunStdout(t, tmp, nil, filepath.Join(venv, "bin", "python"), "-c",
 		`import termcolor; print(termcolor.colored("ok", "green"))`)
 	if !strings.Contains(out, "ok") {
 		t.Fatalf("termcolor did not import from the mirrored sdist: %q", out)

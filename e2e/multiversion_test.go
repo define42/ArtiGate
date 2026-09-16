@@ -76,6 +76,7 @@ func TestNpmMultiVersionAccumulation(t *testing.T) {
 	// The real npm installs the OLDER version specifically, resolving it from
 	// the accumulated packument and re-verifying its integrity against the
 	// tarball the first bundle delivered.
+	rx := newReceiver(t, p.HighURL)
 	tmp := t.TempDir()
 	proj := filepath.Join(tmp, "proj")
 	writeFile(t, filepath.Join(proj, "package.json"), `{"name":"e2e-consumer","version":"1.0.0","private":true}`)
@@ -86,8 +87,8 @@ fund=false
 update-notifier=false
 `, p.HighURL, filepath.Join(tmp, "npm-cache")))
 	env := []string{"HOME=" + filepath.Join(tmp, "home")}
-	run(t, proj, env, npm, "install", "left-pad@"+leftPadOldVersion, "--no-audit", "--no-fund")
-	out := runStdout(t, proj, env, node, "-e",
+	rx.Run(t, proj, env, npm, "install", "left-pad@"+leftPadOldVersion, "--no-audit", "--no-fund")
+	out := rx.RunStdout(t, proj, env, node, "-e",
 		`const lp=require('left-pad'); console.log(require('left-pad/package.json').version, lp('42',5,'0'))`)
 	if strings.TrimSpace(out) != leftPadOldVersion+" 00042" {
 		t.Fatalf("node printed %q, want %q", strings.TrimSpace(out), leftPadOldVersion+" 00042")
@@ -136,6 +137,7 @@ func TestRubyGemsMultiVersionAccumulation(t *testing.T) {
 
 	bundle := requireTool(t, "bundle")
 
+	rx := newReceiver(t, p.HighURL)
 	tmp := t.TempDir()
 	proj := filepath.Join(tmp, "proj")
 	// Pin the OLDER version: bundler resolves it from the accumulated compact
@@ -149,8 +151,8 @@ func TestRubyGemsMultiVersionAccumulation(t *testing.T) {
 		"BUNDLE_PATH=" + filepath.Join(tmp, "vendor"),
 		"BUNDLE_APP_CONFIG=" + filepath.Join(tmp, "bundleconfig"),
 	}
-	run(t, proj, env, bundle, "install")
-	out := runStdout(t, proj, env, bundle, "exec", "rake", "--version")
+	rx.Run(t, proj, env, bundle, "install")
+	out := rx.RunStdout(t, proj, env, bundle, "exec", "rake", "--version")
 	if !strings.Contains(out, rakeOldVersion) {
 		t.Fatalf("bundle exec rake --version printed %q, want it to contain %q", strings.TrimSpace(out), rakeOldVersion)
 	}

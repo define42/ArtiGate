@@ -31,6 +31,8 @@ type Stack struct {
 
 	low  *server
 	high *server
+
+	receiverBuild receiverBuilder
 }
 
 var stack *Stack

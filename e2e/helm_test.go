@@ -18,6 +18,7 @@ const certManagerVersion = "v1.16.2"
 // renders it.
 func TestHelm(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 	helm := requireTool(t, "helm")
 
 	res := stack.Collect(t, "helm", map[string]any{
@@ -52,17 +53,17 @@ func TestHelm(t *testing.T) {
 		"HELM_CACHE_HOME=" + filepath.Join(tmp, "cache"),
 		"HELM_DATA_HOME=" + filepath.Join(tmp, "data"),
 	}
-	run(t, tmp, helmEnv, helm, "repo", "add", "mirror", stack.HighURL+"/helm/jetstack")
-	run(t, tmp, helmEnv, helm, "repo", "update")
+	rx.Run(t, tmp, helmEnv, helm, "repo", "add", "mirror", stack.HighURL+"/helm/jetstack")
+	rx.Run(t, tmp, helmEnv, helm, "repo", "update")
 
 	// helm pull fetches the archive through the repo index; template renders
 	// it — proof the mirrored chart is intact and usable. helm saves the file
 	// under the index URL's basename, so glob both separator shapes.
-	run(t, tmp, helmEnv, helm, "pull", "mirror/cert-manager", "--version", certManagerVersion, "-d", tmp)
+	rx.Run(t, tmp, helmEnv, helm, "pull", "mirror/cert-manager", "--version", certManagerVersion, "-d", tmp)
 	if matches, err := filepath.Glob(filepath.Join(tmp, "cert-manager*.tgz")); err != nil || len(matches) != 1 {
 		t.Fatalf("helm pull left %v (err %v), want one chart archive", matches, err)
 	}
-	out := run(t, tmp, helmEnv, helm, "template", "test-release", "mirror/cert-manager",
+	out := rx.Run(t, tmp, helmEnv, helm, "template", "test-release", "mirror/cert-manager",
 		"--version", certManagerVersion)
 	if !strings.Contains(out, "kind: Deployment") {
 		t.Fatalf("helm template rendered no Deployment:\n%s", out[:min(len(out), 2048)])

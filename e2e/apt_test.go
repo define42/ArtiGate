@@ -3,23 +3,18 @@
 package e2e
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// TestApt mirrors the GitHub CLI's apt repository (a deliberately small
-// archive: one package, newest version only) and consumes the regenerated
-// mirror with a real, fully sandboxed apt-get: update parses the rebuilt
-// Release/Packages indexes, download fetches the .deb and verifies its
-// SHA256 against them. The mirror is unsigned, hence [trusted=yes].
+// TestApt performs a real package installation in a fresh Debian receiver.
+// Git is part of the bootstrapped toolchain because gh declares it as a
+// dependency; gh itself and all APT metadata must come from high after isolation.
 func TestApt(t *testing.T) {
 	stack.Prepare(t)
-	aptGet := requireTool(t, "apt-get")
-	dpkgDeb := requireTool(t, "dpkg-deb")
-
+	image := buildNativePackageReceiver(t, aptReceiverBase, `RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN ! command -v gh
+`)
 	res := stack.Collect(t, "apt", map[string]any{
 		"name":          "ghcli",
 		"uri":           "https://cli.github.com/packages",
@@ -29,41 +24,22 @@ func TestApt(t *testing.T) {
 	})
 	stack.WaitImported(t, "apt", res.Sequence)
 
-	code, body := httpGet(t, stack.HighURL+"/ui/api/repos?eco=apt")
-	if code != 200 || !strings.Contains(string(body), `"ghcli"`) {
-		t.Fatalf("high side does not list the ghcli apt mirror (HTTP %d): %s", code, body)
+	receiver := newReceiver(t, stack.HighURL)
+	repositories := receiver.RunStdout(t, "", nil, requireTool(t, "curl"), "-fsS", stack.HighURL+"/ui/api/repos?eco=apt")
+	if !strings.Contains(repositories, `"ghcli"`) {
+		t.Fatalf("high side does not list the ghcli APT mirror: %s", repositories)
 	}
-
-	tmp := t.TempDir()
-	for _, d := range []string{
-		filepath.Join("state", "lists", "partial"),
-		filepath.Join("cache", "archives", "partial"),
-		"dl",
-	} {
-		if err := os.MkdirAll(filepath.Join(tmp, d), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", d, err)
-		}
-	}
-	writeFile(t, filepath.Join(tmp, "sources.list"),
-		fmt.Sprintf("deb [trusted=yes arch=amd64] %s/apt/ghcli stable main\n", stack.HighURL))
-	opts := []string{
-		"-o", "Dir::Etc::sourcelist=" + filepath.Join(tmp, "sources.list"),
-		"-o", "Dir::Etc::sourceparts=/dev/null",
-		"-o", "Dir::State=" + filepath.Join(tmp, "state"),
-		"-o", "Dir::Cache=" + filepath.Join(tmp, "cache"),
-		"-o", "Dir::Etc::trusted=/dev/null",
-		"-o", "Dir::Etc::trustedparts=/dev/null",
-		"-o", "Acquire::Retries=2",
-	}
-	run(t, tmp, nil, aptGet, append(opts, "update")...)
-	run(t, filepath.Join(tmp, "dl"), nil, aptGet, append(opts, "download", "gh")...)
-
-	debs, err := filepath.Glob(filepath.Join(tmp, "dl", "gh_*.deb"))
-	if err != nil || len(debs) != 1 {
-		t.Fatalf("expected exactly one downloaded gh .deb, got %v (err %v)", debs, err)
-	}
-	out := run(t, tmp, nil, dpkgDeb, "--info", debs[0])
-	if !strings.Contains(out, "Package: gh") {
-		t.Fatalf("dpkg-deb --info does not describe package gh:\n%s", out)
+	out := receiver.Container(t, image, nil, "sh", "-ec", `
+test ! -e /var/lib/dpkg/info/gh.list
+rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*
+printf 'deb [trusted=yes arch=amd64] %s/apt/ghcli stable main\n' "$1" > /etc/apt/sources.list
+apt-get -o Acquire::Retries=0 -o Acquire::Languages=none update
+apt-get -o Acquire::Retries=0 install -y --no-install-recommends gh
+test "$(dpkg-query -W -f='${Status}' gh)" = 'install ok installed'
+dpkg --verify gh
+gh --version
+`, "artigate-apt-receiver", stack.HighURL)
+	if !strings.Contains(out, "gh version ") {
+		t.Fatalf("installed APT package did not execute:\n%s", out)
 	}
 }

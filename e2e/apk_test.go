@@ -70,13 +70,14 @@ func TestApk(t *testing.T) {
 	t.Cleanup(func() { _, _ = runAllowFail(t, "", nil, "docker", "rmi", "-f", ref) })
 	run(t, "", nil, "docker", "pull", ref)
 
-	// --network host lets apk inside the container reach the loopback high
-	// side. The regenerated index is unsigned (no --apk-rsa-key in this
-	// stack), so the documented --allow-untrusted flow applies.
+	// Only the high-side endpoint is reachable inside the receiver. The
+	// regenerated index is unsigned, so the documented --allow-untrusted
+	// flow applies.
 	script := fmt.Sprintf(
 		"echo http://%s%s > /etc/apk/repositories && apk update --allow-untrusted && apk add --allow-untrusted %s && apk info -e %s",
-		stack.HighHost, repoPath, apkE2EPackage, apkE2EPackage)
-	out := run(t, "", nil, "docker", "run", "--rm", "--network", "host", ref, "sh", "-ec", script)
+		stack.HighHost, repoPath, apkE2EPackage, apkE2EPackage,
+	)
+	out := newReceiver(t, stack.HighURL).Container(t, ref, nil, "sh", "-ec", script)
 	if !strings.Contains(out, "Installing "+apkE2EPackage+" ("+version) {
 		t.Fatalf("apk add did not install %s %s:\n%s", apkE2EPackage, version, out)
 	}
@@ -113,8 +114,8 @@ func apkE2EMiniUpstream(t *testing.T) (*httptest.Server, string) {
 	return srv, version
 }
 
-// apkE2EFetch downloads one CDN artifact, skipping the test on upstream
-// weather (the same policy Collect applies) and failing on anything else.
+// apkE2EFetch downloads one CDN artifact. Unavailable upstreams fail required
+// coverage; a local optional run may skip under the same policy as Collect.
 func apkE2EFetch(t *testing.T, url string) []byte {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -126,14 +127,14 @@ func apkE2EFetch(t *testing.T, url string) []byte {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if isTransientUpstreamError(err.Error()) {
-			t.Skipf("alpine CDN unavailable: %v", err)
+			requiredUnavailable(t, "alpine CDN unavailable: %v", err)
 		}
 		t.Fatalf("GET %s: %v", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		if isTransientUpstreamError(fmt.Sprintf("status %d", resp.StatusCode)) {
-			t.Skipf("alpine CDN answered %d for %s", resp.StatusCode, url)
+			requiredUnavailable(t, "alpine CDN answered %d for %s", resp.StatusCode, url)
 		}
 		t.Fatalf("GET %s: HTTP %d", url, resp.StatusCode)
 	}

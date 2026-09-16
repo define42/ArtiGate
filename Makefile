@@ -30,7 +30,17 @@ cover: test ## Show per-function coverage from the last test run
 
 .PHONY: e2e
 e2e: ## Run the end-to-end suite (real upstreams + real client tools; see e2e/doc.go)
-	go test -tags e2e -v -count=1 -timeout 25m ./e2e
+	go test -tags e2e -v -count=1 -timeout 45m ./e2e
+
+E2E_RESULTS ?= /tmp/artigate-e2e-results.jsonl
+E2E_REPORT ?= /tmp/artigate-e2e-coverage.json
+
+.PHONY: e2e-strict
+e2e-strict: ## Run every required E2E flow with race detection and reject skips
+	python3 -B -m unittest discover -s e2e -p check_report_test.py
+	@status=0; ARTIGATE_E2E_REQUIRE_ALL=1 go test -tags e2e -json -race -count=1 -timeout 45m ./e2e > "$(E2E_RESULTS)" || status=$$?; \
+	python3 e2e/check_report.py --input "$(E2E_RESULTS)" --report "$(E2E_REPORT)" || status=$$?; \
+	exit $$status
 
 .PHONY: lint
 lint: ## Run golangci-lint using .golangci.yml

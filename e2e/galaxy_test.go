@@ -19,6 +19,7 @@ const posixVersion = "1.5.4"
 // real ansible-galaxy client.
 func TestGalaxy(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 
 	res := stack.Collect(t, "galaxy", map[string]any{
 		"collections": []string{"ansible.posix@" + posixVersion},
@@ -65,7 +66,7 @@ func TestGalaxy(t *testing.T) {
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	run(t, tmp, []string{"HOME=" + home}, ag,
+	rx.Run(t, tmp, []string{"HOME=" + home}, ag,
 		"collection", "install", "ansible.posix:"+posixVersion,
 		"-s", stack.HighURL+"/galaxy/",
 		"-p", filepath.Join(tmp, "collections"),

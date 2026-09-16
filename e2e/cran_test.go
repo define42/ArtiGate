@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,10 +10,11 @@ import (
 
 // TestCRAN mirrors a real package (praise: pure R, zero dependencies beyond
 // base) from the public CRAN mirror across the diode, checks the regenerated
-// PACKAGES index, and — when an R interpreter is installed — installs the
-// package from the mirror with the real install.packages.
+// PACKAGES index, and installs the package from the mirror with the real
+// install.packages client.
 func TestCRAN(t *testing.T) {
 	stack.Prepare(t)
+	rscript := requireTool(t, "Rscript")
 
 	res := stack.Collect(t, "cran", map[string]any{"packages": []string{"praise"}})
 	if res.ExportedModules < 1 {
@@ -30,13 +30,6 @@ func TestCRAN(t *testing.T) {
 		t.Fatalf("regenerated PACKAGES = %d %s", code, body)
 	}
 
-	// Client step: install from the mirror with real R when it is available.
-	// The protocol assertions above already validated the mirror, so a
-	// missing interpreter only skips the client half.
-	rscript, err := exec.LookPath("Rscript")
-	if err != nil {
-		t.Skip("Rscript not installed; mirrored repository verified over HTTP only")
-	}
 	tmp := t.TempDir()
 	lib := filepath.Join(tmp, "library")
 	writeFile(t, filepath.Join(tmp, "install.R"), `
@@ -47,7 +40,8 @@ install.packages("praise", lib = lib, repos = repo, type = "source", quiet = TRU
 library(praise, lib.loc = lib)
 cat(class(praise()), "\n")
 `)
-	out := run(t, tmp, []string{"HOME=" + tmp}, rscript, filepath.Join(tmp, "install.R"), lib, stack.HighURL+"/cran")
+	out := newReceiver(t, stack.HighURL).Run(t, tmp, []string{"HOME=" + tmp},
+		rscript, filepath.Join(tmp, "install.R"), lib, stack.HighURL+"/cran")
 	if !strings.Contains(out, "character") {
 		t.Fatalf("praise() did not run from the mirrored install:\n%s", out)
 	}

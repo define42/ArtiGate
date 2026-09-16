@@ -46,7 +46,8 @@ func TestOCIDistributionConformance(t *testing.T) {
 	gateway := newOCIConformanceGateway(t, pair, upstream)
 	server := httptest.NewServer(gateway)
 	t.Cleanup(server.Close)
-	env := append(ociClientEnv(t, t.TempDir()),
+	env := append(
+		ociClientEnv(t, t.TempDir()),
 		"OCI_ROOT_URL="+server.URL,
 		"OCI_NAMESPACE="+ociFixtureRegistryName+"/"+ociConformanceRepository,
 		"OCI_TEST_PULL=1", "OCI_TEST_CONTENT_DISCOVERY=1",
@@ -55,7 +56,7 @@ func TestOCIDistributionConformance(t *testing.T) {
 		"OCI_USERNAME=", "OCI_PASSWORD=", "OCI_AUTH_SCOPE=",
 		"OCI_REPORT_DIR="+reports, "OCI_HIDE_SKIPPED_WORKFLOWS=1", "OCI_DEBUG=0",
 	)
-	out, err := runAllowFail(t, reports, env, suite, "-test.v", "-ginkgo.no-color")
+	out, err := newReceiver(t, server.URL).RunAllowFail(t, reports, env, suite, "-test.v", "-ginkgo.no-color")
 	ociWriteFile(t, filepath.Join(reports, "suite.log"), []byte(out))
 	gateway.assertCoverage(t)
 	for _, name := range []string{"junit.xml", "report.html"} {

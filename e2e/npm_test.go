@@ -15,6 +15,7 @@ import (
 // node. left-pad@1.3.0 is tiny, dependency-free, and frozen forever.
 func TestNpm(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 	npm := requireTool(t, "npm")
 	node := requireTool(t, "node")
 
@@ -42,8 +43,8 @@ update-notifier=false
 	// A private HOME keeps the user's ~/.npmrc (and its registry) out of
 	// the picture.
 	env := []string{"HOME=" + filepath.Join(tmp, "home")}
-	run(t, proj, env, npm, "install", "left-pad@1.3.0", "--no-audit", "--no-fund")
-	out := runStdout(t, proj, env, node, "-e", `console.log(require('left-pad')('42', 5, '0'))`)
+	rx.Run(t, proj, env, npm, "install", "left-pad@1.3.0", "--no-audit", "--no-fund")
+	out := rx.RunStdout(t, proj, env, node, "-e", `console.log(require('left-pad')('42', 5, '0'))`)
 	if strings.TrimSpace(out) != "00042" {
 		t.Fatalf("node printed %q, want %q", strings.TrimSpace(out), "00042")
 	}

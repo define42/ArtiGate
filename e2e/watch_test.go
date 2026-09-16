@@ -28,12 +28,12 @@ func TestWatchScheduler(t *testing.T) {
 		`{"gems":["rake@`+rakeNewVersion+`"]}`, 3600)
 
 	// Wait for the scheduler to run the watch and record an outcome. A busy or
-	// throttled rubygems.org is upstream weather, not a scheduler regression, so
-	// a transient failure skips rather than fails.
+	// throttled rubygems.org may skip a local run, but required CI coverage
+	// must fail when the scheduled flow cannot complete.
 	w := waitWatchRan(t, p.LowURL, id)
 	if w.LastStatus != "ok" {
 		if isTransientUpstreamError(w.LastMessage) {
-			t.Skipf("watch collect hit transient upstream trouble: %s", w.LastMessage)
+			requiredUnavailable(t, "watch collect hit transient upstream trouble: %s", w.LastMessage)
 		}
 		t.Fatalf("scheduled watch did not succeed: status=%q message=%q", w.LastStatus, w.LastMessage)
 	}

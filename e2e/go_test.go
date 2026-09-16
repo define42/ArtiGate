@@ -18,6 +18,7 @@ import (
 // the mirror alone.
 func TestGoModules(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 	goBin := requireTool(t, "go")
 
 	res := stack.Collect(t, "go", map[string]any{
@@ -80,8 +81,8 @@ func main() {
 		"GOMODCACHE=" + filepath.Join(tmp, "gomodcache"),
 		"GOCACHE=" + filepath.Join(tmp, "gocache"),
 	}
-	run(t, proj, env, goBin, "mod", "tidy")
-	out := runStdout(t, proj, env, goBin, "run", ".")
+	rx.Run(t, proj, env, goBin, "mod", "tidy")
+	out := rx.RunStdout(t, proj, env, goBin, "run", ".")
 	const want = "Don't communicate by sharing memory, share memory by communicating."
 	if strings.TrimSpace(out) != want {
 		t.Fatalf("go run printed %q, want %q", strings.TrimSpace(out), want)

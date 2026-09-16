@@ -21,6 +21,7 @@ const cfgIfVersion = "1.0.0"
 // resolution, download, and checksum verification all go through ArtiGate.
 func TestCrates(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 	cargo := requireTool(t, "cargo")
 
 	res := stack.Collect(t, "crates", map[string]any{
@@ -73,7 +74,7 @@ registry = "sparse+%s/crates/index/"
 		"CARGO_HOME=" + filepath.Join(tmp, "cargo-home"), // fresh index/download caches
 		"CARGO_TERM_COLOR=never",
 	}
-	out := runStdout(t, tmp, cargoEnv, cargo, "run", "--quiet")
+	out := rx.RunStdout(t, tmp, cargoEnv, cargo, "run", "--quiet")
 	if strings.TrimSpace(out) != "cfg-if via mirror: unix" {
 		t.Fatalf("cargo run printed %q", strings.TrimSpace(out))
 	}

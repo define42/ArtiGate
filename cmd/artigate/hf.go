@@ -1592,6 +1592,10 @@ func (s *HighServer) handleHFBlob(w http.ResponseWriter, r *http.Request, model 
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Docker-Content-Digest", digest)
+	// Ollama resolves a direct download URL before issuing parallel ranges,
+	// including on a 200 response. Keep that URL on this verified blob route;
+	// the relative path preserves the receiver's host and TLS scheme.
+	w.Header().Set("Location", r.URL.EscapedPath())
 	http.ServeFile(w, r, abs)
 }
 

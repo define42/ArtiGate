@@ -1,8 +1,8 @@
 package main
 
 // Java (Maven 2) ecosystem adapter. The low side delegates to
-// `mvn dependency:go-offline`, which resolves a project's full dependency and
-// plugin closure into an isolated local repository; that repository is already
+// a pinned Maven dependency-plugin go-offline goal, which resolves a project's
+// dependency and plugin closure into an isolated local repository; that repository is already
 // in Maven 2 layout, so it is packed directly into the same numbered, signed
 // ArtiGate bundle used for Go and Python. The high side serves the artifacts as
 // a static Maven 2 repository under /maven/ and generates maven-metadata.xml on
@@ -488,8 +488,8 @@ func (s *LowServer) HandleMavenCollect(ctx context.Context, r *http.Request) (Ex
 	return s.CollectMaven(ctx, req)
 }
 
-// CollectMaven resolves the requested Maven closure with `mvn
-// dependency:go-offline` into an isolated local repository and packs it into a
+// CollectMaven resolves the requested Maven closure with a pinned dependency
+// plugin into an isolated local repository and packs it into a
 // signed bundle on the shared ArtiGate sequence stream.
 func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (ExportResult, error) {
 	pom, err := mavenProjectPom(req)
@@ -524,9 +524,13 @@ func (s *LowServer) CollectMaven(ctx context.Context, req MavenCollectRequest) (
 		return ExportResult{}, err
 	}
 
-	emitProgress(ctx, "Running mvn dependency:go-offline to resolve the closure…")
+	// Maven 3.8's shorthand can select dependency-plugin 2.8, which omits
+	// transitive build-plugin artifacts and POMs needed by a clean receiver.
+	// Resolve with a fixed modern goal; never execute the caller's build.
+	const offlineGoal = "org.apache.maven.plugins:maven-dependency-plugin:3.11.0:go-offline"
+	emitProgress(ctx, "Running mvn %s to resolve the closure…", offlineGoal)
 	if _, err := s.runMaven(ctx, stageRoot, "-B", "-f", pomPath,
-		"dependency:go-offline", "-Dmaven.repo.local="+localRepo); err != nil {
+		offlineGoal, "-Dmaven.repo.local="+localRepo); err != nil {
 		return ExportResult{}, err
 	}
 

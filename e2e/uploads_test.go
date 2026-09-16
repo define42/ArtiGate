@@ -48,7 +48,7 @@ func TestUploads(t *testing.T) {
 
 	servedURL := stack.HighURL + "/uploads/e2e-docs/report.bin"
 	dl := filepath.Join(tmp, "downloaded.bin")
-	run(t, tmp, nil, curl, "-fsS", "-o", dl, servedURL)
+	newReceiver(t, stack.HighURL).Run(t, tmp, nil, curl, "-fsS", "-o", dl, servedURL)
 	got, err := os.ReadFile(dl)
 	if err != nil {
 		t.Fatalf("reading downloaded file: %v", err)

@@ -1,6 +1,6 @@
 # Java (Maven)
 
-ArtiGate mirrors Java artifacts by delegating to a real Maven install on the low side — `mvn dependency:go-offline` resolves a project's full dependency **and plugin** closure into an isolated local repository, which is packed verbatim into a signed bundle. The high side then serves those files as a static Maven 2 repository under `/maven/`, generating `maven-metadata.xml` on the fly.
+ArtiGate mirrors Java artifacts by delegating to a real Maven install on the low side. A pinned Maven Dependency Plugin `go-offline` goal resolves the project's dependency **and plugin** closure into an isolated local repository, which is packed verbatim into a signed bundle. The high side then serves those files as a static Maven 2 repository under `/maven/`, generating `maven-metadata.xml` on the fly.
 
 Because the resolved local repository is already in Maven 2 layout, ArtiGate maps it directly onto the paths the high side serves — no repacking, no rewriting.
 
@@ -11,7 +11,7 @@ Because the resolved local repository is already in Maven 2 layout, ArtiGate map
 
 | Side | Role | Mechanism |
 |---|---|---|
-| **Low** | collect-only | Runs `mvn -B dependency:go-offline -Dmaven.repo.local=…`, walks the resolved repo, packs it into a numbered, Ed25519-signed bundle on the `maven` stream |
+| **Low** | collect-only | Runs the pinned dependency-plugin `go-offline` goal, walks the isolated repo, and packs it into a numbered, Ed25519-signed bundle on the `maven` stream |
 | **High** | serve-only | Serves stored `.pom`/`.jar`/`.module` files (and their checksums) directly; computes `maven-metadata.xml` from the versions physically present |
 
 The low side never serves artifacts and the high side never invokes `mvn` or reaches upstream — the two halves only ever exchange signed bundles across the diode. See [Architecture](../architecture.md).
@@ -119,7 +119,7 @@ The same policy applies to every dependency extracted from an uploaded `pom.xml`
 2. **Stage.** A temp dir is created under `<root>/maven/staging/collect-*` and the `pom.xml` is written into it. The local repository lives at `<stageRoot>/maven` so its Maven 2 layout maps directly onto the `maven/…` paths the high side serves.
 3. **Resolve.** ArtiGate runs, in batch mode with an isolated local repo:
    ```bash
-   mvn -B -f <stageRoot>/pom.xml dependency:go-offline -Dmaven.repo.local=<stageRoot>/maven
+   mvn -B -f <stageRoot>/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.11.0:go-offline -Dmaven.repo.local=<stageRoot>/maven
    ```
    `dependency:go-offline` pulls the full transitive dependency and plugin closure. The invocation has a **15-minute** timeout; on failure the last 4096 bytes of `mvn` output are returned as diagnostics.
 4. **Walk & filter.** The resolved repo is walked; each artifact file becomes a manifest entry. If nothing resolved, the collect errors with `maven resolution produced no artifacts` rather than emit an empty bundle.
@@ -127,6 +127,10 @@ The same policy applies to every dependency extracted from an uploaded `pom.xml`
 6. **Dedup & export.** If every resolved file was already exported on the `maven` stream, the collect is skipped (no sequence consumed). If only some are new, the signed bundle is a [delta](../architecture.md#export-deduplication-and-delta-bundles): its archive carries the new files and the rest ride as `prior` manifest references. `"force": true` bypasses the index for a full bundle.
 
 ### The `mvn` binary
+
+The low side requires Maven 3.6.3+ and JDK 8+. ArtiGate pins Dependency Plugin
+3.11.0 because older Maven installations can select plugin 2.8 for the shorthand
+goal and omit transitive build-plugin artifacts needed by a clean receiver.
 
 The low side delegates fetching to the `mvn` already installed on the host, run with the host's Maven settings, credentials, and network access — so its upstream repositories are whatever that host's Maven is configured to use.
 

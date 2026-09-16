@@ -66,9 +66,8 @@ const (
 // Collect runs one collect on the low side and returns the terminal
 // ExportResult. Progress is streamed into the test log. A failure that
 // looks like upstream weather (throttling, 5xx, timeouts) is retried once
-// and then skips the test — a real regression must not hide behind a busy
-// mirror, but a busy mirror must not page anyone either. Everything else
-// fails the test immediately.
+// and then fails required CI flows (or skips a local optional run).
+// Everything else fails the test immediately.
 func (s *Stack) Collect(t *testing.T, eco string, body any) ExportResult {
 	t.Helper()
 	res, err := s.collectOnce(t, eco, body)
@@ -77,7 +76,7 @@ func (s *Stack) Collect(t *testing.T, eco string, body any) ExportResult {
 		time.Sleep(transientBackoff)
 		res, err = s.collectOnce(t, eco, body)
 		if err != nil && isTransientUpstreamError(err.Error()) {
-			t.Skipf("collect %s: upstream unavailable after retry: %v", eco, err)
+			requiredUnavailable(t, "collect %s: upstream unavailable after retry: %v", eco, err)
 		}
 	}
 	if err != nil {

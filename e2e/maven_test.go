@@ -11,10 +11,9 @@ import (
 )
 
 // mavenPom drives both sides of the Maven test. The low side collects with
-// exactly this pom (its collector runs `mvn dependency:go-offline` over it
-// and bundles the entire resulting local repository, plugins included), and
-// the client builds the same pom against the mirror — so with the same mvn
-// binary on both sides the resolved closures are identical by construction.
+// a sanitized dependency-only form of this pom using its pinned go-offline
+// resolver. The isolated client builds the original pom from an empty local
+// repository, so missing transitive build-plugin jars or POMs fail the test.
 // Only elements the low side's pom sanitizer accepts may appear here:
 // coordinates, packaging, properties, and dependencies.
 const mavenPom = `<?xml version="1.0" encoding="UTF-8"?>
@@ -48,6 +47,7 @@ const commonsLang3Version = "3.17.0"
 // and runs it with plain java.
 func TestMaven(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 	mvn := requireTool(t, "mvn")
 	javaBin := requireTool(t, "java")
 
@@ -83,7 +83,7 @@ public class Main {
 
 	repo := filepath.Join(tmp, "m2repo")
 	env := []string{"HOME=" + filepath.Join(tmp, "home")}
-	run(t, proj, env, mvn, "-B", "--no-transfer-progress",
+	rx.Run(t, proj, env, mvn, "-B", "--no-transfer-progress",
 		"-s", filepath.Join(tmp, "settings.xml"),
 		"-Dmaven.repo.local="+repo,
 		"compile")
@@ -94,7 +94,7 @@ public class Main {
 		t.Fatalf("commons-lang3 jar missing from the client's local repo: %v", err)
 	}
 	classpath := filepath.Join(proj, "target", "classes") + string(os.PathListSeparator) + jar
-	out := runStdout(t, proj, nil, javaBin, "-cp", classpath, "e2e.Main")
+	out := rx.RunStdout(t, proj, nil, javaBin, "-cp", classpath, "e2e.Main")
 	if strings.TrimSpace(out) != "aRTIgATE e2e" {
 		t.Fatalf("java printed %q, want %q", strings.TrimSpace(out), "aRTIgATE e2e")
 	}

@@ -20,6 +20,7 @@ const newtonsoftVersion = "13.0.3"
 // v3 feed with the real dotnet SDK, the mirror configured as the only source.
 func TestNuget(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 	dotnet := requireTool(t, "dotnet")
 
 	res := stack.Collect(t, "nuget", map[string]any{
@@ -77,7 +78,7 @@ public static class Program
 
 	// dotnet run may prepend restore chatter on non-tty output, so match the
 	// program's line rather than the whole stream.
-	out := runStdout(t, tmp, nugetE2EEnv(tmp), dotnet, "run", "--project", "app.csproj")
+	out := rx.RunStdout(t, tmp, nugetE2EEnv(tmp), dotnet, "run", "--project", "app.csproj")
 	if !strings.Contains(out, `{"mirror":"ok"}`) {
 		t.Fatalf("dotnet run printed %q", out)
 	}

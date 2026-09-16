@@ -16,6 +16,7 @@ import (
 // client, which re-verifies the injected dist shasum against the zip.
 func TestComposer(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 
 	res := stack.Collect(t, "composer", map[string]any{"packages": []string{"psr/container:2.0.2"}})
 	if res.ExportedModules != 1 {
@@ -56,9 +57,14 @@ func TestComposer(t *testing.T) {
 		"COMPOSER_CACHE_DIR=" + filepath.Join(tmp, "cache"),
 		"HOME=" + tmp,
 	}
-	run(t, proj, env, composer, "install", "--no-interaction", "--prefer-dist")
+	rx.Run(t, proj, env, composer, "install", "--no-interaction", "--prefer-dist")
 	installed := filepath.Join(proj, "vendor", "psr", "container", "composer.json")
 	if _, err := os.Stat(installed); err != nil {
 		t.Fatalf("installed package missing at %s: %v", installed, err)
+	}
+	out := rx.RunStdout(t, proj, env, requireTool(t, "php"), "-r",
+		`require 'vendor/autoload.php'; echo interface_exists('Psr\\Container\\ContainerInterface') ? 'mirror ok' : 'missing';`)
+	if out != "mirror ok" {
+		t.Fatalf("PHP could not load the mirrored package: %s", out)
 	}
 }

@@ -20,6 +20,7 @@ const gitMirrorRepo = "https://github.com/octocat/Hello-World.git"
 // integrity end to end), and ls-remote against the mirror.
 func TestGit(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 	git := requireTool(t, "git")
 
 	res := stack.Collect(t, "git", map[string]any{
@@ -42,20 +43,20 @@ func TestGit(t *testing.T) {
 	tmp := t.TempDir()
 	env := []string{"HOME=" + tmp, "GIT_TERMINAL_PROMPT=0"}
 	clone := filepath.Join(tmp, "clone")
-	run(t, tmp, env, git, "clone", stack.HighURL+"/git/hello.git", clone)
+	rx.Run(t, tmp, env, git, "clone", stack.HighURL+"/git/hello.git", clone)
 	if _, err := os.Stat(filepath.Join(clone, "README")); err != nil {
 		t.Fatalf("clone carries no README: %v", err)
 	}
-	if out := runStdout(t, clone, env, git, "-C", clone, "log", "--oneline"); strings.TrimSpace(out) == "" {
+	if out := rx.RunStdout(t, clone, env, git, "-C", clone, "log", "--oneline"); strings.TrimSpace(out) == "" {
 		t.Fatal("git log in the clone is empty")
 	}
 	// fsck re-hashes every object: proof the pure-Go pack pipeline delivered
 	// the repository bit-for-bit intact.
-	run(t, clone, env, git, "-C", clone, "fsck", "--strict")
+	rx.Run(t, clone, env, git, "-C", clone, "fsck", "--strict")
 
 	// ls-remote against the mirror lists exactly the refs the high side
 	// serves.
-	lsRemote := runStdout(t, tmp, env, git, "ls-remote", stack.HighURL+"/git/hello.git")
+	lsRemote := rx.RunStdout(t, tmp, env, git, "ls-remote", stack.HighURL+"/git/hello.git")
 	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
 		if !strings.Contains(lsRemote, line) {
 			t.Errorf("ls-remote misses %q:\n%s", line, lsRemote)

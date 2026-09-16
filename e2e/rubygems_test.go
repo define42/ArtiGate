@@ -21,6 +21,7 @@ const rakeVersion = "13.2.1"
 // ArtiGate.
 func TestRubyGems(t *testing.T) {
 	stack.Prepare(t)
+	rx := newReceiver(t, stack.HighURL)
 
 	res := stack.Collect(t, "rubygems", map[string]any{"gems": []string{"rake@" + rakeVersion}})
 	if res.ExportedModules != 1 {
@@ -59,8 +60,8 @@ func TestRubyGems(t *testing.T) {
 	}
 	// bundle install resolves against the mirror's compact index (bundler
 	// re-verifies each info line's checksum against the downloaded .gem).
-	run(t, proj, env, bundle, "install")
-	out := runStdout(t, proj, env, bundle, "exec", "rake", "--version")
+	rx.Run(t, proj, env, bundle, "install")
+	out := rx.RunStdout(t, proj, env, bundle, "exec", "rake", "--version")
 	if !strings.Contains(out, rakeVersion) {
 		t.Fatalf("bundle exec rake --version printed %q, want it to contain %q",
 			strings.TrimSpace(out), rakeVersion)
