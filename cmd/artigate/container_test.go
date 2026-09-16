@@ -426,6 +426,24 @@ func makeFakeArtifact(layerMediaType, layerContent, artifactType string, annotat
 	return art
 }
 
+// fakeArtifactWithSubject adds the native OCI relationship to a fixture.
+// Legacy cosign and BuildKit fixtures intentionally leave this field absent.
+func fakeArtifactWithSubject(t *testing.T, art fakeArtifact, subject ociDescriptor) fakeArtifact {
+	t.Helper()
+	var manifest map[string]any
+	if err := json.Unmarshal(art.manifest, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["subject"] = subject
+	var err error
+	art.manifest, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	art.digest = containerSHA(art.manifest)
+	return art
+}
+
 // fakeRegistryServe wraps a static body behind the fake token check.
 func fakeRegistryServe(body []byte, contentType string, requireToken func(*http.Request) bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -522,6 +540,9 @@ func newSignedImageRegistry(t *testing.T) (signedImageFixture, *httptest.Server)
 		sig:         makeFakeArtifact("application/vnd.dev.cosign.simplesigning.v1+json", "cosign-signature-payload", "", nil),
 		refAtt:      makeFakeArtifact("application/vnd.dsse.envelope.v1+json", "dsse-attestation-payload", "application/vnd.in-toto+json", nil),
 	}
+	fix.refAtt = fakeArtifactWithSubject(t, fix.refAtt, ociDescriptor{
+		MediaType: mtDockerManifest, Digest: img.manifestDigest, Size: int64(len(img.manifest)),
+	})
 	mux, requireToken, srv := newFakeRegistry(t)
 	const repo = "library/signed"
 	registerFakeImage(mux, repo, "1.0", img, requireToken)
@@ -1470,18 +1491,19 @@ func TestContainerReferrersEndpoint(t *testing.T) {
 	defer srv.Close()
 	base := srv.URL + "/v2/docker.io/library/signed/referrers/"
 
-	// The index digest carries the cosign signature.
+	// The index's legacy cosign tag has no native subject relationship.
 	resp, index := fetchReferrersIndex(t, base+fix.indexDigest)
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != mtOCIIndex {
 		t.Fatalf("referrers(index) = %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
-	if index.SchemaVersion != 2 || index.MediaType != mtOCIIndex || len(index.Manifests) != 1 || index.Manifests[0].Digest != fix.sig.digest {
+	if index.SchemaVersion != 2 || index.MediaType != mtOCIIndex || len(index.Manifests) != 0 {
 		t.Fatalf("referrers(index) body = %+v", index)
 	}
 
-	// The amd64 manifest digest carries both attestations.
+	// Only the native OCI attestation is listed. BuildKit's legacy index
+	// annotation remains available without becoming an OCI subject field.
 	_, index = fetchReferrersIndex(t, base+fix.img.manifestDigest)
-	if len(index.Manifests) != 2 {
+	if len(index.Manifests) != 1 || index.Manifests[0].Digest != fix.refAtt.digest {
 		t.Fatalf("referrers(amd64) = %+v", index.Manifests)
 	}
 
@@ -1745,6 +1767,12 @@ func TestMergeContainerRepoTagRefreshKeepsDigestPins(t *testing.T) {
 			oldImage, newImage := stage(oldFixture), stage(newFixture)
 			oldDigest := containerImageServedDigest(oldImage)
 			artifact := makeFakeArtifact("application/vnd.in-toto+json", "old attestation", "application/vnd.in-toto+json", nil)
+			subject := ociDescriptor{MediaType: oldImage.MediaType, Digest: oldDigest, Size: oldImage.Size}
+			if oldImage.Index != nil {
+				subject.MediaType = oldImage.Index.MediaType
+				subject.Size = oldImage.Index.Size
+			}
+			artifact = fakeArtifactWithSubject(t, artifact, subject)
 			oldImage.Artifacts = []ContainerArtifact{{
 				Subject: oldDigest, Digest: artifact.digest, MediaType: mtOCIManifest,
 				ArtifactType: "application/vnd.in-toto+json", Size: int64(len(artifact.manifest)),

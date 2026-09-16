@@ -100,6 +100,8 @@ type ContainerRepo struct {
 	Registry   string           `json:"registry"`   // e.g. docker.io
 	Repository string           `json:"repository"` // e.g. library/alpine
 	Images     []ContainerImage `json:"images"`
+	// artifactIndex is local high-side state, never part of a signed bundle.
+	artifactIndex *containerArtifactIndex
 }
 
 // ContainerImage is one resolved linux/amd64 image manifest. Digest is the
@@ -131,8 +133,9 @@ type ContainerIndex struct {
 // ContainerArtifact is one attached artifact mirrored alongside an image: a
 // cosign/sigstore signature, an in-toto/SLSA attestation, or an SBOM. It is
 // an OCI image manifest stored like any other (content-addressed, with its
-// config and layer blobs); Subject is the digest of the manifest or index it
-// refers to, which is how the high side's referrers endpoint indexes it.
+// config and layer blobs). In bundle metadata Subject records the discovery
+// association, including legacy cosign tags and BuildKit entries. The high
+// side derives native OCI subject relationships from the stored manifest.
 type ContainerArtifact struct {
 	Subject string `json:"subject"`
 	// Tag is cosign's tag-scheme name (sha256-<hex>.sig / .att / .sbom) when
@@ -473,6 +476,7 @@ type ociManifest struct {
 	Config       ociDescriptor     `json:"config"`
 	Layers       []ociDescriptor   `json:"layers"`
 	Manifests    []ociDescriptor   `json:"manifests"`
+	Subject      *ociDescriptor    `json:"subject,omitempty"`
 	Annotations  map[string]string `json:"annotations"`
 }
 
@@ -686,7 +690,11 @@ func (c *containerClient) fetchToken(ctx context.Context, challenge, repository 
 	if err != nil {
 		return "", err
 	}
-	q := url.Values{}
+	tokenEndpoint, err := url.Parse(realm)
+	if err != nil {
+		return "", fmt.Errorf("parse token endpoint: %w", err)
+	}
+	q := tokenEndpoint.Query()
 	if svc := params["service"]; svc != "" {
 		q.Set("service", svc)
 	}
@@ -695,11 +703,11 @@ func (c *containerClient) fetchToken(ctx context.Context, challenge, repository 
 		scope = "repository:" + repository + ":pull"
 	}
 	q.Set("scope", scope)
-	tokenURL := realm + "?" + q.Encode()
+	tokenEndpoint.RawQuery = q.Encode()
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenEndpoint.String(), nil)
 	if err != nil {
 		return "", err
 	}
@@ -833,12 +841,15 @@ func (c *containerClient) fetchManifestRaw(ctx context.Context, ref imageRef, re
 		return nil, "", "", err
 	}
 	defer resp.Body.Close()
-	body, err = io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err = io.ReadAll(io.LimitReader(resp.Body, maxServedManifestBytes+1))
 	if err != nil {
 		return nil, "", "", err
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", "", fmt.Errorf("%s: manifest %s: HTTP %d", ref, reference, resp.StatusCode)
+	}
+	if len(body) > maxServedManifestBytes {
+		return nil, "", "", fmt.Errorf("%s: manifest %s exceeds %d bytes", ref, reference, maxServedManifestBytes)
 	}
 	mediaType, digest, err = containerManifestIdentity(body, ref, reference, resp.Header.Get("Content-Type"))
 	if err != nil {
@@ -1562,7 +1573,7 @@ func (c *containerClient) collectImageArtifacts(ctx context.Context, ref imageRe
 		col.skip[resolved.IndexDigest] = true
 	}
 	for _, entry := range indexAttestationEntries(resolved.Entries, resolved.Digest) {
-		col.addReferrer(ctx, resolved.Digest, entry)
+		col.addBuildkitAttestation(ctx, resolved.Digest, entry)
 	}
 	for _, subject := range artifactSubjects(resolved) {
 		for _, suffix := range []string{".sig", ".att", ".sbom"} {
@@ -1658,13 +1669,37 @@ func (a *artifactCollector) addByTag(ctx context.Context, subject, tag string) {
 	if !found {
 		return
 	}
-	a.record(ctx, subject, tag, body, mediaType, digest, nil)
+	a.record(
+		ctx,
+		subject,
+		tag,
+		body,
+		mediaType,
+		digest,
+		nil,
+		false,
+	)
 }
 
-// addReferrer mirrors one referrer descriptor (from the referrers API, its
-// fallback tag, or a buildkit attestation index entry), fetching its
-// manifest by digest.
+// addReferrer mirrors one descriptor from the referrers API or its fallback
+// tag, fetching its manifest by digest. Native referrers must
+// declare the queried subject in their immutable manifest bytes.
 func (a *artifactCollector) addReferrer(ctx context.Context, subject string, desc ociDescriptor) {
+	a.addDescriptor(ctx, subject, desc, true)
+}
+
+// addBuildkitAttestation retains the index annotation's legacy association.
+// BuildKit attestations do not need an OCI subject field.
+func (a *artifactCollector) addBuildkitAttestation(ctx context.Context, subject string, desc ociDescriptor) {
+	a.addDescriptor(ctx, subject, desc, false)
+}
+
+func (a *artifactCollector) addDescriptor(
+	ctx context.Context,
+	subject string,
+	desc ociDescriptor,
+	requireSubject bool,
+) {
 	if !containerDigestRE.MatchString(desc.Digest) || a.skip[desc.Digest] || a.found[desc.Digest] != nil {
 		return
 	}
@@ -1680,12 +1715,28 @@ func (a *artifactCollector) addReferrer(ctx context.Context, subject string, des
 		emitProgress(ctx, "    ⚠ artifact %s: %v", shortDigest(desc.Digest), err)
 		return
 	}
-	a.record(ctx, subject, "", body, mediaType, digest, &desc)
+	a.record(
+		ctx,
+		subject,
+		"",
+		body,
+		mediaType,
+		digest,
+		&desc,
+		requireSubject,
+	)
 }
 
 // record stages a fetched artifact manifest with its blobs and appends the
 // artifact record; a digest already mirrored only backfills its cosign tag.
-func (a *artifactCollector) record(ctx context.Context, subject, tag string, body []byte, mediaType, digest string, desc *ociDescriptor) {
+func (a *artifactCollector) record(
+	ctx context.Context,
+	subject, tag string,
+	body []byte,
+	mediaType, digest string,
+	desc *ociDescriptor,
+	requireSubject bool,
+) {
 	if a.skip[digest] {
 		return
 	}
@@ -1698,7 +1749,16 @@ func (a *artifactCollector) record(ctx context.Context, subject, tag string, bod
 	if a.foundCapReached(ctx) {
 		return
 	}
-	art, files, err := a.stageArtifact(ctx, subject, tag, body, mediaType, digest, desc)
+	art, files, err := a.stageArtifact(
+		ctx,
+		subject,
+		tag,
+		body,
+		mediaType,
+		digest,
+		desc,
+		requireSubject,
+	)
 	if err != nil {
 		emitProgress(ctx, "    ⚠ artifact %s: %v", artifactLabel(tag, digest), err)
 		return
@@ -1711,13 +1771,27 @@ func (a *artifactCollector) record(ctx context.Context, subject, tag string, bod
 
 // stageArtifact parses one fetched artifact manifest and stages it with its
 // config and layer blobs, returning the record and the staged files.
-func (a *artifactCollector) stageArtifact(ctx context.Context, subject, tag string, body []byte, mediaType, digest string, desc *ociDescriptor) (ContainerArtifact, []ManifestFile, error) {
+func (a *artifactCollector) stageArtifact(
+	ctx context.Context,
+	subject, tag string,
+	body []byte,
+	mediaType, digest string,
+	desc *ociDescriptor,
+	requireSubject bool,
+) (ContainerArtifact, []ManifestFile, error) {
 	if !isContainerManifestType(mediaType) {
 		return ContainerArtifact{}, nil, fmt.Errorf("unsupported artifact media type %q", mediaType)
 	}
 	var m ociManifest
 	if err := json.Unmarshal(body, &m); err != nil {
 		return ContainerArtifact{}, nil, fmt.Errorf("parse artifact manifest: %w", err)
+	}
+	if m.Subject == nil {
+		if requireSubject {
+			return ContainerArtifact{}, nil, errors.New("referrer manifest has no subject")
+		}
+	} else if m.Subject.Digest != subject {
+		return ContainerArtifact{}, nil, fmt.Errorf("artifact subject %q does not match queried subject %q", m.Subject.Digest, subject)
 	}
 	blobs, files, err := a.c.downloadArtifactBlobs(ctx, a.ref, m, a.stageRoot, a.seenFile)
 	if err != nil {
@@ -1727,10 +1801,18 @@ func (a *artifactCollector) stageArtifact(ctx context.Context, subject, tag stri
 	if err != nil {
 		return ContainerArtifact{}, nil, err
 	}
+	annotations := m.Annotations
+	artifactType := containerArtifactType(m, nil)
+	if m.Subject == nil {
+		// BuildKit's legacy relationship markers live in the image index.
+		// Native OCI metadata comes only from the immutable manifest.
+		annotations = containerArtifactAnnotations(m, desc)
+		artifactType = containerArtifactType(m, desc)
+	}
 	return ContainerArtifact{
 		Subject: subject, Tag: tag, Digest: digest, MediaType: mediaType,
-		ArtifactType: containerArtifactType(m, desc), Size: int64(len(body)),
-		Annotations: containerArtifactAnnotations(m, desc), Blobs: blobs,
+		ArtifactType: artifactType, Size: int64(len(body)),
+		Annotations: annotations, Blobs: blobs,
 	}, append(files, manifestFile), nil
 }
 
@@ -2049,37 +2131,57 @@ func containerImageKey(img ContainerImage) string {
 // re-imported tag moves to its new digest while its old image remains available
 // by digest. Digest-pinned images accumulate.
 func (s *HighServer) mergeContainerRepo(repo ContainerRepo) error {
+	s.containerIndexMu.Lock()
+	defer s.containerIndexMu.Unlock()
 	name := repo.Registry + "/" + repo.Repository
-	merged, err := s.loadContainerRepoIndex(name)
-	if errors.Is(err, os.ErrNotExist) {
-		merged = ContainerRepo{Registry: repo.Registry, Repository: repo.Repository}
+	merged, err := s.loadContainerRepoIndexLocked(name)
+	var pathErr *os.PathError
+	if errors.Is(err, os.ErrNotExist) && errors.As(err, &pathErr) && pathErr.Path == s.containerRepoIndexPath(name) {
+		// A missing artifact during migration is an error, not an empty repo.
+		merged = ContainerRepo{Registry: repo.Registry, Repository: repo.Repository, artifactIndex: newContainerArtifactIndex()}
 	} else if err != nil {
 		return err
 	}
+	for _, img := range repo.Images {
+		// Image and artifact tags share the same registry namespace. A newly
+		// collected image tag supersedes any older artifact-tag observation.
+		delete(merged.artifactIndex.Tags, img.Tag)
+	}
+	if err := s.mergeContainerArtifacts(merged.artifactIndex, repo.Images, false); err != nil {
+		return err
+	}
+	merged.Images = mergeContainerImages(merged.Images, repo.Images)
+	return s.writeContainerRepoIndex(name, merged)
+}
+
+func mergeContainerImages(previous, incoming []ContainerImage) []ContainerImage {
 	byKey := map[string]int{}
-	for i, img := range merged.Images {
+	for i, img := range previous {
 		byKey[containerImageKey(img)] = i
 	}
-	for _, img := range repo.Images {
+	for _, img := range incoming {
 		if i, ok := byKey[containerImageKey(img)]; ok {
-			merged.Images = preserveMovedContainerImage(merged.Images, byKey, merged.Images[i], img)
-			merged.Images[i] = img
+			previous = preserveMovedContainerImage(previous, byKey, previous[i], img)
+			if containerImageServedDigest(previous[i]) == containerImageServedDigest(img) {
+				img.Artifacts = retainContainerArtifacts(previous[i].Artifacts, img.Artifacts)
+			}
+			previous[i] = img
 		} else {
-			byKey[containerImageKey(img)] = len(merged.Images)
-			merged.Images = append(merged.Images, img)
+			byKey[containerImageKey(img)] = len(previous)
+			previous = append(previous, img)
 		}
 	}
-	sort.Slice(merged.Images, func(i, j int) bool {
-		if merged.Images[i].Tag != merged.Images[j].Tag {
-			return merged.Images[i].Tag < merged.Images[j].Tag
+	sort.Slice(previous, func(i, j int) bool {
+		if previous[i].Tag != previous[j].Tag {
+			return previous[i].Tag < previous[j].Tag
 		}
-		if merged.Images[i].Digest != merged.Images[j].Digest {
-			return merged.Images[i].Digest < merged.Images[j].Digest
+		if previous[i].Digest != previous[j].Digest {
+			return previous[i].Digest < previous[j].Digest
 		}
 		// Distinct index pins can share one amd64 manifest digest.
-		return containerImageServedDigest(merged.Images[i]) < containerImageServedDigest(merged.Images[j])
+		return containerImageServedDigest(previous[i]) < containerImageServedDigest(previous[j])
 	})
-	return writeJSONAtomic(s.containerRepoIndexPath(name), merged, 0o644)
+	return previous
 }
 
 // preserveMovedContainerImage keeps a tag's previous image reachable when the
@@ -2099,15 +2201,9 @@ func preserveMovedContainerImage(images []ContainerImage, byKey map[string]int, 
 }
 
 func (s *HighServer) loadContainerRepoIndex(name string) (ContainerRepo, error) {
-	b, err := os.ReadFile(s.containerRepoIndexPath(name))
-	if err != nil {
-		return ContainerRepo{}, err
-	}
-	var repo ContainerRepo
-	if err := json.Unmarshal(b, &repo); err != nil {
-		return ContainerRepo{}, err
-	}
-	return repo, nil
+	s.containerIndexMu.Lock()
+	defer s.containerIndexMu.Unlock()
+	return s.loadContainerRepoIndexLocked(name)
 }
 
 // listContainerRepoNames walks the repos tree and returns every repository's
@@ -2204,18 +2300,19 @@ func (s *HighServer) handleContainerResource(w http.ResponseWriter, r *http.Requ
 		s.handleContainerTags(w, name)
 		return
 	}
-	for _, route := range []string{"/manifests/", "/blobs/", "/referrers/"} {
-		i := strings.LastIndex(rest, route)
-		if i <= 0 {
-			continue
-		}
-		name, ref := rest[:i], rest[i+len(route):]
-		if !validContainerName(name) {
-			registryError(w, http.StatusNotFound, "NAME_INVALID", "invalid repository name")
+	if i := strings.LastIndex(rest, "/"); i > 0 {
+		for _, route := range []string{"/manifests/", "/blobs/", "/referrers/"} {
+			name, ok := strings.CutSuffix(rest[:i+1], route)
+			if !ok {
+				continue
+			}
+			if !validContainerName(name) {
+				registryError(w, http.StatusNotFound, "NAME_INVALID", "invalid repository name")
+				return
+			}
+			s.serveContainerRepoResource(w, r, route, name, rest[i+1:])
 			return
 		}
-		s.serveContainerRepoResource(w, r, route, name, ref)
-		return
 	}
 	registryError(w, http.StatusNotFound, "UNSUPPORTED", "unknown registry path")
 }
@@ -2266,13 +2363,10 @@ func (s *HighServer) handleContainerTags(w http.ResponseWriter, name string) {
 	writeJSON(w, map[string]any{"name": name, "tags": tags})
 }
 
-// maxServedManifestBytes bounds a manifest blob read whole into memory to
-// serve the unauthenticated GET /v2/.../manifests/<ref> pull path (container
-// images and HF models share it). Import checks a manifest's size only > 0,
-// so without the cap a crafted multi-GB "manifest" blob would be read whole
-// on every pull request. Real manifests are a few KB and registries reject
-// uploads past 4 MiB, so the cap is pure hardening: an oversize blob 404s as
-// unservable rather than letting requests balloon the high side's memory.
+// maxServedManifestBytes bounds both collection and serving of container and
+// HF model manifests. Collectors reject larger documents before export so
+// every collected manifest can be served within the same memory bound. The
+// serving check also protects against oversized manifests in older bundles.
 const maxServedManifestBytes = 4 << 20
 
 // handleContainerManifest serves a manifest by tag or digest. Only manifests
@@ -2316,6 +2410,15 @@ type containerManifestDoc struct {
 // friends).
 func findContainerManifestDoc(repo ContainerRepo, ref string) (containerManifestDoc, bool) {
 	byDigest := containerDigestRE.MatchString(ref)
+	if repo.artifactIndex != nil {
+		digest := ref
+		if !byDigest {
+			digest = repo.artifactIndex.Tags[ref]
+		}
+		if a, ok := repo.artifactIndex.Artifacts[digest]; ok {
+			return containerManifestDoc{Digest: a.Digest, MediaType: a.MediaType}, true
+		}
+	}
 	for _, img := range repo.Images {
 		if doc, ok := containerImageManifestDoc(img, ref, byDigest); ok {
 			return doc, true
@@ -2324,8 +2427,7 @@ func findContainerManifestDoc(repo ContainerRepo, ref string) (containerManifest
 	return containerManifestDoc{}, false
 }
 
-// containerImageManifestDoc resolves a reference against one image record and
-// its attached artifacts.
+// containerImageManifestDoc resolves a reference against one image record.
 func containerImageManifestDoc(img ContainerImage, ref string, byDigest bool) (containerManifestDoc, bool) {
 	switch {
 	case byDigest && img.Digest == ref:
@@ -2334,11 +2436,6 @@ func containerImageManifestDoc(img ContainerImage, ref string, byDigest bool) (c
 		return containerManifestDoc{Digest: img.Index.Digest, MediaType: img.Index.MediaType}, true
 	case !byDigest && img.Tag == ref:
 		return containerImageDoc(img), true
-	}
-	for _, a := range img.Artifacts {
-		if (byDigest && a.Digest == ref) || (!byDigest && a.Tag != "" && a.Tag == ref) {
-			return containerManifestDoc{Digest: a.Digest, MediaType: a.MediaType}, true
-		}
 	}
 	return containerManifestDoc{}, false
 }
@@ -2379,11 +2476,10 @@ type ociReferrersIndex struct {
 	Manifests     []ociDescriptor `json:"manifests"`
 }
 
-// handleContainerReferrers answers the OCI 1.1 referrers API from the repo's
-// mirrored artifacts, so policy engines (Kyverno, Ratify) and cosign discover
-// signatures and attestations on the high side exactly as they would
-// upstream. A subject with nothing attached gets an empty index (the spec's
-// "supported but none" answer), and ?artifactType= filters as specced.
+// handleContainerReferrers answers the OCI 1.1 referrers API from genuine
+// subject relationships in stored manifests. Legacy cosign tags remain
+// separately pullable. A subject with no native referrers gets an empty
+// index, and ?artifactType= filters the descriptors.
 func (s *HighServer) handleContainerReferrers(w http.ResponseWriter, r *http.Request, name, digest string) {
 	if !containerDigestRE.MatchString(digest) {
 		registryError(w, http.StatusBadRequest, "DIGEST_INVALID", "invalid digest")
@@ -2413,24 +2509,23 @@ func (s *HighServer) handleContainerReferrers(w http.ResponseWriter, r *http.Req
 	_, _ = w.Write(b)
 }
 
-// containerReferrerDescriptors lists the mirrored artifacts attached to a
-// subject digest, de-duplicated across image records and optionally filtered
-// by artifact type.
+// containerReferrerDescriptors lists the repository's native referrers for a
+// subject digest, optionally filtered by artifact type, in stable digest order.
 func containerReferrerDescriptors(repo ContainerRepo, subject, filter string) []ociDescriptor {
-	seen := map[string]bool{}
 	descs := []ociDescriptor{}
-	for _, img := range repo.Images {
-		for _, a := range img.Artifacts {
-			if a.Subject != subject || seen[a.Digest] || (filter != "" && a.ArtifactType != filter) {
-				continue
-			}
-			seen[a.Digest] = true
-			descs = append(descs, ociDescriptor{
-				MediaType: a.MediaType, Digest: a.Digest, Size: a.Size,
-				ArtifactType: a.ArtifactType, Annotations: a.Annotations,
-			})
-		}
+	if repo.artifactIndex == nil {
+		return descs
 	}
+	for _, a := range repo.artifactIndex.Artifacts {
+		if a.Subject == "" || a.Subject != subject || (filter != "" && a.ArtifactType != filter) {
+			continue
+		}
+		descs = append(descs, ociDescriptor{
+			MediaType: a.MediaType, Digest: a.Digest, Size: a.Size,
+			ArtifactType: a.ArtifactType, Annotations: a.Annotations,
+		})
+	}
+	sort.Slice(descs, func(i, j int) bool { return descs[i].Digest < descs[j].Digest })
 	return descs
 }
 
@@ -2461,6 +2556,13 @@ func (s *HighServer) handleContainerBlob(w http.ResponseWriter, r *http.Request,
 }
 
 func containerRepoReferencesBlob(repo ContainerRepo, digest string) bool {
+	if repo.artifactIndex != nil {
+		for _, a := range repo.artifactIndex.Artifacts {
+			if a.Digest == digest || containerBlobsInclude(a.Blobs, digest) {
+				return true
+			}
+		}
+	}
 	for _, img := range repo.Images {
 		if containerImageReferencesBlob(img, digest) {
 			return true
@@ -2470,19 +2572,14 @@ func containerRepoReferencesBlob(repo ContainerRepo, digest string) bool {
 }
 
 // containerImageReferencesBlob reports whether one image record references a
-// digest: its manifest, preserved index, config/layer blobs, or any attached
-// artifact's manifest and blobs.
+// digest: its manifest, preserved index, or config/layer blobs. Attached
+// artifacts are referenced by the repository's independent artifact index.
 func containerImageReferencesBlob(img ContainerImage, digest string) bool {
 	if img.Digest == digest || (img.Index != nil && img.Index.Digest == digest) {
 		return true
 	}
 	if containerBlobsInclude(img.Blobs, digest) {
 		return true
-	}
-	for _, a := range img.Artifacts {
-		if a.Digest == digest || containerBlobsInclude(a.Blobs, digest) {
-			return true
-		}
 	}
 	return false
 }

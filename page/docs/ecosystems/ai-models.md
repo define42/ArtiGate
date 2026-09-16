@@ -56,7 +56,7 @@ Without a token, a gated model fails with a hint to set `ARTIGATE_HF_TOKEN`. `ne
 
 ## Internals
 
-**Variant fetch.** A variant's manifest comes from `GET /v2/<org>/<name>/manifests/<tag>` — a Docker-schema-2 manifest whose layers are the GGUF model file, chat template, params, and license, each fetched from `/v2/<org>/<name>/blobs/<digest>` and streamed to disk under a size + SHA-256 check. The manifest bytes themselves are stored verbatim as a blob, so the high side replays exactly what the Hub served.
+**Variant fetch.** A variant's manifest comes from `GET /v2/<org>/<name>/manifests/<tag>` — a Docker-schema-2 manifest whose layers are the GGUF model file, chat template, params, and license, each fetched from `/v2/<org>/<name>/blobs/<digest>` and streamed to disk under a size + SHA-256 check. The manifest bytes themselves are stored verbatim as a blob, so the high side replays exactly what the Hub served. Variant manifests share a **4 MiB collection and serving limit**; larger documents are rejected during collection. This limit applies to the manifest document, not the model weights or snapshot files.
 
 **Content-addressed, sharded blob store.** Every file — manifests, GGUF blobs, snapshot files — lands at:
 

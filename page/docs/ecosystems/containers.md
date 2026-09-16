@@ -5,7 +5,7 @@ ArtiGate mirrors OCI/Docker container images end to end: the [low side](../low-s
 Container work travels on the `containers` stream. Like every ecosystem, that stream has its own sequence counter, export lock, and export-dedup index, so a container collect never blocks or interleaves with Go, Python, Maven, npm, APT, RPM, or AI model work.
 
 !!! warning "linux/amd64 only"
-    ArtiGate mirrors the `linux/amd64` platform exclusively — multi-platform indexes are resolved down to the amd64 sub-manifest and nothing else is re-served. Pulls are anonymous by default; private registries authenticate with a per-pull login or standing `ARTIGATE_CONTAINER_AUTH` credentials (see [Private registries](#private-registries)).
+    ArtiGate mirrors the `linux/amd64` platform exclusively. The original multi-platform index is preserved to keep its digest and signatures intact, but other platform images are not downloaded. Pulls are anonymous by default; private registries authenticate with a per-pull login or standing `ARTIGATE_CONTAINER_AUTH` credentials (see [Private registries](#private-registries)).
 
 ## Low-side inputs
 
@@ -134,7 +134,7 @@ containers/blobs/sha256/<first-3-hex>/<full-64-hex>
 
 The first **3 hex characters** of the digest form the shard directory, spreading blobs across 16³ = **4096 directories** (the same first-N-hex scheme Docker's own registry and git use). The store is **shared across all repositories**, so a layer common to many images is stored exactly once (dedup). Blobs already staged in a run are skipped — and because the manifest declares every blob's digest *before* the bytes are fetched, blobs already forwarded on the `containers` stream in an earlier bundle are **not downloaded at all**: they ride in the manifest as [`prior` references](../architecture.md#export-deduplication-and-delta-bundles) while only new blobs are downloaded and packed. A base image shared by many tags therefore crosses the diode exactly once.
 
-**Streaming download & verification.** Blobs are streamed to disk through `io.MultiWriter(file, sha256)` under a 30-minute context — never buffered in memory — and verified against both the expected size and digest; a mismatch removes the file and fails. Foreign / non-distributable layers (media type containing `foreign`) are rejected outright. Manifest bodies are capped at 8 MiB and token responses at 1 MiB; the upstream `tags/list` pager follows RFC 5988 `Link` headers up to a hard cap of 100 pages (≈1M tags).
+**Streaming download & verification.** Blobs are streamed to disk through `io.MultiWriter(file, sha256)` under a 30-minute context — never buffered in memory — and verified against both the expected size and digest; a mismatch removes the file and fails. Foreign / non-distributable layers (media type containing `foreign`) are rejected outright. Image manifests, preserved indexes, and attached-artifact manifests share a **4 MiB collection and serving limit**; larger documents are rejected during collection so an accepted image remains servable on the high side. Token responses are capped at 1 MiB; the upstream `tags/list` pager follows RFC 5988 `Link` headers up to a hard cap of 100 pages (≈1M tags).
 
 **Resilient batches.** Per-image failures are non-fatal: a broken reference is skipped and reported in `SkippedModules`. Only if *zero* images succeed does the whole run fail with `no images could be fetched`. If nothing new was produced at all, `exportIfNew` writes no bundle and burns no sequence; if only some blobs are new, the bundle is a delta carrying just those.
 
@@ -175,6 +175,16 @@ Imported images are merged into a persistent **per-repository index** at:
 
 (The `_index.json` name can never collide with real content because a repository component may not start with `_`.) Re-importing a tag moves it to its new digest; digest-pinned images accumulate. The high side then serves a read-only OCI Distribution registry under `/v2/`. Only `GET` and `HEAD` are accepted — any write returns `405 UNSUPPORTED` (`read-only registry`), so it can never be a push target.
 
+### Signatures, attestations, and referrers
+
+Collection discovers attachments through the OCI referrers API and its tag fallback, legacy cosign `.sig`/`.att`/`.sbom` tags, and BuildKit attestation entries. Native referrer manifests must declare the queried digest in their OCI `subject` field; missing or mismatched subjects are skipped with a warning. Legacy cosign and BuildKit attachments may omit `subject`.
+
+The repository stores each artifact by immutable digest and resolves its mutable tags in one repository-wide map. When a signature tag changes, the tag serves the new artifact and the old artifact remains pullable by digest, including its blobs. A refresh that discovers fewer attachments, including a failed discovery request, preserves previously imported artifacts. Absence from a collection does not delete an attachment.
+
+`GET /v2/<name>/referrers/<digest>` advertises only matching `subject` relationships found in the stored manifest bytes. Artifact type and annotations also come from those bytes. A legacy cosign tag or a BuildKit index annotation alone does not create an OCI referrer; these artifacts remain available through their imported tags or digests. `?artifactType=...` filters the native referrers. Artifact tags stay out of `tags/list`, which lists collected image tags.
+
+Existing repository indexes are rebuilt automatically on first access or import, using stored manifests, and the upgraded index is saved atomically. No re-collection is needed for native relationship repair. Old indexes did not record when conflicting signature tags were observed: migration preserves their first effective mapping and logs the conflict; collecting the image again resolves that tag from upstream. A missing or corrupt stored artifact prevents migration and leaves the existing index intact.
+
 ### Routes
 
 | Route | Response |
@@ -184,8 +194,9 @@ Imported images are merged into a persistent **per-repository index** at:
 | `GET /v2/<name>/tags/list` | `{"name": "<name>", "tags": [...]}` — tagged images only, sorted |
 | `GET\|HEAD /v2/<name>/manifests/<ref>` | manifest by tag or `sha256:` digest |
 | `GET\|HEAD /v2/<name>/blobs/<digest>` | blob by `sha256:` digest |
+| `GET\|HEAD /v2/<name>/referrers/<digest>` | OCI index of genuine native referrers, optionally filtered by `artifactType` |
 
-`<name>` is the registry-namespaced repository, e.g. `docker.io/library/alpine`. Because the name itself contains slashes, the route keyword is matched from the right (`/tags/list` suffix, else the last `/manifests/` or `/blobs/`). A manifest response sets `Content-Type` to the stored `media_type`, plus `Docker-Content-Digest` and `Content-Length`; `HEAD` returns headers only. Blobs are served via `http.ServeFile` with `Content-Type: application/octet-stream` and `Docker-Content-Digest`.
+`<name>` is the registry-namespaced repository, e.g. `docker.io/library/alpine`. Because the name itself contains slashes, the route keyword is matched immediately before the final reference; repository components may themselves be named `manifests`, `blobs`, or `referrers`. A manifest response sets `Content-Type` to the stored `media_type`, plus `Docker-Content-Digest` and `Content-Length`; `HEAD` returns headers only. Blobs are served via `http.ServeFile` with `Content-Type: application/octet-stream` and `Docker-Content-Digest`.
 
 ### Error codes
 
@@ -235,7 +246,7 @@ sudo systemctl restart docker
 
 ## Limitations
 
-- **`linux/amd64` only** — no other architecture or OS, and no multi-arch manifest list is ever re-served (a single amd64 manifest per image).
+- **`linux/amd64` only** — the upstream index is preserved, but other platform images are not downloaded.
 - **One login per pull** — the `auth` field names a single registry; pulls needing different logins for different registries run as separate collects (standing `ARTIGATE_CONTAINER_AUTH` entries cover any number of registries).
 - **Scheduled pulls authenticate only via `ARTIGATE_CONTAINER_AUTH`** — watch specs carrying an `auth` key are rejected, because specs are stored and echoed in plaintext.
 - **`sha256` digests only** — every other algorithm is rejected at parse, verify, and serve time.
@@ -243,7 +254,7 @@ sudo systemctl restart docker
 - **Registry ports are unsupported** — a port cannot appear in the high-side pull name, so such references are rejected at parse time.
 - **A literal tag that looks like a constraint** (e.g. `1.26.x`, or anything with `< > = ~ ! ,` / space) is unreachable by name — pin it by digest.
 - **Constraint resolution ignores variant and non-numeric tags** (`-alpine`, `-slim`, date tags, `latest`).
-- **`tags/list` is capped at 100 pages**; manifest bodies at 8 MiB; token responses at 1 MiB.
+- **`tags/list` is capped at 100 pages**; manifests and preserved indexes at 4 MiB; token responses at 1 MiB.
 - **The registry is read-only** — all writes return `405`, so it cannot be a push target.
 
 ## Related pages

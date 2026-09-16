@@ -208,8 +208,10 @@ and environment variable.
   high side, so the digest a client resolves is exactly upstream's and
   signatures over it verify unchanged; `cosign verify`, Kyverno, and Ratify
   work against the mirror with the same keys/identities they use online.
-  (Artifacts that fail to fetch are skipped with a warning — the image still
-  mirrors, and verification simply fails closed for it.)
+  Native referrers must declare the matching OCI `subject`; legacy cosign
+  tags and BuildKit associations remain available separately. Artifacts that
+  fail to fetch are skipped with a warning, and previously imported artifacts
+  remain available by digest. Signature tags move when a new version arrives.
 
   The tag position also takes a **version constraint**, resolved against the
   upstream tag list at collect time to the newest matching version:
@@ -1159,8 +1161,9 @@ edge-triggered (one notification per gap; the gap then ages via
   latter. `--container-registry host=baseURL` on the low side redirects a
   registry's API to a private mirror/proxy. The high-side registry is
   read-only (no push). Attached artifacts (cosign signatures, attestations,
-  SBOMs) mirror automatically and are served back through cosign's tag
-  scheme and `GET /v2/<name>/referrers/<digest>`; a multi-platform tag
+  SBOMs) mirror automatically: legacy cosign artifacts use their tag scheme,
+  while genuine OCI `subject` relationships appear through
+  `GET /v2/<name>/referrers/<digest>`. A multi-platform tag
   resolves to its preserved upstream index digest, so policy engines verify
   the mirror's content byte for byte. Only artifacts attached to the pulled
   image (or its index) at collect time cross — re-signing upstream later

@@ -403,7 +403,7 @@ func (c *hfClient) fetchHFManifest(ctx context.Context, ref hfRef) (body []byte,
 		return nil, ociManifest{}, "", "", err
 	}
 	defer resp.Body.Close()
-	body, err = io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err = io.ReadAll(io.LimitReader(resp.Body, maxServedManifestBytes+1))
 	if err != nil {
 		return nil, ociManifest{}, "", "", err
 	}
@@ -415,6 +415,9 @@ func (c *hfClient) fetchHFManifest(ctx context.Context, ref hfRef) (body []byte,
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, ociManifest{}, "", "", fmt.Errorf("%s: manifest: HTTP %d", ref, resp.StatusCode)
+	}
+	if len(body) > maxServedManifestBytes {
+		return nil, ociManifest{}, "", "", fmt.Errorf("%s: manifest exceeds %d bytes", ref, maxServedManifestBytes)
 	}
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, ociManifest{}, "", "", fmt.Errorf("%s: parse manifest: %w", ref, err)

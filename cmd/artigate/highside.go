@@ -110,6 +110,9 @@ type HighServer struct {
 	// importMu serializes import passes and SFTP publication. Helpers suffixed
 	// Locked require this mutex; they may perform disk I/O.
 	importMu sync.Mutex
+	// containerIndexMu serializes repository migration and publication so a
+	// first read of an old index cannot overwrite a concurrent import.
+	containerIndexMu sync.Mutex
 	// mu protects only in-memory state and the immutable status snapshot.
 	// Never hold it while doing I/O or acquiring importMu.
 	mu         sync.Mutex
