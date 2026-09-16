@@ -293,6 +293,142 @@ func TestHighServerQuarantineThenDrain(t *testing.T) {
 	}
 }
 
+func TestHighServerQuarantinePreservesCompleteBundle(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		suffixes []string
+	}{
+		{name: "archive only", suffixes: []string{".tar.gz"}},
+		{name: "manifest and signature", suffixes: []string{".manifest.json", ".manifest.json.sig"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pub, priv := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			id := bundleIDForSequence(2)
+			writeSignedBundle(t, hs.cfg.Quarantine, priv, 2, 1, []moduleSpec{{"m", "v2.0.0"}})
+			for _, suffix := range tc.suffixes {
+				writeFile(t, filepath.Join(hs.cfg.Landing, id+suffix), []byte("conflicting partial retransmission"))
+			}
+
+			res := mustImportNext(t, hs)
+			if res.Imported || len(res.RejectedBundles) != 0 || !bundleCompleteInDir(hs.cfg.Quarantine, id) {
+				t.Fatalf("complete future bundle was disturbed by partial retransmission: %+v", res)
+			}
+
+			writeSignedBundle(t, hs.cfg.Landing, priv, 1, 0, []moduleSpec{{"m", "v1.0.0"}})
+			res = mustImportNext(t, hs)
+			if len(res.ImportedBundles) != 2 || res.ImportedBundles[1] != id || len(res.RejectedBundles) != 0 {
+				t.Fatalf("partial retransmission prevented the original bundle importing: %+v", res)
+			}
+			if hs.importedSequence(streamGo) != 2 || !hs.isComplete("m", "v2.0.0") {
+				t.Fatal("original quarantined module was not published")
+			}
+		})
+	}
+}
+
+func TestHighServerQuarantineIncompleteUnionStillReaped(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		landing    string
+		quarantine string
+		missing    string
+	}{
+		{name: "manifest in landing", landing: ".manifest.json", quarantine: ".tar.gz", missing: ".manifest.json.sig"},
+		{name: "manifest in quarantine", landing: ".manifest.json.sig", quarantine: ".manifest.json", missing: ".tar.gz"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pub, priv := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			id := bundleIDForSequence(1)
+			writeSignedBundle(t, hs.cfg.Landing, priv, 1, 0, []moduleSpec{{"m", "v1.0.0"}})
+			landing := filepath.Join(hs.cfg.Landing, id+tc.landing)
+			quarantine := filepath.Join(hs.cfg.Quarantine, id+tc.quarantine)
+			if err := os.Rename(filepath.Join(hs.cfg.Landing, id+tc.quarantine), quarantine); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(hs.cfg.Landing, id+tc.missing)); err != nil {
+				t.Fatal(err)
+			}
+
+			res := mustImportNext(t, hs)
+			if res.Imported || len(res.RejectedBundles) != 0 {
+				t.Fatalf("incomplete union was treated as an importable bundle: %+v", res)
+			}
+			if !fileExists(landing) || !fileExists(quarantine) {
+				t.Fatal("incomplete union moved or discarded a recent artifact")
+			}
+
+			old := time.Now().Add(-incompleteLandingRetention - time.Hour)
+			if err := os.Chtimes(landing, old, old); err != nil {
+				t.Fatal(err)
+			}
+			res = mustImportNext(t, hs)
+			if res.Imported || len(res.RejectedBundles) != 0 || hs.importedSequence(streamGo) != 0 {
+				t.Fatalf("incomplete union advanced the stream: %+v", res)
+			}
+			if fileExists(landing) || !fileExists(quarantine) {
+				t.Fatal("abandoned landing partial was not reaped independently of quarantine")
+			}
+			if hs.isComplete("m", "v1.0.0") {
+				t.Fatal("incomplete bundle published a module")
+			}
+		})
+	}
+}
+
+func TestHighServerQuarantineRecoveryRejectsCorruption(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		moved      int
+		suffix     string
+		content    []byte
+		wantReason string
+	}{
+		{
+			name: "archive", moved: 1, suffix: ".tar.gz",
+			content: []byte("corrupt archive"), wantReason: "gzip:",
+		},
+		{
+			name: "signature", moved: 2, suffix: ".manifest.json.sig",
+			content:    []byte(base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize))),
+			wantReason: "signature verification failed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pub, priv := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			id := bundleIDForSequence(1)
+			writeSignedBundle(t, hs.cfg.Landing, priv, 1, 0, []moduleSpec{{"m", "v1.0.0"}})
+			writeFile(t, filepath.Join(hs.cfg.Landing, id+tc.suffix), tc.content)
+			for _, suffix := range bundleSuffixes()[:tc.moved] {
+				if err := os.Rename(filepath.Join(hs.cfg.Landing, id+suffix), filepath.Join(hs.cfg.Quarantine, id+suffix)); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			res := mustImportNext(t, hs)
+			if res.Imported || len(res.RejectedBundles) != 1 || res.RejectedBundles[0] != id {
+				t.Fatalf("corrupt recovered bundle was not rejected: %+v", res)
+			}
+			if hs.importedSequence(streamGo) != 0 || hs.isComplete("m", "v1.0.0") {
+				t.Fatal("corrupt recovered bundle advanced or published the stream")
+			}
+			rejected := filepath.Join(hs.cfg.Root, "rejected")
+			if !bundleCompleteInDir(rejected, id) {
+				t.Fatal("corrupt recovered bundle was not retained in rejected/")
+			}
+			reason, err := os.ReadFile(filepath.Join(rejected, id+".reason.txt"))
+			if err != nil || !strings.Contains(string(reason), tc.wantReason) {
+				t.Fatalf("rejection reason = %q, %v; want %q", reason, err, tc.wantReason)
+			}
+		})
+	}
+}
+
 func mustImportNext(t *testing.T, hs *HighServer) ImportResult {
 	t.Helper()
 	res, err := hs.ImportNext()

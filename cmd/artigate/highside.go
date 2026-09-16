@@ -1319,6 +1319,17 @@ func (s *HighServer) quarantineFutureBundlesLocked() error {
 	if err != nil {
 		return err
 	}
+	// A move can stop before or after its manifest leaves landing. Scan both
+	// directories so either crash state is recovered before import or reaping.
+	quarantined, err := findBundleStreams(s.cfg.Quarantine)
+	if err != nil {
+		return err
+	}
+	for stream, seqs := range quarantined {
+		if isKnownStream(stream) {
+			byStream[stream] = mergeSequenceLists(byStream[stream], seqs)
+		}
+	}
 	if err := s.sortLandingStreamsLocked(byStream); err != nil {
 		return err
 	}
@@ -1360,6 +1371,11 @@ func (s *HighServer) rejectUnsupportedLandingStreamLocked(stream string, seqs []
 func (s *HighServer) sortLandingBundleLocked(stream string, seq, next int64) error {
 	id := bundleIDFor(stream, seq)
 	if !bundleCompleteInDir(s.cfg.Landing, id) {
+		if seq >= next {
+			// Resume even when this bundle is now next: earlier passes may have
+			// imported its predecessor while the fragments remained stranded.
+			return resumeBundleMove(s.cfg.Landing, s.cfg.Quarantine, id)
+		}
 		return nil
 	}
 	switch {

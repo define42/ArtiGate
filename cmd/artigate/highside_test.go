@@ -12,6 +12,108 @@ import (
 	"time"
 )
 
+func TestHighServerQuarantineMoveRetries(t *testing.T) {
+	for _, suffix := range []string{".manifest.json", ".manifest.json.sig"} {
+		t.Run(suffix, func(t *testing.T) {
+			t.Parallel()
+			pub, priv := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			id := bundleIDFor(streamGo, 2)
+			writeSignedBundle(t, hs.cfg.Landing, priv, 2, 1, []moduleSpec{{"example.com/two", "v1.0.0"}})
+
+			// A nonempty directory forces a move failure after one or two
+			// artifacts have already left landing, without relying on permissions.
+			obstruction := filepath.Join(hs.cfg.Quarantine, id+suffix)
+			if err := os.MkdirAll(obstruction, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(obstruction, "block"), []byte("block"))
+			if _, err := hs.ImportNext(); err == nil {
+				t.Fatal("expected quarantine move to fail")
+			}
+			if !fileExists(filepath.Join(hs.cfg.Quarantine, id+".tar.gz")) {
+				t.Fatal("archive must have moved before the injected failure")
+			}
+			if err := os.RemoveAll(obstruction); err != nil {
+				t.Fatal(err)
+			}
+
+			status, err := hs.ImportStatus()
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := status.Stream(streamGo)
+			if st.BlockingMissing != 1 || !slices.Equal(st.QuarantinedSequences, []int64{2}) {
+				t.Fatalf("recovered bundle must wait for its predecessor: %+v", st)
+			}
+			writeSignedBundle(t, hs.cfg.Landing, priv, 1, 0, []moduleSpec{{"example.com/one", "v1.0.0"}})
+			res := mustImportNext(t, hs)
+			if !slices.Equal(res.ImportedBundles, []string{bundleIDFor(streamGo, 1), id}) {
+				t.Fatalf("expected both bundles to import without retransmission: %+v", res)
+			}
+			if !hs.isComplete("example.com/two", "v1.0.0") {
+				t.Fatal("recovered bundle content was not published")
+			}
+		})
+	}
+}
+
+func TestHighServerQuarantineMoveRecoveryAfterRestart(t *testing.T) {
+	cases := []struct {
+		name                string
+		moved               int
+		predecessorImported bool
+	}{
+		{name: "archive moved, future bundle", moved: 1},
+		{name: "manifest moved, future bundle", moved: 2},
+		{name: "archive moved, next bundle", moved: 1, predecessorImported: true},
+		{name: "manifest moved, next bundle", moved: 2, predecessorImported: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pub, priv := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			if tc.predecessorImported {
+				writeSignedBundle(t, hs.cfg.Landing, priv, 1, 0, []moduleSpec{{"example.com/one", "v1.0.0"}})
+				mustImportNext(t, hs)
+			}
+			id := bundleIDFor(streamGo, 2)
+			writeSignedBundle(t, hs.cfg.Landing, priv, 2, 1, []moduleSpec{{"example.com/two", "v1.0.0"}})
+			old := time.Now().Add(-2 * incompleteLandingRetention)
+			for i, suffix := range bundleSuffixes() {
+				name := filepath.Join(hs.cfg.Landing, id+suffix)
+				if err := os.Chtimes(name, old, old); err != nil {
+					t.Fatal(err)
+				}
+				if i < tc.moved {
+					if err := os.Rename(name, filepath.Join(hs.cfg.Quarantine, id+suffix)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			// Reopen a crash snapshot, including residue old enough for the
+			// incomplete-landing reaper. Recovery must run before that sweep.
+			restarted, err := NewHighServer(hs.cfg, pub)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := mustImportNext(t, restarted)
+			if !tc.predecessorImported {
+				if res.Imported || !bundleCompleteInDir(restarted.cfg.Quarantine, id) {
+					t.Fatalf("future bundle was not retained intact: %+v", res)
+				}
+				writeSignedBundle(t, restarted.cfg.Landing, priv, 1, 0, []moduleSpec{{"example.com/one", "v1.0.0"}})
+				res = mustImportNext(t, restarted)
+			}
+			if !slices.Contains(res.ImportedBundles, id) || !restarted.isComplete("example.com/two", "v1.0.0") {
+				t.Fatalf("restarted importer did not publish the recovered bundle: %+v", res)
+			}
+		})
+	}
+}
+
 func TestHighServerImportInvalidatesPayloadTrees(t *testing.T) {
 	t.Parallel()
 	pub, priv := newTestKeys(t)

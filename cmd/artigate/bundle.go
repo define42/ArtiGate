@@ -312,6 +312,34 @@ func moveBundleFiles(srcDir, dstDir, bundleID string) error {
 	return nil
 }
 
+// resumeBundleMove finishes an interrupted move only when the two directories
+// together contain every artifact. Existing destination files are preserved,
+// especially a complete bundle accompanied by a partial retransmission in src.
+// Consolidation establishes no trust: the importer still verifies the resulting
+// manifest, signature, sequence and archive before publishing any content.
+func resumeBundleMove(srcDir, dstDir, bundleID string) error {
+	if bundleCompleteInDir(dstDir, bundleID) {
+		return nil
+	}
+	for _, suffix := range bundleSuffixes() {
+		name := bundleID + suffix
+		if !fileExists(filepath.Join(dstDir, name)) && !fileExists(filepath.Join(srcDir, name)) {
+			return nil
+		}
+	}
+	for _, suffix := range bundleSuffixes() {
+		name := bundleID + suffix
+		dst := filepath.Join(dstDir, name)
+		if fileExists(dst) {
+			continue
+		}
+		if err := moveFile(filepath.Join(srcDir, name), dst, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // moveFile moves src to dst. It uses rename when possible, and falls back to
 // copy+remove when they are on different filesystems. That happens in
 // containerized deployments where the landing directory and the repository root
