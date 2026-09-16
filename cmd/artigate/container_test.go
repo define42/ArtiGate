@@ -1458,9 +1458,9 @@ func TestContainerArtifactServing(t *testing.T) {
 	// Artifact payload blobs pass the per-repo blob ACL.
 	assertHTTPBody(t, base+"/blobs/"+containerSHA(fix.sig.layer), string(fix.sig.layer))
 	assertHTTPBody(t, base+"/blobs/"+containerSHA(fix.att.config), string(fix.att.config))
-	// The artifact tags stay out of tags/list — they are not pullable images.
+	// All current pullable tags, including legacy cosign tags, are discoverable.
 	code, got := httpGet(t, base+"/tags/list")
-	if code != http.StatusOK || strings.Contains(got, ".sig") {
+	if code != http.StatusOK || !strings.Contains(got, cosignArtifactTag(fix.indexDigest, ".sig")) {
 		t.Fatalf("tags/list = %d %q", code, got)
 	}
 }

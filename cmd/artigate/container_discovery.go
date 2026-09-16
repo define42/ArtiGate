@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -342,16 +341,15 @@ func (c *containerClient) authorizedDiscoveryRequest(ctx context.Context, client
 	if err != nil || resp.StatusCode != http.StatusUnauthorized {
 		return resp, err
 	}
-	challenge := resp.Header.Get("Www-Authenticate")
+	challenge := strings.Join(resp.Header.Values("Www-Authenticate"), ",")
 	_ = resp.Body.Close()
 	authorization, err := c.authorizeChallenge(ctx, challenge, ref)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		// Token errors can contain credential-bearing realm URLs. The normal
-		// image request supplies login guidance; discovery reports its failure
-		// without copying those URLs into progress or durable server logs.
+		// The normal image request supplies login guidance; discovery reports
+		// an incomplete lookup without logging upstream authentication data.
 		return nil, fmt.Errorf("registry discovery authentication failed; check credentials and token endpoint")
 	}
 	c.auths[key] = authorization
@@ -371,12 +369,9 @@ func doContainerDiscoveryRequest(ctx context.Context, client *http.Client, endpo
 	if err == nil {
 		return resp, nil
 	}
-	var requestErr *url.Error
-	if errors.As(err, &requestErr) {
-		// Pagination queries may carry signed cursors or access tokens.
-		return nil, fmt.Errorf("registry discovery request failed: %w", requestErr.Err)
-	}
-	return nil, fmt.Errorf("registry discovery request failed")
+	// Even the cause inside url.Error can contain a signed redirect Location.
+	// Keep the cause for cancellation checks without displaying upstream URLs.
+	return nil, &containerAuthError{message: "registry discovery request failed", cause: err}
 }
 
 func containerDiscoveryRetryDelay(resp *http.Response, attempt int) (time.Duration, bool) {

@@ -372,7 +372,7 @@ func TestContainerReferrerDiscoveryRefreshesAuthentication(t *testing.T) {
 }
 
 func TestContainerReferrerDiscoveryRedactsSensitiveErrors(t *testing.T) {
-	for _, mode := range []string{"token endpoint failure", "pagination transport failure"} {
+	for _, mode := range []string{"token endpoint failure", "pagination transport failure", "malformed redirect"} {
 		t.Run(mode, func(t *testing.T) {
 			const secret = "sensitive-query-token"
 			tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -380,6 +380,11 @@ func TestContainerReferrerDiscoveryRedactsSensitiveErrors(t *testing.T) {
 			}))
 			t.Cleanup(tokenServer.Close)
 			c, ref := newDiscoveryClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if mode == "malformed redirect" {
+					w.Header().Set("Location", "http://auth.test/%zz?access_token="+secret)
+					w.WriteHeader(http.StatusFound)
+					return
+				}
 				if mode == "token endpoint failure" {
 					w.Header().Set("Www-Authenticate", `Bearer realm="`+tokenServer.URL+`?access_token=`+secret+`",service="registry.test"`)
 					w.WriteHeader(http.StatusUnauthorized)

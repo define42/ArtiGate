@@ -14,6 +14,16 @@
 // OCI artifact tests use a pinned local Distribution registry container,
 // native referrer graphs, and temporary cosign keys: signing and verification
 // need no external identity provider or transparency-log service.
+// TestOCIDistributionConformance runs the official distribution-spec v1.1.1
+// pull and discovery workflows, including native referrers and tag pagination.
+// Its fixture gateway sends setup writes to a pinned local Zot registry, then
+// transfers those fixtures through the signed diode before forwarding read
+// assertions to the high side. Push and management workflows remain disabled.
+// HTML, JUnit, and command logs are written to WORKDIR/oci-conformance and
+// uploaded by CI. The standalone oci-distribution-conformance binary is built
+// from the pinned upstream module in .github/workflows/e2e.yml; its dependencies
+// are separate from ArtiGate's go.mod. Set ARTIGATE_E2E_WORKDIR or
+// ARTIGATE_E2E_KEEP=1 to retain reports after a successful local run.
 //
 // Beyond the per-stream client round-trips, the suite exercises the parts of
 // the system that sit between the low and high sides. These do not lean on any

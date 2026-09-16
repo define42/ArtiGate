@@ -42,9 +42,15 @@ func TestOCIArtifacts(t *testing.T) {
 
 func startOCIRegistry(t *testing.T) string {
 	t.Helper()
+	return startOCIRegistryImage(t, ociFixtureRegistryImage, []string{"--env", "REGISTRY_LOG_LEVEL=error"})
+}
+
+func startOCIRegistryImage(t *testing.T, image string, options []string) string {
+	t.Helper()
 	requireDocker(t)
-	id := strings.TrimSpace(runStdout(t, "", nil, "docker", "run", "--detach", "--rm",
-		"--publish", "127.0.0.1::5000", "--env", "REGISTRY_LOG_LEVEL=error", ociFixtureRegistryImage))
+	args := append([]string{"run", "--detach", "--rm", "--publish", "127.0.0.1::5000"}, options...)
+	args = append(args, image)
+	id := strings.TrimSpace(runStdout(t, "", nil, "docker", args...))
 	t.Cleanup(func() {
 		if t.Failed() {
 			_, _ = runAllowFail(t, "", nil, "docker", "logs", id)

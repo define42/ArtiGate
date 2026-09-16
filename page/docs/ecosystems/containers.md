@@ -122,7 +122,9 @@ It is re-read on **every collect** (rotate it without a restart), applies to man
 
 ## Internals
 
-**Bearer token dance.** The stdlib registry client requests `<apiBase>/v2/<repository>/<path>`. On a `401` it reads `Www-Authenticate`: a `Bearer` challenge fetches a token from the realm with scope `repository:<repository>:pull` (adding HTTP Basic credentials when the registry has a login configured) and retries once; a `Basic` challenge answers with the configured login directly, or fails with guidance when there is none. A persistent `401` is a hard error — `credentials for <registry> were not accepted` with a login, or `the image may be private; supply a login on the pull (auth field) or set ARTIGATE_CONTAINER_AUTH` without one. One Authorization value is cached per `<registry>/<repository>` for the whole collect run. The `Authorization` header is set per-request only, so `net/http` drops it on cross-host CDN (S3 blob) redirects, avoiding token or login leakage.
+**Bearer token dance.** The stdlib registry client requests `<apiBase>/v2/<repository>/<path>`. On a `401` it reads all `WWW-Authenticate` headers, including combined challenges and quoted values containing commas or escapes. It prefers `Bearer` and fetches a token from the realm, preserving its query parameters and the challenged scope (defaulting to `repository:<repository>:pull`). Configured credentials are added as HTTP Basic at the token endpoint. If only `Basic` is offered, the client answers with the configured login or fails with guidance when there is none. A failed Bearer exchange never falls back to Basic. Token realms must be absolute HTTP(S) URLs without embedded credentials or fragments; errors omit token URLs and upstream response data.
+
+The registry request is retried once. A persistent `401` is a hard error — `credentials for <registry> were not accepted` with a login, or `the image may be private; supply a login on the pull (auth field) or set ARTIGATE_CONTAINER_AUTH` without one. One Authorization value is cached per `<registry>/<repository>` for the whole collect run and set per request.
 
 **Manifest resolution.** Manifests are requested with an `Accept` header covering Docker and OCI, single-image and index media types. A multi-platform index is unmarshalled and the **first entry with `os == "linux"` and `architecture == "amd64"`** is chosen and re-fetched by digest; attestation entries (`unknown/unknown`) never match. No amd64 manifest is a hard error: `image has no linux/amd64 manifest`. When a manifest is fetched by digest, its recomputed SHA-256 must match or the collect errors with `manifest digest mismatch`.
 
@@ -189,7 +191,9 @@ Traversal is bounded to 64 artifact documents, 256 artifact-manifest fetch attem
 
 The repository stores each artifact by immutable digest and resolves its mutable tags in one repository-wide map. When a signature tag changes, the tag serves the new artifact and the old artifact remains pullable by digest, including its blobs. A refresh that discovers fewer attachments, including a failed discovery request, preserves previously imported artifacts. Absence from a collection does not delete an attachment.
 
-`GET /v2/<name>/referrers/<digest>` advertises only matching `subject` relationships found in the stored manifest bytes. Artifact type and annotations also come from those bytes. A legacy cosign tag or a BuildKit index annotation alone does not create an OCI referrer; these artifacts remain available through their imported tags or digests. `?artifactType=...` filters the native referrers. Artifact tags stay out of `tags/list`, which lists collected image tags.
+`GET /v2/<name>/referrers/<digest>` advertises only matching `subject` relationships found in the stored manifest bytes. Artifact type and annotations also come from those bytes. A legacy cosign tag or a BuildKit index annotation alone does not create an OCI referrer; these artifacts remain available through their imported tags or digests. `?artifactType=...` filters the native referrers. `tags/list` includes all current pullable image and artifact tags, including legacy cosign tags, with duplicates removed.
+
+Both high-side discovery endpoints support `n` and `last` pagination and return a relative `Link: rel="next"` when another page exists. Pages contain at most 1,000 entries; referrer responses also stay within 4 MiB. Follow the returned link to preserve the artifact-type filter and cursor. Tags use case-insensitive lexical ordering with a deterministic tie-break; referrers use digest ordering. `n=0` returns an empty page without a continuation link. Invalid or repeated pagination parameters return `400`. An individual referrer descriptor too large for a page produces an explicit error instead of silently losing metadata.
 
 Existing repository indexes are rebuilt automatically on first access or import, using stored manifests, and the upgraded index is saved atomically. No re-collection is needed for native relationship repair. Old indexes did not record when conflicting signature tags were observed: migration preserves their first effective mapping and logs the conflict; collecting the image again resolves that tag from upstream. A missing or corrupt stored artifact prevents migration and leaves the existing index intact.
 
@@ -201,10 +205,10 @@ Update the high side before collecting index artifacts or subjectless artifact n
 |---|---|
 | `GET /v2/` | version probe: `{}`, header `Docker-Distribution-API-Version: registry/2.0` |
 | `GET /v2/_catalog` | `{"repositories": ["docker.io/library/alpine", ...]}` (empty is `[]`) |
-| `GET /v2/<name>/tags/list` | `{"name": "<name>", "tags": [...]}` — tagged images only, sorted |
+| `GET\|HEAD /v2/<name>/tags/list` | `{"name": "<name>", "tags": [...]}` — current image and artifact tags, sorted and paginated |
 | `GET\|HEAD /v2/<name>/manifests/<ref>` | manifest by tag or `sha256:` digest |
 | `GET\|HEAD /v2/<name>/blobs/<digest>` | blob by `sha256:` digest |
-| `GET\|HEAD /v2/<name>/referrers/<digest>` | OCI index of genuine native referrers, optionally filtered by `artifactType` |
+| `GET\|HEAD /v2/<name>/referrers/<digest>` | Paginated OCI index of genuine native referrers, optionally filtered by `artifactType` |
 
 `<name>` is the registry-namespaced repository, e.g. `docker.io/library/alpine`. Because the name itself contains slashes, the route keyword is matched immediately before the final reference; repository components may themselves be named `manifests`, `blobs`, or `referrers`. A manifest response sets `Content-Type` to the stored `media_type`, plus `Docker-Content-Digest` and `Content-Length`; `HEAD` returns headers only. Blobs are served via `http.ServeFile` with `Content-Type: application/octet-stream` and `Docker-Content-Digest`.
 
@@ -242,7 +246,7 @@ oras pull <high-host>/ghcr.io/org/artifact:v1
 oras cp --recursive --to-oci-layout <high-host>/ghcr.io/org/artifact:v1 ./artifact-layout:v1
 ```
 
-Legacy cosign signature tags remain separate from that native graph and can be verified against the mirror with the original public key. CI exercises real ORAS discovery/copy/pull and local-key cosign verification through a signed low-to-high transfer, using a local upstream registry.
+Legacy cosign signature tags remain separate from that native graph and can be verified against the mirror with the original public key. CI exercises real ORAS discovery/copy/pull and local-key cosign verification through a signed low-to-high transfer, using a local upstream registry. It also runs the unmodified, pinned OCI Distribution v1.1.1 pull and discovery conformance workflows, including native referrers and tag pagination. A fixture gateway sends the suite's setup writes to a local upstream and waits for signed import before forwarding every read assertion to the high side. Push and content-management workflows are disabled. CI retains the HTML and JUnit reports.
 
 ### HTTPS vs. insecure-registries
 

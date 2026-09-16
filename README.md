@@ -216,6 +216,8 @@ and environment variable.
   index attachments and nested attachments retain their required manifests
   and blobs; a missing required child rejects that attachment. The same
   collect endpoint accepts opaque OCI artifacts, including empty blobs.
+  High-side tag and referrer listings support bounded pagination; tag lists
+  include current artifact tags as well as image tags.
 
   The tag position also takes a **version constraint**, resolved against the
   upstream tag list at collect time to the newest matching version:

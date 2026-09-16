@@ -85,6 +85,21 @@ jobs:
             "$oci_tools_dir/cosign" | sha256sum -c -
           sudo install -m 0755 "$oci_tools_dir/cosign" /usr/local/bin/cosign
 
+      - name: Build pinned OCI Distribution conformance suite
+        run: |
+          # distribution-spec v1.1.1. Its standalone module stays outside
+          # ArtiGate's dependency graph; pin the source commit as well as release.
+          oci_conformance_src="${RUNNER_TEMP}/oci-distribution-spec"
+          git init "$oci_conformance_src"
+          git -C "$oci_conformance_src" fetch --depth 1 \
+            https://github.com/opencontainers/distribution-spec.git \
+            a139cc423184af6078077b9b7ee336eddbd03f8f
+          git -C "$oci_conformance_src" checkout --detach FETCH_HEAD
+          go -C "$oci_conformance_src/conformance" test -c \
+            -ldflags '-X github.com/opencontainers/distribution-spec/conformance.Version=v1.1.1' \
+            -o "${RUNNER_TEMP}/oci-clients/oci-distribution-conformance"
+          sudo install -m 0755 "${RUNNER_TEMP}/oci-clients/oci-distribution-conformance" /usr/local/bin/oci-distribution-conformance
+
       - name: Preflight tool and upstream checks
         run: |
           set -x
@@ -172,4 +187,12 @@ jobs:
         with:
           name: e2e-server-logs
           path: ${{ runner.temp }}/artigate-e2e/*.log
+          if-no-files-found: ignore
+
+      - name: Upload OCI conformance reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oci-distribution-conformance-v1.1.1
+          path: ${{ runner.temp }}/artigate-e2e/oci-conformance/**
           if-no-files-found: ignore

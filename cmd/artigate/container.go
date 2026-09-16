@@ -616,7 +616,7 @@ func (c *containerClient) get(ctx context.Context, ref imageRef, urlPath, accept
 	if resp.StatusCode != http.StatusUnauthorized {
 		return resp, nil
 	}
-	challenge := resp.Header.Get("Www-Authenticate")
+	challenge := strings.Join(resp.Header.Values("Www-Authenticate"), ",")
 	_ = resp.Body.Close()
 	authorization, err := c.authorizeChallenge(ctx, challenge, ref)
 	if err != nil {
@@ -639,22 +639,31 @@ func (c *containerClient) get(ctx context.Context, ref imageRef, urlPath, accept
 // (authenticated with the registry's login when one is configured), a Basic
 // challenge answers with the login directly.
 func (c *containerClient) authorizeChallenge(ctx context.Context, challenge string, ref imageRef) (string, error) {
-	cred := c.credentialFor(ref.Registry)
-	scheme, _, _ := strings.Cut(strings.TrimSpace(challenge), " ")
-	switch {
-	case strings.EqualFold(scheme, "Bearer"):
-		token, err := c.fetchToken(ctx, challenge, ref.Repository, cred)
-		if err != nil {
-			return "", err
-		}
-		return "Bearer " + token, nil
-	case strings.EqualFold(scheme, "Basic") && cred != nil:
-		return "Basic " + base64.StdEncoding.EncodeToString([]byte(cred.Username+":"+cred.Password)), nil
-	case strings.EqualFold(scheme, "Basic"):
-		return "", fmt.Errorf("registry requires a login — supply one on the pull (auth field) or set %s", containerAuthEnv)
-	default:
-		return "", fmt.Errorf("registry requires unsupported authentication %q (Bearer and Basic are supported)", scheme)
+	challenges, err := parseContainerAuthChallenges(challenge)
+	if err != nil {
+		return "", err
 	}
+	cred := c.credentialFor(ref.Registry)
+	hasBasic := false
+	for _, candidate := range challenges {
+		if strings.EqualFold(candidate.scheme, "Bearer") {
+			// Prefer Bearer regardless of header order. A failed token exchange
+			// must not silently downgrade to sending Basic credentials instead.
+			token, err := c.fetchToken(ctx, "Bearer "+strings.Join(candidate.fields, ","), ref.Repository, cred)
+			if err != nil {
+				return "", err
+			}
+			return "Bearer " + token, nil
+		}
+		hasBasic = hasBasic || strings.EqualFold(candidate.scheme, "Basic")
+	}
+	if hasBasic && cred != nil {
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(cred.Username+":"+cred.Password)), nil
+	}
+	if hasBasic {
+		return "", fmt.Errorf("registry requires a login — supply one on the pull (auth field) or set %s", containerAuthEnv)
+	}
+	return "", errors.New("registry offers no supported authentication challenge (Bearer and Basic are supported)")
 }
 
 // unauthorizedPullError renders the final 401 after an answered challenge:
@@ -676,9 +685,8 @@ func (c *containerClient) doContainerGet(ctx context.Context, rawURL, accept, au
 		req.Header.Set("Accept", accept)
 	}
 	if authorization != "" {
-		// net/http drops Authorization on cross-host redirects, so a CDN
-		// redirect for a blob (S3 etc.) is followed without leaking the token
-		// or login.
+		// net/http applies its redirect policy to this request header,
+		// omitting Authorization when following redirects to unrelated hosts.
 		req.Header.Set("Authorization", authorization)
 	}
 	return http.DefaultClient.Do(req)
@@ -695,7 +703,7 @@ func (c *containerClient) fetchToken(ctx context.Context, challenge, repository 
 	}
 	tokenEndpoint, err := url.Parse(realm)
 	if err != nil {
-		return "", fmt.Errorf("parse token endpoint: %w", err)
+		return "", &containerAuthError{message: "invalid token endpoint", cause: err}
 	}
 	q := tokenEndpoint.Query()
 	if svc := params["service"]; svc != "" {
@@ -712,29 +720,33 @@ func (c *containerClient) fetchToken(ctx context.Context, challenge, repository 
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenEndpoint.String(), nil)
 	if err != nil {
-		return "", err
+		return "", &containerAuthError{message: "create token endpoint request failed", cause: err}
 	}
 	if cred != nil {
 		req.SetBasicAuth(cred.Username, cred.Password)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", &containerAuthError{message: "token endpoint request failed", cause: err}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", err
+		return "", &containerAuthError{message: "read token endpoint response failed", cause: err}
 	}
 	if resp.StatusCode != http.StatusOK {
 		if cred != nil {
 			// Registries with token auth reject bad logins here, not on the
 			// retried registry request.
-			return "", fmt.Errorf("token endpoint %s: HTTP %d — the configured credentials were not accepted", realm, resp.StatusCode)
+			return "", fmt.Errorf("token endpoint: HTTP %d — the configured credentials were not accepted", resp.StatusCode)
 		}
-		return "", fmt.Errorf("token endpoint %s: HTTP %d", realm, resp.StatusCode)
+		return "", fmt.Errorf("token endpoint: HTTP %d", resp.StatusCode)
 	}
-	return parseTokenResponse(body)
+	token, err := parseTokenResponse(body)
+	if err != nil {
+		return "", &containerAuthError{message: "invalid token endpoint response", cause: err}
+	}
+	return token, nil
 }
 
 // parseTokenResponse extracts the bearer token from a token endpoint reply,
@@ -754,32 +766,6 @@ func parseTokenResponse(body []byte) (string, error) {
 		return "", errors.New("token endpoint returned no token")
 	}
 	return tok.Token, nil
-}
-
-// parseBearerChallenge extracts the realm and parameters from a header like
-// `Bearer realm="https://auth.docker.io/token",service="registry.docker.io"`.
-func parseBearerChallenge(challenge string) (realm string, params map[string]string, err error) {
-	scheme, rest, _ := strings.Cut(strings.TrimSpace(challenge), " ")
-	if !strings.EqualFold(scheme, "Bearer") {
-		return "", nil, fmt.Errorf("expected a Bearer challenge, got %q", scheme)
-	}
-	params = map[string]string{}
-	for _, part := range strings.Split(rest, ",") {
-		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
-		if !ok {
-			continue
-		}
-		params[strings.ToLower(k)] = strings.Trim(v, `"`)
-	}
-	realm = params["realm"]
-	if realm == "" {
-		return "", nil, errors.New("Bearer challenge has no realm")
-	}
-	u, err := url.Parse(realm)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return "", nil, fmt.Errorf("invalid Bearer realm %q", realm)
-	}
-	return realm, params, nil
 }
 
 // resolvedImage is fetchContainerManifest's result: the linux/amd64 image
@@ -2252,7 +2238,7 @@ func (s *HighServer) handleContainerResource(w http.ResponseWriter, r *http.Requ
 			registryError(w, http.StatusNotFound, "NAME_INVALID", "invalid repository name")
 			return
 		}
-		s.handleContainerTags(w, name)
+		s.handleContainerTags(w, r, name)
 		return
 	}
 	if i := strings.LastIndex(rest, "/"); i > 0 {
@@ -2302,20 +2288,24 @@ func validContainerName(name string) bool {
 	return true
 }
 
-func (s *HighServer) handleContainerTags(w http.ResponseWriter, name string) {
+func (s *HighServer) handleContainerTags(w http.ResponseWriter, r *http.Request, name string) {
+	page, err := parseContainerPagination(r.URL.RawQuery, false)
+	if err != nil {
+		registryError(w, http.StatusBadRequest, "UNSUPPORTED", err.Error())
+		return
+	}
 	repo, err := s.loadContainerRepoIndex(name)
 	if err != nil {
 		registryError(w, http.StatusNotFound, "NAME_UNKNOWN", "repository not found")
 		return
 	}
-	tags := []string{}
-	for _, img := range repo.Images {
-		if img.Tag != "" {
-			tags = append(tags, img.Tag)
-		}
+	tags, last := paginateContainerTags(containerRepositoryTags(repo), page)
+	body, err := json.Marshal(map[string]any{"name": name, "tags": tags})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-	sort.Strings(tags)
-	writeJSON(w, map[string]any{"name": name, "tags": tags})
+	writeContainerPage(w, r, page, last, "application/json; charset=utf-8", body)
 }
 
 // maxServedManifestBytes bounds both collection and serving of container and
@@ -2440,28 +2430,25 @@ func (s *HighServer) handleContainerReferrers(w http.ResponseWriter, r *http.Req
 		registryError(w, http.StatusBadRequest, "DIGEST_INVALID", "invalid digest")
 		return
 	}
+	page, err := parseContainerPagination(r.URL.RawQuery, true)
+	if err != nil {
+		registryError(w, http.StatusBadRequest, "UNSUPPORTED", err.Error())
+		return
+	}
 	repo, err := s.loadContainerRepoIndex(name)
 	if err != nil {
 		registryError(w, http.StatusNotFound, "NAME_UNKNOWN", "repository not found")
 		return
 	}
-	filter := r.URL.Query().Get("artifactType")
-	index := ociReferrersIndex{
-		SchemaVersion: 2,
-		MediaType:     mtOCIIndex,
-		Manifests:     containerReferrerDescriptors(repo, digest, filter),
-	}
-	b, err := json.Marshal(index)
+	b, last, err := paginateContainerReferrers(containerReferrerDescriptors(repo, digest, page.ArtifactType), page)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if filter != "" {
+	if page.ArtifactType != "" {
 		w.Header().Set("OCI-Filters-Applied", "artifactType")
 	}
-	w.Header().Set("Content-Type", mtOCIIndex)
-	w.Header().Set("Content-Length", fmt.Sprint(len(b)))
-	_, _ = w.Write(b)
+	writeContainerPage(w, r, page, last, mtOCIIndex, b)
 }
 
 // containerReferrerDescriptors lists the repository's native referrers for a
