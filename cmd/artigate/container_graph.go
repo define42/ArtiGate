@@ -76,6 +76,7 @@ func (a *artifactCollector) seedImageSubject(ctx context.Context, resolved resol
 		return
 	}
 	if err := a.collectGraph(ctx, "", "", resolved.Manifest, resolved.MediaType, resolved.Digest, nil, false); err != nil {
+		noteContainerDiscoveryIssue(ctx, "artifact_invalid", resolved.Digest)
 		emitProgress(ctx, "    ⚠ image subject %s: %v", shortDigest(resolved.Digest), err)
 	}
 }
@@ -97,6 +98,7 @@ func (a *artifactCollector) discoverSubject(ctx context.Context, subject string,
 		return
 	}
 	visited[subject] = true
+	noteContainerDiscoverySubject(ctx, subject)
 	for _, suffix := range []string{".sig", ".att", ".sbom"} {
 		a.addByTag(ctx, subject, cosignArtifactTag(subject, suffix))
 	}
@@ -159,7 +161,7 @@ func (g *containerArtifactGraph) stage(ctx context.Context, subject, tag string,
 	}
 	if depth > containerMaxArtifactDepth || len(g.pending)+len(g.collector.found) >= containerMaxImageArtifacts {
 		g.collector.warnCapped(ctx)
-		return errors.New("artifact graph exceeds depth or manifest limit")
+		return &containerArtifactLimitError{}
 	}
 	art, files, err := g.stager.stageArtifact(ctx, subject, tag, body, mediaType, digest, desc, requireSubject)
 	if err != nil {
@@ -194,15 +196,16 @@ func (g *containerArtifactGraph) stageChild(ctx context.Context, child Container
 		return nil
 	}
 	if depth > containerMaxArtifactDepth || g.collector.capReached(ctx) || len(g.pending)+len(g.collector.found) >= containerMaxImageArtifacts {
-		return errors.New("artifact graph exceeds depth, manifest, or fetch limit")
+		g.collector.warnCapped(ctx)
+		return &containerArtifactLimitError{}
 	}
 	g.collector.attempts++
 	body, mediaType, digest, found, err := g.collector.c.fetchArtifactManifest(ctx, g.collector.ref, child.Digest)
 	if err != nil {
-		return err
+		return &containerArtifactFetchError{cause: err}
 	}
 	if !found {
-		return errors.New("required manifest missing upstream")
+		return &containerArtifactFetchError{cause: errors.New("required manifest missing upstream")}
 	}
 	if int64(len(body)) != child.Size || mediaType != child.MediaType {
 		return errors.New("artifact child descriptor does not match fetched manifest")

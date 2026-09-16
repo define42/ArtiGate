@@ -418,6 +418,7 @@ func (s *LowServer) serveMetrics(w http.ResponseWriter, r *http.Request) {
 	s.collectScheduleMetrics(p)
 	s.collectJobMetrics(p)
 	s.collectCollectMetrics(p)
+	s.collectContainerDiscoveryMetrics(p)
 	writeDiskMetrics(p, []diskTarget{
 		{label: "root", path: s.cfg.Root},
 		{label: "export", path: s.cfg.ExportDir},

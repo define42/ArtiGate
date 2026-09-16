@@ -124,6 +124,8 @@ It is re-read on **every collect** (rotate it without a restart), applies to man
 
 **Bearer token dance.** The stdlib registry client requests `<apiBase>/v2/<repository>/<path>`. On a `401` it reads all `WWW-Authenticate` headers, including combined challenges and quoted values containing commas or escapes. It prefers `Bearer` and fetches a token from the realm, preserving its query parameters and the challenged scope (defaulting to `repository:<repository>:pull`). Configured credentials are added as HTTP Basic at the token endpoint. If only `Basic` is offered, the client answers with the configured login or fails with guidance when there is none. A failed Bearer exchange never falls back to Basic. Token realms must be absolute HTTP(S) URLs without embedded credentials or fragments; errors omit token URLs and upstream response data.
 
+Registry and token requests compare redirect origins by scheme, hostname, and effective port. Credentials are stripped permanently when a redirect leaves the original origin, including on a later redirect back. A redirected `401` cannot cause ArtiGate to answer with the original registry's login. HTTPS downgrades are rejected; anonymous downloads through signed CDN URLs remain supported. With a registry override, the configured mirror is the registry request's original origin. Redirect errors hide URL query secrets.
+
 The registry request is retried once. A persistent `401` is a hard error — `credentials for <registry> were not accepted` with a login, or `the image may be private; supply a login on the pull (auth field) or set ARTIGATE_CONTAINER_AUTH` without one. One Authorization value is cached per `<registry>/<repository>` for the whole collect run and set per request.
 
 **Manifest resolution.** Manifests are requested with an `Accept` header covering Docker and OCI, single-image and index media types. A multi-platform index is unmarshalled and the **first entry with `os == "linux"` and `architecture == "amd64"`** is chosen and re-fetched by digest; attestation entries (`unknown/unknown`) never match. No amd64 manifest is a hard error: `image has no linux/amd64 manifest`. When a manifest is fetched by digest, its recomputed SHA-256 must match or the collect errors with `manifest digest mismatch`.
@@ -198,6 +200,41 @@ Both high-side discovery endpoints support `n` and `last` pagination and return 
 Existing repository indexes are rebuilt automatically on first access or import, using stored manifests, and the upgraded index is saved atomically. No re-collection is needed for native relationship repair. Old indexes did not record when conflicting signature tags were observed: migration preserves their first effective mapping and logs the conflict; collecting the image again resolves that tag from upstream. A missing or corrupt stored artifact prevents migration and leaves the existing index intact.
 
 Update the high side before collecting index artifacts or subjectless artifact nodes with the updated low side: older importers reject these new graph records.
+
+### Attachment discovery status
+
+A successful image pull can still have incomplete attachment discovery. Each collected image therefore has a separate observation with state `complete`, `incomplete`, or `unknown`, counts of collected artifacts and checked subjects, a check time, the last complete check for that digest, and up to 16 distinct issues. Additional issues are counted in `issues_dropped`. These states describe discovery coverage; they do **not** verify signatures or establish trust.
+
+Collect responses include `container_discovery` records, including when export deduplication produces no new bundle. `GET /admin/containers/discovery` returns the durable low-side observations as `{"records": [...]}`. The Containers dashboard shows them with incomplete observations first. Each record names its registry, repository, served digest, and current tags. The snapshot is written atomically to `<low-root>/containers/discovery.json`; history remains available by digest after tags move. Last-success times never transfer to a different digest.
+
+Issue codes are `referrers_api`, `referrers_fallback`, `legacy_fetch`, `artifact_fetch`, `artifact_invalid`, `discovery_limit`, and `cancelled`. Issues contain only a fixed code and an optional subject digest, never upstream URLs or error bodies. An absent legacy cosign tag is normal; a failed lookup or an unavailable artifact advertised by discovery makes the observation incomplete. Retry collection after correcting the cause. Existing imported attachments remain available.
+
+If the root image or its required graph cannot be collected, the existing collection error or `skipped_modules` reports that failure. The previous discovery observation keeps its original timestamp; a failed root pull does not create a fresh successful observation.
+
+State, count, or issue changes cross the diode in signed metadata even when the image bytes are unchanged. Timestamp-only changes do not force another bundle. The high-side image details expose `container_discovery` and display the most recently **exported** observation, which may be older than the latest low-side check. Previously imported images without observations display `unknown`. Dry runs report `unknown` and do not update durable status or last-success times.
+
+Prometheus exposes aggregate `artigate_low_container_discovery_records{state}` and `artigate_low_container_discovery_issues{code}` gauges, artifact counts by state, omitted-issue counts, newest check/success timestamps, and a `status_read_error` gauge under the same prefix. Labels never contain repository names, digests, or free-form errors. Alert on `artigate_low_container_discovery_records{state="incomplete"} > 0` and `artigate_low_container_discovery_status_read_error > 0`. Records include retained digest history; a historical incomplete record remains until that digest is collected successfully.
+
+### Offline integrity checks and repair
+
+Stop the high side before running the offline checker against its storage root:
+
+```bash
+artigate containers check --root /var/lib/artigate-high
+artigate containers check --root /var/lib/artigate-high --repository docker.io/library/alpine --json
+```
+
+The default is strictly read-only and makes no network requests. It verifies repository identities, manifest bytes, SHA-256 digests, declared sizes, configs and layers, required artifact graphs, tag mappings, and derived artifact indexes. It does not require unmirrored platform siblings from a preserved image index. A missing root is an error; an existing root with no container repositories reports zero repositories.
+
+To rebuild derived artifact metadata and native subject relationships from verified stored manifests:
+
+```bash
+artigate containers check --root /var/lib/artigate-high --repair
+```
+
+Repair preserves authorized artifacts by digest, current tag aliases, and unrelated repository metadata. Every selected repository is validated before writes begin; any missing/corrupt content, ambiguous legacy alias, incomplete required graph, or missing authoritative artifact map prevents repair. Unrecognized fields inside the derived artifact index also prevent repair, so a rebuild cannot discard metadata written by a newer version. Each changed index is replaced atomically. This is not a transaction across multiple repositories: an I/O failure during replacement can leave earlier repositories repaired, so rerun the checker after resolving it. Keep the high side stopped throughout.
+
+Repair cannot recreate missing blobs or decide which conflicting legacy tag was newest. Recollect affected content on the low side (`force: true` for a full bundle), transfer and import it, then check again. JSON reports include `ok`, `repositories` with issue codes and repairability, `blobs_checked`, and `repaired`. Exit status is `0` for clean or repaired content, `1` for unresolved issues or operational errors, and `2` for invalid CLI arguments.
 
 ### Routes
 

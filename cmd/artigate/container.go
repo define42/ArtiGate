@@ -108,11 +108,12 @@ type ContainerRepo struct {
 // SHA-256 of the stored manifest blob; Blobs lists the config and layers it
 // references (all stored content-addressed under containers/blobs/).
 type ContainerImage struct {
-	Tag       string          `json:"tag,omitempty"`
-	Digest    string          `json:"digest"`
-	MediaType string          `json:"media_type"`
-	Size      int64           `json:"size"`
-	Blobs     []ContainerBlob `json:"blobs"`
+	Discovery *ContainerDiscoveryStatus `json:"discovery,omitempty"`
+	Tag       string                    `json:"tag,omitempty"`
+	Digest    string                    `json:"digest"`
+	MediaType string                    `json:"media_type"`
+	Size      int64                     `json:"size"`
+	Blobs     []ContainerBlob           `json:"blobs"`
 	// Index preserves the multi-platform index the reference resolved
 	// through, when there was one. The high side serves these exact bytes for
 	// the tag, so the digest a client resolves — and any cosign signature
@@ -609,12 +610,16 @@ func (c *containerClient) credentialFor(registry string) *registryCredential {
 func (c *containerClient) get(ctx context.Context, ref imageRef, urlPath, accept string) (*http.Response, error) {
 	full := c.ls.containerAPIBase(ref.Registry) + "/v2/" + ref.Repository + "/" + urlPath
 	key := ref.Registry + "/" + ref.Repository
-	resp, err := c.doContainerGet(ctx, full, accept, c.auths[key])
+	resp, sameOrigin, err := c.doContainerGet(ctx, full, accept, c.auths[key])
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusUnauthorized {
 		return resp, nil
+	}
+	if !sameOrigin {
+		_ = resp.Body.Close()
+		return nil, errors.New("refusing registry authentication after an origin-changing redirect")
 	}
 	challenge := strings.Join(resp.Header.Values("Www-Authenticate"), ",")
 	_ = resp.Body.Close()
@@ -623,13 +628,16 @@ func (c *containerClient) get(ctx context.Context, ref imageRef, urlPath, accept
 		return nil, fmt.Errorf("%s: %w", ref.Registry, err)
 	}
 	c.auths[key] = authorization
-	resp, err = c.doContainerGet(ctx, full, accept, authorization)
+	resp, sameOrigin, err = c.doContainerGet(ctx, full, accept, authorization)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		_ = resp.Body.Close()
-		return nil, c.unauthorizedPullError(ref.Registry, full)
+		if !sameOrigin {
+			return nil, errors.New("refusing registry authentication after an origin-changing redirect")
+		}
+		return nil, c.unauthorizedPullError(ref.Registry)
 	}
 	return resp, nil
 }
@@ -669,27 +677,28 @@ func (c *containerClient) authorizeChallenge(ctx context.Context, challenge stri
 // unauthorizedPullError renders the final 401 after an answered challenge:
 // with a login configured the registry rejected it; anonymously the image
 // needs one.
-func (c *containerClient) unauthorizedPullError(registry, fullURL string) error {
+func (c *containerClient) unauthorizedPullError(registry string) error {
 	if c.credentialFor(registry) != nil {
-		return fmt.Errorf("GET %s: unauthorized — the credentials for %s were not accepted", fullURL, registry)
+		return fmt.Errorf("registry unauthorized — the credentials for %s were not accepted", registry)
 	}
-	return fmt.Errorf("GET %s: unauthorized — the image may be private; supply a login on the pull (auth field) or set %s", fullURL, containerAuthEnv)
+	return fmt.Errorf("registry unauthorized — the image may be private; supply a login on the pull (auth field) or set %s", containerAuthEnv)
 }
 
-func (c *containerClient) doContainerGet(ctx context.Context, rawURL, accept, authorization string) (*http.Response, error) {
+func (c *containerClient) doContainerGet(
+	ctx context.Context,
+	rawURL, accept, authorization string,
+) (*http.Response, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, &containerAuthError{message: "invalid registry request", cause: err}
 	}
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
 	if authorization != "" {
-		// net/http applies its redirect policy to this request header,
-		// omitting Authorization when following redirects to unrelated hosts.
 		req.Header.Set("Authorization", authorization)
 	}
-	return http.DefaultClient.Do(req)
+	return doContainerRequest(req)
 }
 
 // fetchToken obtains a pull token from the endpoint named in a Bearer
@@ -725,7 +734,7 @@ func (c *containerClient) fetchToken(ctx context.Context, challenge, repository 
 	if cred != nil {
 		req.SetBasicAuth(cred.Username, cred.Password)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, _, err := doContainerRequest(req)
 	if err != nil {
 		return "", &containerAuthError{message: "token endpoint request failed", cause: err}
 	}
@@ -1047,11 +1056,11 @@ func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRe
 	defer cancel()
 	resp, err := c.get(ctx, ref, "blobs/"+desc.Digest, "")
 	if err != nil {
-		return ManifestFile{}, err
+		return ManifestFile{}, &containerArtifactFetchError{cause: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return ManifestFile{}, fmt.Errorf("%s: blob %s: HTTP %d", ref, desc.Digest, resp.StatusCode)
+		return ManifestFile{}, &containerArtifactFetchError{cause: fmt.Errorf("%s: blob %s: HTTP %d", ref, desc.Digest, resp.StatusCode)}
 	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
 	body := newProgressReader(ctx, resp.Body, "blob "+shortDigest(desc.Digest), desc.Size)
@@ -1168,6 +1177,10 @@ func (s *LowServer) CollectContainers(ctx context.Context, req ContainerCollectR
 	if len(repos) == 0 {
 		return ExportResult{}, fmt.Errorf("no images could be fetched: %s", summarizeFailures(failed))
 	}
+	discovery, err := s.updateContainerDiscovery(ctx, repos)
+	if err != nil {
+		return ExportResult{}, err
+	}
 	metadata, err := containerExportMetadata(repos)
 	if err != nil {
 		return ExportResult{}, err
@@ -1181,6 +1194,7 @@ func (s *LowServer) CollectContainers(ctx context.Context, req ContainerCollectR
 		return ExportResult{}, err
 	}
 	res.SkippedModules = failed
+	res.ContainerDiscovery = discovery
 	return res, nil
 }
 
@@ -1191,6 +1205,16 @@ func containerExportMetadata(repos []ContainerRepo) ([]ExportMetadata, error) {
 	var metadata []ExportMetadata
 	for _, repo := range repos {
 		for _, img := range repo.Images {
+			// Refresh timestamps remain current in the low snapshot, while only
+			// changes in coverage make an otherwise identical collect export.
+			if img.Discovery != nil {
+				status := *img.Discovery
+				if status.estimatedState != "" {
+					status.State = status.estimatedState
+				}
+				status.CheckedAt, status.LastSuccessAt = "", ""
+				img.Discovery = &status
+			}
 			// Referrers may arrive in a different order without any change.
 			img.Artifacts = slices.Clone(img.Artifacts)
 			sort.Slice(img.Artifacts, func(i, j int) bool { return img.Artifacts[i].Digest < img.Artifacts[j].Digest })
@@ -1301,12 +1325,14 @@ func (s *LowServer) mirrorContainerImages(ctx context.Context, refs []imageRef, 
 
 	for _, ref := range refs {
 		emitProgress(ctx, "→ %s", ref)
-		img, mf, err := client.resolveAndMirrorImage(ctx, ref, stageRoot, staged)
+		imageContext, tracker := withContainerDiscovery(ctx)
+		img, mf, err := client.resolveAndMirrorImage(imageContext, ref, stageRoot, staged)
 		if err != nil {
 			emitProgress(ctx, "  ✗ %s: %s", ref, err)
 			failed = append(failed, FailedModule{Module: ref.Registry + "/" + ref.Repository, Version: refVersionLabel(ref), Error: err.Error()})
 			continue
 		}
+		img.Discovery = tracker.finish(imageContext, img)
 		emitProgress(ctx, "  ✓ %s (%d blob(s))", ref, len(mf))
 		for _, f := range mf {
 			if !listed[f.Path] {
@@ -1599,6 +1625,7 @@ func (a *artifactCollector) addByTag(ctx context.Context, subject, tag string) {
 	a.attempts++
 	body, mediaType, digest, found, err := a.c.fetchArtifactManifest(ctx, a.ref, tag)
 	if err != nil {
+		noteContainerDiscoveryIssue(ctx, "legacy_fetch", subject)
 		emitProgress(ctx, "    ⚠ artifact %s: %v", tag, err)
 		return
 	}
@@ -1636,7 +1663,11 @@ func (a *artifactCollector) addDescriptor(
 	desc ociDescriptor,
 	requireSubject bool,
 ) {
-	if !containerDigestRE.MatchString(desc.Digest) || a.skip[desc.Digest] || a.found[desc.Digest] != nil {
+	if !containerDigestRE.MatchString(desc.Digest) {
+		noteContainerDiscoveryIssue(ctx, "artifact_invalid", subject)
+		return
+	}
+	if a.skip[desc.Digest] || a.found[desc.Digest] != nil {
 		return
 	}
 	if a.capReached(ctx) {
@@ -1645,6 +1676,7 @@ func (a *artifactCollector) addDescriptor(
 	a.attempts++
 	body, mediaType, digest, found, err := a.c.fetchArtifactManifest(ctx, a.ref, desc.Digest)
 	if err != nil || !found {
+		noteContainerDiscoveryIssue(ctx, "artifact_fetch", subject)
 		if err == nil {
 			err = errors.New("listed as a referrer but missing upstream")
 		}
@@ -1687,6 +1719,7 @@ func (a *artifactCollector) record(
 	}
 	err := a.collectGraph(ctx, subject, tag, body, mediaType, digest, desc, requireSubject)
 	if err != nil {
+		noteContainerDiscoveryIssue(ctx, containerArtifactIssueCode(err), subject)
 		emitProgress(ctx, "    ⚠ artifact %s: %v", artifactLabel(tag, digest), err)
 		return
 	}
@@ -1751,6 +1784,7 @@ func (a *artifactCollector) stageArtifact(
 
 // warnCapped reports once that further attached artifacts are being skipped.
 func (a *artifactCollector) warnCapped(ctx context.Context) {
+	noteContainerDiscoveryIssue(ctx, "discovery_limit", "")
 	if !a.capped {
 		a.capped = true
 		emitProgress(ctx, "    ⚠ artifact discovery cap reached (%d mirrored, %d fetches); skipping the rest",
@@ -1932,6 +1966,9 @@ func validateContainerRepo(repo ContainerRepo, seen map[string]bool, shaByPath m
 }
 
 func validateContainerImage(img ContainerImage, seen map[string]bool, shaByPath map[string]string) error {
+	if err := validateContainerDiscovery(img.Discovery); err != nil {
+		return err
+	}
 	if img.Tag != "" && !containerTagRE.MatchString(img.Tag) {
 		return fmt.Errorf("invalid container tag %q", img.Tag)
 	}
@@ -2621,12 +2658,14 @@ func (s *HighServer) containerDetail(spec string) (UIDetail, error) {
 	// the dashboard prepends its own host and renders it as a prominent
 	// click-to-copy button, so the operator copies exactly what `docker pull`
 	// needs for this ArtiGate.
+	discovery := containerImageDiscovery(img)
 	return UIDetail{
-		Title:    name,
-		Subtitle: subtitle,
-		Fields:   containerDetailFields(repo, img),
-		CopyRef:  name + refSuffix(img),
-		Layers:   s.containerImageLayers(img),
+		Title:              name,
+		Subtitle:           subtitle,
+		Fields:             append(containerDetailFields(repo, img), containerDiscoveryDetailFields(discovery)...),
+		CopyRef:            name + refSuffix(img),
+		Layers:             s.containerImageLayers(img),
+		ContainerDiscovery: &discovery,
 	}, nil
 }
 

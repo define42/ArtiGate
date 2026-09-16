@@ -506,6 +506,8 @@ func (s *LowServer) serveLowAdmin(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	switch {
+	case r.URL.Path == "/admin/containers/discovery":
+		s.handleContainerDiscovery(w, r)
 	case r.URL.Path == "/admin/reexport" && r.Method == http.MethodPost:
 		res, err := s.HandleReexportRequest(r)
 		return respondJSONOrError(w, http.StatusBadRequest, res, err)
@@ -808,10 +810,11 @@ func (s *LowServer) saveStateLocked() error {
 }
 
 type ExportResult struct {
-	Stream          string `json:"stream,omitempty"`
-	Sequence        int64  `json:"sequence,omitempty"`
-	ExportedModules int    `json:"exported_modules"`
-	BundleID        string `json:"bundle_id,omitempty"`
+	ContainerDiscovery []ContainerDiscoveryRecord `json:"container_discovery,omitempty"`
+	Stream             string                     `json:"stream,omitempty"`
+	Sequence           int64                      `json:"sequence,omitempty"`
+	ExportedModules    int                        `json:"exported_modules"`
+	BundleID           string                     `json:"bundle_id,omitempty"`
 	// Skipped is set when a collect produced no bundle because every resolved
 	// file and tracked metadata record had already been forwarded on this
 	// stream. No sequence number is consumed.

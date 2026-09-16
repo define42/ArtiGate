@@ -694,6 +694,9 @@ type UIDetail struct {
 	// step ran, and the filesystem layer it produced), rendered as a box below
 	// the detail panel. Empty for non-container leaves.
 	Layers []UIImageLayer `json:"layers,omitempty"`
+	// ContainerDiscovery is the most recently exported attachment observation.
+	// Older images expose an explicit unknown state, never an implied success.
+	ContainerDiscovery *ContainerDiscoveryStatus `json:"container_discovery,omitempty"`
 }
 
 // UIDownload is one direct-download button in the detail panel: the artifact's

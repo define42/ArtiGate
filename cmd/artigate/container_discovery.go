@@ -28,10 +28,13 @@ func (c *containerClient) fetchReferrers(ctx context.Context, ref imageRef, subj
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	descs, supported, err := c.fetchReferrersAPI(ctx, ref, subject)
+	issueCode := "referrers_api"
 	if !supported && err == nil {
+		issueCode = "referrers_fallback"
 		descs, err = c.fetchReferrersFallbackTag(ctx, ref, subject)
 	}
 	if err != nil {
+		noteContainerDiscoveryIssue(ctx, issueCode, subject)
 		emitProgress(ctx, "    ⚠ referrers for %s: discovery incomplete (%d found): %v", shortDigest(subject), len(descs), err)
 		log.Printf("containers: %s referrers for %s: discovery incomplete (%d found): %v", ref, subject, len(descs), err)
 	}

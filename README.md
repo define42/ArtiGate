@@ -962,6 +962,20 @@ artigate_low_last_successful_collect_timestamp_seconds{stream="python"} 17200000
 artigate_disk_free_bytes{dir="export"} 5.36870912e+10
 ```
 
+Container attachment coverage is tracked separately from collect success. The
+Containers dashboard and `GET /admin/containers/discovery` show durable complete,
+incomplete, or unknown observations. Aggregate gauges include
+`artigate_low_container_discovery_records{state="incomplete"}`,
+`artigate_low_container_discovery_issues{code="artifact_fetch"}`, and
+`artigate_low_container_discovery_status_read_error`. These report discovery,
+not signature verification. See [container operations](page/docs/ecosystems/containers.md#attachment-discovery-status).
+
+With the high side stopped, `artigate containers check --root HIGH_ROOT` verifies
+stored OCI content without changing it or making network requests. Add `--json`
+for a machine-readable report, `--repository registry/repo` to select one repository,
+or `--repair` to rebuild derived indexes after content validation. Missing blobs
+and ambiguous aliases require recollection; see [offline repair](page/docs/ecosystems/containers.md#offline-integrity-checks-and-repair).
+
 The **high side** reports, per stream, the last-imported and highest-seen
 sequence, **import lag** (`highest_seen − last_imported`), whether the stream is
 **blocked** on a missing bundle and for how long (**gap age**), quarantine

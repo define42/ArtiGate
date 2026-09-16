@@ -490,6 +490,13 @@ const lowUIHTML = `<!DOCTYPE html>
     </div>
     <div id="ctrWatches" class="watchlist"></div>
   </div>
+  <div class="card">
+    <h2>Attachment discovery</h2>
+    <p class="hint">Latest observations for each collected image digest. Incomplete discovery keeps known attachments available; retry collection after resolving the reported issue. Discovery status does not verify signatures.</p>
+    <button id="ctrDiscoveryRefresh" class="secondary" type="button" onclick="loadContainerDiscovery()">Refresh discovery status</button>
+    <p id="ctrDiscoverySummary" class="hint" role="status" aria-live="polite">Open this page to load discovery status.</p>
+    <div id="ctrDiscoveryRecords"></div>
+  </div>
   </section>
 
   <section class="view" id="view-hf" hidden>
@@ -1239,7 +1246,7 @@ async function runCollect(o){
     if(!o.dry && o.forceId && o.body.force) document.getElementById(o.forceId).checked=false;
     let out;
     if(d && d.dry_run) out=dryRunMsg(d);
-    else if(d && d.skipped) out={cls:'ok', msg:'&#10003; No new content since the last export &mdash; nothing to send across the diode.'};
+    else if(d && d.skipped && !(d.container_discovery && d.container_discovery.length)) out={cls:'ok', msg:'&#10003; No new content since the last export &mdash; nothing to send across the diode.'};
     else out=o.render(d);
     // A failed upload to the HTTP diode endpoint is a warning, not an error:
     // the bundle is committed and archived, ready to re-transmit.
@@ -1357,6 +1364,7 @@ function setView(view){
   if(view==='overview'){ loadAllWatches(); loadJobs(); }
   pollJobs(view==='overview'); // live jobs only while the Overview is showing
   if(view==='status') loadStatus();
+  if(view==='containers') loadContainerDiscovery();
   if(VIEW_STREAM[view]) loadWatchesInto(VIEW_STREAM[view]);
 }
 
@@ -1697,11 +1705,74 @@ async function collectContainers(ev, dry){
   }
   runCollect({dry:dry, btnId:'ctrBtn', showFn:showCtrResult, title:'Collecting container images',
     url:'/admin/containers/collect', body:body, forceId:'ctrForce', render:d=>{
-      const msg=collectedMsg(d,'Collected','image(s)');
-      const sk=d.skipped_modules||[];
-      if(sk.length) return {cls:'warn', msg:msg+skippedListHTML('Skipped '+esc(sk.length)+' unfetchable image(s):', sk, m=>'<code>'+esc(m.module)+':'+esc(m.version)+'</code> &mdash; '+esc(m.error))};
-      return {cls:'ok', msg};
+      if(!d.dry_run) loadContainerDiscovery();
+      return containerCollectResult(d);
     }});
+}
+
+function containerCollectResult(d){
+  let msg=d.skipped?'No new content since the last export.':collectedMsg(d,'Collected','image(s)');
+  const sk=d.skipped_modules||[];
+  const partial=(d.container_discovery||[]).filter(record=>record.discovery && record.discovery.state==='incomplete');
+  if(sk.length) msg+=skippedListHTML('Skipped '+esc(sk.length)+' unfetchable image(s):', sk, m=>'<code>'+esc(m.module)+':'+esc(m.version)+'</code> &mdash; '+esc(m.error));
+  if(partial.length) msg+='<p><b>Attachment discovery incomplete for '+partial.length+' image(s).</b> Retry collection after resolving the reported issue.</p>'+partial.map(containerDiscoveryHTML).join('');
+  return {cls:sk.length||partial.length?'warn':'ok', msg};
+}
+
+// Discovery rendering uses fixed issue descriptions and escapes every value
+// from persisted records. Unknown/legacy state must never appear as success.
+function containerDiscoveryHTML(record){
+  const status=record.discovery||{};
+  const state=status.state==='complete'?'Complete':status.state==='incomplete'?'Incomplete':'Unknown';
+  const reference=(record.registry||'')+'/'+(record.repository||'')+'@'+(record.digest||'');
+  const reasons={
+    referrers_api:'Referrer lookup failed or was incomplete',
+    referrers_fallback:'Fallback referrer lookup failed',
+    legacy_fetch:'Legacy signature or attestation lookup failed',
+    artifact_fetch:'Attachment or required child download failed',
+    artifact_invalid:'Attachment content or subject validation failed',
+    discovery_limit:'Attachment discovery reached a configured limit',
+    cancelled:'Attachment discovery was canceled'
+  };
+  let html='<details class="pytarget"><summary>'+state+' — <code style="overflow-wrap:anywhere">'+esc(reference)+'</code></summary>';
+  if(record.tags && record.tags.length) html+='<p class="hint">Current tags: '+esc(record.tags.join(', '))+'</p>';
+  html+='<p class="hint">Checked: '+esc(status.checked_at||'Not recorded')+'<br>Last complete discovery: '+esc(status.last_success_at||'Not recorded')+'</p>';
+  if(status.checked_at) html+='<p>'+esc(status.artifacts||0)+' artifact(s) collected; '+esc(status.subjects||0)+' subject(s) checked.</p>';
+  if(status.issues && status.issues.length){
+    html+='<ul>'+status.issues.map(issue=>'<li>'+esc(reasons[issue.code]||'Attachment discovery could not be completed')+(issue.subject?' — <code style="overflow-wrap:anywhere">'+esc(issue.subject)+'</code>':'')+'</li>').join('')+'</ul>';
+  }
+  if(status.issues_dropped) html+='<p>'+esc(status.issues_dropped)+' additional issue(s) omitted.</p>';
+  return html+'</details>';
+}
+
+let ctrDiscoveryRequest=0;
+async function loadContainerDiscovery(){
+  const request=++ctrDiscoveryRequest;
+  const summary=document.getElementById('ctrDiscoverySummary');
+  const recordsBox=document.getElementById('ctrDiscoveryRecords');
+  const button=document.getElementById('ctrDiscoveryRefresh');
+  button.disabled=true;
+  summary.textContent='Loading attachment discovery status…';
+  try{
+    const response=await fetch('/admin/containers/discovery',{cache:'no-store'});
+    if(!response.ok) throw new Error('Discovery status could not be loaded. Try refreshing.');
+    const data=await response.json();
+    if(request!==ctrDiscoveryRequest) return;
+    const records=data.records||[];
+    const incomplete=records.filter(record=>record.discovery && record.discovery.state==='incomplete').length;
+    records.sort((a,b)=>{
+      const ap=a.discovery && a.discovery.state==='incomplete'?1:0;
+      const bp=b.discovery && b.discovery.state==='incomplete'?1:0;
+      return bp-ap || String(b.discovery && b.discovery.checked_at||'').localeCompare(String(a.discovery && a.discovery.checked_at||''));
+    });
+    summary.textContent=records.length?records.length+' image observation(s); '+incomplete+' incomplete.'+(records.length>100?' Showing 100, with incomplete observations first.':''):'No discovery observations recorded yet. Collect an image to record its attachment status.';
+    recordsBox.innerHTML=records.slice(0,100).map(containerDiscoveryHTML).join('');
+  }catch(error){
+    if(request!==ctrDiscoveryRequest) return;
+    summary.textContent='Discovery status could not be loaded. Try refreshing.';
+  }finally{
+    if(request===ctrDiscoveryRequest) button.disabled=false;
+  }
 }
 
 async function scheduleContainers(){
@@ -2381,6 +2452,7 @@ function viewJob(id, title){
       let out=(d && d.skipped)
         ? {cls:'ok', msg:'&#10003; No new content since the last export &mdash; nothing to send across the diode.'}
         : {cls:'ok', msg:(d && d.bundle_id)?collectedMsg(d,'Collected','unit(s)'):'&#10003; Job finished.'};
+      if(d && d.container_discovery && d.container_discovery.length) out=containerCollectResult(d);
       if(d && d.diode_error){
         out={cls:'warn', msg:out.msg+'<br>&#9888; Diode upload failed: '+esc(d.diode_error)+' &mdash; the bundle is archived and still staged; re-transmit it from the Status page.'};
       }

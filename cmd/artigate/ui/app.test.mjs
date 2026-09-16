@@ -4,6 +4,60 @@ import test from "node:test";
 import vm from "node:vm";
 
 const script = readFileSync(new URL("app.js", import.meta.url), "utf8");
+const lowSource = readFileSync(new URL("../ui_low.go", import.meta.url), "utf8");
+
+function containerStatusUI() {
+  const elements = new Map(["ctrDiscoverySummary", "ctrDiscoveryRecords", "ctrDiscoveryRefresh"].map(id => [id, { textContent: "", innerHTML: "", disabled: false }]));
+  const pending = [];
+  const context = vm.createContext({
+    document: { getElementById: id => elements.get(id) },
+    fetch: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    collectedMsg: () => "Collected image.",
+  });
+  const escape = lowSource.split("\n").find(line => line.startsWith("function esc("));
+  const helpers = lowSource.slice(lowSource.indexOf("function containerCollectResult("), lowSource.indexOf("async function scheduleContainers("));
+  vm.runInContext(escape + "\n" + helpers, context);
+  return { context, elements, pending };
+}
+
+test("container discovery never turns a partial deduplicated collect into success", () => {
+  const { context } = containerStatusUI();
+  const result = context.containerCollectResult({ skipped: true, container_discovery: [{ discovery: { state: "incomplete", issues: [{ code: "artifact_fetch" }] } }] });
+  assert.equal(result.cls, "warn");
+  assert.match(result.msg, /No new content/);
+  assert.match(result.msg, /Retry collection/);
+  assert.match(result.msg, /required child download failed/);
+  assert.equal(context.containerCollectResult({ skipped: true, container_discovery: [{ discovery: { state: "complete" } }] }).cls, "ok");
+});
+
+test("container discovery renders legacy state as unknown and escapes stored values", () => {
+  const { context } = containerStatusUI();
+  assert.match(context.containerDiscoveryHTML({}), /<summary>Unknown/);
+  const hostile = '<script>alert("secret")</script>';
+  const html = context.containerDiscoveryHTML({ registry: hostile, repository: hostile, digest: hostile, tags: [hostile], discovery: { state: "incomplete", checked_at: hostile, last_success_at: hostile, issues: [{ code: hostile, subject: hostile }] } });
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /could not be completed/);
+});
+
+test("container discovery refresh rejects stale results and keeps existing data on failure", async () => {
+  const { context, elements, pending } = containerStatusUI();
+  const old = context.loadContainerDiscovery();
+  const current = context.loadContainerDiscovery();
+  pending[1].resolve({ ok: true, json: async () => ({ records: [{ repository: "current", discovery: { state: "incomplete" } }] }) });
+  await current;
+  pending[0].resolve({ ok: true, json: async () => ({ records: [] }) });
+  await old;
+  const box = elements.get("ctrDiscoveryRecords");
+  assert.match(box.innerHTML, /current/);
+  assert.match(elements.get("ctrDiscoverySummary").textContent, /1 incomplete/);
+  const failed = context.loadContainerDiscovery();
+  pending[2].reject(new Error("private upstream URL"));
+  await failed;
+  assert.match(box.innerHTML, /current/);
+  assert.equal(elements.get("ctrDiscoverySummary").textContent, "Discovery status could not be loaded. Try refreshing.");
+  assert.equal(elements.get("ctrDiscoveryRefresh").disabled, false);
+});
 
 // Only the DOM operations used by tree/detail rendering are needed here. Run
 // the shipped script unchanged, including its event listeners and startup.

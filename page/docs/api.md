@@ -255,6 +255,12 @@ Both JSON blobs must be valid JSON. Packages resolving outside the registry (e.g
 !!! warning "linux/amd64 only"
     Only the `linux/amd64` platform is mirrored. Unfetchable images are skipped and reported in `skipped_modules`.
 
+Container collect results also include `container_discovery`, an array of `{registry, repository, digest, tags, discovery}` records. `discovery` contains `state` (`complete`, `incomplete`, or `unknown`), `checked_at`, optional `last_success_at`, `artifacts`, `subjects`, optional `issues: [{code, subject?}]`, and optional `issues_dropped`. A pulled image may have incomplete attachments even when the collect succeeds or exports no new bundle. Dry runs report unknown and do not persist observations. See [Attachment discovery status](ecosystems/containers.md#attachment-discovery-status) for issue codes and timestamp semantics.
+
+#### Container discovery — `GET /admin/containers/discovery`
+
+Returns `{"records": [...]}` with the same record shape, retaining the latest low-side observation for each repository and served digest across restarts and tag moves. Uses the normal low-side admin authentication. Other methods return `405`; unreadable or corrupt durable status returns `500` with a generic error. This endpoint reports discovery coverage, not signature verification. High-side container detail responses separately expose the most recently exported observation as `container_discovery`.
+
 #### AI models — `POST /admin/hf/collect`
 
 `HFCollectRequest`. Body limit **1 MiB**. See [AI models (Hugging Face)](ecosystems/ai-models.md).

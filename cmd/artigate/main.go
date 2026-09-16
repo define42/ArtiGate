@@ -40,6 +40,8 @@ func main() {
 		runLow(os.Args[2:])
 	case "high":
 		runHigh(os.Args[2:])
+	case "containers":
+		runContainers(os.Args[2:])
 	case "hashpw":
 		runHashpw(os.Args[2:])
 	case "version", "--version", "-version":
@@ -60,6 +62,9 @@ const usageText = `Usage:
   artigate keygen --private low.ed25519 --public high.ed25519.pub
 
   artigate hashpw --user alice        # argon2id hash for ARTIGATE_LOW_AUTH (reads password from stdin)
+
+  artigate containers check --root /var/lib/artigate-high [--repository registry/repo] [--repair] [--json]
+                                      # offline integrity check; stop the high side first
 
   artigate low \
     --listen :8080 \
