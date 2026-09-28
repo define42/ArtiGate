@@ -41,9 +41,9 @@ func isContainerArtifactDocument(m ociManifest, mediaType string) bool {
 	return m.ArtifactType != "" || m.Config.MediaType != ""
 }
 
-func (c *containerClient) mirrorContainerArtifact(ctx context.Context, ref imageRef, resolved resolvedImage, stageRoot string, seen map[string]bool) (ContainerImage, []ManifestFile, error) {
+func (c *containerClient) mirrorContainerArtifact(ctx context.Context, ref imageRef, resolved resolvedImage, stageRoot string, staged map[string]bool) (ContainerImage, []ManifestFile, error) {
 	col := &artifactCollector{
-		c: c, ref: ref, stageRoot: stageRoot, seenFile: seen,
+		c: c, ref: ref, stageRoot: stageRoot, staged: staged,
 		found: make(map[string]*ContainerArtifact), skip: make(map[string]bool),
 	}
 	if err := col.collectGraph(ctx, "", "", resolved.Manifest, resolved.MediaType, resolved.Digest, nil, false); err != nil {
@@ -55,7 +55,7 @@ func (c *containerClient) mirrorContainerArtifact(ctx context.Context, ref image
 		Blobs: root.Blobs,
 	}
 	var err error
-	col.files, err = stageResolvedIndex(&img, resolved, stageRoot, seen, col.files)
+	col.files, err = stageResolvedIndex(&img, resolved, stageRoot, staged, col.files)
 	if err != nil {
 		return ContainerImage{}, nil, err
 	}
@@ -130,9 +130,9 @@ func (a *artifactCollector) collectGraph(ctx context.Context, subject, tag strin
 		collector: a, stager: *a,
 		pending: make(map[string]*ContainerArtifact), visiting: make(map[string]bool),
 	}
-	g.stager.seenFile = maps.Clone(a.seenFile)
-	if g.stager.seenFile == nil {
-		g.stager.seenFile = make(map[string]bool)
+	g.stager.staged = maps.Clone(a.staged)
+	if g.stager.staged == nil {
+		g.stager.staged = make(map[string]bool)
 	}
 	if err := g.stage(ctx, subject, tag, body, mediaType, digest, desc, requireSubject, 0); err != nil {
 		return err
@@ -142,10 +142,10 @@ func (a *artifactCollector) collectGraph(ctx context.Context, subject, tag strin
 		a.order = append(a.order, key)
 	}
 	a.files = append(a.files, g.files...)
-	if a.seenFile == nil {
-		a.seenFile = make(map[string]bool)
+	if a.staged == nil {
+		a.staged = make(map[string]bool)
 	}
-	maps.Copy(a.seenFile, g.stager.seenFile)
+	maps.Copy(a.staged, g.stager.staged)
 	return nil
 }
 
@@ -215,7 +215,7 @@ func (g *containerArtifactGraph) stageChild(ctx context.Context, child Container
 
 func (a *artifactCollector) stageArtifactContent(ctx context.Context, m ociManifest, mediaType string) ([]ContainerBlob, []ContainerIndex, []ManifestFile, error) {
 	if !isContainerIndexType(mediaType) {
-		blobs, files, err := a.c.downloadArtifactBlobs(ctx, a.ref, m, a.stageRoot, a.seenFile)
+		blobs, files, err := a.c.downloadArtifactBlobs(ctx, a.ref, m, a.stageRoot, a.staged)
 		return blobs, nil, files, err
 	}
 	children := make([]ContainerIndex, 0, len(m.Manifests))

@@ -1026,8 +1026,10 @@ func nextTagPage(link string) string {
 // whose digest this stream has already forwarded is not downloaded at all —
 // it becomes a prior manifest reference (blobs are content-addressed, so the
 // descriptor supplies everything the manifest entry needs) — and a dry run
-// accounts for new blobs from the descriptor the same way.
-func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRef, desc ociDescriptor, stageRoot string, seen map[string]bool, allowPrior bool) (ManifestFile, error) {
+// accounts for new blobs from the descriptor the same way. The staged map
+// records only successfully written files under stageRoot, so a later image
+// can still fetch a skipped blob when it needs its bytes for validation.
+func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRef, desc ociDescriptor, stageRoot string, staged map[string]bool, allowPrior bool) (ManifestFile, error) {
 	if !containerDigestRE.MatchString(desc.Digest) {
 		return ManifestFile{}, fmt.Errorf("%s: unsupported blob digest %q (only sha256 is supported)", ref, desc.Digest)
 	}
@@ -1036,12 +1038,11 @@ func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRe
 	}
 	rel := containerBlobRel(desc.Digest)
 	mf := ManifestFile{Path: rel, SHA256: strings.TrimPrefix(desc.Digest, "sha256:"), Size: desc.Size}
-	if seen[rel] {
+	if staged[rel] {
 		return mf, nil
 	}
 	if allowPrior && c.prior != nil && c.prior(rel, mf.SHA256) {
 		emitProgress(ctx, "    ≡ blob %s already forwarded (download skipped)", shortDigest(desc.Digest))
-		seen[rel] = true
 		mf.Prior = true
 		return mf, nil
 	}
@@ -1049,7 +1050,6 @@ func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRe
 	// from staging for the platform check, so it must be fetched regardless.
 	if allowPrior && skipDownloadForDryRun(ctx, mf.SHA256, desc.Size) {
 		emitProgress(ctx, "    ~ blob %s (%s)", shortDigest(desc.Digest), formatBytes(desc.Size))
-		seen[rel] = true
 		return mf, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
@@ -1068,7 +1068,7 @@ func (c *containerClient) downloadContainerBlob(ctx context.Context, ref imageRe
 		return ManifestFile{}, fmt.Errorf("%s: blob %s: %w", ref, desc.Digest, err)
 	}
 	emitProgress(ctx, "    ↓ blob %s (%s)", shortDigest(desc.Digest), formatBytes(desc.Size))
-	seen[rel] = true
+	staged[rel] = true
 	return mf, nil
 }
 
@@ -1374,7 +1374,7 @@ func refVersionLabel(ref imageRef) string {
 // tag (a plain tag or digest passes through) and mirrors that image. The
 // resolved tag — not the constraint — is what the bundle records, so the high
 // side serves e.g. golang:1.26.3 for a "golang:1.26.x" collect.
-func (c *containerClient) resolveAndMirrorImage(ctx context.Context, ref imageRef, stageRoot string, seenFile map[string]bool) (ContainerImage, []ManifestFile, error) {
+func (c *containerClient) resolveAndMirrorImage(ctx context.Context, ref imageRef, stageRoot string, staged map[string]bool) (ContainerImage, []ManifestFile, error) {
 	if ref.Constraint != "" {
 		tag, err := c.resolveConstraintTag(ctx, ref)
 		if err != nil {
@@ -1384,7 +1384,7 @@ func (c *containerClient) resolveAndMirrorImage(ctx context.Context, ref imageRe
 		emitProgress(ctx, "  %s resolved to tag %s", ref, tag)
 		ref.Tag, ref.Constraint = tag, ""
 	}
-	return c.mirrorContainerImage(ctx, ref, stageRoot, seenFile)
+	return c.mirrorContainerImage(ctx, ref, stageRoot, staged)
 }
 
 // mirrorContainerImage resolves one reference to its linux/amd64 manifest and
@@ -1392,7 +1392,7 @@ func (c *containerClient) resolveAndMirrorImage(ctx context.Context, ref imageRe
 // plus the multi-platform index it resolved through and any attached
 // signatures, attestations, and SBOMs. It returns the image record plus the
 // manifest files it references.
-func (c *containerClient) mirrorContainerImage(ctx context.Context, ref imageRef, stageRoot string, seenFile map[string]bool) (ContainerImage, []ManifestFile, error) {
+func (c *containerClient) mirrorContainerImage(ctx context.Context, ref imageRef, stageRoot string, staged map[string]bool) (ContainerImage, []ManifestFile, error) {
 	resolved, err := c.fetchContainerManifest(ctx, ref)
 	if err != nil {
 		return ContainerImage{}, nil, err
@@ -1402,14 +1402,14 @@ func (c *containerClient) mirrorContainerImage(ctx context.Context, ref imageRef
 		return ContainerImage{}, nil, fmt.Errorf("%s: parse image manifest: %w", ref, err)
 	}
 	if isContainerArtifactDocument(m, resolved.MediaType) {
-		return c.mirrorContainerArtifact(ctx, ref, resolved, stageRoot, seenFile)
+		return c.mirrorContainerArtifact(ctx, ref, resolved, stageRoot, staged)
 	}
 	if m.Config.Digest == "" || len(m.Layers) == 0 {
 		return ContainerImage{}, nil, fmt.Errorf("%s: image manifest has no config or layers", ref)
 	}
 
 	img := ContainerImage{Tag: ref.Tag, Digest: resolved.Digest, MediaType: resolved.MediaType, Size: int64(len(resolved.Manifest))}
-	blobs, files, err := c.downloadImageBlobs(ctx, ref, m, stageRoot, seenFile)
+	blobs, files, err := c.downloadImageBlobs(ctx, ref, m, stageRoot, staged)
 	if err != nil {
 		return ContainerImage{}, nil, err
 	}
@@ -1417,16 +1417,16 @@ func (c *containerClient) mirrorContainerImage(ctx context.Context, ref imageRef
 	if err := verifyContainerConfigPlatform(stageRoot, ref, m.Config.Digest); err != nil {
 		return ContainerImage{}, nil, err
 	}
-	manifestFile, err := stageContainerManifestBlob(stageRoot, resolved.Digest, resolved.Manifest, seenFile)
+	manifestFile, err := stageContainerManifestBlob(stageRoot, resolved.Digest, resolved.Manifest, staged)
 	if err != nil {
 		return ContainerImage{}, nil, err
 	}
 	files = append(files, manifestFile)
-	files, err = stageResolvedIndex(&img, resolved, stageRoot, seenFile, files)
+	files, err = stageResolvedIndex(&img, resolved, stageRoot, staged, files)
 	if err != nil {
 		return ContainerImage{}, nil, err
 	}
-	arts, artFiles := c.collectImageArtifacts(ctx, ref, resolved, stageRoot, seenFile)
+	arts, artFiles := c.collectImageArtifacts(ctx, ref, resolved, stageRoot, staged)
 	img.Artifacts = arts
 	return img, append(files, artFiles...), nil
 }
@@ -1435,11 +1435,11 @@ func (c *containerClient) mirrorContainerImage(ctx context.Context, ref imageRef
 // through as a content-addressed blob and records it on the image, so the
 // high side can serve the tag under its upstream digest. A reference that
 // named an image manifest directly stages nothing.
-func stageResolvedIndex(img *ContainerImage, resolved resolvedImage, stageRoot string, seenFile map[string]bool, files []ManifestFile) ([]ManifestFile, error) {
+func stageResolvedIndex(img *ContainerImage, resolved resolvedImage, stageRoot string, staged map[string]bool, files []ManifestFile) ([]ManifestFile, error) {
 	if resolved.IndexDigest == "" {
 		return files, nil
 	}
-	indexFile, err := stageContainerManifestBlob(stageRoot, resolved.IndexDigest, resolved.Index, seenFile)
+	indexFile, err := stageContainerManifestBlob(stageRoot, resolved.IndexDigest, resolved.Index, staged)
 	if err != nil {
 		return nil, err
 	}
@@ -1449,7 +1449,7 @@ func stageResolvedIndex(img *ContainerImage, resolved resolvedImage, stageRoot s
 
 // downloadImageBlobs stages an image's config and layer blobs, returning the
 // blob records for the bundle manifest.
-func (c *containerClient) downloadImageBlobs(ctx context.Context, ref imageRef, m ociManifest, stageRoot string, seenFile map[string]bool) ([]ContainerBlob, []ManifestFile, error) {
+func (c *containerClient) downloadImageBlobs(ctx context.Context, ref imageRef, m ociManifest, stageRoot string, staged map[string]bool) ([]ContainerBlob, []ManifestFile, error) {
 	var blobs []ContainerBlob
 	var files []ManifestFile
 	inImage := map[string]bool{}
@@ -1459,7 +1459,7 @@ func (c *containerClient) downloadImageBlobs(ctx context.Context, ref imageRef, 
 		}
 		// The config blob (index 0) is read back from staging for the platform
 		// check, so only layers may skip their download as prior content.
-		mf, err := c.downloadContainerBlob(ctx, ref, desc, stageRoot, seenFile, i > 0)
+		mf, err := c.downloadContainerBlob(ctx, ref, desc, stageRoot, staged, i > 0)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1474,10 +1474,10 @@ func (c *containerClient) downloadImageBlobs(ctx context.Context, ref imageRef, 
 
 // stageContainerManifestBlob stores the image manifest itself as a
 // content-addressed blob in the staging store.
-func stageContainerManifestBlob(stageRoot, digest string, manifestBytes []byte, seenFile map[string]bool) (ManifestFile, error) {
+func stageContainerManifestBlob(stageRoot, digest string, manifestBytes []byte, staged map[string]bool) (ManifestFile, error) {
 	rel := containerBlobRel(digest)
 	mf := ManifestFile{Path: rel, SHA256: strings.TrimPrefix(digest, "sha256:"), Size: int64(len(manifestBytes))}
-	if seenFile[rel] {
+	if staged[rel] {
 		return mf, nil
 	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
@@ -1487,7 +1487,7 @@ func stageContainerManifestBlob(stageRoot, digest string, manifestBytes []byte, 
 	if err := os.WriteFile(abs, manifestBytes, 0o644); err != nil {
 		return ManifestFile{}, err
 	}
-	seenFile[rel] = true
+	staged[rel] = true
 	return mf, nil
 }
 
@@ -1531,9 +1531,9 @@ const containerMaxArtifactFetches = containerMaxImageArtifacts * 4
 // resolved image: buildkit attestation-manifest index entries, cosign's tag
 // scheme, and the OCI referrers API — for both the digest a tag pull serves
 // (the index, when there is one) and the linux/amd64 manifest.
-func (c *containerClient) collectImageArtifacts(ctx context.Context, ref imageRef, resolved resolvedImage, stageRoot string, seenFile map[string]bool) ([]ContainerArtifact, []ManifestFile) {
+func (c *containerClient) collectImageArtifacts(ctx context.Context, ref imageRef, resolved resolvedImage, stageRoot string, staged map[string]bool) ([]ContainerArtifact, []ManifestFile) {
 	col := &artifactCollector{
-		c: c, ref: ref, stageRoot: stageRoot, seenFile: seenFile,
+		c: c, ref: ref, stageRoot: stageRoot, staged: staged,
 		skip:  map[string]bool{resolved.Digest: true},
 		found: map[string]*ContainerArtifact{},
 	}
@@ -1568,7 +1568,7 @@ type artifactCollector struct {
 	c         *containerClient
 	ref       imageRef
 	stageRoot string
-	seenFile  map[string]bool
+	staged    map[string]bool
 	skip      map[string]bool // the image and index digests themselves
 	found     map[string]*ContainerArtifact
 	order     []string
@@ -1758,7 +1758,7 @@ func (a *artifactCollector) stageArtifact(
 	if err != nil {
 		return ContainerArtifact{}, nil, err
 	}
-	manifestFile, err := stageContainerManifestBlob(a.stageRoot, digest, body, a.seenFile)
+	manifestFile, err := stageContainerManifestBlob(a.stageRoot, digest, body, a.staged)
 	if err != nil {
 		return ContainerArtifact{}, nil, err
 	}
@@ -1804,7 +1804,7 @@ func artifactLabel(tag, digest string) string {
 // downloadArtifactBlobs stages an artifact manifest's config and layer
 // blobs. Unlike an image's, an artifact's config is opaque (no platform
 // check — cosign configs are empty JSON) and its layer list may be empty.
-func (c *containerClient) downloadArtifactBlobs(ctx context.Context, ref imageRef, m ociManifest, stageRoot string, seenFile map[string]bool) ([]ContainerBlob, []ManifestFile, error) {
+func (c *containerClient) downloadArtifactBlobs(ctx context.Context, ref imageRef, m ociManifest, stageRoot string, staged map[string]bool) ([]ContainerBlob, []ManifestFile, error) {
 	descs := m.Layers
 	if m.Config.Digest != "" {
 		descs = append([]ociDescriptor{m.Config}, m.Layers...)
@@ -1813,7 +1813,7 @@ func (c *containerClient) downloadArtifactBlobs(ctx context.Context, ref imageRe
 	var files []ManifestFile
 	inArtifact := map[string]bool{}
 	for _, desc := range descs {
-		mf, err := c.downloadContainerBlob(ctx, ref, desc, stageRoot, seenFile, true)
+		mf, err := c.downloadContainerBlob(ctx, ref, desc, stageRoot, staged, true)
 		if err != nil {
 			return nil, nil, err
 		}

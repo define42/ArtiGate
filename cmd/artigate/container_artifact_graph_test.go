@@ -422,6 +422,148 @@ func TestContainerArtifactGraphDryRunAndPriorDelta(t *testing.T) {
 	assertArtifactGraphBody(t, hs, "blobs/"+containerSHA(sharedConfig), sharedConfig)
 }
 
+func TestContainerArtifactGraphMixedImageBatch(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prior   bool
+		dryRun  bool
+		reverse bool
+		force   bool
+	}{
+		{name: "fresh index first"},
+		{name: "prior index first", prior: true},
+		{name: "prior image first", prior: true, reverse: true},
+		{name: "dry run index first", dryRun: true},
+		{name: "dry run image first", dryRun: true, reverse: true},
+		{name: "force index first", prior: true, force: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newArtifactGraphRegistry()
+			child := f.root
+			f.root = f.addIndex(t, nil, child)
+			var imageManifest ociManifest
+			if err := json.Unmarshal(f.manifests[child.Digest], &imageManifest); err != nil {
+				t.Fatal(err)
+			}
+			upstream := httptest.NewServer(f)
+			t.Cleanup(upstream.Close)
+			ls, priv := newContainerLowServer(t, map[string]string{"docker.io": upstream.URL})
+			hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+			if tc.prior {
+				seedMixedArtifactGraph(t, ls, hs)
+			}
+			configPath := "blobs/" + imageManifest.Config.Digest
+			layerPath := "blobs/" + imageManifest.Layers[0].Digest
+			configBefore, layerBefore := f.requestCount(configPath), f.requestCount(layerPath)
+			refs := []string{"graph@" + f.root.Digest, "graph@" + child.Digest}
+			if tc.reverse {
+				slices.Reverse(refs)
+			}
+			ctx := t.Context()
+			if tc.dryRun {
+				ctx = withDryRunCollect(ctx)
+			}
+			var progress []string
+			ctx = withProgress(ctx, func(line string) { progress = append(progress, line) })
+			res, err := ls.CollectContainers(ctx, ContainerCollectRequest{Images: refs, Force: tc.force})
+			if err != nil || len(res.SkippedModules) != 0 || len(res.ContainerDiscovery) != 2 {
+				t.Fatalf("mixed graph collect = %+v, %v; progress: %v", res, err, progress)
+			}
+			if got := f.requestCount(configPath) - configBefore; got != 1 {
+				t.Errorf("shared image config downloaded %d times, want once", got)
+			}
+			wantLayer := 1
+			if tc.dryRun || tc.prior && !tc.force {
+				wantLayer = 0
+			}
+			if got := f.requestCount(layerPath) - layerBefore; got != wantLayer {
+				t.Errorf("shared image layer downloaded %d times, want %d", got, wantLayer)
+			}
+			if tc.dryRun {
+				assertMixedArtifactGraphDryRun(t, ls, res)
+				return
+			}
+			assertMixedArtifactGraphExport(t, ls, hs, f, child, res, tc.prior && !tc.force)
+		})
+	}
+}
+
+func seedMixedArtifactGraph(t *testing.T, ls *LowServer, hs *HighServer) {
+	t.Helper()
+	// Seed every blob through a tag; digest references in the mixed batch
+	// still require new image records even though the payload is unchanged.
+	res, err := ls.CollectContainers(t.Context(), ContainerCollectRequest{Images: []string{"graph:1.0"}})
+	if err != nil || res.ExportedModules != 1 {
+		t.Fatalf("seed graph collect = %+v, %v", res, err)
+	}
+	stageArtifactGraphBundle(t, hs, ls, res.BundleID)
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("seed graph import: %v", err)
+	}
+}
+
+func assertMixedArtifactGraphDryRun(t *testing.T, ls *LowServer, res ExportResult) {
+	t.Helper()
+	if !res.DryRun || res.BundleID != "" || res.Estimate == nil || res.Estimate.TotalFiles != 4 {
+		t.Fatalf("mixed graph dry run = %+v", res)
+	}
+	entries, err := os.ReadDir(ls.cfg.ExportDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("dry run created export artifacts: %v", entries)
+	}
+}
+
+func assertMixedArtifactGraphExport(
+	t *testing.T, ls *LowServer, hs *HighServer, f *artifactGraphRegistry,
+	child ociDescriptor, res ExportResult, prior bool,
+) {
+	t.Helper()
+	if res.ExportedModules != 2 || res.BundleID == "" {
+		t.Fatalf("mixed graph exported fewer than both references: %+v", res)
+	}
+	manifest := readBundleManifest(t, ls, res.BundleID)
+	if manifest.Containers == nil || len(manifest.Containers.Repos) != 1 {
+		t.Fatalf("mixed graph missing repository: %+v", manifest.Containers)
+	}
+	var digests []string
+	for _, img := range manifest.Containers.Repos[0].Images {
+		digests = append(digests, img.Digest)
+	}
+	wantDigests := []string{f.root.Digest, child.Digest}
+	slices.Sort(digests)
+	slices.Sort(wantDigests)
+	if !slices.Equal(digests, wantDigests) {
+		t.Fatalf("mixed graph image records = %v, want %v", digests, wantDigests)
+	}
+	if len(manifest.Files) != 4 {
+		t.Fatalf("mixed graph contains %d file records, want 4 unique blobs", len(manifest.Files))
+	}
+	for _, file := range manifest.Files {
+		if file.Prior != prior {
+			t.Errorf("mixed graph file prior = %t, want %t: %s", file.Prior, prior, file.Path)
+		}
+	}
+	wantEntries := 4
+	if prior {
+		wantEntries = 0
+	}
+	if entries := listArchiveEntries(t, ls.cfg.ExportDir, res.BundleID); len(entries) != wantEntries {
+		t.Errorf("mixed graph archive contains %d entries, want %d: %v", len(entries), wantEntries, entries)
+	}
+	stageArtifactGraphBundle(t, hs, ls, res.BundleID)
+	if _, err := hs.ImportNext(); err != nil {
+		t.Fatalf("mixed graph import: %v", err)
+	}
+	assertArtifactGraphBody(t, hs, "manifests/"+f.root.Digest, f.manifests[f.root.Digest])
+	assertArtifactGraphBody(t, hs, "manifests/"+child.Digest, f.manifests[child.Digest])
+	for digest, body := range f.blobs {
+		assertArtifactGraphBody(t, hs, "blobs/"+digest, body)
+	}
+}
+
 func TestContainerArtifactGraphMissingChildRejectsParent(t *testing.T) {
 	f := newArtifactGraphRegistry()
 	child := f.addArtifact(t, nil, []byte("complete config"), []byte("complete child payload"))

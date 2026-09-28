@@ -1931,7 +1931,7 @@ func TestArtifactCollectorCapStopsFetching(t *testing.T) {
 	ls, _ := newContainerLowServer(t, map[string]string{"docker.io": srv.URL})
 	col := &artifactCollector{
 		c: ls.newContainerClient(), ref: imageRef{Registry: "docker.io", Repository: "library/alpine"},
-		stageRoot: t.TempDir(), seenFile: map[string]bool{}, skip: map[string]bool{},
+		stageRoot: t.TempDir(), staged: map[string]bool{}, skip: map[string]bool{},
 		found: map[string]*ContainerArtifact{},
 	}
 	for i := 0; i < containerMaxImageArtifacts; i++ {
@@ -1965,7 +1965,7 @@ func TestArtifactCollectorAttemptCapBoundsMissingReferrers(t *testing.T) {
 	ls, _ := newContainerLowServer(t, map[string]string{"docker.io": srv.URL})
 	col := &artifactCollector{
 		c: ls.newContainerClient(), ref: imageRef{Registry: "docker.io", Repository: "library/alpine"},
-		stageRoot: t.TempDir(), seenFile: map[string]bool{}, skip: map[string]bool{},
+		stageRoot: t.TempDir(), staged: map[string]bool{}, skip: map[string]bool{},
 		found: map[string]*ContainerArtifact{},
 	}
 	subject := containerSHA([]byte("subject"))
@@ -1993,7 +1993,7 @@ func TestArtifactCollectorRecordsFinalBudgetedArtifact(t *testing.T) {
 	ls, _ := newContainerLowServer(t, map[string]string{"docker.io": srv.URL})
 	col := &artifactCollector{
 		c: ls.newContainerClient(), ref: imageRef{Registry: "docker.io", Repository: "library/signed"},
-		stageRoot: t.TempDir(), seenFile: map[string]bool{}, skip: map[string]bool{},
+		stageRoot: t.TempDir(), staged: map[string]bool{}, skip: map[string]bool{},
 		found:    map[string]*ContainerArtifact{},
 		attempts: containerMaxArtifactFetches - 1,
 	}
