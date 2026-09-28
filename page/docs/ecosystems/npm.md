@@ -181,7 +181,11 @@ Successful tarballs are packed into the standard numbered, Ed25519-signed ArtiGa
 !!! note
     `integrity` here is the SRI from the resolving lockfile, kept for **audit only**. The high side recomputes `shasum` and `integrity` from the artifact itself and does not trust this value.
 
-The collection is deduplicated: if every resolved tarball was already forwarded on a previous bundle, no new sequence number is burned; if only some are new, the bundle is a [delta](../architecture.md#export-deduplication-and-delta-bundles) whose archive carries just those (the rest ride as `prior` manifest references). `"force": true` bypasses the index. See [Low side](../low-side.md) and [Scheduling (watches)](../scheduling.md) for the export and recurring-pull mechanics.
+The collection deduplicates both files and upstream metadata. If all files and metadata are unchanged, it returns “no new content” without advancing the sequence. Changes to a package's dist-tags, a version's registry signatures or attestation metadata, or a registry's signing keys trigger a new signed bundle even when every tarball is unchanged. No force collect is needed.
+
+A [delta bundle](../architecture.md#export-deduplication-and-delta-bundles) carries only new or changed files in its archive; files already forwarded appear as `prior` manifest references. A change limited to metadata therefore produces a bundle with no repeated tarball bytes. `"force": true` bypasses deduplication and exports a full, self-contained bundle. See [Low side](../low-side.md) and [Scheduling (watches)](../scheduling.md) for the export and recurring-pull mechanics.
+
+Each successfully fetched dist-tag snapshot replaces the previous snapshot for that package, including tag removals. An explicitly empty snapshot clears its stored upstream tags; the high side still generates the `latest` fallback described below. Packages omitted from a collection keep their snapshots. Failed metadata fetches preserve the last known tags, signatures, attestation metadata, and registry keys instead of treating unavailable data as a removal.
 
 ## High side: import-time metadata regeneration
 
@@ -289,7 +293,7 @@ The `.npmrc` can be `~/.npmrc`, `/etc/npmrc`, or a per-project `.npmrc`.
 - **Registry tarballs only.** Git, file, and `git+ssh` `resolved` URLs (any non-`http`/`https` scheme) are skipped and reported. Workspace links (`link`) and bundled deps (`inBundle`) are dropped silently.
 - **Lifecycle scripts never run** during resolution (`--ignore-scripts`), but the served version object still sets `hasInstallScript`, so a client `npm install` on the mirror will run install scripts.
 - **Empty lockfile `integrity` ⇒ that tarball is downloaded unverified** on the low side. High-side metadata is always recomputed from the tarball regardless.
-- **Only the `latest` dist-tag is served** — no `next`/`beta`/custom tags.
+- **Dist-tags only resolve to mirrored versions.** Upstream `next`, `beta`, and custom tags are served when their targets are present; `latest` falls back to the highest mirrored release when needed.
 - A packument omits versions whose tarball is absent; a version 404s if its tarball is missing. Imports never wedge on one unparseable tarball (it is logged and skipped).
 - Size and time limits: request body 8 MiB, embedded `package.json` read 8 MiB, per-tarball download cap 2 GiB; `npm` run timeout 15 minutes, per-tarball download timeout 10 minutes.
 - `--npm-registry` empty ⇒ npm uses its own configured default registry (no `--registry` passed).

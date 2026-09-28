@@ -1927,15 +1927,17 @@ func moveVerifiedFile(src, dst string) error {
 // mutableRepoPath reports whether a verified bundle may replace an existing
 // file at this path with different content (copyFileAtomic renames over the
 // old file). Mirrored package artifacts are immutable — a later bundle can
-// never rewrite history. Three kinds of paths are legitimately mutable:
+// never rewrite history. The paths that are legitimately mutable include:
 // operator uploads, where re-uploading a name replaces it by design; OSV
 // advisory databases, which are continuously updated snapshots re-delivered
-// at one canonical per-ecosystem path; and the Go checksum database's moving
+// at one canonical per-ecosystem path; the Go checksum database's moving
 // parts (its latest tree head, and lookups whose embedded tree note was
-// refreshed). All only ever arrive hash-verified inside signed, sequenced
-// bundles.
+// refreshed); and npm attestation documents, whose upstream verification
+// material can change for an existing version. All only ever arrive
+// hash-verified inside signed, sequenced bundles.
 func mutableRepoPath(p string) bool {
-	return strings.HasPrefix(p, "uploads/") || strings.HasPrefix(p, "osv/") || mutableSumDBPath(p)
+	return strings.HasPrefix(p, "uploads/") || strings.HasPrefix(p, "osv/") ||
+		strings.HasPrefix(p, "npm/attestations/") || mutableSumDBPath(p)
 }
 
 // requirePriorFile verifies a delta bundle's claim that an earlier bundle

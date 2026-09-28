@@ -258,8 +258,8 @@ func TestValidateNpmPackages(t *testing.T) {
 	good := []NpmPackage{{
 		Name: "lodash", Version: "4.17.21", Filename: "lodash-4.17.21.tgz",
 		Path: tarballPath, SHA256: strings.Repeat("a", 64),
-		Signatures:       []NpmRegistrySignature{{KeyID: "SHA256:k", Sig: "MEUCIQ"}},
-		AttestationsPath: attPath, AttestationsPredicateType: "https://slsa.dev/provenance/v1",
+		Signatures:   []NpmRegistrySignature{{KeyID: "SHA256:k", Sig: "MEUCIQ"}},
+		Attestations: &NpmAttestations{Path: attPath, PredicateType: "https://slsa.dev/provenance/v1"},
 	}}
 	if err := validateNpmPackages(good, seen); err != nil {
 		t.Errorf("valid packages rejected: %v", err)
@@ -267,6 +267,8 @@ func TestValidateNpmPackages(t *testing.T) {
 
 	withProv := func(mutate func(*NpmPackage)) []NpmPackage {
 		p := good[0]
+		att := *p.Attestations
+		p.Attestations = &att
 		mutate(&p)
 		return []NpmPackage{p}
 	}
@@ -282,9 +284,9 @@ func TestValidateNpmPackages(t *testing.T) {
 		{"oversized signature", withProv(func(p *NpmPackage) {
 			p.Signatures = []NpmRegistrySignature{{KeyID: "k", Sig: strings.Repeat("A", 9000)}}
 		})},
-		{"non-canonical attestations path", withProv(func(p *NpmPackage) { p.AttestationsPath = "npm/attestations/other/1.0.0.json" })},
-		{"attestations without predicate", withProv(func(p *NpmPackage) { p.AttestationsPredicateType = "" })},
-		{"predicate without attestations", withProv(func(p *NpmPackage) { p.AttestationsPath = "" })},
+		{"non-canonical attestations path", withProv(func(p *NpmPackage) { p.Attestations.Path = "npm/attestations/other/1.0.0.json" })},
+		{"attestations without predicate", withProv(func(p *NpmPackage) { p.Attestations.PredicateType = "" })},
+		{"predicate without attestations", withProv(func(p *NpmPackage) { p.Attestations.Path = "" })},
 	}
 	for _, tt := range bad {
 		if err := validateNpmPackages(tt.pkgs, seen); err == nil {
@@ -915,8 +917,8 @@ func TestNpmSignaturePipeline(t *testing.T) {
 	if len(p.Signatures) != 1 || p.Signatures[0].KeyID != "SHA256:key1" {
 		t.Fatalf("bundle signatures = %+v", p.Signatures)
 	}
-	if p.AttestationsPath != "npm/attestations/lodash/4.17.21.json" || p.AttestationsPredicateType != "https://slsa.dev/provenance/v1" {
-		t.Fatalf("bundle attestations ref = %q %q", p.AttestationsPath, p.AttestationsPredicateType)
+	if p.Attestations == nil || p.Attestations.Path != "npm/attestations/lodash/4.17.21.json" || p.Attestations.PredicateType != "https://slsa.dev/provenance/v1" {
+		t.Fatalf("bundle attestations ref = %+v", p.Attestations)
 	}
 	host := npmRegistryHost(registry.URL)
 	if len(m.Npm.Keys[host]) != 1 {

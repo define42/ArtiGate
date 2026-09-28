@@ -38,6 +38,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -84,9 +85,8 @@ type NpmManifest struct {
 	// (name -> tag -> version) as observed at collect time. The high side
 	// serves a tag only while its target version is actually mirrored, and
 	// always regenerates "latest" as a fallback, so a stale or hostile tag can
-	// never point outside the verified store. Tag movement alone does not
-	// change the mirrored file set, so refreshing tags for an unchanged
-	// package set needs a force collect.
+	// never point outside the verified store. Changed snapshots export even
+	// when all tarballs are prior references; an empty snapshot clears tags.
 	DistTags map[string]map[string]string `json:"dist_tags,omitempty"`
 	// Keys carries each upstream registry's published signing keys
 	// (GET /-/npm/v1/keys) observed at collect time, keyed by registry host.
@@ -124,14 +124,19 @@ type NpmPackage struct {
 	// the high side recomputes integrity from the artifact itself.
 	Integrity string `json:"integrity,omitempty"`
 	// Signatures are the upstream registry's dist.signatures for this exact
-	// version, served back in the mirrored packument.
-	Signatures []NpmRegistrySignature `json:"signatures,omitempty"`
-	// AttestationsPath is the mirrored attestations document
-	// (/-/npm/v1/attestations/<name>@<version>) for this version, with the
-	// provenance predicate type dist.attestations advertises. Both are set
-	// together or not at all.
-	AttestationsPath          string `json:"attestations_path,omitempty"`
-	AttestationsPredicateType string `json:"attestations_predicate_type,omitempty"`
+	// version, served back in the mirrored packument. Null means unavailable;
+	// an empty array confirms that upstream publishes no signatures.
+	Signatures []NpmRegistrySignature `json:"signatures"`
+	// Attestations is nil when metadata or the document could not be fetched.
+	// An empty snapshot confirms that upstream advertises no attestations.
+	Attestations *NpmAttestations `json:"attestations,omitempty"`
+}
+
+// NpmAttestations describes the verified document for one package version.
+// Path and PredicateType are either both present or both empty.
+type NpmAttestations struct {
+	Path          string `json:"path,omitempty"`
+	PredicateType string `json:"predicate_type,omitempty"`
 }
 
 // npmAttestationsRel is the bundle path of one version's mirrored
@@ -264,16 +269,17 @@ func validateNpmPackageProvenance(p NpmPackage, seen map[string]bool) error {
 			return fmt.Errorf("npm package %s@%s has a malformed registry signature", p.Name, p.Version)
 		}
 	}
-	if p.AttestationsPath == "" && p.AttestationsPredicateType == "" {
+	att := p.Attestations
+	if att == nil || (att.Path == "" && att.PredicateType == "") {
 		return nil
 	}
-	if p.AttestationsPath != npmAttestationsRel(p.Name, p.Version) {
-		return fmt.Errorf("npm package %s@%s has non-canonical attestations path %s", p.Name, p.Version, p.AttestationsPath)
+	if att.Path != npmAttestationsRel(p.Name, p.Version) {
+		return fmt.Errorf("npm package %s@%s has non-canonical attestations path %s", p.Name, p.Version, att.Path)
 	}
-	if !seen[p.AttestationsPath] {
-		return fmt.Errorf("npm package %s@%s references attestations not listed in manifest.files: %s", p.Name, p.Version, p.AttestationsPath)
+	if !seen[att.Path] {
+		return fmt.Errorf("npm package %s@%s references attestations not listed in manifest.files: %s", p.Name, p.Version, att.Path)
 	}
-	if p.AttestationsPredicateType == "" || len(p.AttestationsPredicateType) > 256 {
+	if att.PredicateType == "" || len(att.PredicateType) > 256 {
 		return fmt.Errorf("npm package %s@%s has a malformed attestations predicate type", p.Name, p.Version)
 	}
 	return nil
@@ -829,19 +835,38 @@ func (s *HighServer) publishNpmPackage(p NpmPackage) error {
 	}
 	st := npmStoredManifest{
 		Filename: path.Base(p.Path), Shasum: shasum, Integrity: integrity, Manifest: manifest,
-		Signatures: p.Signatures,
 	}
-	// The attestations pointer is stored only when the mirrored document is
-	// actually installed, so dist.attestations never advertises a 404.
-	if p.AttestationsPredicateType != "" &&
-		fileExists(filepath.Join(s.downloadDir, filepath.FromSlash(npmAttestationsRel(p.Name, p.Version)))) {
-		st.AttestationsPredicateType = p.AttestationsPredicateType
-	}
+	s.applyNpmVerification(p, &st)
 	out := filepath.Join(s.npmMetadataDir(), filepath.FromSlash(p.Name), p.Version+".json")
 	if !safeJoin(s.npmMetadataDir(), out) {
 		return fmt.Errorf("unsafe metadata path for %s@%s", p.Name, p.Version)
 	}
 	return writeJSONAtomic(out, st, 0o644)
+}
+
+// applyNpmVerification preserves unavailable upstream metadata only for the
+// same verified tarball. Explicit empty snapshots remove prior metadata.
+func (s *HighServer) applyNpmVerification(p NpmPackage, st *npmStoredManifest) {
+	if p.Signatures == nil || p.Attestations == nil {
+		previous, err := s.readNpmStoredManifest(p.Name, p.Version)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("npm previous metadata %s@%s: %v; rebuilding from verified tarball", p.Name, p.Version, err)
+		}
+		if err == nil && previous.Integrity == st.Integrity {
+			st.Signatures = previous.Signatures
+			st.AttestationsPredicateType = previous.AttestationsPredicateType
+		}
+	}
+	if p.Signatures != nil {
+		st.Signatures = p.Signatures
+	}
+	if p.Attestations != nil {
+		st.AttestationsPredicateType = p.Attestations.PredicateType
+	}
+	// Never advertise an attestation document absent from the verified store.
+	if !fileExists(filepath.Join(s.downloadDir, filepath.FromSlash(npmAttestationsRel(p.Name, p.Version)))) {
+		st.AttestationsPredicateType = ""
+	}
 }
 
 // extractNpmPackageJSON reads the package manifest embedded in an npm tarball.
@@ -1163,12 +1188,15 @@ func (s *LowServer) CollectNpm(ctx context.Context, req NpmCollectRequest) (Expo
 	}
 	emitProgress(ctx, "Packing %d file(s) into a signed bundle…", len(files))
 
-	// exportIfNew peeks/commits the sequence around the write (so a failed
-	// collection never burns a number) and skips entirely when every tarball was
-	// already forwarded.
+	metadata, err := npmExportMetadata(pkgs, meta)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	// Changed metadata exports with prior file references even when every
+	// tarball has already been forwarded.
 	res, err := s.exportIfNew(ctx, streamNpm, stageRoot, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeNpmBundle(ctx, seq, stageRoot, files, pkgs, meta)
-	})
+	}, metadata...)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -1391,7 +1419,8 @@ func npmRegistryBaseFor(name, resolved string) string {
 // beyond the tarballs themselves: dist-tags per package, registry signatures
 // and attestation pointers per exact version, and each registry's signing
 // keys. All of it is verification material or polish — fetched best-effort,
-// never failing the collect; a package without it simply mirrors bare.
+// never failing the collect. Unavailable fields preserve previously mirrored
+// metadata; a new package without it simply mirrors bare.
 type npmUpstreamMeta struct {
 	tags map[string]map[string]string
 	sigs map[string][]NpmRegistrySignature // "name@version" ->
@@ -1446,45 +1475,53 @@ func fetchNpmPackumentMeta(ctx context.Context, base, name string, versions []st
 		return err
 	}
 	var doc struct {
-		DistTags map[string]string `json:"dist-tags"`
-		Versions map[string]struct {
-			Dist struct {
-				Signatures   []NpmRegistrySignature `json:"signatures"`
-				Attestations struct {
-					URL        string `json:"url"`
-					Provenance struct {
-						PredicateType string `json:"predicateType"`
-					} `json:"provenance"`
-				} `json:"attestations"`
-			} `json:"dist"`
-		} `json:"versions"`
+		DistTags map[string]string              `json:"dist-tags"`
+		Versions map[string]*npmUpstreamVersion `json:"versions"`
 	}
 	if err := json.Unmarshal(b, &doc); err != nil {
 		return fmt.Errorf("parse packument: %w", err)
 	}
-	if cleaned := cleanNpmDistTags(doc.DistTags); len(cleaned) > 0 {
+	if cleaned := cleanNpmDistTags(doc.DistTags); doc.DistTags != nil && (len(doc.DistTags) == 0 || len(cleaned) > 0) {
 		meta.tags[name] = cleaned
 	}
 	for _, version := range versions {
-		v, ok := doc.Versions[version]
-		if !ok {
-			continue
-		}
-		key := name + "@" + version
-		if sigs := cleanNpmSignatures(v.Dist.Signatures); len(sigs) > 0 {
-			meta.sigs[key] = sigs
-		}
-		if pt := v.Dist.Attestations.Provenance.PredicateType; pt != "" && len(pt) <= 256 {
-			meta.atts[key] = npmAttestationsRef{PredicateType: pt}
-		}
+		recordNpmVersionMeta(meta, name+"@"+version, doc.Versions[version])
 	}
 	return nil
+}
+
+// npmUpstreamVersion keeps missing version/dist objects distinct from a
+// successful observation that contains no signatures or attestations.
+type npmUpstreamVersion struct {
+	Dist *struct {
+		Signatures   []NpmRegistrySignature `json:"signatures"`
+		Attestations *struct {
+			Provenance struct {
+				PredicateType string `json:"predicateType"`
+			} `json:"provenance"`
+		} `json:"attestations"`
+	} `json:"dist"`
+}
+
+func recordNpmVersionMeta(meta *npmUpstreamMeta, key string, version *npmUpstreamVersion) {
+	if version == nil || version.Dist == nil {
+		return
+	}
+	dist := version.Dist
+	if sigs := cleanNpmSignatures(dist.Signatures); len(dist.Signatures) == 0 || len(sigs) > 0 {
+		meta.sigs[key] = sigs
+	}
+	if dist.Attestations == nil {
+		meta.atts[key] = npmAttestationsRef{}
+	} else if pt := dist.Attestations.Provenance.PredicateType; pt != "" && len(pt) <= 256 {
+		meta.atts[key] = npmAttestationsRef{PredicateType: pt}
+	}
 }
 
 // cleanNpmSignatures keeps only the well-formed, bounded signature entries of
 // an upstream dist.signatures list.
 func cleanNpmSignatures(sigs []NpmRegistrySignature) []NpmRegistrySignature {
-	var out []NpmRegistrySignature
+	out := make([]NpmRegistrySignature, 0, min(len(sigs), 16))
 	for _, s := range sigs {
 		if s.KeyID == "" || len(s.KeyID) > 256 || s.Sig == "" || len(s.Sig) > 8192 {
 			continue
@@ -1514,7 +1551,7 @@ func fetchNpmRegistryKeys(ctx context.Context, meta *npmUpstreamMeta) {
 		var doc struct {
 			Keys []NpmRegistryKey `json:"keys"`
 		}
-		if json.Unmarshal(b, &doc) != nil || len(doc.Keys) == 0 {
+		if json.Unmarshal(b, &doc) != nil || doc.Keys == nil {
 			continue
 		}
 		if keys := map[string][]NpmRegistryKey{host: doc.Keys}; validateNpmKeys(keys) == nil {
@@ -1560,9 +1597,8 @@ func npmRegistryGet(ctx context.Context, rawURL, accept string, limit int64) ([]
 
 // stageNpmAttestations mirrors one version's attestations document into the
 // staging tree, returning its manifest file. found=false with nil error means
-// upstream advertises attestations but the document could not be fetched —
-// the version then serves without dist.attestations rather than advertising
-// a dead URL.
+// upstream advertises attestations but the document could not be fetched.
+// The receiver can retain its previous verified document in that case.
 func stageNpmAttestations(ctx context.Context, stageRoot, base string, e npmLockEntry) (ManifestFile, bool, error) {
 	b, err := npmRegistryGet(ctx, base+"/-/npm/v1/attestations/"+url.PathEscape(e.Name)+"@"+url.PathEscape(e.Version),
 		"application/json", npmMaxAttestationsBytes)
@@ -1646,12 +1682,16 @@ func (s *LowServer) downloadNpmPackages(ctx context.Context, stageRoot string, e
 
 // attachNpmAttestations mirrors a version's attestations document when
 // upstream advertises one, recording it on the package. Failures warn and
-// leave the package without dist.attestations — never advertising a document
-// the mirror does not hold.
+// leave the snapshot unavailable, so the receiver preserves any previous
+// verified attestations instead of advertising a document it does not hold.
 func attachNpmAttestations(ctx context.Context, stageRoot string, e npmLockEntry, meta npmUpstreamMeta, pkg *NpmPackage) (ManifestFile, bool) {
 	att, ok := meta.atts[e.Name+"@"+e.Version]
 	base := meta.bases[e.Name]
 	if !ok || base == "" {
+		return ManifestFile{}, false
+	}
+	if att.PredicateType == "" {
+		pkg.Attestations = &NpmAttestations{}
 		return ManifestFile{}, false
 	}
 	mf, found, err := stageNpmAttestations(ctx, stageRoot, base, e)
@@ -1663,8 +1703,7 @@ func attachNpmAttestations(ctx context.Context, stageRoot string, e npmLockEntry
 		return ManifestFile{}, false
 	}
 	emitProgress(ctx, "  ⊕ attestations %s@%s (%s)", e.Name, e.Version, att.PredicateType)
-	pkg.AttestationsPath = mf.Path
-	pkg.AttestationsPredicateType = att.PredicateType
+	pkg.Attestations = &NpmAttestations{Path: mf.Path, PredicateType: att.PredicateType}
 	return mf, true
 }
 
@@ -1774,6 +1813,71 @@ func (v *sriVerifier) verify() error {
 // -----------------------------------------------------------------------------
 // Bundle writing
 // -----------------------------------------------------------------------------
+
+// npmExportMetadata tracks snapshots independently so collecting a subset of
+// packages cannot hide another package's changes or repeatedly resend metadata.
+// Only observed fields are tracked; unavailable fields preserve receiver state.
+func npmExportMetadata(pkgs []NpmPackage, meta npmUpstreamMeta) ([]ExportMetadata, error) {
+	records := map[string]any{}
+	for name, tags := range meta.tags {
+		records["tags/"+name] = tags
+	}
+	for host, keys := range meta.keys {
+		encoded, err := npmRegistryKeySnapshot(keys)
+		if err != nil {
+			return nil, err
+		}
+		records["keys/"+host] = encoded
+	}
+	for _, pkg := range pkgs {
+		id := pkg.Name + "@" + pkg.Version
+		if pkg.Signatures != nil {
+			records["signatures/"+id] = npmSignatureSnapshot(pkg.Signatures)
+		}
+		if pkg.Attestations != nil {
+			records["attestations/"+id] = pkg.Attestations
+		}
+	}
+	metadata := make([]ExportMetadata, 0, len(records))
+	for key, record := range records {
+		body, err := json.Marshal(record)
+		if err != nil {
+			return nil, fmt.Errorf("encode npm export metadata %s: %w", key, err)
+		}
+		sum := sha256.Sum256(body)
+		metadata = append(metadata, ExportMetadata{Key: key, SHA256: hex.EncodeToString(sum[:])})
+	}
+	sort.Slice(metadata, func(i, j int) bool { return metadata[i].Key < metadata[j].Key })
+	return metadata, nil
+}
+
+// npmSignatureSnapshot ignores upstream list ordering without changing the
+// observed signatures carried in the bundle.
+func npmSignatureSnapshot(signatures []NpmRegistrySignature) []NpmRegistrySignature {
+	sigs := slices.Clone(signatures)
+	sort.Slice(sigs, func(i, j int) bool {
+		if sigs[i].KeyID != sigs[j].KeyID {
+			return sigs[i].KeyID < sigs[j].KeyID
+		}
+		return sigs[i].Sig < sigs[j].Sig
+	})
+	return sigs
+}
+
+// npmRegistryKeySnapshot ignores ordering while including every key field,
+// including expiry, in the registry's metadata fingerprint.
+func npmRegistryKeySnapshot(keys []NpmRegistryKey) ([]string, error) {
+	encoded := make([]string, 0, len(keys))
+	for _, key := range keys {
+		body, err := json.Marshal(key)
+		if err != nil {
+			return nil, fmt.Errorf("encode npm registry key: %w", err)
+		}
+		encoded = append(encoded, string(body))
+	}
+	sort.Strings(encoded)
+	return encoded, nil
+}
 
 func (s *LowServer) writeNpmBundle(ctx context.Context, seq int64, stageRoot string, files []ManifestFile, pkgs []NpmPackage, meta npmUpstreamMeta) (ExportResult, error) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })

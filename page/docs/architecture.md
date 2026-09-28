@@ -296,18 +296,20 @@ The chain link is enforced: a manifest's `PreviousSequence` must equal the high 
 2. **`loadVerifiedManifest`** — read the manifest bytes + signature, base64-decode the sig, and `ed25519.Verify(s.publicKey, manifestBytes, sig)` on the **raw on-disk bytes**. Failure ⇒ "signature verification failed".
 3. **`checkManifestFields`** — `Type == "go-module-bundle"`; `Stream` matches (empty ⇒ `go`); `Sequence == expectedSeq`; `PreviousSequence == Imported[stream]`; `BundleID` matches; then `validateManifestCompleteness` requires valid `Files` (64-hex SHA-256, safe relative paths) and at least one populated ecosystem section, each cross-checked so every declared artifact references a path present in `Files`.
 4. **Extract + hash-verify the archive** into `<root>/tmp/<bundleID>`: each tar entry must be a regular file, must be listed in the manifest (an `unexpected file` is rejected), its **size must match**, its path must `safeJoin` under staging (blocking traversal), and its **streaming SHA-256 must equal the manifest hash**. Any non-prior manifest file missing from the archive is an error.
-5. **Check prior files** — a file marked `prior` is not in the archive at all: it must already sit in the accumulated repository. Repository installs are immutable and were hash-verified when they first arrived, so the importer checks **existence and size** (re-hashing every prior file would make a large delta import as expensive as a full one). A missing prior file fails the import with *"bundle references prior file `<path>` (sha256 `<hash>`) that is not in the repository: import this stream's earlier bundles first, or run a forced (full) re-collect on the low side"*.
+5. **Check prior files** — a file marked `prior` is not in the archive at all: it must already sit in the accumulated repository. Immutable package files were hash-verified when they first arrived, so the importer checks **existence and size**. For mutable snapshots, including npm attestation documents, it also checks SHA-256 against the current stored bytes. A missing prior file fails the import with *"bundle references prior file `<path>` (sha256 `<hash>`) that is not in the repository: import this stream's earlier bundles first, or run a forced (full) re-collect on the low side"*.
 6. **Install** the verified files, then **regenerate metadata** (below).
 7. On success: set `Imported[stream] = manifest.Sequence` and `ImportedAt`, save state, and move the three landing files into `<landing>/imported`.
 
 ### Immutable installs
 
-`installVerifiedFile` makes every repo path **write-once**:
+`installVerifiedFile` makes package artifacts **write-once**:
 
 - If the destination already exists, it is re-hashed. A different hash ⇒ **`"immutable file conflict"`** error. A matching hash ⇒ **no-op** (re-imports are idempotent).
 - Otherwise the file is copied atomically at `0644`.
 
-Content can never be silently mutated across bundles. For Go, a `.complete` marker is written per module **only after all its files are installed**, and the proxy's `isComplete` requires that marker plus the `.info` / `.mod` / `.zip` before serving a version — so half-installed versions are never visible.
+Mutable snapshots are exceptions: operator uploads, OSV advisory databases, moving Go checksum database records, and npm attestation documents can be replaced by a later signed, sequenced bundle. Every replacement must pass the same file hash verification. npm tarballs remain immutable.
+
+For Go, a `.complete` marker is written per module **only after all its files are installed**, and the proxy's `isComplete` requires that marker plus the `.info` / `.mod` / `.zip` before serving a version — so half-installed versions are never visible.
 
 ## The trust model: regenerate, never trust transferred indexes
 
