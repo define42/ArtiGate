@@ -291,8 +291,8 @@ func (s *HighServer) handleCrateDownload(w http.ResponseWriter, r *http.Request,
 // -----------------------------------------------------------------------------
 
 // publishCrates regenerates the served sparse-index files for every crate in
-// an imported bundle. A record that cannot be published is logged and skipped
-// (that version 404s) rather than wedging the stream's import forever.
+// an imported bundle. Invalid records are skipped; storage failures leave the
+// bundle retryable.
 func (s *HighServer) publishCrates(m *CratesManifest) error {
 	if m == nil {
 		return nil
@@ -309,7 +309,12 @@ func (s *HighServer) publishCrates(m *CratesManifest) error {
 	sort.Strings(names)
 	for _, name := range names {
 		if err := s.publishCrateIndex(name, byName[name]); err != nil {
-			log.Printf("crates publish %s: %v", name, err)
+			var invalid *invalidPackageError
+			if errors.As(err, &invalid) {
+				log.Printf("crates publish %s: %v", name, err)
+				continue
+			}
+			return fmt.Errorf("publish crate %s: %w", name, err)
 		}
 	}
 	return nil
@@ -322,23 +327,28 @@ func (s *HighServer) publishCrates(m *CratesManifest) error {
 // sparse-index file must have one JSON object per line for cargo to parse it.
 func (s *HighServer) publishCrateIndex(name string, records []CrateVersion) error {
 	if validateCrateName(name) != nil {
-		return fmt.Errorf("invalid crate name %q", name)
+		return invalidPackage(fmt.Errorf("invalid crate name %q", name))
 	}
 	out := filepath.Join(s.cratesIndexDir(), filepath.FromSlash(crateIndexPath(name)))
 	if !safeJoin(s.cratesIndexDir(), out) {
-		return fmt.Errorf("unsafe index path for %q", name)
+		return invalidPackage(fmt.Errorf("unsafe index path for %q", name))
 	}
 	lines, err := readCrateIndexLines(out)
 	if err != nil {
 		return err
 	}
 	for _, c := range records {
-		if !fileExists(filepath.Join(s.downloadDir, filepath.FromSlash(c.Path))) {
-			return fmt.Errorf("crate archive missing for %s@%s", c.Name, c.Version)
+		archive := filepath.Join(s.downloadDir, filepath.FromSlash(c.Path))
+		info, err := os.Stat(archive)
+		if err != nil {
+			return fmt.Errorf("stat crate archive %s@%s: %w", c.Name, c.Version, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("crate archive %s@%s is not a regular file", c.Name, c.Version)
 		}
 		var compact bytes.Buffer
 		if err := json.Compact(&compact, c.IndexLine); err != nil {
-			return fmt.Errorf("crate %s@%s index line: %w", c.Name, c.Version, err)
+			return invalidPackage(fmt.Errorf("crate %s@%s index line: %w", c.Name, c.Version, err))
 		}
 		lines[c.Version] = json.RawMessage(compact.Bytes())
 	}
@@ -356,14 +366,17 @@ func readCrateIndexLines(p string) (map[string]json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, raw := range strings.Split(string(b), "\n") {
+	for i, raw := range strings.Split(string(b), "\n") {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue
 		}
 		var line crateIndexLine
-		if json.Unmarshal([]byte(raw), &line) != nil || line.Vers == "" {
-			continue
+		if err := json.Unmarshal([]byte(raw), &line); err != nil {
+			return nil, fmt.Errorf("parse stored crate index %s line %d: %w", p, i+1, err)
+		}
+		if line.Vers == "" {
+			return nil, fmt.Errorf("stored crate index %s line %d has no version", p, i+1)
 		}
 		lines[line.Vers] = json.RawMessage(raw)
 	}

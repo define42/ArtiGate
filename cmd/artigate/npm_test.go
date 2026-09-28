@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -1159,5 +1161,148 @@ func TestNpmResolveTagGates(t *testing.T) {
 	}
 	if got := hs.npmResolveTag("lodash", "beta"); got != "" {
 		t.Errorf("tag with absent target resolved to %q", got)
+	}
+}
+
+func TestNpmPublishMetadataWriteFailure(t *testing.T) {
+	for _, kind := range []string{"dist-tags", "keys"} {
+		t.Run(kind, func(t *testing.T) {
+			pub, _ := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			previous := &NpmManifest{DistTags: map[string]map[string]string{"tagpkg": {"latest": "1.0.0"}}}
+			update := &NpmManifest{DistTags: map[string]map[string]string{"tagpkg": {"latest": "2.0.0"}}}
+			metadataPath := filepath.Join(hs.npmMetadataDir(), "tagpkg", "_tags.json")
+			if kind == "keys" {
+				previous = &NpmManifest{Keys: map[string][]NpmRegistryKey{"old.example": {{KeyID: "old", Key: "old-key"}}}}
+				update = &NpmManifest{Keys: map[string][]NpmRegistryKey{"new.example": {{KeyID: "new", Key: "new-key"}}}}
+				metadataPath = filepath.Join(hs.npmMetadataDir(), "_keys.json")
+			}
+			if err := hs.publishNpm(previous); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(metadataPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A nonempty directory at the temporary file path deterministically
+			// prevents the atomic writer from opening a replacement file.
+			blocked := metadataPath + ".tmp"
+			if err := os.Mkdir(blocked, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(blocked, "blocker"), []byte("blocks metadata write"))
+			for attempt := range 2 {
+				err := hs.publishNpm(update)
+				var invalid *invalidPackageError
+				if err == nil || errors.As(err, &invalid) {
+					t.Fatalf("attempt %d: error=%v, want retryable publication failure", attempt, err)
+				}
+				after, err := os.ReadFile(metadataPath)
+				if err != nil || !bytes.Equal(before, after) {
+					t.Fatalf("failed publication changed stored metadata: %s, err=%v", after, err)
+				}
+			}
+			if err := os.Remove(filepath.Join(blocked, "blocker")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(blocked); err != nil {
+				t.Fatal(err)
+			}
+			if err := hs.publishNpm(update); err != nil {
+				t.Fatalf("publish after repair: %v", err)
+			}
+			if kind == "keys" {
+				stored, err := hs.readNpmStoredKeys()
+				if err != nil || !reflect.DeepEqual(stored.Hosts["old.example"], previous.Keys["old.example"]) ||
+					!reflect.DeepEqual(stored.Hosts["new.example"], update.Keys["new.example"]) {
+					t.Fatalf("keys after retry = %+v, err=%v", stored, err)
+				}
+			} else if got := hs.readNpmStoredTags("tagpkg")["latest"]; got != "2.0.0" {
+				t.Fatalf("latest after retry = %q", got)
+			}
+		})
+	}
+}
+
+func TestNpmPublishKeysPreservesUnreadableStore(t *testing.T) {
+	for _, fault := range []string{"corrupt JSON", "read error"} {
+		t.Run(fault, func(t *testing.T) {
+			pub, _ := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			previous := map[string][]NpmRegistryKey{"old.example": {{KeyID: "old", Key: "old-key"}}}
+			if err := hs.publishNpmKeys(previous); err != nil {
+				t.Fatal(err)
+			}
+			metadataPath := filepath.Join(hs.npmMetadataDir(), "_keys.json")
+			before, err := os.ReadFile(metadataPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fault == "corrupt JSON" {
+				writeFile(t, metadataPath, []byte("invalid JSON"))
+			} else {
+				if err := os.Remove(metadataPath); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(metadataPath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			update := map[string][]NpmRegistryKey{"new.example": {{KeyID: "new", Key: "new-key"}}}
+			for attempt := range 2 {
+				err := hs.publishNpm(&NpmManifest{Keys: update})
+				var invalid *invalidPackageError
+				if err == nil || errors.As(err, &invalid) {
+					t.Fatalf("attempt %d: error=%v, want retryable key-store failure", attempt, err)
+				}
+			}
+			rr := httptest.NewRecorder()
+			hs.handleNpmKeys(rr)
+			if rr.Code != http.StatusInternalServerError {
+				t.Fatalf("unreadable keys HTTP %d, want 500", rr.Code)
+			}
+			if err := os.Remove(metadataPath); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, metadataPath, before)
+			if err := hs.publishNpm(&NpmManifest{Keys: update}); err != nil {
+				t.Fatalf("publish after repair: %v", err)
+			}
+			stored, err := hs.readNpmStoredKeys()
+			want := map[string][]NpmRegistryKey{"old.example": previous["old.example"], "new.example": update["new.example"]}
+			if err != nil || !reflect.DeepEqual(stored.Hosts, want) {
+				t.Fatalf("stored keys = %+v, err=%v, want %+v", stored, err, want)
+			}
+		})
+	}
+}
+
+func TestExtractNpmPackageJSONErrorClassification(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		content   []byte
+		directory bool
+		invalid   bool
+	}{
+		{name: "invalid gzip", content: []byte("not a tarball"), invalid: true},
+		{name: "truncated gzip", content: []byte{0x1f, 0x8b}, invalid: true},
+		{name: "missing tarball"},
+		{name: "directory read failure", directory: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "package.tgz")
+			if tt.directory {
+				if err := os.Mkdir(p, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else if tt.content != nil {
+				writeFile(t, p, tt.content)
+			}
+			_, err := extractNpmPackageJSON(p)
+			var invalid *invalidPackageError
+			if err == nil || errors.As(err, &invalid) != tt.invalid {
+				t.Fatalf("error=%v, invalid=%v, want invalid=%v", err, invalid != nil, tt.invalid)
+			}
+		})
 	}
 }

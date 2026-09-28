@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"io"
 	"net/http"
@@ -973,11 +974,6 @@ func TestComposerPublishRejectsBadRecords(t *testing.T) {
 			Name: "acme/tampered", Version: "1.0.0", VersionNormalized: "1.0.0.0", Path: zipRel,
 			Metadata: composerTestMetadata(t, "acme/tampered", "1.0.0", "1.0.0.0", map[string]any{"dist": map[string]any{"url": "https://evil"}}),
 		},
-		{ // zip missing
-			Name: "acme/missing", Version: "1.0.0", VersionNormalized: "1.0.0.0",
-			Path:     composerDistRel("acme/missing", "1.0.0.0"),
-			Metadata: composerTestMetadata(t, "acme/missing", "1.0.0", "1.0.0.0", nil),
-		},
 		{ // non-canonical path
 			Name: "acme/stray", Version: "1.0.0", VersionNormalized: "1.0.0.0", Path: "composer/dist/acme/stray/x.zip",
 			Metadata: composerTestMetadata(t, "acme/stray", "1.0.0", "1.0.0.0", nil),
@@ -986,7 +982,7 @@ func TestComposerPublishRejectsBadRecords(t *testing.T) {
 	if err := hs.publishComposer(&ComposerManifest{Packages: bad}); err != nil {
 		t.Fatalf("publish must skip bad records, not fail: %v", err)
 	}
-	for _, name := range []string{"acme/tampered", "acme/missing", "acme/stray"} {
+	for _, name := range []string{"acme/tampered", "acme/stray"} {
 		if objs, err := hs.composerVersionObjects("http://x", name); err != nil || len(objs) != 0 {
 			t.Errorf("%s should not be served, got %d objects (%v)", name, len(objs), err)
 		}
@@ -1102,5 +1098,32 @@ func TestComposerCheckIdentityTable(t *testing.T) {
 		if err := composerCheckIdentity("acme/lib", obj); err == nil {
 			t.Errorf("%s: expected error, got nil", name)
 		}
+	}
+}
+
+func TestComposerPublishMissingArchiveIsRetryable(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	p := ComposerPackage{
+		Name: "acme/missing", Version: "1.0.0", VersionNormalized: "1.0.0.0",
+		Path:     composerDistRel("acme/missing", "1.0.0.0"),
+		Metadata: composerTestMetadata(t, "acme/missing", "1.0.0", "1.0.0.0", nil),
+	}
+	m := &ComposerManifest{Packages: []ComposerPackage{p}}
+	err := hs.publishComposer(m)
+	var invalid *invalidPackageError
+	if !errors.Is(err, os.ErrNotExist) || errors.As(err, &invalid) {
+		t.Fatalf("missing archive: %v, want retryable storage error", err)
+	}
+	abs := filepath.Join(hs.downloadDir, filepath.FromSlash(p.Path))
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, abs, []byte("repaired archive"))
+	if err := hs.publishComposer(m); err != nil {
+		t.Fatalf("publish after repair: %v", err)
+	}
+	if _, err := hs.readComposerStored(p.Name, p.VersionNormalized); err != nil {
+		t.Fatal(err)
 	}
 }

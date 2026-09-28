@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -136,6 +138,14 @@ func (fx *npmVerificationFixture) collect(t *testing.T) ExportResult {
 
 func (fx *npmVerificationFixture) importBundle(t *testing.T, result ExportResult) {
 	t.Helper()
+	fx.transferBundle(t, result)
+	if _, err := fx.high.ImportNext(); err != nil {
+		t.Fatalf("ImportNext: %v", err)
+	}
+}
+
+func (fx *npmVerificationFixture) transferBundle(t *testing.T, result ExportResult) {
+	t.Helper()
 	if result.Skipped || result.BundleID == "" {
 		t.Fatalf("metadata change did not produce a bundle: %+v", result)
 	}
@@ -146,9 +156,6 @@ func (fx *npmVerificationFixture) importBundle(t *testing.T, result ExportResult
 			t.Fatal(err)
 		}
 		writeFile(t, filepath.Join(fx.high.cfg.Landing, name), data)
-	}
-	if _, err := fx.high.ImportNext(); err != nil {
-		t.Fatalf("ImportNext: %v", err)
 	}
 }
 
@@ -376,20 +383,139 @@ func TestNpmAttestationsDocumentUpdatesAndReverts(t *testing.T) {
 	}
 }
 
-// Derived metadata can always be rebuilt from the verified tarball, even when
-// the upstream observation is unavailable and no prior metadata can be read.
-func TestNpmVerificationRebuildsCorruptStoredMetadata(t *testing.T) {
+// A failed prior-metadata read must not erase signatures that the current
+// bundle could not fetch. Repairing the stored metadata makes the same bundle
+// retryable without collecting it again.
+func TestNpmVerificationPreservesMetadataAfterReadFailure(t *testing.T) {
+	for _, fault := range []string{"corrupt JSON", "read error"} {
+		t.Run(fault, func(t *testing.T) {
+			fx := newNpmVerificationFixture(t)
+			fx.importBundle(t, fx.collect(t))
+			metadataPath := filepath.Join(fx.high.npmMetadataDir(), "lodash", "4.17.21.json")
+			previous, err := os.ReadFile(metadataPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fault == "corrupt JSON" {
+				writeFile(t, metadataPath, []byte("invalid JSON"))
+			} else {
+				if err := os.Remove(metadataPath); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(metadataPath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			keys := []NpmRegistryKey{{KeyID: "SHA256:key2", Key: "publickey2"}}
+			fx.change(func(st *npmVerificationState) {
+				st.packumentStatus = http.StatusServiceUnavailable
+				st.keys = keys
+			})
+			result := fx.collect(t)
+			fx.assertPriorTarball(t, result)
+			fx.transferBundle(t, result)
+			for attempt := range 2 {
+				imported, err := fx.high.ImportNext()
+				var invalid *invalidPackageError
+				if err == nil || errors.As(err, &invalid) || imported.Imported {
+					t.Fatalf("attempt %d: imported=%+v err=%v, want retryable failure", attempt, imported, err)
+				}
+				if got := fx.high.state.Imported[streamNpm]; got != 1 {
+					t.Fatalf("failed import advanced sequence to %d", got)
+				}
+			}
+			if err := os.Remove(metadataPath); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, metadataPath, previous)
+			imported, err := fx.high.ImportNext()
+			if err != nil || !imported.Imported {
+				t.Fatalf("retry after repair: imported=%+v err=%v", imported, err)
+			}
+			fx.assertServed(t, npmVerificationWant{
+				signatures: []NpmRegistrySignature{{KeyID: "SHA256:key1", Sig: "signature1"}},
+				keys:       keys, predicate: npmVerificationPredicate,
+			})
+		})
+	}
+}
+
+func TestNpmVerificationReturnsAttestationStatErrors(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	const rel = "npm/packages/verified/verified-1.0.0.tgz"
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(hs.downloadDir, rel)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(hs.downloadDir, rel), makeNpmTgz(t, "package", "verified", "1.0.0"))
+	blocked := filepath.Join(hs.downloadDir, "npm", "attestations")
+	writeFile(t, blocked, []byte("blocks attestation directory"))
+	manifest := &NpmManifest{Packages: []NpmPackage{{
+		Name: "verified", Version: "1.0.0", Path: rel,
+		Signatures: []NpmRegistrySignature{}, Attestations: &NpmAttestations{},
+	}}}
+	err := hs.publishNpm(manifest)
+	var invalid *invalidPackageError
+	if err == nil || errors.As(err, &invalid) {
+		t.Fatalf("publication error = %v, want retryable attestation stat error", err)
+	}
+	if _, err := os.Stat(filepath.Join(hs.npmMetadataDir(), "verified", "1.0.0.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("metadata was published before checking attestation storage: %v", err)
+	}
+	if err := os.Remove(blocked); err != nil {
+		t.Fatal(err)
+	}
+	if err := hs.publishNpm(manifest); err != nil {
+		t.Fatalf("publish after repair: %v", err)
+	}
+}
+
+func TestNpmVerificationPreservesMetadataAfterAttestationObstruction(t *testing.T) {
 	fx := newNpmVerificationFixture(t)
-	fx.importBundle(t, fx.collect(t))
-	metadataPath := filepath.Join(fx.high.npmMetadataDir(), "lodash", "4.17.21.json")
-	writeFile(t, metadataPath, []byte("invalid JSON"))
-	keys := []NpmRegistryKey{{KeyID: "SHA256:key2", Key: "publickey2"}}
-	fx.change(func(st *npmVerificationState) {
-		st.packumentStatus = http.StatusServiceUnavailable
-		st.keys = keys
-	})
 	result := fx.collect(t)
 	fx.importBundle(t, result)
-	fx.assertPriorTarball(t, result)
-	fx.assertServed(t, npmVerificationWant{keys: keys})
+	manifest := readBundleManifest(t, fx.low, result.BundleID)
+	pkg := manifest.Npm.Packages[0]
+	pkg.Signatures = nil
+	pkg.Attestations = nil
+	update := &NpmManifest{Packages: []NpmPackage{pkg}}
+	metadataPath := filepath.Join(fx.high.npmMetadataDir(), pkg.Name, pkg.Version+".json")
+	metadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestationsPath := filepath.Join(fx.high.downloadDir, npmAttestationsRel(pkg.Name, pkg.Version))
+	attestations, err := os.ReadFile(attestationsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(attestationsPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(attestationsPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := range 2 {
+		err := fx.high.publishNpm(update)
+		var invalid *invalidPackageError
+		if err == nil || errors.As(err, &invalid) {
+			t.Fatalf("attempt %d: error=%v, want retryable attestation obstruction error", attempt, err)
+		}
+		after, err := os.ReadFile(metadataPath)
+		if err != nil || !bytes.Equal(after, metadata) {
+			t.Fatalf("failed publication changed verification metadata: %s, err=%v", after, err)
+		}
+	}
+	if err := os.Remove(attestationsPath); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, attestationsPath, attestations)
+	if err := fx.high.publishNpm(update); err != nil {
+		t.Fatalf("publish after repair: %v", err)
+	}
+	fx.assertServed(t, npmVerificationWant{
+		signatures: fx.state.signatures,
+		keys:       fx.state.keys,
+		predicate:  npmVerificationPredicate,
+	})
 }

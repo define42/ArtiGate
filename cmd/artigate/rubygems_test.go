@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"io"
 	"net/http"
@@ -1084,5 +1085,104 @@ func TestRubyGemsDashboardListAndDetail(t *testing.T) {
 		if _, err := hs.rubygemsDetail(spec); err == nil {
 			t.Errorf("rubygemsDetail(%q) = nil error, want error", spec)
 		}
+	}
+}
+
+func TestRubyGemsIndexPreservesOlderEntriesOnFailure(t *testing.T) {
+	for _, fault := range []string{"invalid JSON", "metadata directory", "info write", "artifact stat"} {
+		t.Run(fault, func(t *testing.T) {
+			pub, _ := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			rubygemsPublishOne(t, hs, "aaa", "1.0.0", "")
+			metadata := filepath.Join(hs.rubygemsMetadataDir(), "aaa.json")
+			previous, err := os.ReadFile(metadata)
+			if err != nil {
+				t.Fatal(err)
+			}
+			indexes := map[string][]byte{}
+			for _, rel := range []string{"names", "versions", "info/aaa"} {
+				b, err := os.ReadFile(filepath.Join(hs.rubygemsIndexDir(), filepath.FromSlash(rel)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				indexes[rel] = b
+			}
+			artifact := filepath.Join(hs.rubygemsGemsDir(), "aaa-1.0.0.gem")
+			tmp := filepath.Join(hs.rubygemsIndexDir(), "info", "aaa.tmp")
+			switch fault {
+			case "invalid JSON":
+				writeFile(t, metadata, []byte("bad JSON"))
+			case "metadata directory":
+				if err := os.Rename(metadata, metadata+".saved"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(metadata, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			case "info write":
+				if err := os.Mkdir(tmp, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, filepath.Join(tmp, "blocker"), []byte("keep"))
+			case "artifact stat":
+				if err := os.Rename(artifact, artifact+".saved"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Base(artifact), artifact); err != nil {
+					t.Fatal(err)
+				}
+			}
+			payload := gemTestPayload("zzz", "2.0.0")
+			rel := gemFileRel("zzz-2.0.0.gem")
+			writeFile(t, filepath.Join(hs.downloadDir, filepath.FromSlash(rel)), payload)
+			m := &RubyGemsManifest{Gems: []GemVersion{{
+				Name: "zzz", Version: "2.0.0", Filename: "zzz-2.0.0.gem", Path: rel,
+				SHA256: aptSHA256(payload), InfoLine: "2.0.0 |checksum:" + aptSHA256(payload),
+			}}}
+			err = hs.publishRubyGems(m)
+			var invalid *invalidPackageError
+			if err == nil || errors.As(err, &invalid) {
+				t.Fatalf("publish: %v, want retryable error", err)
+			}
+			for rel, want := range indexes {
+				got, err := os.ReadFile(filepath.Join(hs.rubygemsIndexDir(), filepath.FromSlash(rel)))
+				if err != nil || string(got) != string(want) {
+					t.Fatalf("index %s changed: %q, %v", rel, got, err)
+				}
+			}
+			switch fault {
+			case "invalid JSON":
+				got, err := os.ReadFile(metadata)
+				if err != nil || string(got) != "bad JSON" {
+					t.Fatalf("corrupt metadata overwritten: %q, %v", got, err)
+				}
+				writeFile(t, metadata, previous)
+			case "metadata directory":
+				if err := os.Remove(metadata); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(metadata+".saved", metadata); err != nil {
+					t.Fatal(err)
+				}
+			case "info write":
+				if err := os.RemoveAll(tmp); err != nil {
+					t.Fatal(err)
+				}
+			case "artifact stat":
+				if err := os.Remove(artifact); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(artifact+".saved", artifact); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := hs.publishRubyGems(m); err != nil {
+				t.Fatalf("publish after repair: %v", err)
+			}
+			names, err := os.ReadFile(filepath.Join(hs.rubygemsIndexDir(), "names"))
+			if err != nil || string(names) != "---\naaa\nzzz\n" {
+				t.Fatalf("repaired names = %q, %v", names, err)
+			}
+		})
 	}
 }

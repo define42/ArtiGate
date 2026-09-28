@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -850,5 +851,114 @@ func TestCratesImportCksumMustMatchDeliveredArtifact(t *testing.T) {
 		if strings.Contains(body, wrong) {
 			t.Error("served index line carries a cksum that does not match the byte-verified artifact")
 		}
+	}
+}
+
+func TestCratesPublishPreservesStoredIndexOnFailure(t *testing.T) {
+	for _, fault := range []string{"invalid JSON", "missing version", "read error", "write error"} {
+		t.Run(fault, func(t *testing.T) {
+			pub, _ := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			record := func(version string) CrateVersion {
+				rel := crateFileRel("mylib", version)
+				abs := filepath.Join(hs.downloadDir, filepath.FromSlash(rel))
+				if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, abs, []byte(version))
+				return CrateVersion{
+					Name: "mylib", Version: version, Path: rel,
+					IndexLine: json.RawMessage(fmt.Sprintf(`{"name":"mylib","vers":%q}`, version)),
+				}
+			}
+			old, next := record("1.0.0"), record("2.0.0")
+			if err := hs.publishCrates(&CratesManifest{Crates: []CrateVersion{old}}); err != nil {
+				t.Fatal(err)
+			}
+			out := filepath.Join(hs.cratesIndexDir(), filepath.FromSlash(crateIndexPath("mylib")))
+			previous, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := previous
+			switch fault {
+			case "invalid JSON":
+				expected = append(append([]byte(nil), previous...), []byte("invalid JSON\n")...)
+				writeFile(t, out, expected)
+			case "missing version":
+				expected = append(append([]byte(nil), previous...), []byte("{}\n")...)
+				writeFile(t, out, expected)
+			case "read error":
+				if err := os.Rename(out, out+".saved"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(out, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			case "write error":
+				if err := os.Mkdir(out+".tmp", 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, filepath.Join(out+".tmp", "blocker"), []byte("keep"))
+			}
+			m := &CratesManifest{Crates: []CrateVersion{next}}
+			err = hs.publishCrates(m)
+			var invalid *invalidPackageError
+			if err == nil || errors.As(err, &invalid) {
+				t.Fatalf("publish: %v, want retryable error", err)
+			}
+			preserved := out
+			if fault == "read error" {
+				preserved += ".saved"
+			}
+			got, err := os.ReadFile(preserved)
+			if err != nil || string(got) != string(expected) {
+				t.Fatalf("stored index changed: %q, %v", got, err)
+			}
+			switch fault {
+			case "read error":
+				if err := os.Remove(out); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(out+".saved", out); err != nil {
+					t.Fatal(err)
+				}
+			case "write error":
+				if err := os.RemoveAll(out + ".tmp"); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				writeFile(t, out, previous)
+			}
+			if err := hs.publishCrates(m); err != nil {
+				t.Fatalf("publish after repair: %v", err)
+			}
+			lines, err := readCrateIndexLines(out)
+			if err != nil || len(lines) != 2 || lines[old.Version] == nil || lines[next.Version] == nil {
+				t.Fatalf("repaired index = %v, %v; want both versions", lines, err)
+			}
+		})
+	}
+}
+
+func TestCratesPublishSkipsInvalidContent(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	rel := crateFileRel("broken", "1.0.0")
+	abs := filepath.Join(hs.downloadDir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, abs, []byte("archive"))
+	m := &CratesManifest{Crates: []CrateVersion{
+		{Name: "../escape", Version: "1.0.0"},
+		{Name: "broken", Version: "1.0.0", Path: rel, IndexLine: json.RawMessage("bad JSON")},
+	}}
+	if err := hs.publishCrates(m); err != nil {
+		t.Fatalf("invalid records: %v", err)
+	}
+	out := filepath.Join(hs.cratesIndexDir(), filepath.FromSlash(crateIndexPath("broken")))
+	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid index was published: %v", err)
 	}
 }

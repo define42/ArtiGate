@@ -509,7 +509,11 @@ func (s *HighServer) npmResolveTag(name, tag string) string {
 // (/-/npm/v1/keys). Like an upstream registry that signs nothing, it 404s
 // until a collect has captured keys.
 func (s *HighServer) handleNpmKeys(w http.ResponseWriter) {
-	keys := s.mergedNpmKeys()
+	keys, err := s.mergedNpmKeys()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if len(keys) == 0 {
 		http.Error(w, "no registry signing keys mirrored", http.StatusNotFound)
 		return
@@ -519,8 +523,11 @@ func (s *HighServer) handleNpmKeys(w http.ResponseWriter) {
 
 // mergedNpmKeys flattens the stored per-registry key snapshots into one list,
 // de-duplicated by key identity and sorted for stable output.
-func (s *HighServer) mergedNpmKeys() []NpmRegistryKey {
-	stored := s.readNpmStoredKeys()
+func (s *HighServer) mergedNpmKeys() ([]NpmRegistryKey, error) {
+	stored, err := s.readNpmStoredKeys()
+	if err != nil {
+		return nil, err
+	}
 	hosts := make([]string, 0, len(stored.Hosts))
 	for host := range stored.Hosts {
 		hosts = append(hosts, host)
@@ -539,7 +546,7 @@ func (s *HighServer) mergedNpmKeys() []NpmRegistryKey {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].KeyID < out[j].KeyID })
-	return out
+	return out, nil
 }
 
 // handleNpmAttestations serves one version's mirrored attestations document
@@ -707,27 +714,29 @@ func npmLatestVersion(versions []string) string {
 // -----------------------------------------------------------------------------
 
 // publishNpm regenerates the served per-version metadata for every package in
-// an imported bundle from the tarball's own embedded package.json. A package
-// whose tarball cannot be parsed is logged and skipped (its version 404s)
-// rather than wedging the stream's import forever.
-// publishNpm regenerates the served npm metadata from each tarball's own
-// embedded package.json (never trusting a transferred packument).
+// an imported bundle from the tarball's own embedded package.json. Invalid
+// package content is skipped; operational errors leave the import retryable.
 func (s *HighServer) publishNpm(m *NpmManifest) error {
 	if m == nil {
 		return nil
 	}
 	for _, p := range m.Packages {
 		if err := s.publishNpmPackage(p); err != nil {
-			log.Printf("npm publish %s@%s: %v", p.Name, p.Version, err)
+			var invalid *invalidPackageError
+			if errors.As(err, &invalid) {
+				log.Printf("skipping invalid npm package %s@%s: %v", p.Name, p.Version, err)
+				continue
+			}
+			return fmt.Errorf("publish npm %s@%s: %w", p.Name, p.Version, err)
 		}
 	}
 	for name, tags := range m.DistTags {
 		if err := s.publishNpmDistTags(name, tags); err != nil {
-			log.Printf("npm publish dist-tags %s: %v", name, err)
+			return fmt.Errorf("publish npm dist-tags %s: %w", name, err)
 		}
 	}
 	if err := s.publishNpmKeys(m.Keys); err != nil {
-		log.Printf("npm publish registry keys: %v", err)
+		return fmt.Errorf("publish npm registry keys: %w", err)
 	}
 	return nil
 }
@@ -750,7 +759,10 @@ func (s *HighServer) publishNpmKeys(keys map[string][]NpmRegistryKey) error {
 	if err := validateNpmKeys(keys); err != nil {
 		return err
 	}
-	stored := s.readNpmStoredKeys()
+	stored, err := s.readNpmStoredKeys()
+	if err != nil {
+		return err
+	}
 	if stored.Hosts == nil {
 		stored.Hosts = map[string][]NpmRegistryKey{}
 	}
@@ -760,15 +772,21 @@ func (s *HighServer) publishNpmKeys(keys map[string][]NpmRegistryKey) error {
 	return writeJSONAtomic(filepath.Join(s.npmMetadataDir(), "_keys.json"), stored, 0o644)
 }
 
-// readNpmStoredKeys loads the accumulated key store; missing or unreadable
-// means no keys captured yet.
-func (s *HighServer) readNpmStoredKeys() npmStoredKeys {
+// readNpmStoredKeys loads the accumulated key store. Only an absent store
+// means no keys have been captured; unreadable state must not be overwritten.
+func (s *HighServer) readNpmStoredKeys() (npmStoredKeys, error) {
 	var st npmStoredKeys
 	b, err := os.ReadFile(filepath.Join(s.npmMetadataDir(), "_keys.json"))
-	if err != nil || json.Unmarshal(b, &st) != nil {
-		return npmStoredKeys{}
+	if errors.Is(err, os.ErrNotExist) {
+		return st, nil
 	}
-	return st
+	if err != nil {
+		return st, fmt.Errorf("read stored npm registry keys: %w", err)
+	}
+	if err := json.Unmarshal(b, &st); err != nil {
+		return st, fmt.Errorf("decode stored npm registry keys: %w", err)
+	}
+	return st, nil
 }
 
 // npmStoredTags is the per-package dist-tag snapshot stored beside the
@@ -816,14 +834,14 @@ func (s *HighServer) readNpmStoredTags(name string) map[string]string {
 
 func (s *HighServer) publishNpmPackage(p NpmPackage) error {
 	if err := validateNpmName(p.Name); err != nil {
-		return err
+		return invalidPackage(err)
 	}
 	if err := validateNpmVersion(p.Version); err != nil {
-		return err
+		return invalidPackage(err)
 	}
 	tarball := filepath.Join(s.downloadDir, filepath.FromSlash(p.Path))
 	if !strings.HasPrefix(p.Path, "npm/packages/") || !safeJoin(s.downloadDir, tarball) {
-		return fmt.Errorf("unsafe tarball path %s", p.Path)
+		return invalidPackage(fmt.Errorf("unsafe tarball path %s", p.Path))
 	}
 	manifest, err := extractNpmPackageJSON(tarball)
 	if err != nil {
@@ -836,21 +854,23 @@ func (s *HighServer) publishNpmPackage(p NpmPackage) error {
 	st := npmStoredManifest{
 		Filename: path.Base(p.Path), Shasum: shasum, Integrity: integrity, Manifest: manifest,
 	}
-	s.applyNpmVerification(p, &st)
+	if err := s.applyNpmVerification(p, &st); err != nil {
+		return err
+	}
 	out := filepath.Join(s.npmMetadataDir(), filepath.FromSlash(p.Name), p.Version+".json")
 	if !safeJoin(s.npmMetadataDir(), out) {
-		return fmt.Errorf("unsafe metadata path for %s@%s", p.Name, p.Version)
+		return invalidPackage(fmt.Errorf("unsafe metadata path for %s@%s", p.Name, p.Version))
 	}
 	return writeJSONAtomic(out, st, 0o644)
 }
 
 // applyNpmVerification preserves unavailable upstream metadata only for the
 // same verified tarball. Explicit empty snapshots remove prior metadata.
-func (s *HighServer) applyNpmVerification(p NpmPackage, st *npmStoredManifest) {
+func (s *HighServer) applyNpmVerification(p NpmPackage, st *npmStoredManifest) error {
 	if p.Signatures == nil || p.Attestations == nil {
 		previous, err := s.readNpmStoredManifest(p.Name, p.Version)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			log.Printf("npm previous metadata %s@%s: %v; rebuilding from verified tarball", p.Name, p.Version, err)
+			return fmt.Errorf("read previous npm metadata %s@%s: %w", p.Name, p.Version, err)
 		}
 		if err == nil && previous.Integrity == st.Integrity {
 			st.Signatures = previous.Signatures
@@ -864,9 +884,17 @@ func (s *HighServer) applyNpmVerification(p NpmPackage, st *npmStoredManifest) {
 		st.AttestationsPredicateType = p.Attestations.PredicateType
 	}
 	// Never advertise an attestation document absent from the verified store.
-	if !fileExists(filepath.Join(s.downloadDir, filepath.FromSlash(npmAttestationsRel(p.Name, p.Version)))) {
+	attestationsPath := filepath.Join(s.downloadDir, filepath.FromSlash(npmAttestationsRel(p.Name, p.Version)))
+	info, err := os.Stat(attestationsPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
 		st.AttestationsPredicateType = ""
+	case err != nil:
+		return fmt.Errorf("stat npm attestations %s@%s: %w", p.Name, p.Version, err)
+	case !info.Mode().IsRegular():
+		return fmt.Errorf("npm attestations %s@%s is not a regular file", p.Name, p.Version)
 	}
+	return nil
 }
 
 // extractNpmPackageJSON reads the package manifest embedded in an npm tarball.
@@ -888,7 +916,7 @@ func extractNpmPackageJSONBounded(tgzPath string, scanBudget int64) (json.RawMes
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return nil, err
+		return nil, classifyPackageArchiveError(err)
 	}
 	defer gz.Close()
 	// Bound total decompression: tr.Next() inflates every skipped entry, so a
@@ -897,10 +925,10 @@ func extractNpmPackageJSONBounded(tgzPath string, scanBudget int64) (json.RawMes
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil, errors.New("tarball has no package.json")
+			return nil, invalidPackage(errors.New("tarball has no package.json"))
 		}
 		if err != nil {
-			return nil, err
+			return nil, classifyPackageArchiveError(err)
 		}
 		parts := strings.Split(path.Clean(strings.TrimPrefix(hdr.Name, "./")), "/")
 		if hdr.Typeflag != tar.TypeReg || len(parts) != 2 || parts[1] != "package.json" {
@@ -908,10 +936,10 @@ func extractNpmPackageJSONBounded(tgzPath string, scanBudget int64) (json.RawMes
 		}
 		b, err := io.ReadAll(io.LimitReader(tr, 8<<20))
 		if err != nil {
-			return nil, err
+			return nil, classifyPackageArchiveError(err)
 		}
 		if !json.Valid(b) {
-			return nil, errors.New("embedded package.json is not valid JSON")
+			return nil, invalidPackage(errors.New("embedded package.json is not valid JSON"))
 		}
 		return b, nil
 	}

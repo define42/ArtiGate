@@ -53,6 +53,8 @@ type ecosystem struct {
 	// actually installed — never from transferred indexes. It must no-op on a
 	// manifest without this ecosystem's content (every import pass calls every
 	// publish hook). nil when the installed files are already the served layout.
+	// Operational publication failures must be returned: the importer commits
+	// its durable sequence only after all publication hooks succeed.
 	publish func(*HighServer, BundleManifest) error
 	// serve handles the ecosystem's high-side URL space, reporting whether it
 	// wrote a response.

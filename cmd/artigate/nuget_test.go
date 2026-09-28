@@ -16,6 +16,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1438,12 +1439,31 @@ func TestNugetPublishPackageRejections(t *testing.T) {
 		{"path outside the nuget tree", NugetPackage{ID: "Foo.Bar", Version: "1.2.3", Path: "go/foo.nupkg"}},
 		{"nuspec id mismatch", NugetPackage{ID: "Other.Pkg", Version: "1.2.3", Path: rel}},
 		{"nuspec version mismatch", NugetPackage{ID: "Foo.Bar", Version: "9.9.9", Path: rel}},
-		{"missing archive", NugetPackage{ID: "Foo.Bar", Version: "1.2.4", Path: nugetPackageRel("Foo.Bar", "1.2.4")}},
 	}
 	for _, tt := range bad {
-		if err := hs.publishNugetPackage(tt.pkg); err == nil {
-			t.Errorf("%s: expected error, got nil", tt.name)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			err := hs.publishNugetPackage(tt.pkg)
+			var invalid *invalidPackageError
+			if !errors.As(err, &invalid) {
+				t.Fatalf("expected invalid package content, got %v", err)
+			}
+		})
+	}
+}
+
+// Missing or unreadable installed bytes are storage failures, so publication
+// must leave the signed bundle available for retry.
+func TestNugetPublishMissingArchiveIsRetryable(t *testing.T) {
+	pub, _ := newTestKeys(t)
+	hs := newTestHighServer(t, pub)
+	p := NugetPackage{ID: "Foo.Bar", Version: "1.2.4", Path: nugetPackageRel("Foo.Bar", "1.2.4")}
+	err := hs.publishNuget(&NugetManifest{Packages: []NugetPackage{p}})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected missing archive error, got %v", err)
+	}
+	var invalid *invalidPackageError
+	if errors.As(err, &invalid) {
+		t.Fatalf("missing installed archive classified as invalid content: %v", err)
 	}
 }
 

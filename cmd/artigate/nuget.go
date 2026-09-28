@@ -799,18 +799,20 @@ func (s *HighServer) nugetDetail(spec string) (UIDetail, error) {
 // -----------------------------------------------------------------------------
 
 // publishNuget regenerates the served per-version metadata for every package
-// in an imported bundle from the archive's own embedded .nuspec. A package
-// whose archive cannot be parsed is logged and skipped (its version 404s)
-// rather than wedging the stream's import forever.
-// publishNuget regenerates the served NuGet metadata from each package's own
-// embedded .nuspec (never trusting transferred metadata).
+// in an imported bundle from the archive's own embedded .nuspec. Invalid
+// packages are logged and skipped; operational errors leave the import retryable.
 func (s *HighServer) publishNuget(m *NugetManifest) error {
 	if m == nil {
 		return nil
 	}
 	for _, p := range m.Packages {
 		if err := s.publishNugetPackage(p); err != nil {
-			log.Printf("nuget publish %s@%s: %v", p.ID, p.Version, err)
+			var invalid *invalidPackageError
+			if errors.As(err, &invalid) {
+				log.Printf("nuget skip invalid package %s@%s: %v", p.ID, p.Version, err)
+				continue
+			}
+			return fmt.Errorf("publish nuget %s@%s: %w", p.ID, p.Version, err)
 		}
 	}
 	return nil
@@ -818,24 +820,24 @@ func (s *HighServer) publishNuget(m *NugetManifest) error {
 
 func (s *HighServer) publishNugetPackage(p NugetPackage) error {
 	if err := validateNugetID(p.ID); err != nil {
-		return err
+		return invalidPackage(err)
 	}
 	if err := validateNugetVersion(p.Version); err != nil {
-		return err
+		return invalidPackage(err)
 	}
 	abs := filepath.Join(s.downloadDir, filepath.FromSlash(p.Path))
 	if !strings.HasPrefix(p.Path, "nuget/packages/") || !safeJoin(s.nugetPackagesDir(), abs) {
-		return fmt.Errorf("unsafe package path %s", p.Path)
+		return invalidPackage(fmt.Errorf("unsafe package path %s", p.Path))
 	}
 	raw, spec, err := extractNuspec(abs)
 	if err != nil {
 		return err
 	}
 	if !strings.EqualFold(spec.Metadata.ID, p.ID) {
-		return fmt.Errorf("embedded nuspec names %q", spec.Metadata.ID)
+		return invalidPackage(fmt.Errorf("embedded nuspec names %q", spec.Metadata.ID))
 	}
 	if nugetNormalizeVersion(spec.Metadata.Version) != p.Version {
-		return fmt.Errorf("embedded nuspec version is %q", spec.Metadata.Version)
+		return invalidPackage(fmt.Errorf("embedded nuspec version is %q", spec.Metadata.Version))
 	}
 	idl, verl := strings.ToLower(p.ID), strings.ToLower(p.Version)
 	st := nugetStoredManifest{
@@ -884,7 +886,7 @@ type nuspecDep struct {
 func extractNuspec(nupkgPath string) ([]byte, *nuspecXML, error) {
 	zr, err := zip.OpenReader(nupkgPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open nupkg: %w", err)
+		return nil, nil, fmt.Errorf("open nupkg: %w", classifyPackageArchiveError(err))
 	}
 	defer zr.Close()
 	for _, f := range zr.File {
@@ -893,20 +895,20 @@ func extractNuspec(nupkgPath string) ([]byte, *nuspecXML, error) {
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, classifyPackageArchiveError(err)
 		}
 		raw, err := io.ReadAll(io.LimitReader(rc, nugetMaxNuspecBytes))
 		_ = rc.Close()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, classifyPackageArchiveError(err)
 		}
 		spec, err := parseNuspec(raw)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, invalidPackage(err)
 		}
 		return raw, spec, nil
 	}
-	return nil, nil, errors.New("nupkg has no root-level .nuspec")
+	return nil, nil, invalidPackage(errors.New("nupkg has no root-level .nuspec"))
 }
 
 func parseNuspec(raw []byte) (*nuspecXML, error) {

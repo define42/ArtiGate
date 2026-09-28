@@ -617,9 +617,8 @@ type gemStoredInfo struct {
 
 // publishRubyGems re-verifies every imported release against its embedded
 // info line, folds the verified lines into the per-gem metadata store, and
-// regenerates the served compact index. A record that cannot be published is
-// logged and skipped (that release stays out of the index) rather than
-// wedging the stream's import forever.
+// regenerates the served compact index. Invalid records are skipped; storage
+// failures leave the bundle retryable.
 func (s *HighServer) publishRubyGems(m *RubyGemsManifest) error {
 	if m == nil {
 		return nil
@@ -627,8 +626,12 @@ func (s *HighServer) publishRubyGems(m *RubyGemsManifest) error {
 	published := 0
 	for _, g := range m.Gems {
 		if err := s.publishGemRecord(g); err != nil {
-			log.Printf("rubygems publish %s@%s: %v", g.Name, gemVersionFull(g.Version, g.Platform), err)
-			continue
+			var invalid *invalidPackageError
+			if errors.As(err, &invalid) {
+				log.Printf("rubygems publish %s@%s: %v", g.Name, gemVersionFull(g.Version, g.Platform), err)
+				continue
+			}
+			return fmt.Errorf("publish gem %s@%s: %w", g.Name, gemVersionFull(g.Version, g.Platform), err)
 		}
 		published++
 	}
@@ -643,25 +646,25 @@ func (s *HighServer) publishRubyGems(m *RubyGemsManifest) error {
 // line into the gem's accumulated metadata.
 func (s *HighServer) publishGemRecord(g GemVersion) error {
 	if err := validateGemIdentity(g); err != nil {
-		return err
+		return invalidPackage(err)
 	}
 	abs := filepath.Join(s.downloadDir, filepath.FromSlash(g.Path))
 	if !strings.HasPrefix(g.Path, "rubygems/gems/") || !safeJoin(s.rubygemsGemsDir(), abs) {
-		return fmt.Errorf("unsafe gem path %s", g.Path)
+		return invalidPackage(fmt.Errorf("unsafe gem path %s", g.Path))
 	}
 	line, err := parseGemInfoLine(g.InfoLine)
 	if err != nil {
-		return err
+		return invalidPackage(err)
 	}
 	if line.Version != g.Version || line.Platform != g.Platform {
-		return fmt.Errorf("info line names version %s", gemVersionFull(line.Version, line.Platform))
+		return invalidPackage(fmt.Errorf("info line names version %s", gemVersionFull(line.Version, line.Platform)))
 	}
 	sum, err := sha256File(abs)
 	if err != nil {
 		return err
 	}
 	if !strings.EqualFold(sum, line.Checksum) {
-		return errors.New("info line checksum does not match the installed artifact")
+		return invalidPackage(errors.New("info line checksum does not match the installed artifact"))
 	}
 	return s.upsertGemLine(g.Name, gemVersionFull(g.Version, g.Platform), g.InfoLine)
 }
@@ -719,13 +722,15 @@ func (s *HighServer) regenerateRubyGemsIndex() error {
 	versionLines := []string{}
 	for _, e := range entries {
 		name, ok := strings.CutSuffix(e.Name(), ".json")
-		if e.IsDir() || !ok || validateGemName(name) != nil {
+		if !ok || validateGemName(name) != nil {
 			continue
+		}
+		if e.IsDir() {
+			return fmt.Errorf("stored metadata for %s is a directory", name)
 		}
 		line, err := s.regenerateGemInfoFile(name)
 		if err != nil {
-			log.Printf("rubygems index %s: %v", name, err)
-			continue
+			return fmt.Errorf("regenerate gem index %s: %w", name, err)
 		}
 		if line == "" {
 			continue // no release with a present artifact
@@ -752,7 +757,10 @@ func (s *HighServer) regenerateGemInfoFile(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	keys := s.gemPresentKeys(name, st)
+	keys, err := s.gemPresentKeys(name, st)
+	if err != nil {
+		return "", err
+	}
 	if len(keys) == 0 {
 		if err := os.Remove(out); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return "", err
@@ -775,20 +783,34 @@ func (s *HighServer) regenerateGemInfoFile(name string) (string, error) {
 // gemPresentKeys returns the stored version tokens whose (validated) .gem
 // artifact is present on disk, sorted like the served info file: versions
 // ascending, the pure-ruby gem before its platform variants.
-func (s *HighServer) gemPresentKeys(name string, st gemStoredInfo) []string {
+func (s *HighServer) gemPresentKeys(name string, st gemStoredInfo) ([]string, error) {
 	keys := make([]string, 0, len(st.Lines))
 	for token := range st.Lines {
 		version, platform, err := parseGemVersionToken(token)
-		if err != nil || strings.ContainsAny(st.Lines[token], "\r\n") {
-			continue
+		if err != nil {
+			return nil, fmt.Errorf("stored gem %s version %q: %w", name, token, err)
+		}
+		if strings.ContainsAny(st.Lines[token], "\r\n") {
+			return nil, fmt.Errorf("stored gem %s@%s info is not a single line", name, token)
 		}
 		abs := filepath.Join(s.rubygemsGemsDir(), gemFilename(name, version, platform))
-		if safeJoin(s.rubygemsGemsDir(), abs) && fileExists(abs) {
-			keys = append(keys, token)
+		if !safeJoin(s.rubygemsGemsDir(), abs) {
+			return nil, fmt.Errorf("unsafe stored gem path for %s@%s", name, token)
 		}
+		info, err := os.Stat(abs)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("stat gem %s@%s: %w", name, token, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("gem %s@%s is not a regular file", name, token)
+		}
+		keys = append(keys, token)
 	}
 	sort.Slice(keys, func(i, j int) bool { return gemTokenLess(keys[i], keys[j]) })
-	return keys
+	return keys, nil
 }
 
 // writeRubyGemsVersions rebuilds the served /versions list from scratch: the
@@ -850,7 +872,11 @@ func (s *HighServer) listRubyGems() ([]UIModule, error) {
 		if err != nil {
 			continue
 		}
-		if keys := s.gemPresentKeys(name, st); len(keys) > 0 {
+		keys, err := s.gemPresentKeys(name, st)
+		if err != nil {
+			return nil, err
+		}
+		if len(keys) > 0 {
 			out = append(out, UIModule{Module: name, Versions: keys})
 		}
 	}

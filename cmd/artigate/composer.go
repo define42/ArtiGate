@@ -923,16 +923,20 @@ func composerServedVersionObject(st composerStoredVersion, name, vnorm, baseURL 
 // -----------------------------------------------------------------------------
 
 // publishComposer regenerates the served per-release metadata for every
-// package in an imported bundle. A record that cannot be published is logged
-// and skipped (its version 404s) rather than wedging the stream's import
-// forever.
+// package in an imported bundle. Invalid records are skipped; storage failures
+// leave the bundle retryable.
 func (s *HighServer) publishComposer(m *ComposerManifest) error {
 	if m == nil {
 		return nil
 	}
 	for _, p := range m.Packages {
 		if err := s.publishComposerPackage(p); err != nil {
-			log.Printf("composer publish %s@%s: %v", p.Name, p.Version, err)
+			var invalid *invalidPackageError
+			if errors.As(err, &invalid) {
+				log.Printf("composer publish %s@%s: %v", p.Name, p.Version, err)
+				continue
+			}
+			return fmt.Errorf("publish composer package %s@%s: %w", p.Name, p.Version, err)
 		}
 	}
 	return nil
@@ -944,11 +948,11 @@ func (s *HighServer) publishComposer(m *ComposerManifest) error {
 // from the byte-verified artifact itself.
 func (s *HighServer) publishComposerPackage(p ComposerPackage) error {
 	if err := validateComposerRecord(p); err != nil {
-		return err
+		return invalidPackage(err)
 	}
 	abs := filepath.Join(s.downloadDir, filepath.FromSlash(p.Path))
 	if !strings.HasPrefix(p.Path, "composer/dist/") || !safeJoin(s.composerDistDir(), abs) {
-		return fmt.Errorf("unsafe dist path %s", p.Path)
+		return invalidPackage(fmt.Errorf("unsafe dist path %s", p.Path))
 	}
 	shasum, err := composerSha1File(abs)
 	if err != nil {
@@ -962,7 +966,7 @@ func (s *HighServer) publishComposerPackage(p ComposerPackage) error {
 	}
 	out := filepath.Join(s.composerMetadataDir(), filepath.FromSlash(p.Name), p.VersionNormalized+".json")
 	if !safeJoin(s.composerMetadataDir(), out) {
-		return fmt.Errorf("unsafe metadata path for %s@%s", p.Name, p.Version)
+		return invalidPackage(fmt.Errorf("unsafe metadata path for %s@%s", p.Name, p.Version))
 	}
 	return writeJSONAtomic(out, st, 0o644)
 }
