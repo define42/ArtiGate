@@ -318,9 +318,8 @@ func (s *HighServer) publishCrates(m *CratesManifest) error {
 // publishCrateIndex upserts the given releases into one crate's sparse-index
 // file, keeping lines from earlier bundles and writing the result atomically.
 // Only releases whose verified .crate archive is present are (re)listed. Each
-// line is compacted first: the bundle manifest is written indented, which
-// spreads the embedded raw line over several lines, and a sparse-index file
-// must be strictly one JSON object per line for cargo to parse it.
+// line is compacted first: embedded JSON may contain formatting, but a
+// sparse-index file must have one JSON object per line for cargo to parse it.
 func (s *HighServer) publishCrateIndex(name string, records []CrateVersion) error {
 	if validateCrateName(name) != nil {
 		return fmt.Errorf("invalid crate name %q", name)

@@ -62,13 +62,13 @@ Each bundle is three files sharing a bundle ID (e.g. `go-bundle-000042`):
 ```text
 go-bundle-000042.tar.gz            # the artifact archive
 go-bundle-000042.manifest.json     # the signed bytes
-go-bundle-000042.manifest.json.sig # detached Ed25519 signature (base64 + newline)
+go-bundle-000042.manifest.json.sig # detached Ed25519ph signature (marker + base64 + newline)
 ```
 
-The manifest records, for every file in the archive, its slash-relative `path`, its `sha256`, and its `size`. It is serialized once with `json.MarshalIndent`, and the signature is computed over those **exact** manifest bytes as written to disk:
+The manifest records, for every file in the archive, its slash-relative `path`, its `sha256`, and its `size`. It is serialized once as compact JSON with HTML escaping disabled (`json.Encoder.SetEscapeHTML(false)`). The serialized manifest may be at most **64 MiB**, inclusive; the low side rejects larger manifests before writing bundle files or advancing the stream sequence. The signature is computed over those **exact** manifest bytes as written to disk:
 
 ```go
-sig := ed25519.Sign(s.privateKey, manifestBytes)
+sig, err := signManifestPH(s.privateKey, manifestBytes)
 ```
 
 !!! note "The signed bytes are the on-disk bytes"
@@ -79,7 +79,7 @@ sig := ed25519.Sign(s.privateKey, manifestBytes)
 Import is strictly gated. `importBundleFromDirLocked` runs the following before any artifact is served:
 
 1. **All three files present.** A missing archive, manifest, or signature errors with `bundle X incomplete: need archive, manifest and signature`.
-2. **Signature check.** The `.sig` is base64-decoded and checked against the raw on-disk manifest bytes with `ed25519.Verify(s.publicKey, manifestBytes, sig)`, *before* the JSON is unmarshalled. Failure → `signature verification failed for X`.
+2. **Signature check.** The `.sig` is decoded and checked against the exact on-disk manifest bytes, *before* the JSON is decoded. Current bundles use Ed25519ph, which hashes the manifest as a stream before signature verification. Failure → `signature verification failed for X`.
 3. **Field / chain checks** (`checkManifestFields`):
     - `type` is the expected manifest type;
     - `stream` matches (an empty stream is treated as legacy `go`);
@@ -214,7 +214,7 @@ The high side's integrity comes from **signature + hash verification at import**
 
 ### The one optional write surface: diode ingest
 
-With `ARTIGATE_DIODE_INGEST=on` (off by default), the high side accepts bundle uploads at `PUT/POST /diode/<file>` — the receiving end of the [HTTP diode transport](deployment.md). This does **not** weaken the trust model: only supported stream names and positive bundle sequences are accepted, and nothing is served until signature, sequencing, and hash checks pass. Enabling ingest requires a whitespace-free bearer token of at least 32 bytes, compared in constant time. Before verification, archives are capped at 64 GiB, manifests at 16 MiB, signatures at 4 KiB, and direct unverified files across landing, quarantine, and rejected storage at 128 GiB. Completed uploads feed one bounded, coalescing import worker. Leave ingest off entirely when you use the folder flow.
+With `ARTIGATE_DIODE_INGEST=on` (off by default), the high side accepts bundle uploads at `PUT/POST /diode/<file>` — the receiving end of the [HTTP diode transport](deployment.md). This does **not** weaken the trust model: only supported stream names and positive bundle sequences are accepted, and nothing is served until signature, sequencing, and hash checks pass. Enabling ingest requires a whitespace-free bearer token of at least 32 bytes, compared in constant time. Before verification, archives are capped at 64 GiB, manifests at 64 MiB, signatures at 4 KiB, and direct unverified files across landing, quarantine, and rejected storage at 128 GiB. Completed uploads feed one bounded, coalescing import worker. Leave ingest off entirely when you use the folder flow.
 
 ### Upstream credentials on the low side
 

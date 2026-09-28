@@ -1687,6 +1687,11 @@ func bundleSuffixes() []string {
 // bundles, a staging dir for Python). Files marked prior are listed in the
 // manifest only — the archive carries just the new content.
 func (s *LowServer) writeBundleArtifacts(ctx context.Context, bundleID, baseDir string, manifestBytes []byte, files []ManifestFile) error {
+	// Reject before writing any artifacts: a complete but oversized bundle
+	// would consume a sequence the receiver can never import.
+	if int64(len(manifestBytes)) > diodeMaxManifestBytes {
+		return fmt.Errorf("bundle %s manifest is %d bytes, exceeds receiver limit of %d bytes; collect fewer items per request", bundleID, len(manifestBytes), diodeMaxManifestBytes)
+	}
 	// Any bundle artifact already carrying this id means its sequence may have
 	// been observed:
 	// overwriting would fork the stream into two different signed bundles with

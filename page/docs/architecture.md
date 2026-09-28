@@ -174,8 +174,8 @@ keygen ──▶ low.ed25519       (private, base64, mode 0600)  ─── stays
 ```
 
 - **Keygen** (`runKeygen`) uses `ed25519.GenerateKey`. Keys are stored base64, whole-file, and length-checked against `ed25519.PrivateKeySize` / `PublicKeySize` on load.
-- **Signing** is over the *canonical manifest bytes*. In the writer, the manifest is serialized with `json.MarshalIndent(manifest, "", "  ")`, and `sig := ed25519.Sign(s.privateKey, manifestBytes)`. The **exact `manifestBytes` written to disk are what is signed** — the signature file is `base64.StdEncoding.EncodeToString(sig) + "\n"`.
-- On import the high side re-reads those same on-disk bytes and calls `ed25519.Verify`. Field order and indentation are therefore load-bearing.
+- **Signing** covers the *exact serialized manifest bytes*. The writer uses compact JSON with HTML escaping disabled and rejects manifests above 64 MiB before creating bundle files or advancing the sequence. It signs those bytes with Ed25519ph; the signature file contains the `ed25519ph:` marker, base64 signature, and a newline.
+- On import the high side hashes those same on-disk bytes as a stream and verifies the signature before decoding the JSON. Changing field order or whitespace invalidates the signature.
 
 !!! warning "Never rewrite a manifest in place"
     Because the signature is over the exact serialized bytes — not a re-marshal — any tool that reformats or re-orders the manifest JSON invalidates the signature. Move the three files together, untouched.

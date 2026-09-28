@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ed25519"
@@ -722,4 +723,85 @@ func TestMetadataExportInvalidationFailurePreventsWrite(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	assertMetadataChanged(t, store, streamContainers, []ExportMetadata{old}, false)
 	assertMetadataChanged(t, store, streamContainers, []ExportMetadata{next}, true)
+}
+
+func TestWriteBundleArtifactsManifestSizeLimit(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		size int64
+	}{
+		{name: "above old limit", size: 20 << 20},
+		{name: "below limit", size: (64 << 20) - 1},
+		{name: "at limit", size: 64 << 20},
+		{name: "over limit", size: (64 << 20) + 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ls, priv := newAptLowServer(t)
+			id := bundleIDFor(streamUploads, 1)
+			stage := t.TempDir()
+			payload := []byte("hello")
+			rel := uploadsFileRel("docs", "next.txt")
+			if err := os.MkdirAll(filepath.Join(stage, "uploads", "docs"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(stage, filepath.FromSlash(rel)), payload)
+			files := []ManifestFile{{Path: rel, SHA256: aptSHA256(payload), Size: int64(len(payload))}}
+			encoded, err := marshalManifest(BundleManifest{
+				Type: manifestType, Stream: streamUploads, Sequence: 1, BundleID: id,
+				Ecosystems: []string{streamUploads}, Files: files,
+				Uploads: &UploadsManifest{Files: []UploadFile{{
+					Folder: "docs", Name: "next.txt", Path: rel, SHA256: files[0].SHA256, Size: files[0].Size,
+				}}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// JSON whitespace pads a valid signed manifest to the exact wire
+			// boundary without creating hundreds of thousands of test files.
+			manifest := bytes.Repeat([]byte(" "), int(tt.size))
+			copy(manifest, encoded)
+			res, err := ls.exportSequencedBundle(t.Context(), streamUploads, files, func(seq int64) (ExportResult, error) {
+				if err := ls.writeBundleArtifacts(t.Context(), id, stage, manifest, files); err != nil {
+					return ExportResult{}, err
+				}
+				return ExportResult{Stream: streamUploads, BundleID: id, Sequence: seq}, nil
+			})
+			if tt.size > 64<<20 {
+				assertManifestExportRejected(t, ls, id, err)
+				// A rejected manifest cannot prevent the next ordinary upload
+				// from taking sequence 1 and being imported below.
+				res = collectUpload(t, ls, "docs", []uploadPair{{"next.txt", "hello"}})
+			} else if err != nil {
+				t.Fatalf("manifest within limit: %v", err)
+			}
+			if res.Sequence != 1 {
+				t.Fatalf("export sequence = %d, want 1", res.Sequence)
+			}
+			hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+			transferAptBundle(t, ls, hs, res.BundleID)
+			if imported, err := hs.ImportNext(); err != nil || !imported.Imported {
+				t.Fatalf("manifest import = %+v, %v", imported, err)
+			}
+			w := httptest.NewRecorder()
+			hs.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+rel, nil))
+			if w.Code != http.StatusOK || w.Body.String() != string(payload) {
+				t.Fatalf("upload download = HTTP %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func assertManifestExportRejected(t *testing.T, ls *LowServer, id string, err error) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "manifest") || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized manifest error = %v, want manifest-size error", err)
+	}
+	for _, dir := range []string{ls.cfg.ExportDir, ls.bundleArchiveDir()} {
+		if bundleArtifactsExistInDir(dir, id) {
+			t.Fatalf("oversized manifest left bundle artifacts in %s", dir)
+		}
+	}
+	if seq := ls.peekSequence(streamUploads); seq != 1 {
+		t.Fatalf("oversized manifest consumed sequence: next = %d", seq)
+	}
 }

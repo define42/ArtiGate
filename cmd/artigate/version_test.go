@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"runtime/debug"
@@ -85,5 +86,34 @@ func TestMarshalManifestStampsFormatAndVersion(t *testing.T) {
 	}
 	if in.Format != 0 || in.GeneratorVersion != "" {
 		t.Errorf("caller's manifest was mutated: %+v", in)
+	}
+}
+
+func TestMarshalManifestCompactJSON(t *testing.T) {
+	in := BundleManifest{Generator: `builder<&>`, Files: []ManifestFile{{Path: `uploads/docs/a&b<1>.txt`}}}
+	body, err := marshalManifest(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, body); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, compact.Bytes()) {
+		t.Fatal("manifest contains JSON formatting whitespace")
+	}
+	if !bytes.Contains(body, []byte(in.Generator)) || !bytes.Contains(body, []byte(in.Files[0].Path)) {
+		t.Fatal("standalone manifest unnecessarily HTML-escapes metadata")
+	}
+	var decoded BundleManifest
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Generator != in.Generator || len(decoded.Files) != 1 || decoded.Files[0].Path != in.Files[0].Path {
+		t.Fatalf("metadata did not survive encoding: %+v", decoded)
+	}
+	again, err := marshalManifest(in)
+	if err != nil || !bytes.Equal(body, again) {
+		t.Fatalf("manifest encoding is not deterministic: %v", err)
 	}
 }

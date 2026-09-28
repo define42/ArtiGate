@@ -7,6 +7,7 @@ package main
 // used by missing-bundle reports and re-export requests.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -167,7 +168,7 @@ type ModuleInfo struct {
 	Time    time.Time `json:"Time"`
 }
 
-// marshalManifest renders the canonical manifest JSON that gets signed,
+// marshalManifest renders the compact manifest JSON that gets signed,
 // stamping the bundle wire-format version and the producing binary's version
 // first. Every bundle producer marshals through here (m is a copy, so the
 // caller's value is untouched), which is what guarantees no exported bundle
@@ -175,7 +176,15 @@ type ModuleInfo struct {
 func marshalManifest(m BundleManifest) ([]byte, error) {
 	m.Format = manifestFormatCurrent
 	m.GeneratorVersion = versionString()
-	return json.MarshalIndent(m, "", "  ")
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	// Manifests are standalone JSON files, so HTML escaping only inflates
+	// paths and metadata. Sign the compact bytes exactly as written.
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(m); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 // SequenceRange is inclusive. It is used for operator-facing missing bundle

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -282,6 +283,49 @@ func TestHighDiodeIngestSuffixLimitsAndQuota(t *testing.T) {
 	}
 	if got := request("go-bundle-000002.tar.gz", 1).Code; got != http.StatusInsufficientStorage {
 		t.Fatalf("exhausted quota status = %d, want 507", got)
+	}
+}
+
+func TestHighDiodeIngestAcceptsLargeManifest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		size int64
+	}{
+		{name: "above previous limit", size: (16 << 20) + 1},
+		{name: "maximum size", size: 64 << 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pub, _ := newTestKeys(t)
+			hs := newTestHighServer(t, pub)
+			hs.cfg.DiodeIngest = true
+			hs.cfg.DiodeToken = "diode-secret"
+			// A sparse source exercises the full body limit without buffering
+			// another manifest-sized byte slice in the test process.
+			source, err := os.CreateTemp(t.TempDir(), "manifest-source-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer source.Close()
+			if err := source.Truncate(tc.size); err != nil {
+				t.Fatal(err)
+			}
+			const name = "go-bundle-000001.manifest.json"
+			req := httptest.NewRequest(http.MethodPut, "/diode/"+name, io.NewSectionReader(source, 0, tc.size))
+			req.Header.Set("Authorization", "Bearer "+hs.cfg.DiodeToken)
+			req.ContentLength = tc.size
+			rec := httptest.NewRecorder()
+			hs.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("large manifest upload = %d %q, want 200", rec.Code, rec.Body.String())
+			}
+			info, err := os.Stat(filepath.Join(hs.cfg.Landing, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Size() != tc.size {
+				t.Fatalf("received manifest size = %d, want %d", info.Size(), tc.size)
+			}
+		})
 	}
 }
 

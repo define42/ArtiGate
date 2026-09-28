@@ -359,7 +359,7 @@ bundles still awaiting arrival, including a final bundle lost entirely in
 transit. Configure `ARTIGATE_DIODE_HEARTBEAT` or set it to `off` to disable it.
 
 Ingress limits bound unverified data: archives up to 64 GiB, manifests up to
-16 MiB, signatures up to 4 KiB, and 128 GiB total pending/quarantined/rejected
+64 MiB, signatures up to 4 KiB, and 128 GiB total pending/quarantined/rejected
 transport data. Export splitting also respects the configured UDP wire limit;
 an individual file still has to fit its applicable bundle limit.
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -461,5 +462,53 @@ func TestStageUploadPartsCountCap(t *testing.T) {
 	mr := multipart.NewReader(&buf, mw.Boundary())
 	if _, _, err := stageUploadParts(context.Background(), mr, t.TempDir()); err == nil || !strings.Contains(err.Error(), "more than") {
 		t.Fatalf("stageUploadParts over the part cap = %v, want a part-count error", err)
+	}
+}
+
+func TestUploadsLargeManifestRoundTrip(t *testing.T) {
+	ls, priv := newAptLowServer(t)
+	// This valid request previously produced a 19.4 MB indented, HTML-escaped
+	// manifest. Compact encoding must collect and import it successfully.
+	folder := strings.Repeat("&", 128)
+	files := make([]uploadPair, 4000)
+	for i := range files {
+		files[i] = uploadPair{strings.Repeat("&", 122) + fmt.Sprintf("%06d", i), "hello"}
+	}
+	w := httptest.NewRecorder()
+	ls.ServeHTTP(w, newUploadRequest(t, folder, files))
+	if w.Code != http.StatusOK {
+		t.Fatalf("large upload = HTTP %d: %s", w.Code, w.Body.String())
+	}
+	var res ExportResult
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	manifest := readBundleManifest(t, ls, res.BundleID)
+	oldEncoding, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oldEncoding) <= 16<<20 {
+		t.Fatalf("fixture no longer exceeds the old 16 MiB cap: %d bytes", len(oldEncoding))
+	}
+	info, err := os.Stat(filepath.Join(ls.cfg.ExportDir, res.BundleID+".manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() >= int64(len(oldEncoding)) {
+		t.Fatalf("compact manifest size = %d, want smaller than %d", info.Size(), len(oldEncoding))
+	}
+	t.Logf("manifest: old encoding %d bytes, compact encoding %d bytes", len(oldEncoding), info.Size())
+	hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+	transferAptBundle(t, ls, hs, res.BundleID)
+	if imported, err := hs.ImportNext(); err != nil || !imported.Imported {
+		t.Fatalf("large upload import = %+v, %v", imported, err)
+	}
+	for _, file := range []uploadPair{files[0], files[len(files)-1]} {
+		w = httptest.NewRecorder()
+		hs.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+uploadsFileRel(folder, file.name), nil))
+		if w.Code != http.StatusOK || w.Body.String() != file.content {
+			t.Fatalf("large upload download = HTTP %d: %s", w.Code, w.Body.String())
+		}
 	}
 }

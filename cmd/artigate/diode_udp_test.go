@@ -298,6 +298,24 @@ func TestDiodeAssemblerHostileAndLossyInput(t *testing.T) {
 	})
 }
 
+func TestDiodeAssemblerAcceptsLargeManifest(t *testing.T) {
+	asm := newDiodeAssembler(t.TempDir(), validBundleFileName, nil)
+	const size = 64 << 20
+	p := diodePacket{
+		Name:       "go-bundle-000001.manifest.json",
+		FileSize:   size,
+		BlockCount: 1024,
+	}
+	tx, err := asm.transferFor(&p, time.Now())
+	if err != nil {
+		t.Fatalf("maximum-size manifest transfer: %v", err)
+	}
+	t.Cleanup(func() { asm.removeTemp(tx) })
+	if tx.fileSize != size || asm.activeSize != size {
+		t.Fatalf("manifest transfer size = %d, active size = %d, want %d", tx.fileSize, asm.activeSize, size)
+	}
+}
+
 func TestDiodeAssemblerResourceBounds(t *testing.T) {
 	t.Run("suffix file limit", func(t *testing.T) {
 		asm := newDiodeAssembler(t.TempDir(), validBundleFileName, nil)

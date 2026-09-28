@@ -55,7 +55,7 @@ const (
 	// Per-suffix limits keep manifests/signatures small enough for bounded
 	// verification while still allowing large model/container archives.
 	diodeMaxArchiveBytes   int64 = 64 << 30
-	diodeMaxManifestBytes  int64 = 16 << 20
+	diodeMaxManifestBytes  int64 = 64 << 20
 	diodeMaxSignatureBytes int64 = 4 << 10
 	// diodeMaxUnverifiedBytes bounds aggregate pending/rejected transport data.
 	diodeMaxUnverifiedBytes int64 = 128 << 30
