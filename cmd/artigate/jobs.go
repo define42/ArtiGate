@@ -42,9 +42,8 @@ var (
 	errJobFinished  = errors.New("job already finished")
 	errJobQueueFull = errors.New("job queue for this stream is full; retry later")
 	errJobsClosed   = errors.New("server is shutting down")
-	// errWatchJobExists reports that a watch already has a queued or running
-	// job, so a new run would be a duplicate (a due tick overlapping run-now,
-	// or a slow collect still going when the next interval arrives).
+	// errWatchJobExists reports that a watch has a job queued, running, or
+	// recording its outcome, so a new run would be a duplicate.
 	errWatchJobExists = errors.New("watch already queued or running")
 )
 
@@ -93,7 +92,8 @@ type Job struct {
 
 	// run executes the collect. afterRun, if set, observes the outcome (the
 	// watch integration records it); it runs after the job reaches a terminal
-	// state, outside all queue locks. ctx/cancel govern the run: ctx derives
+	// state, outside all queue locks. The watch's duplicate guard stays held
+	// until the hook returns. ctx/cancel govern the run: ctx derives
 	// from context.Background() for detached jobs, or from the request context
 	// for uploads (whose body streams from the client).
 	run      func(context.Context) (ExportResult, error)
@@ -119,23 +119,25 @@ type Job struct {
 // jobManager owns every stream's queue. Lock order is always m.mu before
 // j.mu; broadcastLocked-style helpers expect j.mu held.
 type jobManager struct {
-	mu       sync.Mutex
-	closed   bool
-	nextID   int64
-	queues   map[string][]*Job // queued jobs per stream, FIFO
-	running  map[string]*Job   // at most one per stream
-	byID     map[int64]*Job    // queued + running + retained history
-	history  []*Job            // finished jobs, oldest first, capped
-	dispatch map[string]bool   // stream has a live dispatcher goroutine
-	wg       sync.WaitGroup
+	mu        sync.Mutex
+	closed    bool
+	nextID    int64
+	queues    map[string][]*Job // queued jobs per stream, FIFO
+	running   map[string]*Job   // at most one per stream
+	watchJobs map[int64]*Job    // admitted watches, retained through completion hooks
+	byID      map[int64]*Job    // queued + running + retained history
+	history   []*Job            // finished jobs, oldest first, capped
+	dispatch  map[string]bool   // stream has a live dispatcher goroutine
+	wg        sync.WaitGroup
 }
 
 func newJobManager() *jobManager {
 	return &jobManager{
-		queues:   map[string][]*Job{},
-		running:  map[string]*Job{},
-		byID:     map[int64]*Job{},
-		dispatch: map[string]bool{},
+		queues:    map[string][]*Job{},
+		running:   map[string]*Job{},
+		watchJobs: map[int64]*Job{},
+		byID:      map[int64]*Job{},
+		dispatch:  map[string]bool{},
 	}
 }
 
@@ -151,7 +153,7 @@ func (m *jobManager) enqueue(parent context.Context, j *Job) (int, error) {
 	if m.closed {
 		return 0, errJobsClosed
 	}
-	if j.WatchID != 0 && m.watchJobExistsLocked(j.WatchID) {
+	if j.WatchID != 0 && m.watchJobs[j.WatchID] != nil {
 		return 0, errWatchJobExists
 	}
 	queue := m.queues[j.Stream]
@@ -174,30 +176,15 @@ func (m *jobManager) enqueue(parent context.Context, j *Job) (int, error) {
 	}
 	m.queues[j.Stream] = append(queue, j)
 	m.byID[j.ID] = j
+	if j.WatchID != 0 {
+		m.watchJobs[j.WatchID] = j
+	}
 	if !m.dispatch[j.Stream] {
 		m.dispatch[j.Stream] = true
 		m.wg.Add(1)
 		go m.runStream(j.Stream)
 	}
 	return ahead, nil
-}
-
-// watchJobExistsLocked reports whether a job for this watch is already queued
-// or running on any stream. Caller holds m.mu.
-func (m *jobManager) watchJobExistsLocked(watchID int64) bool {
-	for _, j := range m.running {
-		if j.WatchID == watchID {
-			return true
-		}
-	}
-	for _, queue := range m.queues {
-		for _, j := range queue {
-			if j.WatchID == watchID {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // runStream is one stream's dispatcher: it pops and runs queued jobs in FIFO
@@ -257,7 +244,8 @@ func (m *jobManager) runJob(j *Job) {
 
 // finishJob moves j to a terminal state, retires it into history, and runs the
 // afterRun hook outside all locks. It is a no-op when the job is already
-// terminal (a canceled queued job whose cancel raced the dispatcher).
+// terminal (a canceled queued job whose cancel raced the dispatcher). A watch
+// stays reserved through the hook after leaving its queue or running slot.
 func (m *jobManager) finishJob(j *Job, res ExportResult, err error) {
 	m.mu.Lock()
 	j.mu.Lock()
@@ -281,9 +269,22 @@ func (m *jobManager) finishJob(j *Job, res ExportResult, err error) {
 		m.history = m.history[1:]
 	}
 	m.mu.Unlock()
+	// Queued cancellation also comes through here. Keep the watch reserved
+	// while its next run is being saved, and release it even if a hook panics.
+	if j.WatchID != 0 {
+		defer m.releaseWatchJob(j)
+	}
 	j.cancel() // release the context's resources; no-op if already canceled
 	if after != nil {
 		after(res, err)
+	}
+}
+
+func (m *jobManager) releaseWatchJob(j *Job) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.watchJobs[j.WatchID] == j {
+		delete(m.watchJobs, j.WatchID)
 	}
 }
 

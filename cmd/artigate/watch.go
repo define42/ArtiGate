@@ -320,13 +320,14 @@ func (s *LowServer) watchLoop(ctx context.Context) {
 // time), and a watch whose previous run is still queued or running is left
 // alone until it finishes.
 func (s *LowServer) runDueWatches() {
-	due, err := s.watches.Due(time.Now().UTC())
+	now := time.Now().UTC()
+	due, err := s.watches.Due(now)
 	if err != nil {
 		log.Printf("watch scheduler: %v", err)
 		return
 	}
 	for _, w := range due {
-		if _, err := s.enqueueWatch(w); err != nil && !errors.Is(err, errWatchJobExists) {
+		if _, err := s.enqueueDueWatch(w.ID, now); err != nil && !errors.Is(err, errWatchJobExists) {
 			// A full queue or a shutdown: the watch stays due, so the skipped
 			// run is retried on a later tick rather than lost.
 			log.Printf("watch %d (%s): not queued: %v", w.ID, w.Label, err)
@@ -334,12 +335,31 @@ func (s *LowServer) runDueWatches() {
 	}
 }
 
+// enqueueDueWatch rechecks a scheduler candidate before admitting it. A job
+// may have completed since Due selected the row; serialize this read/enqueue
+// with RecordRun so that either the active-job guard or the saved next run
+// time prevents a duplicate. Run-now intentionally bypasses the due check.
+func (s *LowServer) enqueueDueWatch(id int64, now time.Time) (int64, error) {
+	s.watchMu.Lock()
+	defer s.watchMu.Unlock()
+	w, err := s.watches.Get(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if !w.Enabled || w.NextRunAt.After(now) {
+		return 0, nil
+	}
+	return s.enqueueWatch(w)
+}
+
 // enqueueWatch queues one run of w and returns the job's id. It returns
-// errWatchJobExists when a job for this watch is already queued or running (a
-// due tick overlapping a run-now, or a slow collect still going when the next
-// interval arrived), and the queue's other refusals (errJobQueueFull,
-// errJobsClosed) verbatim so callers can tell a deduplicated run from a
-// dropped one. The outcome is recorded from the job's completion hook; a
+// errWatchJobExists while a job for this watch is queued, running, or recording
+// its outcome. Other queue refusals (errJobQueueFull, errJobsClosed) are returned
+// unchanged so callers can distinguish a duplicate from a dropped run.
+// The outcome is recorded from the job's completion hook; a
 // watch deleted while its job is queued still runs, and its RecordRun then
 // updates zero rows — harmless.
 func (s *LowServer) enqueueWatch(w Watch) (int64, error) {
@@ -391,6 +411,8 @@ func (s *LowServer) recordWatchOutcome(w Watch, res ExportResult, err error) {
 		log.Printf("watch %d (%s): %s", w.ID, w.Label, message)
 		s.metrics.recordCollect(w.Stream, true, now)
 	}
+	s.watchMu.Lock()
+	defer s.watchMu.Unlock()
 	if rerr := s.watches.RecordRun(w.ID, now, status, message); rerr != nil {
 		log.Printf("watch %d: record run: %v", w.ID, rerr)
 	}

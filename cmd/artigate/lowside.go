@@ -168,6 +168,9 @@ type LowServer struct {
 	// how often the scheduler checks for due ones.
 	watches   *WatchStore
 	watchTick time.Duration
+	// watchMu serializes due-watch admission with saving the next run time.
+	// It precedes jobs.mu; completion hooks acquire it outside queue locks.
+	watchMu sync.Mutex
 	// jobs is the per-stream collect queue: every manual and scheduled collect
 	// runs as a job on it, giving all dashboard sessions one shared view of
 	// what is queued, running, and recently finished (and why it failed). It

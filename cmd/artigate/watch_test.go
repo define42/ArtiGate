@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -613,5 +614,134 @@ func TestLowServerWatchUpdateEndpoint(t *testing.T) {
 	// The rejected edits changed nothing.
 	if got, _ := ls.watches.Get(created.ID); got.IntervalSeconds != 7200 || got.Spec != `{"requirements":["urllib3"]}` {
 		t.Errorf("rejected updates must not change the watch: %+v", got)
+	}
+}
+
+// A scheduler tick while completion bookkeeping is paused must see the watch
+// as occupied until its next scheduled time has been saved.
+func TestRunDueWatchesDuringCompletion(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	w, err := ls.watches.Create(Watch{
+		Stream: streamGo, Label: "completion race", Enabled: true,
+		Spec: `{"modules":["example.com/foo/bar@v1.0.0"]}`, IntervalSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completing, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	j := &Job{
+		Stream: w.Stream, Kind: jobKindWatch, WatchID: w.ID, Label: w.Label,
+		run: func(context.Context) (ExportResult, error) { return ExportResult{Skipped: true}, nil },
+		afterRun: func(res ExportResult, err error) {
+			close(completing)
+			<-release
+			ls.recordWatchOutcome(w, res, err)
+		},
+	}
+	if _, err := ls.jobs.enqueue(t.Context(), j); err != nil {
+		t.Fatal(err)
+	}
+	waitWatchSignal(t, completing)
+	ls.runDueWatches()
+	if jobs := ls.jobs.list(); len(jobs) != 1 {
+		t.Fatalf("scheduler queued a duplicate during completion: %+v", jobs)
+	}
+	unblock()
+	drained := make(chan struct{})
+	go func() {
+		ls.jobs.wg.Wait()
+		close(drained)
+	}()
+	waitWatchSignal(t, drained)
+	assertDueCount(t, ls.watches, time.Now().UTC(), 0)
+	ls.runDueWatches()
+	if jobs := ls.jobs.list(); len(jobs) != 1 {
+		t.Fatalf("scheduler queued a duplicate after completion: %+v", jobs)
+	}
+}
+
+func waitWatchSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch synchronization timed out")
+	}
+}
+
+// A scheduler candidate can become ineligible after Due returns. Admission
+// must use the current stored schedule rather than the earlier snapshot.
+func TestEnqueueDueWatchRechecksCandidate(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*LowServer, Watch) error
+	}{
+		{name: "completed", change: func(ls *LowServer, w Watch) error {
+			ls.recordWatchOutcome(w, ExportResult{Skipped: true}, nil)
+			return nil
+		}},
+		{name: "disabled", change: func(ls *LowServer, w Watch) error {
+			return ls.watches.SetEnabled(w.ID, false)
+		}},
+		{name: "deleted", change: func(ls *LowServer, w Watch) error {
+			return ls.watches.Delete(w.ID)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ls, _ := newFakeLowServer(t)
+			w, err := ls.watches.Create(Watch{
+				Stream: streamGo, Label: "stale candidate", Enabled: true,
+				Spec: `{"modules":["example.com/foo/bar@v1.0.0"]}`, IntervalSeconds: 3600,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			due, err := ls.watches.Due(now)
+			if err != nil || len(due) != 1 {
+				t.Fatalf("initial due candidates = %+v, %v", due, err)
+			}
+			if err := tc.change(ls, w); err != nil {
+				t.Fatal(err)
+			}
+			if id, err := ls.enqueueDueWatch(due[0].ID, now); err != nil || id != 0 {
+				t.Fatalf("stale candidate admitted as job %d, error %v", id, err)
+			}
+			if jobs := ls.jobs.list(); len(jobs) != 0 {
+				t.Fatalf("stale candidate created jobs: %+v", jobs)
+			}
+		})
+	}
+}
+
+func TestEnqueueDueWatchPreservesRunNow(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	w, err := ls.watches.Create(Watch{
+		Stream: streamGo, Label: "manual run", Enabled: true,
+		Spec: `{"modules":["example.com/foo/bar@v1.0.0"]}`, IntervalSeconds: 3600,
+		NextRunAt: time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, err := ls.enqueueDueWatch(w.ID, time.Now().UTC()); err != nil || id != 0 {
+		t.Fatalf("future watch admitted as job %d, error %v", id, err)
+	}
+	id, err := ls.enqueueWatch(w)
+	if err != nil || id == 0 {
+		t.Fatalf("run-now refused for future watch: job %d, %v", id, err)
+	}
+	waitJobDone(t, ls.jobs.get(id))
+}
+
+func TestEnqueueDueWatchReportsReadFailure(t *testing.T) {
+	ls, _ := newFakeLowServer(t)
+	if err := ls.watches.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := ls.enqueueDueWatch(1, time.Now().UTC()); err == nil || id != 0 {
+		t.Fatalf("failed schedule read = job %d, %v", id, err)
 	}
 }

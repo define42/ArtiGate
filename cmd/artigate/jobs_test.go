@@ -445,6 +445,164 @@ func TestJobAfterRunHook(t *testing.T) {
 	}
 }
 
+// The watch remains claimed while its completion hook saves the next due time,
+// even though callers can already observe the terminal job outcome.
+func TestJobWatchDedupThroughAfterRun(t *testing.T) {
+	collectErr := errors.New("collect failed")
+	cases := []struct {
+		name        string
+		runErr      error
+		wantState   jobState
+		queued      bool
+		panicInHook bool
+	}{
+		{name: "success", wantState: jobOK},
+		{name: "error", runErr: collectErr, wantState: jobError},
+		{name: "canceled queued", runErr: context.Canceled, wantState: jobCanceled, queued: true},
+		{name: "panicking hook", wantState: jobOK, panicInHook: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newJobManager()
+			t.Cleanup(m.shutdown)
+			blockerRelease := make(chan struct{})
+			releaseBlocker := sync.OnceFunc(func() { close(blockerRelease) })
+			t.Cleanup(releaseBlocker)
+			if tc.queued {
+				started := make(chan struct{})
+				blocker := testJob(streamGo, func(context.Context) (ExportResult, error) {
+					close(started)
+					<-blockerRelease
+					return ExportResult{}, nil
+				})
+				if _, err := m.enqueue(context.Background(), blocker); err != nil {
+					t.Fatal(err)
+				}
+				waitJobTestSignal(t, started, "blocking job to start")
+			}
+
+			ran := make(chan struct{})
+			j := testJob(streamGo, func(context.Context) (ExportResult, error) {
+				close(ran)
+				return ExportResult{}, tc.runErr
+			})
+			j.Kind, j.WatchID = jobKindWatch, 7
+			hookEntered := make(chan error, 1)
+			hookRelease := make(chan struct{})
+			releaseHook := sync.OnceFunc(func() { close(hookRelease) })
+			t.Cleanup(releaseHook)
+			j.afterRun = func(_ ExportResult, err error) {
+				hookEntered <- err
+				<-hookRelease
+				if tc.panicInHook {
+					panic("completion hook failed")
+				}
+			}
+			if _, err := m.enqueue(context.Background(), j); err != nil {
+				t.Fatal(err)
+			}
+			canceled := make(chan error, 1)
+			if tc.queued {
+				go func() { canceled <- m.cancel(j.ID) }()
+			}
+			select {
+			case err := <-hookEntered:
+				if !errors.Is(err, tc.runErr) {
+					t.Errorf("completion outcome = %v, want %v", err, tc.runErr)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("completion hook never started")
+			}
+			waitJobDone(t, j)
+			assertCompletingWatchResponsive(t, m, j, tc.wantState)
+			if tc.queued {
+				select {
+				case <-ran:
+					t.Error("canceled queued watch ran")
+				default:
+				}
+			}
+
+			// A later job on the same stream establishes that the dispatcher
+			// has returned from the hook, including when the hook panics.
+			next := testJob(streamGo, func(context.Context) (ExportResult, error) {
+				return ExportResult{}, nil
+			})
+			if _, err := m.enqueue(context.Background(), next); err != nil {
+				t.Fatal(err)
+			}
+			releaseHook()
+			if tc.queued {
+				select {
+				case err := <-canceled:
+					if err != nil {
+						t.Fatalf("cancel queued watch: %v", err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("cancel did not return after completion hook")
+				}
+			}
+			releaseBlocker()
+			waitJobDone(t, next)
+			retry := testJob(streamGo, func(context.Context) (ExportResult, error) {
+				return ExportResult{}, nil
+			})
+			retry.Kind, retry.WatchID = jobKindWatch, j.WatchID
+			if _, err := m.enqueue(context.Background(), retry); err != nil {
+				t.Fatalf("watch enqueue after completion hook = %v", err)
+			}
+			waitJobDone(t, retry)
+		})
+	}
+}
+
+func waitJobTestSignal(t *testing.T, signal <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+func assertCompletingWatchResponsive(t *testing.T, m *jobManager, j *Job, wantState jobState) {
+	t.Helper()
+	other := testJob(streamPython, func(context.Context) (ExportResult, error) {
+		return ExportResult{}, nil
+	})
+	other.Kind, other.WatchID = jobKindWatch, j.WatchID+1
+	checked := make(chan error, 1)
+	go func() {
+		var checks []error
+		if got := j.snapshotInfo(0).State; got != string(wantState) {
+			checks = append(checks, fmt.Errorf("job state during completion = %s, want %s", got, wantState))
+		}
+		if m.get(j.ID) != j || len(m.list()) == 0 {
+			checks = append(checks, errors.New("completed job missing during completion hook"))
+		}
+		duplicate := testJob(streamPython, func(context.Context) (ExportResult, error) {
+			return ExportResult{}, nil
+		})
+		duplicate.Kind, duplicate.WatchID = jobKindWatch, j.WatchID
+		if _, err := m.enqueue(context.Background(), duplicate); !errors.Is(err, errWatchJobExists) {
+			checks = append(checks, errors.Join(errors.New("watch enqueue during completion did not return errWatchJobExists"), err))
+		}
+		if _, err := m.enqueue(context.Background(), other); err != nil {
+			checks = append(checks, fmt.Errorf("unrelated watch enqueue during completion: %w", err))
+		}
+		checked <- errors.Join(checks...)
+	}()
+	select {
+	case err := <-checked:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("completion hook blocked job reads or enqueues")
+	}
+	waitJobDone(t, other)
+}
+
 func TestJobListOrderingAndFields(t *testing.T) {
 	m := newJobManager()
 	finished := testJob(streamPython, func(context.Context) (ExportResult, error) {
