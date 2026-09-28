@@ -1,1259 +1,552 @@
 # ArtiGate
 
-[![codecov](https://codecov.io/gh/define42/ArtiGate/graph/badge.svg?token=RBKT8U26R8)](https://codecov.io/gh/define42/ArtiGate)
-[![docs](https://img.shields.io/badge/docs-define42.github.io%2FArtiGate-green)](https://define42.github.io/ArtiGate/)
+[![Go version](https://img.shields.io/github/go-mod/go-version/define42/ArtiGate)](go.mod)
+[![CI](https://img.shields.io/github/actions/workflow/status/define42/ArtiGate/go.yml?branch=main)](https://github.com/define42/ArtiGate/actions/workflows/go.yml)
+[![Coverage](https://codecov.io/gh/define42/ArtiGate/graph/badge.svg)](https://codecov.io/gh/define42/ArtiGate)
+[![License](https://img.shields.io/github/license/define42/ArtiGate)](LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-ArtiGate-green)](https://define42.github.io/ArtiGate/)
 
-ArtiGate is a dependency mirror for **one-way data-diode networks**. It mirrors
-Go modules, Python (PyPI) wheels and opt-in sdists, Java (Maven) artifacts,
-NPM packages, Rust crates, Terraform/OpenTofu providers and modules, Helm
-charts, NuGet packages, APT (`.deb`), RPM (`.rpm`), and Alpine (`.apk`)
-repositories, Conda channels, Ruby gems, PHP Composer packages, VS Code
-extensions (from Open VSX), Ansible Galaxy collections, R packages (CRAN),
-Snap packages (with their store assertions, ready for `snap ack` +
-`snap install`), raw git repositories, container images (Docker/OCI,
-linux/amd64), AI models
-from Hugging Face (GGUF for Ollama, plus full safetensors repositories), and
-OSV vulnerability-advisory databases from the internet into an air-gapped
-network, and serves them there in each ecosystem's native format — so the
-air-gapped side can not only build against mirrored dependencies but also
-audit them.
+ArtiGate mirrors software dependencies, container images, AI models, and
+vulnerability advisories into air-gapped networks through a one-way data diode.
+It transfers signed bundles and serves their verified contents through native
+package and registry protocols, so existing build tools can use the mirror.
 
-One binary, two modes:
+[Full documentation](https://define42.github.io/ArtiGate/) ·
+[Configuration](page/docs/configuration.md) ·
+[HTTP API](page/docs/api.md) ·
+[Deployment](page/docs/deployment.md)
 
-- **`low`** — runs on the internet side. From its web dashboard you give it a spec
-  (a `go.mod` or module list, a Python requirements list, Maven coordinates, a
-  `package.json` or NPM package list, a crate/provider/chart/NuGet list, an APT
-  source, a `.repo`, an Alpine repositories file, a conda channel and package
-  list, a gem/Composer/extension/collection/CRAN/snap package list, a git
-  clone URL, a list of container images, a list of Hugging Face model
-  references,
-  or a list of OSV ecosystem names); it fetches the artifacts from upstream
-  and writes **signed, numbered bundle files**.
-- **`high`** — runs air-gapped. It imports the bundles (in order, verifying every
-  signature and hash) and serves them as a GOPROXY, a PyPI index, a Maven 2
-  repository, an NPM registry (including `npm audit`, answered from the
-  mirrored OSV data), a cargo sparse registry, a Terraform/OpenTofu
-  provider+module registry, Helm repositories, a NuGet v3 feed, APT/RPM/Alpine
-  repositories, conda channels, a RubyGems compact-index source, a Composer
-  repository, a VS Code extension gallery, an Ansible Galaxy v3 API, a CRAN
-  mirror, a Snap download mirror (`.snap` + `.assert` pairs for snapd's
-  offline install flow), read-only git repositories (dumb HTTP), a read-only
-  OCI container
-  registry, an Ollama-compatible model registry with a Hugging Face Hub
-  download API, and an OSV advisory feed for offline vulnerability scanners.
+## Demo
 
-```
-  spec ──▶ [ low ] ──▶ signed bundles ──▶ ((diode)) ──▶ [ high ] ──▶ clients
-         fetch + sign        carry across          verify + serve
+One binary runs on both sides of the boundary:
+
+```text
+Internet                One-way transfer                 Air-gapped network
+
+Upstreams --> low --> signed bundles --> diode --> high --> package clients
+              |                                    |
+         collect + sign                       verify + serve
 ```
 
-Each ecosystem is an independently numbered **stream**, so a stalled or missing
-bundle in one never blocks the others. The high side never trusts transferred
-metadata: it verifies every byte against the signed manifest and regenerates
-all repository indexes from the artifacts actually present.
+The **low side** accepts package specifications through a dashboard or HTTP API,
+fetches the requested content, and exports numbered bundles. The **high side**
+imports those bundles and serves a local mirror without fetching missing
+content from upstream. Each ecosystem has its own sequence of bundles;
+a missing Go bundle does not stop Python or container imports.
 
-Full documentation lives at **<https://define42.github.io/ArtiGate/>**.
-
-## Quick start (Docker Compose)
-
-Brings up a low + high stack wired together over the HTTP diode transport (the
-low side uploads each bundle to the high side's `/diode` ingest endpoint), with
-the signing keys generated automatically. The stack refuses to start until an
-operator login and a random diode token are configured:
+For example, collect `rsc.io/quote@v1.5.2` on the low side, wait for its import,
+and download it through the high side:
 
 ```bash
+GOPROXY=http://localhost:8081/go,off GOSUMDB=sum.golang.org \
+  go mod download -json rsc.io/quote@v1.5.2
+```
+
+The local setup below provides both dashboards and the transfer between them.
+
+## Getting started
+
+### Run the local Docker Compose stack
+
+You need Git, Docker with Docker Compose, OpenSSL, and Go **1.27.1 or newer**
+for the credential command below. The containers include the tools used to
+collect dependencies.
+
+```bash
+git clone https://github.com/define42/ArtiGate.git
+cd ArtiGate
 cp .env.example .env
-go run ./cmd/artigate hashpw --user admin  # paste into ARTIGATE_LOW_AUTH
-openssl rand -hex 32              # paste the output into ARTIGATE_DIODE_TOKEN
-make run          # foreground   (make run-detach to background)
-make stop         # stop, keep state    make reset  wipe state
+
+go run ./cmd/artigate hashpw --user admin
+openssl rand -hex 32
 ```
 
-Then open the low-side dashboard at <http://localhost:8080/>, pick an ecosystem,
-enter a spec (or upload a `go.mod`), and click **Collect & export**. Watch it
-appear on the high-side dashboard at <http://localhost:8081/>, then point a client
-at the high side (see below). Both published ports are loopback-only by default;
-terminate TLS in a reverse proxy before deliberately exposing either one.
+For `hashpw`, enter your chosen password on stdin and press Enter. Copy the
+complete printed `admin:$argon2id$...` credential into `ARTIGATE_LOW_AUTH` in
+`.env`, and the OpenSSL output into `ARTIGATE_DIODE_TOKEN`. Keep the credential
+**single-quoted** so Compose preserves every `$` in the hash:
 
-## Build
+```dotenv
+ARTIGATE_LOW_AUTH='PASTE_THE_COMPLETE_USERNAME_AND_HASH_HERE'
+ARTIGATE_DIODE_TOKEN='PASTE_THE_RANDOM_TOKEN_HERE'
+```
+
+To generate the credential without installing Go on the host, use the local
+container image instead of `go run`:
 
 ```bash
-go build -o artigate ./cmd/artigate     # or: make build
+docker build -t artigate:local .
+docker run --rm -it artigate:local hashpw --user admin
 ```
 
-CI publishes a container image on every push to `main`:
-`ghcr.io/define42/artigate` (tags: `latest`, the commit SHA, and a
-semver tag). The image bundles the fetch toolchains the low side shells out to
-(`go`/`git`, `pip`, `mvn` + JDK, `npm`, `gpgv`, `xz`); a high-only deployment
-needs none of them except `gnupg` when signing served APT/RPM repos.
+Start the stack after setting both values:
 
-## Signing keys
+```bash
+docker compose up --build -d
+```
+
+| Dashboard | Address | Use |
+| --- | --- | --- |
+| Low side | <http://localhost:8080/> | Sign in, collect dependencies, schedule updates, re-transmit bundles. |
+| High side | <http://localhost:8081/> | Check imports, browse artifacts, copy client setup instructions. |
+
+The stack generates an Ed25519 key pair once and stores the private and public
+keys in separate volumes. The high side receives only the public key.
+
+**This is a local demonstration of the transfer pipeline.** Compose uses HTTP
+on a shared Docker network; it does not enforce a one-way boundary. Both
+published ports bind to `127.0.0.1`. Before exposing them remotely, configure
+TLS, authentication at the appropriate boundary, and network access controls.
+See [deployment](page/docs/deployment.md) for separate hosts and services.
+
+### Mirror your first dependency
+
+1. Open the low-side dashboard and sign in with the password you hashed.
+2. Select **Go**, enter `rsc.io/quote@v1.5.2`, and click **Collect & export**.
+3. Wait for the Go bundle to appear on the high-side dashboard.
+4. Run the `go mod download` command in the demo above.
+
+The high side also serves captured Go checksum database records, so `GOSUMDB`
+can remain enabled. `GOPROXY=...,off` prevents upstream fallback. If a collect
+reports gaps in checksum capture, resolve those before using a fresh offline
+client; older bundles without checksum records need recollection.
+
+Use `docker compose logs -f low high` to follow activity. To stop while keeping
+keys, sequences, and mirrored content:
+
+```bash
+docker compose down
+```
+
+`make run`, `make run-detach`, and `make stop` wrap these Compose operations.
+**`make reset` deletes all Compose volumes**, including signing keys and mirror
+state; reserve it for a deliberate fresh start.
+
+### Build or run the binary
+
+From a checkout, with the Go version required by [go.mod](go.mod):
+
+```bash
+make build
+./artigate version
+./artigate low --help
+./artigate high --help
+```
+
+Without Make, use `go build -o artigate ./cmd/artigate`. The `make build` target
+also embeds a version derived from Git; set `VERSION=v1.2.3` to override it.
+
+The [release workflow](.github/workflows/go.yml) publishes
+`ghcr.io/define42/artigate` with `latest`, commit, and release tags:
+
+```bash
+docker run --rm ghcr.io/define42/artigate:latest version
+```
+
+A native low-side deployment needs the tools used by its collectors: Go and
+Git, Python/pip, Maven and a JDK, npm, and repository verification or compression
+tools as applicable. The [Dockerfile](Dockerfile) lists the bundled tools.
+Maven collection requires Maven 3.6.3+ and JDK 8+; npm collection requires npm
+7+. The high side needs no fetch toolchains; GnuPG is needed if it signs served
+APT or RPM repository metadata.
+
+## Features and specification
+
+### Supported ecosystems
+
+ArtiGate has **23 independent streams**, including arbitrary file uploads.
+The links below cover request fields, client setup, and ecosystem-specific
+limitations. Paths are relative to the high-side base URL; `<mirror>` is the
+repository name shown in its dashboard.
+
+| Ecosystem | What to collect | High-side interface |
+| --- | --- | --- |
+| [Go](page/docs/ecosystems/go.md) | Module specs or `go.mod`, optionally with `go.sum`. A `go.mod` upload or `resolve_deps: true` fetches the full dependency graph. | GOPROXY at `/go`; checksum database records at `/go/sumdb/`. |
+| [Python](page/docs/ecosystems/python.md) | Requirements and target-platform wheels; explicit `sdists` for source distributions. | PyPI simple index at `/simple/`, downloads at `/packages/`, provenance at `/integrity/`. |
+| [Java / Maven](page/docs/ecosystems/maven.md) | Release coordinates or dependency information from a `pom.xml`. | Maven 2 repository at `/maven/`, including available detached `.asc` signatures. |
+| [npm](page/docs/ecosystems/npm.md) | Package specs or `package.json`, optionally pinned by `package-lock.json`. | Registry at `/npm/`, with mirrored signatures, provenance, and OSV-backed `npm audit`. |
+| [Rust crates](page/docs/ecosystems/crates.md) | Crate specs and normal/build dependencies; optional dependencies on request. | Cargo sparse registry at `/crates/index/`. |
+| [Terraform / OpenTofu](page/docs/ecosystems/terraform.md) | Providers for selected platforms and registry modules. | Provider and module registry under `/terraform/`; discovery at `/.well-known/terraform.json`. |
+| [Helm](page/docs/ecosystems/helm.md) | Charts from an `index.yaml` repository, including available `.prov` files. | Chart repositories at `/helm/<mirror>/`. |
+| [NuGet](page/docs/ecosystems/nuget.md) | Package specs and dependencies from a v3 source. | NuGet v3 feed at `/nuget/v3/index.json`. |
+| [APT](page/docs/ecosystems/apt.md) | deb822 sources, suites, components, and architectures. | Repositories at `/apt/<mirror>/`. |
+| [RPM](page/docs/ecosystems/rpm.md) | Concrete `.repo` URLs; `x86_64` and `noarch` packages by default. | yum/dnf repositories at `/rpm/<mirror>/`. |
+| [Alpine](page/docs/ecosystems/apk.md) | Mirror branches, repositories, and architectures, or an apk repositories file. | Repositories at `/apk/<mirror>/`; optional index-signing keys at `/apk/keys/`. |
+| [Conda](page/docs/ecosystems/conda.md) | Channel, package specs, and platform subdirectories; `noarch` is included. | Channels at `/conda/<mirror>/`. |
+| [RubyGems](page/docs/ecosystems/rubygems.md) | Gem specs and runtime dependencies. | Compact index and gems at `/rubygems/`. |
+| [PHP Composer](page/docs/ecosystems/composer.md) | Stable package releases and their `require` dependencies. | Composer v2 repository at `/composer/`. |
+| [VS Code extensions](page/docs/ecosystems/vsx.md) | Open VSX extension IDs, dependencies, and extension packs. | Gallery API at `/vsx/gallery`, plus `.vsix` downloads. |
+| [Ansible Galaxy](page/docs/ecosystems/galaxy.md) | Collection specs and dependencies. | Galaxy v3 API under `/galaxy/`. |
+| [R / CRAN](page/docs/ecosystems/cran.md) | Source packages and Depends/Imports/LinkingTo dependencies; archived versions can be pinned. | CRAN source repository at `/cran/`. |
+| [Snap](page/docs/ecosystems/snap.md) | Channel revisions, store assertions, and declared base snaps. | `.snap` / `.assert` downloads under `/snap/` for `snap ack` and offline installation. |
+| [Git](page/docs/ecosystems/git.md) | HTTP(S) clone URLs and selected branches or tags. | Read-only dumb HTTP repositories at `/git/<mirror>.git`. |
+| [Containers](page/docs/ecosystems/containers.md) | OCI/Docker images, attached signatures, attestations, SBOMs, and opaque OCI artifacts. | Read-only registry at `/v2/`; pull names preserve the upstream registry namespace. |
+| [AI models](page/docs/ecosystems/ai-models.md) | Hugging Face GGUF variants or full repositories pinned to a commit, with optional path exclusions. | Ollama-compatible `/v2/`, raw GGUF downloads under `/hf/`, and the Hub download API. |
+| [OSV](page/docs/ecosystems/osv.md) | Advisory snapshots by OSV ecosystem name, such as `Go`, `PyPI`, or `npm`. | Snapshot ZIPs and individual advisories under `/osv/`; the `npm` snapshot enables npm audit responses. |
+| [Uploads](page/docs/ecosystems/uploads.md) | Arbitrary files grouped into named folders. | Downloads at `/uploads/<folder>/<name>`; files can be replaced or deleted. |
+
+### Collection and client constraints
+
+- **Python:** pip runs with `--only-binary=:all:`. A requirement without a
+  compatible wheel fails unless handled through the separate source-distribution
+  flow. Source archives are fetched directly without running build hooks or
+  resolving dependencies; collect their runtime and build requirements for
+  clients that build them offline.
+- **Maven:** SNAPSHOTs and version ranges are rejected. Uploaded POMs may supply
+  dependency information; build sections, profiles, and repository overrides
+  are rejected.
+- **npm:** install scripts do not run during resolution. Dependencies that
+  resolve to Git or file URLs are skipped and reported. `npm audit` requires
+  the mirrored OSV `npm` database and npm's bulk-advisory protocol; otherwise
+  its endpoint returns 404. Yarn classic's older audit protocol is not served.
+- **Rust and Conda:** these collectors are not complete replacements for the
+  native dependency solvers. Rust does not perform feature unification or fetch
+  dev-dependencies; Conda resolves greedily. Large Conda channel indexes can
+  require substantial low-side memory.
+- **APT, RPM, and Alpine:** the dashboard defaults to the newest package
+  version; turn off **Newest version only** to collect all versions. RPM URLs
+  must have variables such as `$releasever` expanded; `.zck`-only indexes are
+  unsupported. Alpine re-collects download packages again before export dedup.
+- **Terraform:** provider platforms default to `linux_amd64`. Modules use HTTPS
+  archives or `git::https` sources; publishing and `terraform login` APIs are
+  not provided. Use host-prefixed source addresses, such as
+  `artigate-high.local/hashicorp/aws`, with HTTPS on the high side. The
+  `provider_installation.network_mirror` protocol is not implemented.
+- **Helm:** the Helm collector accepts classic chart repositories. Use the
+  container collector for OCI-hosted artifacts.
+- **Containers:** image collection selects **linux/amd64**. Original image
+  indexes are retained to preserve signed digests, but other platforms are not
+  made available. Foreign layers and upstream registry names with explicit
+  ports are unsupported; `--container-registry host=baseURL` can redirect a
+  logical registry to a private endpoint. The high-side registry accepts no pushes.
+- **AI models:** GGUF tags select quantizations; digest pins and split GGUFs are
+  unsupported. Full snapshots expose the Hub download API, not search or write
+  APIs. A refreshed branch points to its new commit while old commits remain
+  downloadable.
+- **Snap:** this is an offline download mirror, not a replacement Snap Store.
+  On a fresh receiver, collect and install the `snapd` runtime, the base snap,
+  and any content-interface prerequisites as needed; only declared bases are
+  followed automatically.
+
+Configure clients to use **only the high-side mirror**. Additional package
+indexes or upstream fallbacks can introduce dependencies that were never
+mirrored. The dashboard's **Set me up** guides and the ecosystem links above
+provide client configuration using the actual mirror names and addresses.
+
+### Signed bundles and import order
+
+Each bundle consists of three files:
+
+```text
+go-bundle-000001.tar.gz
+go-bundle-000001.manifest.json
+go-bundle-000001.manifest.json.sig
+```
+
+The manifest binds artifact paths, sizes, hashes, metadata, and sequence
+information to an Ed25519 signature. On import, the high side verifies the
+signature, sequence chain, and each newly transferred file's size and SHA-256.
+It regenerates repository indexes from verified artifacts and signed records,
+and publishes complete versions. The transfer mechanism does not establish
+trust in bundle contents.
+
+Bundles are imported **consecutively within each stream**. Future bundles up to
+10,000 positions ahead wait in quarantine and are imported when their missing
+predecessors arrive. Duplicates do not advance state. Invalid bundles,
+unsupported streams, and excessively far-future bundles are moved to
+`<root>/rejected`; a blocked stream does not prevent imports for other
+ecosystems. Bundles using a newer manifest format wait for a compatible
+high-side version.
+
+Artifact paths are generally immutable. Explicit update paths include uploads,
+OSV snapshots, and Go checksum database latest/lookup records. Existing content
+referenced by a delta bundle must already be present on the high side.
+
+ArtiGate's bundle signature proves transfer integrity under the configured
+signing key; it does not replace verification of the original publisher.
+Available upstream verification material is carried alongside artifacts:
+Go checksum records, Terraform checksums and GPG material, OCI attachments,
+npm signatures and attestations, Maven `.asc`, Helm `.prov`, Python PEP 740
+provenance, and Snap assertions. NuGet's embedded signatures travel unchanged.
+Clients remain responsible for their publisher trust policies. Collection of
+optional signatures and attachments can be incomplete; inspect warnings and
+container discovery status. Conda content-trust metadata, Galaxy collection
+signatures, and Open VSX signatures are not mirrored.
+
+For regenerated APT/RPM/Alpine metadata, configure `--apt-gpg-key`,
+`--rpm-gpg-key`, or `--apk-rsa-key` on the high side and install the matching
+public keys on clients. These repositories are otherwise served unsigned and
+need explicit client configuration to accept unsigned metadata. Original RPM
+package signatures still require the publisher's key.
+
+See [architecture](page/docs/architecture.md) for the bundle format and
+[security](page/docs/security.md) for the trust model.
+
+### Scheduling, estimates, and bandwidth
+
+The low-side dashboard can turn a collection specification into a recurring
+schedule. Schedules can be paused, run immediately, edited, or removed; due
+schedules are checked every minute by default (`--watch-interval`). Uploads
+cannot be scheduled because they have no upstream source.
+
+Container tags may be pinned or expressed as version constraints, such as
+`golang:1.26.x` or `golang:>=1.24, <2.0`. Schedules resolve the constraint again
+on every run. Only plain numeric version tags participate; pin variant tags
+such as `1.26.3-alpine` explicitly.
+
+Export deduplication tracks previously forwarded paths and hashes per stream:
+
+- If neither content nor export metadata changes, no bundle or sequence number
+  is created.
+- Delta bundles contain new files and reference earlier content through the
+  signed manifest. Where upstream checksums permit it, collection can also
+  skip downloading previously forwarded files.
+- `"force": true` bypasses content deduplication and produces full content, but
+  **does not reset the sequence or allow missing bundles to be skipped**.
+- Uploads always send their files in full, so re-uploading restores a file
+  deleted on the high side.
+
+Use **Estimate size** or append `?dry_run=1` to a collect request to estimate
+new bytes and bundle count without exporting, allocating a sequence, or
+marking content as forwarded. Some collectors can estimate from metadata;
+tool-driven collectors still fetch locally to determine sizes. Large exports
+split into consecutive bundles, with ecosystem metadata in the final bundle.
+
+The [scheduling guide](page/docs/scheduling.md),
+[low-side guide](page/docs/low-side.md), and [API reference](page/docs/api.md)
+cover stored specifications, jobs, cancellation, and streaming progress.
+
+### Transfer options
+
+| Transport | Configuration | Behavior |
+| --- | --- | --- |
+| Folder | Low `--export-dir`; high `--landing`. | Default. An external carrier transfers each bundle's three files. |
+| HTTP | Low `ARTIGATE_DIODE_URL`; high `ARTIGATE_DIODE_INGEST=on`; shared `ARTIGATE_DIODE_TOKEN`. | Uploads to `PUT/POST /diode/<file>`; the token must be at least 32 bytes. Complete arrivals trigger import. |
+| SFTP | `ARTIGATE_SFTP_URL` on each side, with SSH credentials and `ARTIGATE_SFTP_KNOWN_HOSTS`. | Low uploads to one endpoint; high polls another. Servers may be separate ends of a diode transfer service. |
+| UDP diode | Low `ARTIGATE_PITCHER_INTERFACE`; high `ARTIGATE_CATCHER_INTERFACE`. | Rate-limited IPv6 multicast with Reed–Solomon forward error correction over a dedicated one-way link. |
+
+Choose one automatic low-side sender: HTTP, SFTP, or UDP. HTTP and SFTP need
+their local transport endpoint to support the protocol's bidirectional session;
+the built-in UDP transport requires no return path.
+
+HTTP and SFTP uploads remove successfully sent files from the export spool and
+retain the archive copy. Failed sends stay staged for **re-transmit** from the
+low-side Status page; collection success alone does not confirm delivery.
+There is no automatic retry of failed HTTP/SFTP bundle uploads.
+
+SFTP requires trusted host keys and pre-created remote directories. Use a
+server supporting `posix-rename@openssh.com` for atomic replacement. Uploads
+use a `.writing` suffix until complete; polling ignores unfinished files and
+waits for all three bundle files. The high side leaves remote files in place,
+so remote retention is an operator responsibility. SSH login keys are separate
+from bundle-signing keys. See the
+[SFTP configuration](page/docs/configuration.md#sftp-transport).
+
+For UDP, the defaults are 800 Mbit/s, MTU 9000, and 32 data plus 8 parity shards.
+Loss beyond the parity budget requires a re-transmission. Completed receive
+blocks are retained for 24 hours so retries of identical files can resume.
+The Docker examples use host networking, `NET_ADMIN`, and a root user for
+automatic NIC setup. Preconfigured interfaces can use
+`ARTIGATE_PITCHER_NETSETUP=off` / `ARTIGATE_CATCHER_NETSETUP=off` for
+unprivileged operation within host socket-buffer limits. See the
+[low-side](examples/docker-compose-diode-low.yml) and
+[high-side](examples/docker-compose-diode-high.yml) Compose examples and the
+[UDP guide](page/docs/data-diode.md).
+
+Across all transports, a signed heartbeat advertises the low side's newest
+sequence per stream every 30 seconds by default. It lets the high side show
+bundles still awaiting arrival, including a final bundle lost entirely in
+transit. Configure `ARTIGATE_DIODE_HEARTBEAT` or set it to `off` to disable it.
+
+Ingress limits bound unverified data: archives up to 64 GiB, manifests up to
+16 MiB, signatures up to 4 KiB, and 128 GiB total pending/quarantined/rejected
+transport data. Export splitting also respects the configured UDP wire limit;
+an individual file still has to fit its applicable bundle limit.
+
+### Native deployment and configuration
+
+Generate the signing pair once:
 
 ```bash
 ./artigate keygen --private low.ed25519 --public high.ed25519.pub
 ```
 
-Keep the private key on the low side only; install the public key on the high side.
+Keep `low.ed25519` on the low side and provision `high.ed25519.pub` on the high
+side. Back up the keys with their associated state; do not regenerate them
+when restarting an existing mirror.
 
-## Low side
+For example, after installing the key files and preparing writable state and
+spool directories, run these commands on their respective hosts. The loopback
+listeners can sit behind local reverse proxies:
 
 ```bash
+# Low host
 ./artigate low \
-  --listen :8080 \
+  --listen 127.0.0.1:8080 \
   --root /var/lib/artigate-low \
   --export-dir /var/spool/diode-out \
-  --private-key /etc/artigate/low.ed25519 \
-  --upstream-goproxy https://proxy.golang.org,direct \
-  --goprivate github.com/your-org/*
-```
-
-Everything is driven from the **dashboard at `http://<low-host>:8080/`** — one page
-per ecosystem. Each collect fetches from upstream and writes a signed bundle to
-the export directory (three files per bundle: `.tar.gz`, `.manifest.json`,
-`.manifest.json.sig`).
-
-Fetching uses the host's normal tools and credentials (`go`/`git`, `pip`, `mvn`,
-`npm`, `gpgv`). Private Go modules can authenticate with a one-time login on the
-collect (the Go page's *Private module host login* fields / the `auth` field) or
-a standing `host=user:password` entry in `ARTIGATE_GO_AUTH` — ArtiGate
-injects it into `go`/`git` for that collect and adds the host to `GOPRIVATE`;
-alternatively, configure the service user's Git/SSH before starting.
-`--gotoolchain` (default `auto`) lets `go` download a newer toolchain when a
-module requires one. The [configuration
-reference](https://define42.github.io/ArtiGate/configuration/) lists every flag
-and environment variable.
-
-### What each page mirrors
-
-- **Go** — list modules to fetch (`module@version`, or a bare `module` /
-  `module@latest` for the newest), or upload a project's `go.mod` (and optional
-  `go.sum`) to mirror exactly what it builds. The full dependency graph is always
-  fetched.
-- **Python** — a requirements list (paste or upload `requirements.txt`). Wheels
-  by default, enforced with `--only-binary=:all:` for every collect so package
-  build hooks never run beside the signing key. Packages that publish no wheel
-  can be opted into source distributions via the request's `sdists` list —
-  those are fetched straight from the index's JSON API (never through pip, so
-  still no build hooks) and verified against the API-declared SHA-256; clients
-  build them locally exactly as they would against PyPI. An optional
-  cross-target downloads wheels for the high-side interpreter/platform rather
-  than the low-side host. PEP 740 provenance documents published by the index
-  (attested trusted-publisher uploads) mirror automatically and serve through
-  `/integrity/…` plus the simple JSON `provenance` key.
-- **Java** — Maven coordinates (`groupId:artifactId:version`, one per line) or an
-  uploaded `pom.xml`. Only the pom's dependency information is used — build
-  sections, profiles, and repository overrides are rejected, so an uploaded pom
-  can never execute code through Maven. Release versions only; SNAPSHOTs and
-  version ranges are rejected. Each resolved file's detached `.asc` PGP
-  signature is mirrored from Maven Central (best-effort; `--maven-signatures`
-  overrides the source), so Gradle dependency verification and manual
-  `gpg --verify` work against the mirror.
-- **NPM** — package specs (one per line: `lodash@4.17.21`, a bare `lodash` for
-  the newest version, a range like `react@^18.2`, scoped `@types/node`), or an
-  uploaded `package.json` (with an optional `package-lock.json` pinning the
-  exact resolved graph). The full dependency graph is resolved with `npm`
-  (`--package-lock-only`, scripts never run) and every resolved registry
-  tarball is downloaded and verified against the lockfile's integrity hash.
-  Dependencies that resolve outside the registry (git/file URLs) are skipped
-  and reported. `--npm-registry` points resolution at a different registry.
-  Registry signatures, provenance attestations, and the registry signing keys
-  are mirrored with the packages, so `npm audit signatures` verifies against
-  the mirror.
-- **APT** — a deb822 source stanza (paste or upload a `.sources` file). `Suites:`
-  may list several suites of the archive (they share one mirror and its pool); an
-  optional `Signed-By` keyring verifies each suite's upstream release with `gpgv`;
-  several stanzas mirror several repositories. The mirror is named after the
-  repository URI. Example:
-
-  ```text
-  Types: deb
-  URIs: http://archive.ubuntu.com/ubuntu
-  Suites: noble noble-updates noble-security
-  Components: main universe
-  Architectures: amd64
-  Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-  ```
-
-- **RPM** — a yum/dnf `.repo` stanza (paste or upload). `baseurl` must be concrete
-  (no `$releasever`/`$basearch`) and names the mirror. Mirrors the repository's
-  metadata plus its `.rpm`s — by default only the **x86_64 and noarch**
-  packages (noarch rides along because hardware-arch packages depend on it);
-  list architectures explicitly in the collect request to override. Example:
-
-  ```text
-  [code]
-  baseurl=https://packages.microsoft.com/yumrepos/vscode
-  gpgcheck=1
-  gpgkey=https://packages.microsoft.com/keys/microsoft.asc
-  ```
-
-- **Containers** — image references, one per line: `alpine:3.20`,
-  `ghcr.io/org/app:v1`, `registry.access.redhat.com/ubi9/ubi@sha256:…`. Only
-  **linux/amd64** is fetched (a multi-platform image is resolved to its amd64
-  manifest). Public images from any OCI registry (Docker Hub, GitHub, Red Hat,
-  quay.io, …) work anonymously; private registries take a login from the
-  page's *Private registry login* fields (used for that pull only, never
-  stored) or from `ARTIGATE_CONTAINER_AUTH` on the low side (comma-separated
-  `host=user:password`, also what scheduled pulls use). Each upstream registry
-  keeps its own namespace on the high side, so `docker.io/...` and
-  `ghcr.io/...` content never mixes. Layers are content-addressed, so a base
-  layer shared by several images is bundled and stored once.
-
-  **Signatures and attestations cross the diode too.** Each collect also
-  mirrors whatever is attached to the image upstream — cosign/sigstore
-  signatures, in-toto/SLSA provenance, SBOMs — discovered via the OCI 1.1
-  referrers API (and its tag fallback), cosign's `sha256-<digest>.sig`/
-  `.att`/`.sbom` tag scheme, and buildkit's attestation entries in the image
-  index. A multi-platform tag serves its original **index** document on the
-  high side, so the digest a client resolves is exactly upstream's and
-  signatures over it verify unchanged; `cosign verify`, Kyverno, and Ratify
-  work against the mirror with the same keys/identities they use online.
-  Native referrers must declare the matching OCI `subject`; legacy cosign
-  tags and BuildKit associations remain available separately. Artifacts that
-  fail to fetch are skipped with a warning, and previously imported artifacts
-  remain available by digest. Signature tags move when a new version arrives.
-  Discovery follows paginated referrers and reports partial failures. OCI
-  index attachments and nested attachments retain their required manifests
-  and blobs; a missing required child rejects that attachment. The same
-  collect endpoint accepts opaque OCI artifacts, including empty blobs.
-  High-side tag and referrer listings support bounded pagination; tag lists
-  include current artifact tags as well as image tags.
-
-  The tag position also takes a **version constraint**, resolved against the
-  upstream tag list at collect time to the newest matching version:
-
-  ```text
-  golang:1.26.x          # newest 1.26 patch release (e.g. 1.26.3)
-  golang:<2.0.0          # newest version below 2.0.0
-  golang:>=1.24, <2.0    # a range ([hashicorp/go-version] syntax)
-  ```
-
-  Only plain numeric tags (`1.26.3`, `v2.0`, `17`) are considered, so a variant
-  tag like `1.26.3-alpine` never outranks the plain image — pin variants
-  explicitly. The bundle records the resolved concrete tag, and a **scheduled**
-  collect re-resolves on every run, so `golang:1.26.x` keeps tracking new patch
-  releases through the diode automatically.
-
-- **AI Models** — two kinds of Hugging Face references, one per line each.
-  **GGUF models**, container-style:
-
-  ```text
-  hf.co/unsloth/gpt-oss-20b-GGUF:Q4_0
-  bartowski/Llama-3.2-1B-Instruct-GGUF:Q8_0     # hf.co/ prefix optional
-  unsloth/gpt-oss-20b-GGUF                       # no tag = default quantization
-  ```
-
-  The repository names the Hugging Face model; the tag selects a
-  **variant/quantization**, resolved by Hugging Face itself (the same
-  Ollama-compatible API behind `ollama run hf.co/…`), so it works for any GGUF
-  model repository that Ollama accepts. The manifest, model file, chat
-  template, params, and license are fetched with their SHA-256s verified and
-  stored content-addressed — a license or model blob shared between variants
-  is bundled and stored once.
-
-  **Full repositories**, for safetensors releases that publish no GGUF
-  (`openai/gpt-oss-20b`, say) — consumed on the high side by vLLM,
-  transformers, and `hf download` through the Hub API:
-
-  ```text
-  openai/gpt-oss-20b                # branch main, pinned to its commit
-  openai/gpt-oss-20b@main           # same, explicit
-  org/model@<commit-hash>           # pin an exact revision
-  ```
-
-  Every file is mirrored at the pinned commit (large LFS files verified
-  against their upstream SHA-256s) into the same content-addressed store. A
-  **"Skip repository paths"** field excludes subtrees you don't want to carry
-  across the diode — e.g. `original, metal` skips gpt-oss's two extra full
-  copies of the weights and roughly third-sizes the bundle.
-
-  For both kinds: gated or private models need `ARTIGATE_HF_TOKEN` (a Hugging
-  Face access token) set on the low side; `--hf-endpoint` points the collector
-  at a private mirror instead of `https://huggingface.co`.
-
-[hashicorp/go-version]: https://github.com/hashicorp/go-version
-
-- **Crates** — Rust crate specs, one per line (`serde@1.0.203`, or a bare
-  `serde` for the newest release). The transitive dependency graph (normal and
-  build dependencies; never dev-dependencies, optional ones only when asked) is
-  resolved against the sparse index — `https://index.crates.io` by default,
-  `--crates-index` overrides — and every `.crate` archive is verified against
-  the index checksum. The verbatim index line of each release travels inside
-  the signed manifest; the high side serves a sparse registry regenerated from
-  those verified records.
-- **Terraform** — provider addresses (`hashicorp/aws@5.50.0`, or bare for the
-  newest release; `platforms` selects the target zips, `linux_amd64` by
-  default) and/or registry modules (`terraform-aws-modules/vpc/aws@5.8.1`).
-  Provider zips are verified against the registry-declared checksum and
-  mirrored together with the upstream `SHA256SUMS`, its GPG signature, and the
-  registry-served signing keys, so terraform's own verification chain works
-  unchanged against the mirror. Modules are fetched from their upstream source
-  (https archives, or git sources via the `git` tool) and repacked as
-  deterministic archives. `--terraform-registry` (or the request's `registry`
-  field) points at another registry — e.g. `https://registry.opentofu.org`
-  to mirror OpenTofu.
-- **Helm** — a chart repository URL plus charts, one per line (`nginx@21.1.0`,
-  or bare for the newest version). Chart archives are verified against the
-  repository index digest when the index declares one. Each upstream repo is
-  served as its own mirror under `/helm/<mirror>`, its `index.yaml`
-  regenerated from every chart's own embedded `Chart.yaml`. A chart's signed
-  `.prov` provenance file is mirrored when the upstream publishes one, and the
-  chart is then advertised under its original `<name>-<version>.tgz` name so
-  `helm pull --verify` passes with the author's key.
-- **NuGet** — package specs, one per line (`Newtonsoft.Json@13.0.3`, or a bare
-  `Serilog` for the newest stable release). Dependencies from each package's
-  nuspec are resolved the way NuGet restore does (lowest applicable version)
-  against the v3 source — `https://api.nuget.org/v3/index.json` by default,
-  `--nuget-source` overrides. The high side serves a v3 feed (service index,
-  flat container, registration, search), all metadata regenerated from each
-  package's own embedded `.nuspec`.
-- **Alpine** — a mirror base URL plus branches/repositories/architectures
-  (defaults: `main`, `x86_64`), or a pasted `/etc/apk/repositories` file.
-  Every listed `.apk` is verified against the APKINDEX-declared size and
-  control checksum; the verbatim index stanzas travel inside the signed
-  manifest and the high side regenerates `APKINDEX.tar.gz` from them, gated on
-  the packages present. With `--apk-rsa-key` the high side signs the
-  regenerated index with its own RSA key (clients install the matching public
-  key once, served at `/apk/keys/<name>`); unsigned indexes need
-  `apk --allow-untrusted`. The upstream index carries no whole-file hash, so a
-  scheduled re-collect re-downloads packages on the low side and dedups at
-  export — the bundle still carries only new content.
-- **Conda** — a channel (a name like `conda-forge` under
-  `https://conda.anaconda.org`, or a full channel URL, `--conda-channel-base`
-  overrides the alias base) plus package specs (`numpy`, `scipy==1.13.1`,
-  `pandas>=2.0,<3`) and platform subdirs (`noarch` is always searched).
-  Dependencies are resolved greedily against the channel's repodata; each
-  package file is verified against its repodata-declared SHA-256, and the
-  verbatim repodata entries travel inside the signed manifest. The high side
-  regenerates per-subdir `repodata.json` from the entries whose packages are
-  present, so `conda`/`mamba`/`micromamba` install from
-  `<high>/conda/<mirror>`. Big channels are genuinely large — mirroring
-  conda-forge's platform subdirs needs a generous RAM budget on the low side.
-- **RubyGems** — gem specs, one per line (`rake@13.2.1`, or a bare `rails` for
-  the newest release; `--rubygems-url` overrides the upstream). The runtime
-  dependency closure is resolved from the compact index and every `.gem` is
-  verified against its index-declared SHA-256; the verbatim `/info` lines
-  travel inside the signed manifest. The high side regenerates a compact
-  index (`/versions`, `/info/<gem>`, `/names`) gated on the gems present, so
-  Bundler works with `source "<high>/rubygems"`.
-- **Composer** — PHP package specs, one per line (`monolog/monolog`, or
-  `psr/container:2.0.2` to pin; `--composer-repo` overrides the upstream).
-  The require closure is resolved from the Composer v2 (p2) metadata over
-  stable releases; each release's expanded version object travels inside the
-  signed manifest with its dist/source sections stripped. The high side
-  re-renders the p2 API from those verified objects — dist URLs point back at
-  its own verified zips — so `composer install` works against
-  `<high>/composer` with packagist.org disabled.
-- **VS Code extensions** — extension ids, one per line (`golang.Go`, or
-  `redhat.vscode-yaml@1.14.0` to pin), fetched from Open VSX
-  (`--vsx-registry` overrides). Extension dependencies and packs are mirrored
-  with them. The high side regenerates gallery metadata from each `.vsix`'s
-  own embedded `package.json` and answers the VS Code gallery query API at
-  `<high>/vsx/gallery` — point VSCodium's `extensionsGallery.serviceUrl` (or
-  `VSCODE_GALLERY_SERVICE_URL`) at it, or download `.vsix` files directly.
-- **Ansible** — Galaxy collection specs, one per line (`ansible.posix`, or
-  `community.general@8.5.0` to pin; `--galaxy-server` overrides the
-  upstream). Dependencies from each collection's metadata are resolved and
-  mirrored; artifacts are verified against the API-declared SHA-256. The high
-  side regenerates a Galaxy v3 API from each artifact's own embedded
-  `MANIFEST.json`, so `ansible-galaxy collection install ns.name -s
-  <high>/galaxy/` works.
-- **CRAN** — R package specs, one per line (`jsonlite`, or `data.table@1.15.4`
-  for a superseded release, fetched from the mirror's Archive;
-  `--cran-mirror` overrides the upstream). The runtime dependency closure
-  (Depends/Imports/LinkingTo, minus base packages) is mirrored as source
-  packages verified against the index MD5. The high side regenerates
-  `src/contrib/PACKAGES(.gz)` from each tarball's own `DESCRIPTION`, so
-  `install.packages("pkg", repos = "<high>/cran")` works.
-- **Snap** — snap specs, one per line (`hello`, or `hello@edge` /
-  `blender@4.1/stable` to pick a channel; one architecture per collect,
-  default `amd64`; `--snap-store` overrides the upstream). Each snap's
-  current revision in that channel is fetched from the Snap Store API,
-  verified against the store-declared SHA3-384, and mirrored together with
-  its signed store assertions (`.assert`) and, unless opted out, the base
-  snap it runs on. The high side recomputes every archive's SHA3-384 and
-  refuses revisions whose assertions don't vouch for the exact bytes, then
-  serves the `<name>_<rev>.snap` + `<name>_<rev>.assert` pairs (plus a JSON
-  revision index at `/snap/info/<name>`) — on the air-gapped machine,
-  `snap ack <name>_<rev>.assert && snap install <name>_<rev>.snap` installs
-  with snapd's own signature verification, no `--dangerous` needed.
-  For a fresh classic Linux receiver, also mirror the `snapd` runtime snap
-  explicitly and install it and the base before the application. Automatic
-  collection follows declared bases; it does not infer implicit snapd runtime
-  or content-interface prerequisites.
-- **Git** — a clone URL (plus an optional mirror name and ref list). The low
-  side speaks the smart HTTP protocol as a pure-Go client — no git binary
-  beside the signing key — fetches every selected branch and tag as one
-  self-contained packfile, and fully verifies it (trailer hash, every object,
-  every delta) before signing. The high side re-verifies the pack, rebuilds
-  the `.idx` itself, and serves the repository over git's dumb HTTP protocol,
-  so `git clone <high>/git/<mirror>.git` works with stock git. Each
-  re-collect refreshes the mirror to the current upstream refs.
-
-For APT, RPM, and Alpine, a **"Newest version only"** checkbox (on by default)
-mirrors just the latest version of each package; untick it to mirror every
-version.
-
-Private **git, APT, RPM, Alpine, and Conda** upstreams authenticate with HTTP Basic:
-a one-shot login on the collect (each page's *Private … login* fields / the
-`auth` field, never stored) or standing `host=user:password` entries in
-`ARTIGATE_UPSTREAM_AUTH` on the low side — the latter is what scheduled
-collects use. URLs embedding `user:pass@` are rejected (they previously
-"worked" via Go's automatic Basic auth while leaking the secret into the
-signed manifest that crosses the diode — move such logins into the auth field
-or the environment variable). Private **Go module hosts** use their own
-standing variable, `ARTIGATE_GO_AUTH` (same format), or the `auth`-field
-login, injected into the `go`/`git` subprocesses for that collect (see the Go
-bullet above). It is separate from `ARTIGATE_UPSTREAM_AUTH` because a
-standing Go credential also marks its host private (`GOPRIVATE` et al.) —
-a git/APT login on a shared host like `github.com` must not push public
-module fetches off the proxy and checksum database.
-
-- **OSV** — vulnerability-advisory databases from [osv.dev](https://osv.dev):
-  OSV ecosystem names, one per line, exactly as osv.dev spells them (`npm`,
-  `PyPI`, `Go`, `crates.io`, `Maven`, `NuGet`, `Alpine:v3.22`, `Debian:12`,
-  …). Each name's current `all.zip` advisory database is fetched and
-  re-exported as a snapshot; the high side serves the verified zips in the
-  upstream bucket's layout under `/osv/…` (plus single advisories by id,
-  streamed straight out of the zip) for offline scanners such as osv-scanner.
-  Advisory data is the one deliberately *mutable* mirrored subtree: each
-  import replaces the previous snapshot at the same path, and an unchanged
-  database dedups to a no-op, so a daily schedule keeps the air-gapped side's
-  advisory picture current at near-zero diode cost. Mirroring the `npm`
-  database additionally regenerates an advisory index that makes **`npm
-  audit` work against the mirror** (see the NPM client note below).
-- **Uploads** — arbitrary files, no ecosystem behind them: pick a folder name
-  and one or more files (`POST /admin/uploads/collect`, multipart form data).
-  The high side serves them at `/uploads/<folder>/<name>`, lists them on its
-  dashboard under **Uploads**, and — uniquely among the streams — lets the
-  operator **delete** a file there again (an emptied folder disappears with its
-  last file). Re-uploading a name replaces the file; uploads always ship in
-  full (the forwarded-content index is not consulted), so a file deleted on
-  the high side comes back by simply uploading it again. Uploads cannot be
-  scheduled — there is no upstream to re-pull.
-
-### Scheduling
-
-Each ecosystem page can turn its inputs into a **recurring pull**: set an interval
-(hours or days) and click *Add schedule* — e.g. re-pull a `go.mod` or a
-requirements list every day. Schedules run in the background (due schedules are
-checked every `--watch-interval`, default one minute) and can be paused, run
-immediately, or deleted from the same page.
-
-### Export deduplication
-
-A collect only bundles — and where possible only downloads — content it has not
-already sent. The low side records every forwarded file (bundle path plus
-content hash), per stream, in a small SQLite index (`<root>/exported.db`):
-
-- **Nothing new** — when a collect resolves to a file set that is *entirely*
-  already-forwarded, no bundle is written and no bundle number is consumed; the
-  dashboard (and a schedule's status) simply reports "no new content".
-- **Partly new** — the bundle's archive carries only the new files. The rest are
-  listed in the manifest as *prior* references, which the high side verifies
-  against its accumulated repository instead of receiving again. A daily
-  schedule over a slowly-changing mirror therefore sends only the churn.
-- **Download skip** — collectors whose upstream declares each file's SHA-256
-  before the bytes are fetched (APT `Packages` indexes, RPM `primary.xml`,
-  container image digests, Hugging Face LFS files) check the index first and
-  skip the download entirely. pip-, mvn-, npm-, and go-driven fetches still
-  download as before (their upstreams declare no usable pre-download SHA-256;
-  the Go module cache already avoids re-downloads on its own), and their
-  unchanged files are still deduplicated from the bundle after hashing.
-
-Every collect request accepts `"force": true` to bypass the index and produce a
-full, self-contained bundle — the disaster-recovery path when a high side is
-rebuilt from scratch or bundles were pruned before it caught up. Note that a
-delta bundle imports only on a high side that holds the stream's earlier
-bundles; importing out of order fails with a "prior file … not in the
-repository" error naming the missing content.
-
-The index is independent of the re-export archive: re-transmitting a bundle
-never consults or updates it, and if the index is ever unavailable a collect
-simply downloads and exports as normal rather than wrongly skipping.
-
-### Dry run — estimate before you export
-
-Every ecosystem page has an **Estimate size** button next to *Collect &
-export* (the API equivalent is appending `?dry_run=1` to any
-`POST /admin/<stream>/collect`). A dry run answers *"N artifacts, ~X GB, Y
-new"* before you commit gigabytes to a rate-limited one-way link: it resolves
-the request, checks every file against the export dedup index, and plans the
-bundle split exactly like a real collect — then stops at the export threshold.
-Nothing is written, no bundle number is consumed, nothing is recorded as
-forwarded, and nothing is handed to the diode transport. The result reports
-the resolved totals, the new files and bytes that would actually cross the
-diode, an upper bound on the archived size, and how many sequenced bundles
-the content would ship as.
-
-Collectors whose upstream declares each file's SHA-256 and size (APT, RPM,
-container images, Hugging Face models and LFS files — the gigabyte-scale
-streams) estimate from metadata alone, so their dry runs download nothing but
-indexes. Tool-driven ecosystems (`go`, `pip`, `mvn`, `npm`, …) must still
-fetch into their local caches to learn sizes; the dry run then only spares
-the diode, not the low side's own bandwidth. Combined with `"force": true`
-the estimate covers the full self-contained bundle a forced collect would
-produce.
-
-### Status and re-export
-
-The **Status** page shows each stream's next bundle number and the exported
-bundles (with sizes, and whether each is still staged in the export directory
-or already sent). If the high side reports a bundle missing, use its
-re-transmit form to regenerate that bundle number or range from the archive
-(`<root>/bundles`), which keeps a copy of every bundle ever exported.
-
-## Data diode
-
-Carry each bundle's three files across the diode into the high side's landing
-directory. The high side imports each **stream** strictly in order. An
-out-of-order bundle (e.g. `go-bundle-000043` before `000042`) is quarantined, not
-rejected, and imported automatically once the gap is filled; duplicates and old
-replays are ignored. Future gaps are capped at 10,000 sequences; unsupported,
-excessively-future, or cryptographically invalid bundles move to
-`<root>/rejected` and do not block the other streams.
-
-Whichever transport carries the bundles, the low side also emits a periodic
-**heartbeat** with every stream's newest committed sequence number, signed
-with its key under a dedicated signature context (never confusable with a
-manifest signature). A diode gives the high side no other way to learn what
-it *should* have: `/admin/missing` can only report gaps behind bundles that
-did arrive, so a bundle lost in its entirety — or a low side that stopped
-exporting — would otherwise be invisible. `ARTIGATE_DIODE_HEARTBEAT` sets the
-interval (default `30s`, `off` disables); delivery matches the transport —
-one more file in the export dir for a folder carrier
-(`artigate.heartbeat`), an SFTP upload, a `PUT` to the HTTP diode endpoint, or a
-datagram on the built-in UDP diode. The high side verifies and records it
-identically for each transport. The dashboard then shows the low side's index
-per stream, an **Awaiting** column for bundles that left the low side but have not arrived
-(in transit, or lost and needing a re-export), and the heartbeat's freshness;
-`/metrics` exposes the same as `artigate_high_low_last_sequence`,
-`artigate_high_bundles_awaiting_from_low`, and
-`artigate_high_diode_heartbeat_{timestamp,age}_seconds` (alert on awaiting
-with a `for:` clause long enough to ride out a large bundle's transfer).
-
-### HTTP transport (optional)
-
-For diodes (or diode proxies) that speak HTTP instead of moving files, both
-sides also support an HTTP transport, configured entirely by environment
-variables — the folder flow stays the default:
-
-| Variable | Side | Meaning |
-|---|---|---|
-| `ARTIGATE_DIODE_URL` | low | endpoint bundles are uploaded to after every export and re-export (`PUT <url>/<file>`, archive first) |
-| `ARTIGATE_DIODE_INGEST` | high | `on` accepts bundle uploads at `PUT/POST /diode/<file>` into the landing directory (default `off`) |
-| `ARTIGATE_DIODE_TOKEN` | both | shared bearer token, at least 32 bytes and required whenever HTTP diode transport is enabled |
-| `ARTIGATE_DIODE_HEARTBEAT` | low | stream-index heartbeat interval for whichever transport is active (folder, SFTP, HTTP, or UDP), default `30s` (`off` disables) |
-
-```bash
-# low side — upload each bundle to the diode proxy (or directly to the high side)
-export ARTIGATE_DIODE_URL=https://artigate-high.local/diode
-export ARTIGATE_DIODE_TOKEN=…
-
-# high side — accept uploads into the landing directory
-export ARTIGATE_DIODE_INGEST=on
-export ARTIGATE_DIODE_TOKEN=…
-```
-
-After a successful upload the low side clears the bundle from the export
-directory (it shows as *sent* on the Status page), exactly like a folder diode
-moving the files out; the archive copy is kept for re-transmits, which also go
-out over HTTP. A failed upload never loses a bundle — the collect still
-succeeds, the dashboard (and a schedule's status) reports the upload error,
-and the bundle stays staged for a re-transmit from the Status page. A complete
-bundle received over HTTP is imported immediately rather than on the next scan
-tick. Completion notifications use one coalescing worker rather than creating a
-goroutine per upload.
-
-The transport carries no trust: uploads land in the landing directory exactly
-as diode-carried files would, and the importer still verifies the Ed25519
-signature, per-stream sequencing, and every file hash. The token only protects
-the high side's disk from unauthenticated uploads — leave the ingest off (the
-default) unless you use the HTTP transport. Anything that can `PUT` a file
-works as a sender, e.g.:
-
-```bash
-curl -fT go-bundle-000042.tar.gz -H "Authorization: Bearer $TOKEN" \
-  https://artigate-high.local/diode/go-bundle-000042.tar.gz
-```
-
-Ingress is bounded before verification: archives are limited to 64 GiB,
-manifests to 16 MiB, signatures to 4 KiB, and pending/quarantined/rejected files
-to 128 GiB in aggregate. The archive bound is no ceiling on what a collect can
-carry: a collect whose new content would overflow it — a full safetensors
-repository easily does — is split automatically into consecutive sequenced
-bundles, each within the limit. The content ships in *part* bundles first and
-the ecosystem metadata arrives in the final bundle, which references the parts'
-files, so the model appears on the high side exactly once, complete. With the
-built-in UDP pitcher enabled, the split budget also respects the wire's
-block-count bound for the configured FEC geometry, so every bundle produced is
-guaranteed transmittable as configured.
-
-### SFTP transport (optional)
-
-ArtiGate can upload bundles to an SFTP server on the low side and poll an SFTP
-server directory on the high side. Configure each process independently; the
-servers can be different endpoints of your diode's file-transfer service.
-
-**Low-side uploads use the exact suffix `.writing`:**
-`go-bundle-000042.tar.gz.writing` is renamed to `go-bundle-000042.tar.gz`
-only after the upload completes. The manifest and signature follow the same
-rule. High-side polling ignores remote names starting with `.` or ending in
-`.writing`, and waits for all three ready bundle files. Each download lands
-locally as `.go-bundle-000042.tar.gz` (and likewise for its companions); the
-leading dots are removed only after all three downloads complete. The bundle
-then passes the usual signature, hash, and sequence checks before import.
-
-```bash
-# Low-side process: upload to the diode's sending endpoint.
-export ARTIGATE_SFTP_URL=sftp://artigate@low-sftp.local:22/outgoing
-export ARTIGATE_SFTP_PRIVATE_KEY=/etc/artigate/sftp-upload-key
-export ARTIGATE_SFTP_KNOWN_HOSTS=/etc/artigate/sftp-known-hosts
-./artigate low --listen 127.0.0.1:8080 \
   --private-key /etc/artigate/low.ed25519
 ```
 
 ```bash
-# High-side process: poll the diode's receiving endpoint.
-export ARTIGATE_SFTP_URL=sftp://artigate@high-sftp.local:22/incoming
-export ARTIGATE_SFTP_PRIVATE_KEY=/etc/artigate/sftp-download-key
-export ARTIGATE_SFTP_KNOWN_HOSTS=/etc/artigate/sftp-known-hosts
-export ARTIGATE_SFTP_POLL_INTERVAL=10s
-./artigate high --listen 127.0.0.1:8080 \
-  --public-key /etc/artigate/high.ed25519.pub \
-  --landing /var/spool/diode-in
-```
-
-Create the remote directories before starting and provision trusted server
-host keys in the required `known_hosts` file. Use an SFTP server supporting
-`posix-rename@openssh.com` for atomic replacement of retransmitted bundles and
-heartbeats. The SFTP private key is an unencrypted SSH login key, separate from
-the Ed25519 bundle-signing key. Set
-`ARTIGATE_SFTP_PASSWORD` instead for password authentication. On the low side,
-choose one of `ARTIGATE_SFTP_URL`, `ARTIGATE_DIODE_URL`, or
-`ARTIGATE_PITCHER_INTERFACE`.
-
-Successful uploads clear the export spool and retain the archive copy. Failed
-uploads stay staged and can be retried with **re-transmit** on the Status page;
-the low side does not automatically retry them. The high side polls at startup
-and every `ARTIGATE_SFTP_POLL_INTERVAL` (default `10s`), reconnects on the next
-poll after a failure, and imports completed transfers immediately, even with
-`--import-interval=0`. `ARTIGATE_SFTP_TIMEOUT` bounds each transfer session
-(default `4h`). The signed heartbeat uses the same SFTP naming rules and its
-usual `ARTIGATE_DIODE_HEARTBEAT` interval (default `30s`); each heartbeat upload
-also has a `30s` timeout.
-
-The high side leaves remote files in place and skips bundles already imported
-or complete in its landing/quarantine directories. Manage remote retention
-outside ArtiGate. Keep ready bundle names immutable: retransmitting a bundle
-must use the same bytes. The heartbeat is replaced as its contents change.
-See the [configuration reference](https://define42.github.io/ArtiGate/configuration/#sftp-transport)
-for every SFTP setting.
-
-### Built-in UDP diode transport (optional)
-
-ArtiGate can also drive a **hardware diode directly** — a one-way fiber
-between a spare NIC on each side, no diode proxy software at all. The low
-side's **pitcher** transmits every bundle as rate-limited, Reed-Solomon-coded
-IPv6 link-local multicast (multicast because a one-way link can never resolve
-the receiver's MAC address); the high side's **catcher** reassembles the
-datagrams into the landing directory and imports immediately. Naming the
-interface is what enables each side — ArtiGate configures the NIC itself
-(MTU 9000, deep TX/RX queues, IPv6 `addr-gen-mode eui64` link-local, link up):
-
-| Variable | Side | Meaning |
-|---|---|---|
-| `ARTIGATE_PITCHER_INTERFACE` | low | dedicated diode TX NIC (e.g. `eth1`); enables the pitcher |
-| `ARTIGATE_PITCHER_RATE_MBIT` | low | max wire rate, default `800` — a one-way link has no congestion control, so stay below what the catcher absorbs |
-| `ARTIGATE_PITCHER_FEC_DATA` / `_FEC_PARITY` | low | Reed-Solomon geometry, default `32`+`8`: any 8 of every 40 datagrams may be lost harmlessly |
-| `ARTIGATE_PITCHER_TXQUEUELEN` | low | TX NIC queue length, default `10000` — raise if the driver drops on bursts |
-| `ARTIGATE_CATCHER_INTERFACE` | high | dedicated diode RX NIC; enables the catcher |
-| `ARTIGATE_CATCHER_RCVBUF_MB` | high | receive buffer (MiB), default `64`, set via `SO_RCVBUFFORCE` |
-| `ARTIGATE_{PITCHER,CATCHER}_{MTU,GROUP,PORT,NETSETUP}` | both | MTU `9000`, group `ff02::4147`, port `4147`; `NETSETUP=off` when the host pre-configures the NIC |
-
-The stream-index heartbeat (see above) rides this transport too: the pitcher
-broadcasts it as a signed datagram and the catcher verifies it off the wire.
-
-Loss beyond the parity budget expires the transfer on the catcher (nothing
-partial ever lands) and is recovered the usual way: the gap shows on the high
-side's `/admin/missing`, and a low-side re-export re-transmits it from the
-archive. The retry is cheap even for huge bundles, because recovery is
-per-block: the catcher keeps an expired transfer's completed FEC blocks beside
-the landing directory (for 24 hours), and the re-sent file — same name, same
-content hash — resumes from them, so each attempt only has to deliver the
-blocks every earlier attempt lost. A multi-gigabyte model bundle therefore
-converges on a lossy link instead of demanding one perfect pass. In Docker
-both sides need `network_mode: host`, `cap_add: [NET_ADMIN]`, and a root user
-— see `examples/docker-compose-diode-low.yml`,
-`examples/docker-compose-diode-high.yml`, and the
-[data-diode documentation](https://define42.github.io/ArtiGate/data-diode/)
-for tuning guidance.
-
-## High side
-
-```bash
+# High host
 ./artigate high \
-  --listen :8080 \
+  --listen 127.0.0.1:8080 \
   --root /var/lib/artigate-high \
   --landing /var/spool/diode-in \
   --public-key /etc/artigate/high.ed25519.pub \
-  --import-interval 10s \
-  # --apt-gpg-key <keyid>  --rpm-gpg-key <keyid>   (optional: sign the served repos)
-  # --apk-rsa-key /etc/artigate/apk.pem  --apk-key-name artigate.rsa.pub  (optional: sign Alpine indexes)
+  --import-interval 10s
 ```
 
-It imports on a timer, and the **dashboard at `http://<high-host>:8080/`** shows
-import status (per stream, flagging any missing bundles) and a browsable tree of
-everything mirrored. The high side never trusts transferred index/`latest`/
-metadata files as truth — it regenerates them from the artifacts actually present,
-and serves only complete versions.
+Without an automatic transport, arrange for the external carrier to move
+bundles from the low export directory to the high landing directory. An import
+interval of `0` disables periodic scans; explicit imports and completed
+HTTP/SFTP/UDP arrivals can still trigger importing.
 
-### Point clients at the high side
+Server paths, collectors, and upstreams use command-line flags. Authentication,
+TLS, transports, upstream credentials, and webhooks use environment variables.
+The binary does not load the Compose `.env` file itself. See
+`low --help`, `high --help`, and the
+[configuration reference](page/docs/configuration.md) for the complete surface.
+[systemd examples](examples/systemd/) are also included.
+
+| Setting | Purpose |
+| --- | --- |
+| `ARTIGATE_LOW_AUTH` | `username:argon2id-hash` credentials, separated by semicolons or newlines. Generate them with `hashpw`. |
+| `ARTIGATE_LOW_COOKIE_SECURE=true` | Mark session cookies secure when HTTPS terminates at a reverse proxy. |
+| `ARTIGATE_GO_AUTH` | Standing private Go host credentials; also marks those hosts private for Go resolution. |
+| `ARTIGATE_CONTAINER_AUTH` | Standing private container registry credentials. |
+| `ARTIGATE_UPSTREAM_AUTH` | Standing HTTP Basic credentials for Git, APT, RPM, Alpine, and Conda upstreams. |
+| `ARTIGATE_HF_TOKEN` | Hugging Face token for gated or private model repositories. |
+| `ARTIGATE_TLS_MODE` | `unencrypted` (default), `own-certificate`, `auto-generate-certificate`, or `acme`. |
+
+The three host-credential variables use comma-separated `host=user:password`
+entries. Per-collect logins are temporary and are not stored in schedules;
+scheduled private fetches need standing credentials. Use the authentication
+fields or environment variables rather than embedding credentials in upstream
+URLs.
+
+The low side holds the signing key and is a privileged control plane. Without
+`ARTIGATE_LOW_AUTH`, startup refuses a non-loopback listener unless
+`ARTIGATE_LOW_ALLOW_UNAUTHENTICATED=true` explicitly delegates authentication
+to a trusted external layer. A loopback listener without credentials remains
+unauthenticated.
+
+The high side has no built-in client login, including for mirrored private
+content. Restrict access through network placement or a proxy. Its
+state-changing admin endpoints, including manual import and upload deletion,
+accept only loopback callers by default. `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN=on`
+relaxes that restriction; the demo Compose stack sets it because Docker port
+forwarding changes the caller address, while keeping host ports loopback-only.
+
+For native HTTPS, set `ARTIGATE_TLS_MODE=own-certificate` with
+`ARTIGATE_TLS_CERT` and `ARTIGATE_TLS_KEY`, or use the other modes described in
+the [TLS guide](page/docs/tls.md). Self-signed certificates need client trust.
+ACME uses TLS-ALPN-01 and requires the certificate authority to reach the
+listener. Docker and Ollama clients expect HTTPS unless explicitly configured
+for a plain-HTTP mirror.
+
+### Monitoring and alerting
+
+Both sides expose the following on the dashboard listener, even when low-side
+login is enabled:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /healthz` | Process liveness. |
+| `GET /readyz` | Readiness: HTTP 200 when checks pass, HTTP 503 naming failures; `?verbose` includes successful checks. |
+| `GET /metrics` | Prometheus metrics for sequences, transfer/import outcomes, schedules, jobs, disk space, and transport quota. |
+
+Keep liveness probes on `/healthz`: a missing bundle should raise an alert, not
+restart a server that can still serve previously imported content. Readiness
+checks include failed staged transfers on the low side and stream gaps,
+stalled or failing import passes, undrained backlog, and exhausted transport
+quota on the high side. An active long-running import does not itself fail
+readiness; supervise a hung import separately.
+
+Useful high-side metrics include `artigate_high_import_lag`,
+`artigate_high_stream_blocked`, `artigate_high_gap_age_seconds`,
+`artigate_high_bundles_awaiting_from_low`, and
+`artigate_high_diode_heartbeat_age_seconds`. Allow for normal transfer time
+when alerting on bundles awaiting arrival. Counters reset when the process
+restarts; retain history in your monitoring system.
+
+Set `ARTIGATE_WEBHOOK_URL` and optionally `ARTIGATE_WEBHOOK_TOKEN` for
+`schedule_failed` (low), `bundle_rejected` (high), and `gap_detected` (high)
+notifications. Delivery is best-effort with no retries; gaps emit a notification
+when detected, not on every scan.
+
+### Recovery and retention
+
+To recover a missing bundle:
+
+1. Read the missing sequence or range from the high-side dashboard or
+   `GET /admin/missing`.
+2. Use **re-transmit** on the low-side Status page, or
+   `POST /admin/reexport?stream=go&sequences=42,45-47`, to resend the retained
+   bundles.
+3. Let the high side import the missing predecessors and drain quarantine.
+
+The low side retains bundles in `<root>/bundles` without automatic expiry.
+Back up that archive, stream sequence state, export index, and signing keys;
+a fresh high side needs its stream history replayed in order. A forced collect
+does not bridge missing sequence history. High-side imported, duplicate, and
+rejected files are reaped after seven days; quarantine waits for its gap to
+fill. Plan disk capacity and retention on both sides.
+
+For containers, the dashboard and `GET /admin/containers/discovery` distinguish
+current reference coverage from retained history. Discovery status reports
+attachment retrieval, not publisher-signature verification. With the high side
+stopped, inspect stored OCI content without network access:
 
 ```bash
-# Go
-go env -w GOPROXY=https://artigate-high.local/go,off
-# GOSUMDB stays on (the default): the mirror also serves the checksum
-# database's signed records and Merkle proofs under /go/sumdb/, captured when
-# each module was mirrored, so `go` keeps end-to-end sumdb verification
-# offline. Only for modules mirrored by bundles from before sumdb capture
-# existed: re-collect them once on the low side, or `go env -w GOSUMDB=off`.
+./artigate containers check --root /var/lib/artigate-high --json
 ```
 
-```ini
-# Python — /etc/pip.conf
-[global]
-index-url = https://artigate-high.local/simple/
-```
+`--repository registry/repo` limits the check; `--repair` rebuilds derived
+indexes after content validation. Missing blobs and ambiguous aliases require
+recollection. See [container operations](page/docs/ecosystems/containers.md#attachment-discovery-status),
+[offline repair](page/docs/ecosystems/containers.md#offline-integrity-checks-and-repair),
+and [troubleshooting](page/docs/troubleshooting.md).
 
-```xml
-<!-- Maven — ~/.m2/settings.xml -->
-<settings><mirrors><mirror>
-  <id>artigate</id><mirrorOf>*</mirrorOf>
-  <url>https://artigate-high.local/maven/</url>
-</mirror></mirrors></settings>
-```
+## Contributing
 
-```ini
-# NPM — ~/.npmrc (or /etc/npmrc)
-registry=https://artigate-high.local/npm/
-fund=false
-# npm audit works once the OSV "npm" database is mirrored (see below);
-# until then add audit=false, because the advisory endpoint answers 404.
-```
-
-```text
-# APT — /etc/apt/sources.list.d/artigate.sources  (use ArtiGate's key, not the vendor's)
-Types: deb
-URIs: https://artigate-high.local/apt/<mirror>
-Suites: stable
-Components: main
-Architectures: amd64
-Signed-By: /usr/share/keyrings/artigate-apt.gpg
-```
-
-```ini
-# RPM — /etc/yum.repos.d/artigate.repo
-[artigate]
-baseurl=https://artigate-high.local/rpm/<mirror>
-enabled=1
-gpgcheck=1
-repo_gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-artigate
-```
-
-```toml
-# Rust — ~/.cargo/config.toml
-[source.crates-io]
-replace-with = "artigate"
-
-[source.artigate]
-registry = "sparse+https://artigate-high.local/crates/index/"
-```
-
-```hcl
-# Terraform / OpenTofu — ~/.terraformrc (network_mirror needs HTTPS), or use
-# the host directly in source addresses: artigate-high.local/hashicorp/aws
-provider_installation {
-  network_mirror {
-    url = "https://artigate-high.local/terraform/v1/providers/"
-  }
-}
-```
+Use the Go version in [go.mod](go.mod). From a checkout:
 
 ```bash
-# Helm — each mirrored upstream repo is served under its mirror name
-helm repo add artigate https://artigate-high.local/helm/<mirror>
-helm install my-release artigate/<chart> --version <version>
+make build
+make test       # unit tests, race detector, and coverage
+make vet
+make lint       # installs the golangci-lint version pinned by the Makefile
 ```
 
-```xml
-<!-- NuGet — nuget.config (next to the solution) -->
-<configuration><packageSources>
-  <clear />
-  <add key="artigate" value="https://artigate-high.local/nuget/v3/index.json" protocolVersion="3" />
-</packageSources></configuration>
-```
+For dashboard changes, use `make ui` to compile the TypeScript and
+`make ui-test` to run its behavior tests with Node.js 22+. Commit the generated
+JavaScript with its source changes. `make help` lists the available targets.
+
+The end-to-end suite runs real low/high processes, transfers signed bundles,
+and consumes all 23 streams with native clients. Receiver clients use isolated
+networks and fresh caches to check that the mirror supplies their dependencies.
 
 ```bash
-# Alpine — /etc/apk/repositories; with --apk-rsa-key, install the mirror's key once
-wget -O /etc/apk/keys/artigate.rsa.pub https://artigate-high.local/apk/keys/artigate.rsa.pub
-echo https://artigate-high.local/apk/<mirror>/v3.22/main >> /etc/apk/repositories
-apk update   # add --allow-untrusted instead when the index is served unsigned
+make e2e         # local run; unavailable tools or upstreams may skip
+make e2e-strict  # required-flow matrix, race detection, and no skips
 ```
 
-```bash
-# Containers — the pull name embeds the upstream registry
-docker pull artigate-high.local/docker.io/library/alpine:3.20
-docker pull artigate-high.local/ghcr.io/org/app:v1
+End-to-end tests need Linux network namespaces, client toolchains, and network
+access for provisioning and low-side collection. See [e2e/doc.go](e2e/doc.go)
+for setup and environment options, and
+[required_flows.json](e2e/required_flows.json) for the enforced matrix.
 
-# Signatures/attestations mirrored with the image verify offline: cosign's
-# tag scheme and the OCI referrers API both answer on the high side
-cosign verify --key cosign.pub artigate-high.local/ghcr.io/org/app:v1
-cosign verify-attestation --type slsaprovenance --key cosign.pub \
-  artigate-high.local/ghcr.io/org/app:v1
-```
+Keep changes focused, include relevant validation, and update the documentation
+when behavior changes. The manual lives in [page/docs](page/docs/) and is built
+with MkDocs Material using [page/mkdocs.yml](page/mkdocs.yml).
 
-```bash
-# OSV advisories — the upstream bucket's layout, for offline scanners
-curl -fsSL https://artigate-high.local/osv/ecosystems.txt
-curl -fL -o npm-all.zip https://artigate-high.local/osv/npm/all.zip
-curl -fsSL https://artigate-high.local/osv/npm/GHSA-xxxx-xxxx-xxxx.json
-# osv-scanner: place each all.zip at <cache>/osv-scanner/<ecosystem>/all.zip
-# and run with --offline. npm audit needs no setup at all — with the "npm"
-# database mirrored, the registry above answers it.
-```
+## Contributors
 
-```bash
-# AI models — Ollama pulls straight from the mirror (add --insecure for plain HTTP)
-ollama pull artigate-high.local/unsloth/gpt-oss-20b-GGUF:Q4_0
-ollama run  artigate-high.local/unsloth/gpt-oss-20b-GGUF:Q4_0
+Thanks to everyone who contributes code, documentation, tests, and issue
+reports. See the [contributors](https://github.com/define42/ArtiGate/graphs/contributors).
 
-# ...or download the raw GGUF for vLLM / llama.cpp
-curl -fL -o gpt-oss-20b-GGUF-Q4_0.gguf \
-  https://artigate-high.local/hf/unsloth/gpt-oss-20b-GGUF/Q4_0.gguf
-HF_HUB_OFFLINE=1 vllm serve ./gpt-oss-20b-GGUF-Q4_0.gguf
+## License
 
-# Full repositories (safetensors) — every huggingface_hub client, via HF_ENDPOINT
-export HF_ENDPOINT=https://artigate-high.local
-vllm serve openai/gpt-oss-20b
-hf download openai/gpt-oss-20b
-```
-
-Docker/podman require HTTPS for remote registries — enable TLS on the high side,
-or, for a plain-HTTP mirror, trust it explicitly (then `systemctl restart docker`).
-The high-side **"Set me up"** guide renders this block ready to copy, with the
-actual host and port filled in — for APT it even offers a per-suite release
-picker with component checkboxes:
-
-```json
-// /etc/docker/daemon.json
-{
-  "insecure-registries": [
-    "artigate-high.local:8081"
-  ]
-}
-```
-
-On the high side, use **only** ArtiGate as the source — don't add
-`--extra-index-url`, `mavenCentral()`, or other upstreams, which reopens
-dependency-confusion risk. If a repo is published unsigned, relax the client's
-signature check (`repo_gpgcheck=0`, `[trusted=yes]`, etc.).
-
-## TLS / HTTPS
-
-Both servers serve plain HTTP by default. Enable HTTPS entirely through environment
-variables (no flags) — the same set applies to `low` and `high`.
-`ARTIGATE_TLS_MODE` selects one of:
-
-- `unencrypted` (default) — plain HTTP.
-- `acme` — obtain and renew certificates automatically via ACME (certmagic).
-- `own-certificate` — use a certificate and key you provide.
-- `auto-generate-certificate` — a self-signed certificate made at startup (handy
-  for testing; clients must trust it or skip verification).
-
-| Variable | Modes | Meaning |
-|---|---|---|
-| `ARTIGATE_TLS_MODE` | all | `unencrypted` / `acme` / `own-certificate` / `auto-generate-certificate` |
-| `ARTIGATE_TLS_DOMAINS` | acme, auto-generate | comma-separated domains/IPs (ACME cert names; self-signed SANs) |
-| `ARTIGATE_TLS_CERT`, `ARTIGATE_TLS_KEY` | own-certificate | PEM certificate and private-key paths |
-| `ARTIGATE_ACME_EMAIL` | acme | account email |
-| `ARTIGATE_ACME_DIRECTORY` | acme | ACME server directory URL (defaults to Let's Encrypt) |
-| `ARTIGATE_ACME_CA_ROOT` | acme | PEM root CA to trust, for a private ACME server |
-| `ARTIGATE_ACME_STORAGE` | acme | certificate cache directory (default `<root>/acme`) |
-
-Example against a private ACME server (e.g. step-ca):
-
-```bash
-export ARTIGATE_TLS_MODE=acme
-export ARTIGATE_TLS_DOMAINS=mirror.internal
-export ARTIGATE_ACME_EMAIL=ops@internal
-export ARTIGATE_ACME_DIRECTORY=https://ca.internal/acme/acme/directory
-export ARTIGATE_ACME_CA_ROOT=/etc/artigate/ca-root.pem
-```
-
-ACME uses the TLS-ALPN-01 challenge on the server's own listen port, so that port
-must be reachable by the ACME server as the configured domain.
-
-## Authentication (low side)
-
-The low-side dashboard can require a login. It is off by default and enabled
-through a single environment variable, `ARTIGATE_LOW_AUTH`, holding one or more
-credentials. Passwords are stored as argon2id hashes, never in plaintext —
-generate one with the `hashpw` subcommand (it reads the password from stdin so it
-never appears in your shell history):
-
-```bash
-./artigate hashpw --user alice
-# prompts on stdin, then prints:  alice:$argon2id$v=19$m=65536,t=3,p=1$...$...
-```
-
-Put one or more `username:hash` credentials in the variable, separated by `;` or
-newlines (not commas — the argon2 parameters inside a hash contain commas):
-
-```bash
-export ARTIGATE_LOW_AUTH='alice:$argon2id$v=19$...;bob:$argon2id$v=19$...'
-```
-
-When set, the dashboard presents a sign-in page and, after a successful login,
-carries the session in an encrypted, signed cookie (gorilla/securecookie); a
-**Log out** button in the header clears it. Sessions last 12 hours and survive a
-restart (the cookie keys are persisted to `<root>/session.key`). The `/healthz`
-and `/readyz` probes and the `/metrics` scrape endpoint stay open so container
-health checks and monitoring keep working. The **high side is never
-authenticated** — it serves only already-verified public mirror content.
-
-**When `ARTIGATE_LOW_AUTH` is unset the low-side dashboard is unauthenticated** —
-including the mutating `/admin/*` endpoints — so bind it to localhost or a trusted
-network, or set credentials.
-
-The session cookie's `Secure` flag defaults to whether ArtiGate itself terminates
-TLS. If ArtiGate serves plain HTTP behind a TLS-terminating reverse proxy, set
-`ARTIGATE_LOW_COOKIE_SECURE=true` so the cookie is still marked `Secure` (values:
-`auto` (default), `true`, `false`).
-
-> The shipped Compose stack requires this value. Put it in the gitignored
-> `.env` file as a single-quoted value so the `$` characters remain literal;
-> see `.env.example`. Direct binary/systemd deployments may still leave auth
-> unset only when strict network controls protect the low-side control plane.
-
-## Monitoring and alerting
-
-ArtiGate is built to run unattended behind a diode, so both sides expose
-telemetry an ops team can scrape and alert on — a stalled stream or a failing
-nightly schedule should page someone, not wait for a human to notice a
-dashboard.
-
-### `/metrics` (Prometheus)
-
-Both sides serve Prometheus text-exposition metrics at **`GET /metrics`** on the
-same listener as the dashboard. Like `/healthz`, the endpoint stays open when
-`ARTIGATE_LOW_AUTH` is set (a scraper cannot log in), and it exposes only the
-same non-secret status the dashboard already shows — firewall the scrape port or
-front it with an authenticating proxy if you need it restricted. No extra
-configuration is required.
-
-The **low side** reports, per stream, the next bundle sequence, retained and
-still-outbound bundle counts and their on-diode bytes, scheduled-collect run
-counters and each stream's last successful collect, the queued/running/finished
-job counts, and free/total disk on the root and export directories:
-
-```
-artigate_low_next_sequence{stream="python"} 42
-artigate_low_bundle_bytes{stream="python"} 1830482
-artigate_low_schedule_runs_total{stream="python",status="error"} 1
-artigate_low_last_successful_collect_timestamp_seconds{stream="python"} 1720000000
-artigate_disk_free_bytes{dir="export"} 5.36870912e+10
-```
-
-Container attachment coverage is tracked separately from collect success. The
-Containers dashboard and paginated `GET /admin/containers/discovery` distinguish
-current tags and explicit digest pins from retained history, with repository,
-coverage, and freshness filters. Use
-`artigate_low_container_discovery_current_records{state="incomplete"}` and
-`artigate_low_container_discovery_current_records{freshness="stale"}` for current
-reference alerts; freshness metrics use a 24-hour threshold. Older unclassified
-records and historical failures remain inspectable. The original all-history
-gauges and `artigate_low_container_discovery_status_read_error` remain available.
-These report discovery, not signature verification. See
-[container operations](page/docs/ecosystems/containers.md#attachment-discovery-status).
-
-With the high side stopped, `artigate containers check --root HIGH_ROOT` verifies
-stored OCI content without changing it or making network requests. Add `--json`
-for a machine-readable report, `--repository registry/repo` to select one repository,
-or `--repair` to rebuild derived indexes after content validation. Missing blobs
-and ambiguous aliases require recollection; see [offline repair](page/docs/ecosystems/containers.md#offline-integrity-checks-and-repair).
-
-The **high side** reports, per stream, the last-imported and highest-seen
-sequence, **import lag** (`highest_seen − last_imported`), whether the stream is
-**blocked** on a missing bundle and for how long (**gap age**), quarantine
-depth, last successful import, cumulative imported/rejected counts, the shared
-unverified-transport quota and its usage, and disk on the root and landing
-directories:
-
-```
-artigate_high_import_lag{stream="go"} 3
-artigate_high_stream_blocked{stream="go"} 1
-artigate_high_gap_age_seconds{stream="go"} 907
-artigate_high_bundles_rejected_total{stream="go"} 0
-artigate_high_unverified_transport_bytes 734003200
-```
-
-Counters reset on process restart, as is standard for Prometheus; the derived
-gauges (sequences, lag, quota, disk) are computed live from on-disk state on
-every scrape, so they never drift from reality.
-
-### `/readyz` (readiness)
-
-`GET /healthz` is pure liveness — it answers `ok` as long as the process
-serves, and is what container health checks and load balancers should keep
-using. **`GET /readyz`** is the readiness probe next to it: it runs real
-go/no-go checks against the same live state the dashboard shows and answers
-**200 `ok`** when the side can do its job, or **503** with one
-`[-] check: reason` line per failing check when it cannot (append `?verbose`
-to list every check on success too). Like `/healthz` and `/metrics`, it stays
-open when auth is enabled.
-
-The **low side** is not ready when the schedule store cannot be read
-(`watch-store`), the export spool directory is missing (`export-spool`), or a
-bundle's last diode transfer — UDP pitch, HTTP upload, or SFTP upload — failed
-and its files still sit in the outbound spool awaiting a re-transmit
-(`diode-transfer`; a successful re-export clears it).
-
-The **high side** is not ready when import status cannot be computed
-(`import-status`), a stream is blocked waiting for a missing bundle
-(`stream-gaps`), complete bundles sit ready to import with no active import and no pass
-completing inside the grace window — three `--import-interval`s, at least a
-minute (`import-backlog`), import passes stopped running or the last pass
-failed (`import-pipeline`), or the shared unverified-transport quota is
-exhausted so the diode cannot land new bundles (`transport-quota`).
-
-Import status on `/readyz`, `/metrics`, `/admin/status`, `/admin/missing`, and
-the dashboard comes from a cached snapshot, refreshed at startup and around
-each import pass, with progress published after each durable bundle commit.
-These endpoints can respond while extraction and installation are running.
-Heartbeats and their ages remain live. Folder arrivals appear on the next
-scan. Imports rotate between streams after each bundle, preserving each
-stream's sequence order. Each pass handles at most 16 bundles per stream and
-automatically schedules a continuation for the remaining backlog, even with
-timer-based importing disabled.
-An active import does not fail readiness just because it exceeds the idle
-grace window. A single bundle that hangs therefore needs separate supervision.
-
-```console
-$ curl -s http://high:8080/readyz
-[+] import-status ok
-[-] stream-gaps: stream go waiting for missing bundle 42 for 15m7s
-[+] import-backlog ok
-[+] import-pipeline ok (last pass 4s ago)
-[+] transport-quota ok (700.0 MiB of 128.0 GiB used)
-not ready
-```
-
-Point alerting at `/readyz` (or scrape both: a 503 names exactly what to fix),
-and keep orchestrator liveness probes on `/healthz` so a blocked stream — which
-the high side deliberately survives while continuing to serve everything
-already verified — never causes a restart loop.
-
-### Failure webhooks
-
-Set **`ARTIGATE_WEBHOOK_URL`** (on either or both sides) to have ArtiGate POST a
-small JSON document when something goes wrong, so an alert reaches a channel
-without polling. **`ARTIGATE_WEBHOOK_TOKEN`** (optional) is sent as a
-`Authorization: Bearer …` header.
-
-| Event | Side | Fires when |
-|---|---|---|
-| `schedule_failed` | low | a scheduled collect run fails (upstream error, panic, cancel) |
-| `bundle_rejected` | high | a bundle is rejected on import or sorting (bad signature/hash, unsupported, too far ahead) |
-| `gap_detected` | high | a stream becomes blocked because a later bundle arrived before the next expected one |
-
-```jsonc
-// POST body
-{
-  "event": "gap_detected",
-  "side": "high",
-  "time": "2026-07-14T12:00:00Z",
-  "stream": "go",
-  "blocking_sequence": 42
-}
-```
-
-Delivery is best-effort and fire-and-forget: a slow or unreachable receiver
-never blocks an import or a scheduler tick, and failures are logged rather than
-retried — the `/metrics` counters remain the durable record. `gap_detected` is
-edge-triggered (one notification per gap; the gap then ages via
-`artigate_high_gap_age_seconds` until it fills).
-
-## Notes and limitations
-
-- The **low-side dashboard** is a privileged control plane — it holds the signing
-  key, so anyone who can reach it can have arbitrary content signed and sent across
-  the diode. It requires a session login (`ARTIGATE_LOW_AUTH`, see above); when it
-  is not set the low side **refuses to start on a non-loopback listen address**.
-  Bind `--listen` to loopback, set `ARTIGATE_LOW_AUTH`, or — only behind a trusted
-  TLS-authenticating reverse proxy — set `ARTIGATE_LOW_ALLOW_UNAUTHENTICATED=true`
-  to acknowledge that layer. The **high-side dashboard** serves only
-  already-verified public mirror content and is unauthenticated, so bind it to
-  localhost or a trusted network; its state-changing admin endpoints
-  (`POST /admin/uploads/delete`, `/admin/import`) are additionally restricted to
-  loopback callers unless `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN=on` (set this when a
-  published-port or reverse-proxy hop makes local admin appear non-loopback, and
-  keep the listener itself restricted at the host).
-- **Go**: the checksum database (`sum.golang.org` by default) is mirrored per
-  module: each collect also captures the signed lookup records and Merkle tiles
-  the low-side toolchain verified, and the high side answers the GOPROXY
-  `sumdb/…` passthrough — so clients keep `GOSUMDB` enabled and re-verify every
-  module against the database's own key, fully offline. Modules mirrored by
-  bundles from before sumdb capture existed have no records yet; one re-collect
-  on the low side (a watch's next run does it) backfills them, and until then
-  those clients need `GOSUMDB=off`. Private modules follow the low side's
-  `GONOSUMDB`/`GOPRIVATE` and are never looked up; with `--gosumdb off` nothing
-  is captured and clients use `GOSUMDB=off` as before.
-- **Python**: wheels by default — every pip run is forced to `--only-binary=:all:`,
-  and a *requirement* with no compatible wheel fails the collect (pin a
-  wheel-bearing version, or exclude it). Packages that publish no wheel can be
-  opted into source distributions via the collect's `sdists` list: those are
-  fetched from the index's JSON API (never through pip, so no build hooks run
-  on the low side), verified against the API-declared SHA-256, and built by
-  clients at install time.
-- **Java/Maven**: release versions only; SNAPSHOT and dynamic/range versions are
-  rejected. The low side needs Maven 3.6.3+ and JDK 8+; collection uses the
-  pinned Maven Dependency Plugin 3.11.0 to include transitive build-plugin
-  dependencies needed by a receiver with an empty local repository.
-- **NPM**: registry tarballs only — dependencies resolved to git or file URLs
-  are skipped (and reported). Resolution needs npm 7 or newer on the low side
-  (lockfile v2+). The high side regenerates all packument metadata from each
-  tarball's own embedded `package.json`; each collect also snapshots the
-  upstream `dist-tags`, and the served packument carries every mirrored tag
-  whose target version is present, regenerating `latest` from the versions
-  actually served when the upstream tag is absent or unmirrored (installs by
-  tag, e.g. `pkg@beta`, resolve too). `npm audit` works once the OSV `npm`
-  database is mirrored (npm 7+, the bulk-advisory protocol); without it the
-  advisory endpoint answers 404, so set `audit=false` — yarn classic's older
-  `audits` protocol is not served either way.
-- **APT/RPM**: mirror the newest version of each package by default; untick
-  "Newest version only" to mirror every version. RPM collects default to
-  x86_64 + noarch packages. RPM `.zck`-only indexes aren't supported (use
-  `.gz`/`.xz`/`.zst`). Each collect re-syncs against upstream, but the export dedup
-  index keeps it from re-downloading or re-sending what already crossed.
-- **Crates**: the resolver follows normal and build dependencies (never
-  dev-dependencies; optional ones only with "include optional"), picking the
-  highest version satisfying each requirement like cargo does — but it does no
-  feature unification, so an unusual feature-gated dependency may need to be
-  listed explicitly. Yanked releases are skipped unless pinned exactly.
-- **Terraform**: provider mirroring covers the platforms listed at collect time
-  (`linux_amd64` by default; re-collect with more platforms to extend a
-  version). Module sources must be https archives or `git::https` URLs (the
-  usual registry forms); other go-getter schemes are skipped. `terraform login`
-  / publishing APIs are not served.
-- **Helm**: OCI-hosted charts are out of scope (mirror them as container
-  images); classic `index.yaml` repositories only. Chart provenance (`.prov`)
-  files are not mirrored — integrity comes from the regenerated index digests.
-- **NuGet**: the flat container publishes no digests, so low-side downloads are
-  TLS-trusted and validated against the embedded nuspec; everything after that
-  is hash-locked into the signed bundle. Dependency resolution picks the lowest
-  applicable version per range (NuGet restore behavior) across all target
-  frameworks.
-- **Alpine**: the APKINDEX carries no whole-file hash, so scheduled re-collects
-  re-download packages on the low side (export dedup still keeps re-sends off
-  the diode). Packages are verified against the index's size and Q1 control
-  checksum at collect time.
-- **Signing the served repos** is optional (`--apt-gpg-key`/`--rpm-gpg-key` for
-  APT/RPM, `--apk-rsa-key` for Alpine); otherwise those repositories are
-  published unsigned.
-- **Upstream verification material passes through** wherever the ecosystem
-  publishes any, so clients keep verifying instead of relaxing checks:
-  Go sumdb notes and Terraform's GPG chain (long-standing), container cosign
-  signatures/attestations/SBOMs with the referrers API, npm registry
-  signatures + provenance attestations + the `/-/npm/v1/keys` endpoint
-  (`npm audit signatures` works against the mirror), Maven `.asc` PGP
-  signatures (fetched from Central — override with `--maven-signatures`),
-  Helm `.prov` provenance files (`helm pull --verify`), Snap Store
-  assertion chains (`snap ack` verifies them against snapd's built-in root
-  of trust; the high side additionally refuses any archive whose recomputed
-  SHA3-384 the assertions don't vouch for), and PyPI PEP 740
-  provenance via `/integrity/…` and the simple JSON `provenance` key. All of
-  it is best-effort at collect time (unsigned upstream content mirrors bare)
-  and captured at collect: re-signing upstream later needs a re-collect.
-  Ecosystems whose upstreams publish nothing verifiable per artifact
-  (crates.io, RubyGems, Packagist, CRAN, Hugging Face, OSV) have nothing to
-  pass through — clients there verify the checksums the mirror regenerates
-  from verified bytes; NuGet signatures are embedded in the `.nupkg` files
-  and already cross unmodified. Conda content-trust metadata, Ansible Galaxy
-  collection signatures, and Open VSX signatures are not mirrored yet.
-- **Containers**: linux/amd64 only, and registries on non-standard ports can't
-  be mirrored (the port can't appear in the high-side pull name). Pulls are
-  anonymous by default; private registries take a per-pull login (the `auth`
-  field / the Containers page form, used once and never stored) or standing
-  per-registry credentials in `ARTIGATE_CONTAINER_AUTH`
-  (`host=user:password`, comma-separated) — scheduled pulls use only the
-  latter. `--container-registry host=baseURL` on the low side redirects a
-  registry's API to a private mirror/proxy. The high-side registry is
-  read-only (no push). Attached artifacts (cosign signatures, attestations,
-  SBOMs) mirror automatically: legacy cosign artifacts use their tag scheme,
-  while genuine OCI `subject` relationships appear through
-  `GET /v2/<name>/referrers/<digest>`. A multi-platform tag
-  resolves to its preserved upstream index digest, so policy engines verify
-  the mirror's content byte for byte. Only artifacts attached to the pulled
-  image (or its index) at collect time cross — re-signing upstream later
-  needs a re-collect to propagate.
-- **OSV**: databases are TLS-trusted at collect time (the OSV bucket
-  publishes no digests for its zips) and hash-locked into the signed bundle
-  from there. Advisory *contents* are served verbatim from the verified zip;
-  the npm audit index maps GitHub-Advisory severities onto npm's words and
-  renders OSV version events as npm ranges — a record it cannot render
-  exactly is reported as affecting all versions rather than silently
-  narrowed, and withdrawn advisories are dropped from audit results (the raw
-  records stay downloadable). Audit responses carry no CVSS block (OSV
-  publishes only vectors, not scores). Unlike every other stream, a
-  re-collected database *replaces* the previous snapshot — advisory feeds are
-  updates, not immutable artifacts.
-- **AI Models**: GGUF references use Hugging Face's Ollama-compatible endpoint
-  (the repos `ollama run hf.co/…` accepts; sharded/split GGUFs are not
-  supported upstream); tags are quantization names resolved at collect time,
-  and digest pins are not supported. Ollama requires HTTPS — enable TLS on the
-  high side or pass `--insecure` to `ollama pull`. The raw GGUF is also served
-  at `/hf/<org>/<model>/<variant>.gguf` for llama.cpp and vLLM's GGUF loader
-  (with vLLM set `HF_HUB_OFFLINE=1`; without `--tokenizer` it converts the
-  tokenizer from the GGUF, which slows the first start). Full-repository
-  snapshots serve the download subset of the Hub API (`/api/models/…` and
-  `…/resolve/…`) — enough for `HF_ENDPOINT`-pointed vLLM, transformers, and
-  `hf download`, but not search or the write APIs. Snapshots are pinned to a
-  commit; re-collecting a branch adds the new commit and moves the branch
-  name to it (old snapshots stay pullable by commit hash).
-- Low-side collects for different ecosystems run concurrently; the high side never
-  runs `go`/`pip`/`mvn` and does no upstream fetching.
-
-## End-to-end tests
-
-Beyond the offline unit suite (`go test ./...`), the end-to-end suite builds
-the real binary, starts low/high processes, transfers signed bundles, and
-consumes the high-side repositories with native clients. It covers all 23
-ecosystems, including actual APT/RPM/APK installation, Docker pull/run,
-ORAS/Cosign discovery and verification, Ollama CPU inference, VSCodium extension
-installation, and Snap assertion verification and installation in a disposable
-VM. A separate flow exercises the real UDP multicast pitcher/catcher transport.
-
-Receiver clients use fresh homes/caches and isolated networks that can reach
-only the high-side endpoint. Docker pulls use a fresh daemon and layer store;
-the Snap VM has no network device. Tool and base-image provisioning happens
-before isolation, while the low side retains upstream access for collection.
-
-```bash
-make e2e         # local run; unavailable tools/upstreams may skip
-make e2e-strict  # full required-flow matrix, race detection, zero skips
-```
-
-Linux network namespaces and the client toolchains are required. CI runs the
-strict suite on every PR, fails unavailable required flows, and rejects skips,
-missing tests, or incomplete result streams. The explicit matrix is in
-`e2e/required_flows.json`; JSON events and the coverage report are retained as
-CI artifacts. See `e2e/doc.go` for setup details and environment knobs.
-
-## Documentation
-
-The full manual — architecture, per-ecosystem guides, configuration and HTTP
-API references, deployment and troubleshooting — is at
-**<https://define42.github.io/ArtiGate/>** (source under `page/`, built with
-MkDocs Material). ArtiGate is released under the [Apache 2.0 license](LICENSE).
+ArtiGate is licensed under the [Apache License 2.0](LICENSE).
