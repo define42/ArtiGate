@@ -715,8 +715,8 @@ func httpGetBytes(ctx context.Context, rawURL string, limit int64) ([]byte, erro
 }
 
 // httpGetBytesAuth is httpGetBytes with an optional upstream login (nil means
-// anonymous), attached as HTTP Basic — net/http drops it on cross-host
-// redirects, so a CDN redirect never sees the credential.
+// anonymous), attached as HTTP Basic and restricted to the original origin
+// by doUpstreamRequest.
 func httpGetBytesAuth(ctx context.Context, rawURL string, limit int64, cred *registryCredential) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
@@ -725,7 +725,7 @@ func httpGetBytesAuth(ctx context.Context, rawURL string, limit int64, cred *reg
 		return nil, err
 	}
 	setBasicAuth(req, cred)
-	resp, err := http.DefaultClient.Do(req)
+	resp, _, err := doUpstreamRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -757,8 +757,8 @@ func downloadVerifiedFile(ctx context.Context, rawURL, abs string, wantSize int6
 }
 
 // downloadVerifiedFileAuth is downloadVerifiedFile with an optional upstream
-// login (nil means anonymous), attached as HTTP Basic — net/http drops it on
-// cross-host redirects, so a CDN redirect never sees the credential.
+// login (nil means anonymous), attached as HTTP Basic and restricted to the
+// original origin by doUpstreamRequest.
 func downloadVerifiedFileAuth(ctx context.Context, rawURL, abs string, wantSize int64, checksumType, checksum string, cred *registryCredential) (string, int64, error) {
 	verifier, manifestSHA, writers, err := newDownloadHashers(checksumType)
 	if err != nil {
@@ -772,7 +772,7 @@ func downloadVerifiedFileAuth(ctx context.Context, rawURL, abs string, wantSize 
 		return "", 0, err
 	}
 	setBasicAuth(req, cred)
-	resp, err := http.DefaultClient.Do(req)
+	resp, _, err := doUpstreamRequest(req)
 	if err != nil {
 		return "", 0, err
 	}

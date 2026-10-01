@@ -227,7 +227,9 @@ ArtiGate itself sends four kinds of upstream credentials, all read from the envi
 
 Watch specs carrying credentials are rejected outright on every stream, so logins never land in the plaintext watch store or the dashboard. Upstream URLs that embed a `user:password@` are rejected too — the URL is copied into the signed manifest, progress lines, and error text, so a login there would leak, including across the diode.
 
-No credential is ever forwarded: `net/http` drops the `Authorization` header on the cross-host CDN redirects that package, pack, blob, and model downloads follow, and no credential appears in bundles, manifests, logs, error messages, or the high side.
+For Git, APT, RPM, Alpine, Conda, container, and Hugging Face HTTP downloads, ArtiGate restricts authentication to the request's original origin: its scheme, hostname, and effective port (443 for HTTPS and 80 for HTTP unless specified). If a redirect changes any of these, ArtiGate removes authorization headers, cookies, and URL credentials for the rest of the redirect chain, even if it returns to the original origin. HTTPS-to-HTTP redirects are rejected, including for anonymous downloads. HTTPS CDN downloads can continue using signed URLs without the original login.
+
+These requests do not use ambient client cookies, and redirects omit the `Referer` header so signed URLs are not copied into it. Go module fetching uses the separate subprocess credential handling described above.
 
 ## Dependency-confusion guidance
 

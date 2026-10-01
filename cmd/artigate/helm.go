@@ -1108,8 +1108,8 @@ func downloadFileSHA256(ctx context.Context, rawURL, abs string) (string, int64,
 }
 
 // downloadFileSHA256Auth is downloadFileSHA256 with an optional upstream
-// login (nil means anonymous), attached as HTTP Basic — net/http drops it on
-// cross-host redirects, so a CDN redirect never sees the credential.
+// login (nil means anonymous), attached as HTTP Basic and restricted to the
+// original origin by doUpstreamRequest.
 func downloadFileSHA256Auth(ctx context.Context, rawURL, abs string, cred *registryCredential) (string, int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
@@ -1118,7 +1118,7 @@ func downloadFileSHA256Auth(ctx context.Context, rawURL, abs string, cred *regis
 		return "", 0, err
 	}
 	setBasicAuth(req, cred)
-	resp, err := http.DefaultClient.Do(req)
+	resp, _, err := doUpstreamRequest(req)
 	if err != nil {
 		return "", 0, err
 	}

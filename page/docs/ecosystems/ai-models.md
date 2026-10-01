@@ -52,7 +52,7 @@ One Hub API call (`/api/models/…/revision/…?blobs=true`) resolves the revisi
 | `ARTIGATE_HF_TOKEN` (env, low side) | Hugging Face access token for gated/private models; sent as a Bearer header, read at collect time so it can rotate without a restart |
 | `--hf-endpoint` (flag, low side) | fetch from a private Hub mirror instead of `https://huggingface.co` |
 
-Without a token, a gated model fails with a hint to set `ARTIGATE_HF_TOKEN`. `net/http` drops the `Authorization` header on the cross-host CDN redirects blob downloads follow, so the token never leaks downstream.
+Without a token, a gated model fails with a hint to set `ARTIGATE_HF_TOKEN`. ArtiGate removes the token when a redirect changes the original scheme, hostname, or effective port (443 for HTTPS and 80 for HTTP unless specified). The token stays removed for the rest of that redirect chain, even if it returns to the original origin. HTTPS-to-HTTP redirects are rejected; HTTPS CDN downloads can continue without the token.
 
 ## Internals
 

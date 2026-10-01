@@ -283,10 +283,8 @@ func gitFetchAdvertisement(ctx context.Context, repoURL string, cred *registryCr
 		return nil, err
 	}
 	req.Header.Set("User-Agent", gitUserAgent)
-	// net/http drops Authorization on cross-host redirects, so a redirected
-	// upstream never receives the login.
 	setBasicAuth(req, cred)
-	resp, err := http.DefaultClient.Do(req)
+	resp, _, err := doUpstreamRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -498,10 +496,8 @@ func gitFetchPack(ctx context.Context, repoURL string, wants []string, sideband 
 	req.Header.Set("User-Agent", gitUserAgent)
 	req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
 	req.Header.Set("Accept", "application/x-git-upload-pack-result")
-	// net/http drops Authorization on cross-host redirects, so a redirected
-	// upstream never receives the login.
 	setBasicAuth(req, cred)
-	resp, err := http.DefaultClient.Do(req)
+	resp, _, err := doUpstreamRequest(req)
 	if err != nil {
 		return nil, err
 	}

@@ -170,9 +170,8 @@ func checkNoURLUserinfo(u *url.URL, what string) error {
 	return nil
 }
 
-// setBasicAuth attaches a login to an upstream request. net/http drops
-// Authorization on cross-host redirects, so a CDN redirect (packages, packs)
-// is followed without leaking the login.
+// setBasicAuth attaches a login to an upstream request. Send the request with
+// doUpstreamRequest to keep the login within its original origin on redirects.
 func setBasicAuth(req *http.Request, cred *registryCredential) {
 	if cred != nil {
 		req.SetBasicAuth(cred.Username, cred.Password)

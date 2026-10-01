@@ -339,9 +339,8 @@ const hfMaxPlainFileBytes = 512 << 20
 type hfClient struct {
 	base string
 	// token is an optional Hugging Face access token (ARTIGATE_HF_TOKEN) for
-	// gated or private models; public models need none. net/http drops the
-	// Authorization header on the cross-host CDN redirects blob downloads
-	// follow, so the token is never leaked downstream.
+	// gated or private models; public models need none. doUpstreamRequest
+	// strips it permanently when a redirect leaves the original origin.
 	token string
 	// prior reports whether a blob (bundle path + sha256) was already
 	// forwarded on the hf stream, letting the collector skip the download and
@@ -372,7 +371,7 @@ func (c *hfClient) do(ctx context.Context, label, rawURL, accept string) (*http.
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, _, err := doUpstreamRequest(req)
 	if err != nil {
 		return nil, err
 	}
