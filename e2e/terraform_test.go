@@ -5,6 +5,7 @@ package e2e
 import (
 	"crypto/tls"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -167,12 +168,7 @@ func tfE2EStartTLSHigh(t *testing.T, bundleID string) tfE2EHigh {
 			t.Fatal("TLS high side did not become healthy after 3 attempts")
 		}
 	}
-	t.Cleanup(srv.stop)
-	t.Cleanup(func() {
-		if t.Failed() {
-			logTail(t, logPath)
-		}
-	})
+	registerPairCleanup(t, srv)
 
 	// terraform requires a module registry hostname to contain a dot, so the
 	// source addresses use the dotted loopback IP (covered by the generated
@@ -199,7 +195,10 @@ func tfE2EWaitTLSHealthz(srv *server) error {
 	for time.Now().Before(deadline) {
 		select {
 		case <-srv.done:
-			return fmt.Errorf("process exited before becoming healthy: %v", srv.waitErr)
+			if srv.waitErr != nil {
+				return fmt.Errorf("process exited before becoming healthy: %w", srv.waitErr)
+			}
+			return errors.New("process exited before becoming healthy")
 		default:
 		}
 		resp, err := client.Get(srv.url + "/healthz")

@@ -36,7 +36,7 @@ E2E_RESULTS ?= /tmp/artigate-e2e-results.jsonl
 E2E_REPORT ?= /tmp/artigate-e2e-coverage.json
 
 .PHONY: e2e-strict
-e2e-strict: ## Run every required E2E flow with race detection and reject skips
+e2e-strict: ## Run every required E2E flow with harness/server race detection and reject skips
 	python3 -B -m unittest discover -s e2e -p check_report_test.py
 	@status=0; ARTIGATE_E2E_REQUIRE_ALL=1 go test -tags e2e -json -race -count=1 -timeout 45m ./e2e > "$(E2E_RESULTS)" || status=$$?; \
 	python3 e2e/check_report.py --input "$(E2E_RESULTS)" --report "$(E2E_REPORT)" || status=$$?; \

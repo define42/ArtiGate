@@ -4,7 +4,9 @@ package e2e
 
 import (
 	"crypto/rand"
+	"debug/buildinfo"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -35,7 +37,7 @@ type Stack struct {
 	receiverBuild receiverBuilder
 }
 
-var stack *Stack
+var stack *Stack //nolint:gochecknoglobals // TestMain initializes the shared servers before any tests run.
 
 func TestMain(m *testing.M) {
 	os.Exit(runMain(m))
@@ -56,8 +58,12 @@ func runMain(m *testing.M) int {
 	}
 	stack = st
 	code := m.Run()
-	st.low.stop()
-	st.high.stop()
+	for _, srv := range []*server{st.low, st.high} {
+		if err := srv.stop(); err != nil {
+			fmt.Fprintf(os.Stderr, "e2e: server failure: %v\n", err)
+			code = 1
+		}
+	}
 	if code != 0 {
 		dumpLogTail(os.Stderr, st.low.logPath)
 		dumpLogTail(os.Stderr, st.high.logPath)
@@ -93,7 +99,7 @@ func startStack(wd string) (*Stack, error) {
 		return nil, err
 	}
 	if out, err := exec.Command(bin, "keygen", "--private", priv, "--public", pub).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("keygen: %v\n%s", err, out)
+		return nil, fmt.Errorf("keygen: %w\n%s", err, out)
 	}
 	token, err := diodeToken()
 	if err != nil {
@@ -155,6 +161,11 @@ func startStack(wd string) (*Stack, error) {
 // its working directory, so the repository root is one level up.
 func buildBinary(wd string) (string, error) {
 	if bin := os.Getenv("ARTIGATE_E2E_BIN"); bin != "" {
+		if raceEnabled {
+			if err := requireRaceBinary(bin); err != nil {
+				return "", err
+			}
+		}
 		return bin, nil
 	}
 	repoRoot, err := filepath.Abs("..")
@@ -162,12 +173,32 @@ func buildBinary(wd string) (string, error) {
 		return "", err
 	}
 	bin := filepath.Join(wd, "artigate")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/artigate")
+	args := []string{"build", "-o", bin}
+	if raceEnabled {
+		args = append(args, "-race")
+	}
+	args = append(args, "./cmd/artigate")
+	cmd := exec.Command("go", args...)
 	cmd.Dir = repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("go build ./cmd/artigate: %v\n%s", err, out)
+		return "", fmt.Errorf("go build ./cmd/artigate: %w\n%s", err, out)
 	}
 	return bin, nil
+}
+
+// requireRaceBinary prevents an external binary override from silently
+// disabling server race coverage in a race-enabled test run.
+func requireRaceBinary(bin string) error {
+	info, err := buildinfo.ReadFile(bin)
+	if err != nil {
+		return fmt.Errorf("read build information for %s: %w", bin, err)
+	}
+	for _, setting := range info.Settings {
+		if setting.Key == "-race" && setting.Value == "true" {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s must be built with -race when the E2E suite uses -race", bin)
 }
 
 // diodeToken returns a fresh shared token for the HTTP diode transport
@@ -234,6 +265,10 @@ func launch(bin string, args, extraEnv []string, logPath string) (*server, error
 	// Inherit the full environment: the low side shells out to pip, mvn,
 	// npm, and go, which need PATH and any proxy configuration of the host.
 	cmd.Env = append(os.Environ(), extraEnv...)
+	// Keep child race reports in the captured server log and fail immediately.
+	// Parent GORACE settings must not hide reports in another file or turn
+	// a detected race into a successful exit.
+	cmd.Env = append(cmd.Env, "GORACE=halt_on_error=1 log_path=stderr exitcode=66")
 	err = cmd.Start()
 	_ = logFile.Close() // the child holds its own descriptor now
 	if err != nil {
@@ -253,7 +288,10 @@ func (s *server) waitHealthz(timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		select {
 		case <-s.done:
-			return fmt.Errorf("process exited before becoming healthy: %v", s.waitErr)
+			if s.waitErr != nil {
+				return fmt.Errorf("process exited before becoming healthy: %w", s.waitErr)
+			}
+			return errors.New("process exited before becoming healthy")
 		default:
 		}
 		resp, err := client.Get(s.url + "/healthz")
@@ -270,19 +308,29 @@ func (s *server) waitHealthz(timeout time.Duration) error {
 
 // stop terminates the process gracefully (both roles drain on SIGTERM) and
 // falls back to SIGKILL after 10s.
-func (s *server) stop() {
+func (s *server) stop() error {
 	select {
 	case <-s.done:
-		return
 	default:
+		_ = s.cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-s.done:
+		case <-time.After(10 * time.Second):
+			_ = s.cmd.Process.Kill()
+			<-s.done
+		}
 	}
-	_ = s.cmd.Process.Signal(syscall.SIGTERM)
-	select {
-	case <-s.done:
-	case <-time.After(10 * time.Second):
-		_ = s.cmd.Process.Kill()
-		<-s.done
+	log, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return fmt.Errorf("read server log %s: %w", s.logPath, err)
 	}
+	if strings.Contains(string(log), "WARNING: DATA RACE") {
+		return fmt.Errorf("child data race detected in %s", s.logPath)
+	}
+	if s.waitErr != nil {
+		return fmt.Errorf("server %s exited unsuccessfully: %w", s.logPath, s.waitErr)
+	}
+	return nil
 }
 
 // Prepare registers the per-test failure hook: when the test fails, the

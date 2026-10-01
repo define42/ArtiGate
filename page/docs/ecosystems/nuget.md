@@ -81,7 +81,7 @@ Fetched packages are packed into the standard numbered, Ed25519-signed bundle on
 
 ## High side: import-time metadata regeneration
 
-On import (after the Ed25519 signature and per-file SHA-256 checks), every package's **embedded `.nuspec`** is extracted from the `.nupkg` (a zip; the root-level `.nuspec`, 8 MiB cap) and must match the manifest record's id (case-insensitive) and normalized version. From it the high side stores, per version:
+On import (after the Ed25519 signature and per-file SHA-256 checks), every package's **embedded `.nuspec`** is extracted from the `.nupkg` (a zip; the root-level `.nuspec`, 8 MiB cap) and must match the manifest record's id and normalized version case-insensitively. This also applies during collection: an upstream index listing `1.0.0-beta.1` can identify the same release as a nuspec containing `1.0.0-Beta.1`. From it the high side stores, per version:
 
 - the identity in the nuspec's canonical casing, `description`, and `authors`;
 - the **dependency groups** (target framework + id/range pairs, grouped or legacy flat form);

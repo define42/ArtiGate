@@ -525,8 +525,8 @@ func TestCov3D_OpenExportedStoreError(t *testing.T) {
 	}
 }
 
-// TestCov3D_MigrateLegacyExported folds a pre-delta exported_content table into
-// the path-qualified schema on open.
+// TestCov3D_MigrateLegacyExported drops unknown-path hints from the old schema
+// so an upgrade can repair missing metadata, then dedups newly recorded paths.
 func TestCov3D_MigrateLegacyExported(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "exported.db")
 	db, err := sql.Open("sqlite", path)
@@ -550,14 +550,28 @@ func TestCov3D_MigrateLegacyExported(t *testing.T) {
 		t.Fatalf("OpenExportedStore (migrate): %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	// A legacy hash-only row matches under any path.
+	// A legacy hash cannot establish delivery of an arbitrary path or metadata.
 	ok, err := store.IsForwarded("go", "anything", "deadbeef")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok {
-		t.Error("migrated legacy row should match hash-only")
+	if ok {
+		t.Error("migrated legacy hash should not suppress an unknown path")
 	}
+	var legacyTables int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'exported_content'`).Scan(&legacyTables); err != nil {
+		t.Fatal(err)
+	}
+	if legacyTables != 0 {
+		t.Fatal("legacy table remains after migration")
+	}
+	file := ManifestFile{Path: "anything", SHA256: "deadbeef"}
+	if err := store.Record(streamGo, []ManifestFile{file}); err != nil {
+		t.Fatal(err)
+	}
+	assertForwardedState(t, store, streamGo,
+		[]ManifestFile{file, {Path: "another-path", SHA256: file.SHA256}},
+		[]bool{true, false})
 }
 
 func TestCov3D_ExportedStoreClosedErrors(t *testing.T) {

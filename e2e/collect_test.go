@@ -59,7 +59,6 @@ type collectEvent struct {
 
 const (
 	collectTimeout   = 10 * time.Minute
-	importTimeout    = 3 * time.Minute
 	transientBackoff = 30 * time.Second
 )
 
@@ -144,7 +143,7 @@ func readCollectStream(t *testing.T, eco string, body io.Reader) (ExportResult, 
 		}
 		var ev collectEvent
 		if err := json.Unmarshal(line, &ev); err != nil {
-			return ExportResult{}, fmt.Errorf("bad NDJSON line %q: %v", line, err)
+			return ExportResult{}, fmt.Errorf("bad NDJSON line %q: %w", line, err)
 		}
 		switch ev.Type {
 		case "log":
@@ -159,7 +158,7 @@ func readCollectStream(t *testing.T, eco string, body io.Reader) (ExportResult, 
 		case "done":
 			var res ExportResult
 			if err := json.Unmarshal(ev.Result, &res); err != nil {
-				return ExportResult{}, fmt.Errorf("bad done result %q: %v", ev.Result, err)
+				return ExportResult{}, fmt.Errorf("bad done result %q: %w", ev.Result, err)
 			}
 			return res, nil
 		case "error":
@@ -187,24 +186,26 @@ func (s *Stack) WaitImported(t *testing.T, stream string, seq int64) {
 	t.Helper()
 	deadline := time.Now().Add(importTimeout)
 	var lastStatus []byte
-	for time.Now().Before(deadline) {
+	for ; time.Now().Before(deadline); time.Sleep(time.Second) {
 		resp, err := http.Get(s.HighURL + "/admin/status")
-		if err == nil {
-			b, readErr := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			if readErr == nil && resp.StatusCode == http.StatusOK {
-				lastStatus = b
-				var st importStatus
-				if json.Unmarshal(b, &st) == nil {
-					for _, entry := range st.Streams {
-						if entry.Stream == stream && entry.LastImportedSequence >= seq {
-							return
-						}
-					}
-				}
+		if err != nil {
+			continue
+		}
+		b, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil || resp.StatusCode != http.StatusOK {
+			continue
+		}
+		lastStatus = b
+		var st importStatus
+		if json.Unmarshal(b, &st) != nil {
+			continue
+		}
+		for _, entry := range st.Streams {
+			if entry.Stream == stream && entry.LastImportedSequence >= seq {
+				return
 			}
 		}
-		time.Sleep(time.Second)
 	}
 	t.Fatalf("bundle %s/%d not imported within %s; last status: %s", stream, seq, importTimeout, lastStatus)
 }

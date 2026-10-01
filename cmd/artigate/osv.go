@@ -627,9 +627,9 @@ func (s *HighServer) osvDetail(spec string) (UIDetail, error) {
 // is fetched from the OSV bucket and re-exported as a snapshot.
 type OsvCollectRequest struct {
 	Ecosystems []string `json:"ecosystems"`
-	// Force disables export dedup for this collect: every database is packed
-	// even when its content already crossed, producing a full self-contained
-	// bundle (for disaster recovery or rebuilding a high side from scratch).
+	// Force bypasses content dedup and exports every selected file at the
+	// next sequence, splitting when needed. It does not reset sequencing
+	// or replace a missing earlier bundle.
 	Force bool `json:"force,omitempty"`
 }
 

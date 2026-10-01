@@ -955,9 +955,9 @@ type CondaCollectRequest struct {
 	// belong in ARTIGATE_UPSTREAM_AUTH (watch specs must never carry logins —
 	// they are persisted and echoed in plaintext).
 	Auth *HostCollectAuth `json:"auth,omitempty"`
-	// Force disables export dedup for this collect: every package is packed
-	// even when already forwarded, producing a full self-contained bundle
-	// (for disaster recovery or rebuilding a high side from scratch).
+	// Force bypasses content dedup and exports every selected file at the
+	// next sequence, splitting when needed. It does not reset sequencing
+	// or replace a missing earlier bundle.
 	Force bool `json:"force,omitempty"`
 }
 
@@ -1136,6 +1136,48 @@ type condaCandidate struct {
 // condaPackageIndex maps package name -> selectable candidates across every
 // fetched subdir.
 type condaPackageIndex map[string][]condaCandidate
+
+// forSubdir limits a solve to one platform and its shared noarch packages.
+// A dependency from another platform must never satisfy a local requirement.
+func (idx condaPackageIndex) forSubdir(subdir string) condaPackageIndex {
+	out := condaPackageIndex{}
+	for name, candidates := range idx {
+		for _, candidate := range candidates {
+			if candidate.subdir == subdir || candidate.subdir == "noarch" {
+				out[name] = append(out[name], candidate)
+			}
+		}
+	}
+	return out
+}
+
+// condaResolvePlatforms resolves each target independently, then merges the
+// selected artifacts. noarch participates in every platform's solve; resolve
+// it alone only when there are no concrete platforms in the request.
+func condaResolvePlatforms(ctx context.Context, idx condaPackageIndex, subdirs, specs []string, noDeps bool) ([]condaCandidate, []FailedModule) {
+	var selected []condaCandidate
+	var failed []FailedModule
+	seen := map[string]bool{}
+	for _, subdir := range subdirs {
+		if subdir == "noarch" && len(subdirs) > 1 {
+			continue
+		}
+		resolver := &condaResolver{idx: idx.forSubdir(subdir), noDeps: noDeps, byName: map[string]bool{}}
+		candidates, skipped := resolver.resolve(ctx, specs)
+		for _, failure := range skipped {
+			failure.Error = subdir + ": " + failure.Error
+			failed = append(failed, failure)
+		}
+		for _, candidate := range candidates {
+			key := candidate.subdir + "/" + candidate.filename
+			if !seen[key] {
+				seen[key] = true
+				selected = append(selected, candidate)
+			}
+		}
+	}
+	return selected, failed
+}
 
 // condaFetchIndexes fetches and indexes repodata for every subdir. A subdir
 // that cannot be fetched fails the collect: a silently missing platform
@@ -1364,8 +1406,7 @@ func (s *LowServer) CollectConda(ctx context.Context, req CondaCollectRequest) (
 		return ExportResult{}, decorateUpstreamAuthError(err, creds)
 	}
 	emitProgress(ctx, "Resolving %d package spec(s)…", len(req.Packages))
-	resolver := &condaResolver{idx: idx, noDeps: req.NoDeps, byName: map[string]bool{}}
-	selected, skipped := resolver.resolve(ctx, req.Packages)
+	selected, skipped := condaResolvePlatforms(ctx, idx, subdirs, req.Packages, req.NoDeps)
 	if len(selected) == 0 {
 		return ExportResult{}, fmt.Errorf("no conda packages could be resolved: %s", summarizeFailures(skipped))
 	}

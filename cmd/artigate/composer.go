@@ -1160,9 +1160,9 @@ type ComposerCollectRequest struct {
 	Packages []string `json:"packages"`
 	// NoDeps mirrors only the named releases, skipping the require closure.
 	NoDeps bool `json:"no_deps,omitempty"`
-	// Force disables export dedup for this collect: every zip is packed even
-	// when already forwarded, producing a full self-contained bundle (for
-	// disaster recovery or rebuilding a high side from scratch).
+	// Force bypasses content dedup and exports every selected file at the
+	// next sequence, splitting when needed. It does not reset sequencing
+	// or replace a missing earlier bundle.
 	Force bool `json:"force,omitempty"`
 }
 

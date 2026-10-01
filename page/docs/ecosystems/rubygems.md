@@ -50,6 +50,8 @@ Resolution reads each gem's compact-index `/info/<gem>` document directly (no `g
 
 Every `.gem` is downloaded from `<upstream>/gems/<filename>` and stream-verified against the info line's declared **SHA-256** — a tampered upstream fails the collect. The exact upstream `/info` line for each mirrored release travels in the signed manifest, and import re-checks that the line's checksum, the manifest record, and the verified file all agree.
 
+Dependencies are followed from both the pure-Ruby gem and every successfully downloaded platform variant, including dependencies unique to a variant. `no_deps` disables dependency expansion for all variants.
+
 ## High side: compact-index regeneration
 
 On import, each `.gem` is re-hashed and its verbatim info line stored; the compact index is then regenerated **gated on the gems present**:

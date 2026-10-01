@@ -1429,9 +1429,9 @@ type GitCollectRequest struct {
 	// belong in ARTIGATE_UPSTREAM_AUTH (watch specs must never carry logins —
 	// they are persisted and echoed in plaintext).
 	Auth *HostCollectAuth `json:"auth,omitempty"`
-	// Force disables export dedup for this collect: the pack is bundled even
-	// when an identical one was already forwarded (for disaster recovery or
-	// rebuilding a high side from scratch).
+	// Force bypasses content dedup and exports every selected file at the
+	// next sequence, splitting when needed. It does not reset sequencing
+	// or replace a missing earlier bundle.
 	Force bool `json:"force,omitempty"`
 }
 

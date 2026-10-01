@@ -19,18 +19,19 @@ package main
 //
 // Immutable files use path-qualified historical rows. Mutable paths instead
 // match only their latest delivered contents: an older snapshot no longer
-// describes the receiver after a replacement. Legacy hash-only rows may match
-// immutable paths, but cannot establish the current state of a mutable path.
+// describes the receiver after a replacement. Upgrade drops legacy hash-only
+// hints because they cannot establish delivery of a path or its metadata.
 //
 // It uses the same pure-Go SQLite driver as the watch store (rather than a JSON
 // set rewritten whole on every collect) so lookups and inserts stay O(new) as
 // the mirror grows into hundreds of thousands of artifacts. It is deliberately
 // independent of the rolling bundle archive: rebuilding it from archived
 // manifests would let archive pruning forget shipped content and re-ship it.
-// Re-export never consults or updates it. The index is an optimization, not
-// correctness state. Lookup failures cause callers to export or download
-// anyway. Before writing mutable replacements, callers must durably invalidate
-// their old entries so a failed export or record cannot leave stale dedup hits.
+// Re-export never consults or updates it. Lookup failures cause callers to
+// export or download again. Before writing mutable replacements, callers must
+// durably invalidate their old entries so failures cannot leave stale dedup
+// hits. Pending metadata is recovery state: it must be recorded before writing
+// content parts and is cleared only after a complete ecosystem bundle commits.
 
 import (
 	"database/sql"
@@ -82,9 +83,18 @@ const forwardedMetadataSchema = `CREATE TABLE IF NOT EXISTS forwarded_metadata (
   PRIMARY KEY (stream, key)
 ) WITHOUT ROWID`
 
+// Content parts deliver bytes without the ecosystem metadata needed to serve
+// them. Track that gap per file so a subset retry still sends its metadata.
+const pendingMetadataSchema = `CREATE TABLE IF NOT EXISTS pending_metadata_files (
+  stream TEXT NOT NULL,
+  path   TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  PRIMARY KEY (stream, path, sha256)
+) WITHOUT ROWID`
+
 // OpenExportedStore opens (creating if needed) the exported-content database at
-// path, mirroring the watch store's single-writer setup, and folds in any
-// legacy hash-only index.
+// path, mirroring the watch store's single-writer setup, and migrates earlier
+// dedup schemas conservatively so unknown metadata delivery is replayed.
 func OpenExportedStore(path string) (*ExportedStore, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -103,12 +113,48 @@ func OpenExportedStore(path string) (*ExportedStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate exported db: %w", err)
 	}
+	if err := migratePendingMetadata(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate pending export metadata: %w", err)
+	}
 	return &ExportedStore{db: db}, nil
+}
+
+// migratePendingMetadata repairs older stores, which did not distinguish
+// content parts from complete ecosystem bundles. Replaying each known file's
+// metadata once is safe and repairs interrupted exports from before upgrade.
+// Hash-only rows have no path to acknowledge, so forget those dedup hints;
+// each encountered path will be re-exported and recorded normally instead.
+func migratePendingMetadata(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var exists int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'pending_metadata_files'`).Scan(&exists); err != nil {
+		return err
+	}
+	if exists != 0 {
+		return nil
+	}
+	for _, stmt := range []string{
+		pendingMetadataSchema,
+		`INSERT INTO pending_metadata_files (stream, path, sha256)
+			SELECT stream, path, sha256 FROM forwarded_files WHERE path <> ''`,
+		`DELETE FROM forwarded_files WHERE path = ''`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // migrateLegacyExported folds the pre-delta exported_content table into
 // forwarded_files. The legacy schema recorded hashes without paths, so its
-// rows migrate with an empty path and keep satisfying hash-only membership.
+// rows migrate with an empty path. The pending-metadata migration then drops
+// these unknown-path hints because their metadata delivery cannot be verified.
 func migrateLegacyExported(db *sql.DB) error {
 	var name string
 	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'exported_content'`).Scan(&name)
@@ -135,8 +181,8 @@ func migrateLegacyExported(db *sql.DB) error {
 
 // Close releases the database. It is safe to call more than once (a closed
 // *sql.DB's Close is a no-op) and on a nil store. After Close, queries return a
-// "database is closed" error rather than panicking, which the collectors treat
-// as a fail-safe signal to export without dedup.
+// "database is closed" error rather than panicking. Lookups then conservatively
+// require an export; required recovery-state writes still fail.
 func (s *ExportedStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
@@ -343,6 +389,64 @@ func (s *ExportedStore) RecordMetadata(stream string, metadata []ExportMetadata)
 	defer func() { _ = stmt.Close() }()
 	for _, m := range metadata {
 		if _, err := stmt.Exec(stream, m.Key, m.SHA256); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// HasPendingMetadata reports whether any supplied file still needs an
+// ecosystem bundle after its bytes were exported in a content part.
+func (s *ExportedStore) HasPendingMetadata(stream string, files []ManifestFile) (bool, error) {
+	if len(files) == 0 {
+		return false, nil
+	}
+	stmt, err := s.db.Prepare("SELECT 1 FROM pending_metadata_files WHERE stream = ? AND path = ? AND sha256 = ?")
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, file := range files {
+		var one int
+		switch err := stmt.QueryRow(stream, file.Path, file.SHA256).Scan(&one); {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, sql.ErrNoRows):
+		default:
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// MarkPendingMetadata must commit before a content part is written. On any
+// subsequent error or process exit, its files still require a metadata bundle.
+func (s *ExportedStore) MarkPendingMetadata(stream string, files []ManifestFile) error {
+	return s.updatePendingMetadata("INSERT OR IGNORE INTO pending_metadata_files (stream, path, sha256) VALUES (?, ?, ?)", stream, files)
+}
+
+// ClearPendingMetadata acknowledges only files named in a committed ecosystem
+// bundle. Other subsets and differing hashes must keep their pending entries.
+func (s *ExportedStore) ClearPendingMetadata(stream string, files []ManifestFile) error {
+	return s.updatePendingMetadata("DELETE FROM pending_metadata_files WHERE stream = ? AND path = ? AND sha256 = ?", stream, files)
+}
+
+func (s *ExportedStore) updatePendingMetadata(query, stream string, files []ManifestFile) error {
+	if len(files) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Prepare(query)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, file := range files {
+		if _, err := stmt.Exec(stream, file.Path, file.SHA256); err != nil {
 			return err
 		}
 	}

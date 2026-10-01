@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1184,5 +1185,54 @@ func TestRubyGemsIndexPreservesOlderEntriesOnFailure(t *testing.T) {
 				t.Fatalf("repaired names = %q, %v", names, err)
 			}
 		})
+	}
+}
+
+func TestRubyGemsCollectPlatformDependencies(t *testing.T) {
+	for _, noDeps := range []bool{false, true} {
+		t.Run(fmt.Sprintf("no_deps=%v", noDeps), func(t *testing.T) {
+			up, ls, _ := rubygemsTestSetup(t)
+			up.add("platformapp", "1.0.0", "")
+			up.add("platformapp", "1.0.0-x86_64-linux", "platformhelper:>= 1.0")
+			up.add("platformapp", "1.0.0-java", "platformhelper:>= 1.0")
+			up.add("platformhelper", "1.0.0", "platformleaf:>= 1.0")
+			up.add("platformleaf", "1.0.0", "platformapp:>= 1.0")
+			res, err := ls.CollectRubyGems(t.Context(), RubyGemsCollectRequest{
+				Gems: []string{"platformapp"}, Platforms: []string{"x86_64-linux", "java"}, NoDeps: noDeps,
+			})
+			if err != nil || len(res.SkippedModules) != 0 {
+				t.Fatalf("collect = %+v, %v", res, err)
+			}
+			m := readBundleManifest(t, ls, res.BundleID)
+			wantCount, wantFetches := 5, 1
+			if noDeps {
+				wantCount, wantFetches = 3, 0
+			}
+			if len(m.RubyGems.Gems) != wantCount {
+				t.Fatalf("gems = %+v; want %d gems including variant dependencies", m.RubyGems.Gems, wantCount)
+			}
+			for _, name := range []string{"platformhelper", "platformleaf"} {
+				if got := up.count("/info/" + name); got != wantFetches {
+					t.Errorf("%s info fetched %d times; want %d", name, got, wantFetches)
+				}
+			}
+		})
+	}
+}
+
+func TestRubyGemsCollectFailedVariantSkipsItsDependencies(t *testing.T) {
+	up, ls, _ := rubygemsTestSetup(t)
+	up.add("platformapp", "1.0.0", "")
+	up.add("platformapp", "1.0.0-x86_64-linux", "platformhelper:>= 1.0")
+	up.add("platformhelper", "1.0.0", "")
+	up.tamper("platformapp", "1.0.0-x86_64-linux")
+	res, err := ls.CollectRubyGems(t.Context(), RubyGemsCollectRequest{
+		Gems: []string{"platformapp"}, Platforms: []string{"x86_64-linux"},
+	})
+	if err != nil || len(res.SkippedModules) != 1 || res.ExportedModules != 1 {
+		t.Fatalf("collect = %+v, %v", res, err)
+	}
+	if got := up.count("/info/platformhelper"); got != 0 {
+		t.Fatalf("dependency of failed variant fetched %d times", got)
 	}
 }

@@ -836,12 +836,12 @@ func (s *HighServer) publishNugetPackage(p NugetPackage) error {
 	if !strings.EqualFold(spec.Metadata.ID, p.ID) {
 		return invalidPackage(fmt.Errorf("embedded nuspec names %q", spec.Metadata.ID))
 	}
-	if nugetNormalizeVersion(spec.Metadata.Version) != p.Version {
+	if !strings.EqualFold(nugetNormalizeVersion(spec.Metadata.Version), p.Version) {
 		return invalidPackage(fmt.Errorf("embedded nuspec version is %q", spec.Metadata.Version))
 	}
 	idl, verl := strings.ToLower(p.ID), strings.ToLower(p.Version)
 	st := nugetStoredManifest{
-		ID: spec.Metadata.ID, Version: p.Version,
+		ID: spec.Metadata.ID, Version: nugetNormalizeVersion(spec.Metadata.Version),
 		Description: spec.Metadata.Description, Authors: spec.Metadata.Authors,
 		Groups: nuspecDepGroups(spec),
 	}
@@ -959,9 +959,9 @@ func nuspecDepGroups(spec *nuspecXML) []nugetDepGroup {
 type NugetCollectRequest struct {
 	Packages    []string `json:"packages"`
 	ResolveDeps *bool    `json:"resolve_deps,omitempty"`
-	// Force disables export dedup for this collect: every package is packed
-	// even when already forwarded, producing a full self-contained bundle (for
-	// disaster recovery or rebuilding a high side from scratch).
+	// Force bypasses content dedup and exports every selected file at the
+	// next sequence, splitting when needed. It does not reset sequencing
+	// or replace a missing earlier bundle.
 	Force bool `json:"force,omitempty"`
 }
 
@@ -1411,7 +1411,7 @@ func (r *nugetResolver) downloadPackage(ctx context.Context, id, version string)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if !strings.EqualFold(spec.Metadata.ID, id) || nugetNormalizeVersion(spec.Metadata.Version) != version {
+	if !strings.EqualFold(spec.Metadata.ID, id) || !strings.EqualFold(nugetNormalizeVersion(spec.Metadata.Version), version) {
 		return nil, nil, nil, fmt.Errorf("downloaded package identifies as %s@%s", spec.Metadata.ID, spec.Metadata.Version)
 	}
 	pkg := &NugetPackage{ID: spec.Metadata.ID, Version: version, Path: rel, SHA256: sum}

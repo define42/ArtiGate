@@ -157,3 +157,113 @@ func TestExportedMetadataClosedStore(t *testing.T) {
 		t.Errorf("RecordMetadata(nil) = %v; want nil", err)
 	}
 }
+
+func TestExportedPendingMetadataPersistsExactFiles(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "exported.db")
+	store, err := OpenExportedStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	files := []ManifestFile{
+		{Path: "a", SHA256: strings.Repeat("a", 64)},
+		{Path: "a", SHA256: strings.Repeat("b", 64)},
+		{Path: "b", SHA256: strings.Repeat("a", 64)},
+	}
+	for _, stream := range []string{streamNuget, streamNpm} {
+		if err := store.MarkPendingMetadata(stream, files); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.ClearPendingMetadata(streamNuget, files[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenExportedStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, file := range files {
+		got, err := store.HasPendingMetadata(streamNuget, []ManifestFile{file})
+		if err != nil || got != (i != 0) {
+			t.Errorf("pending NuGet file %d = %v, %v; want %v", i, got, err, i != 0)
+		}
+		if got, err := store.HasPendingMetadata(streamNpm, []ManifestFile{file}); err != nil || !got {
+			t.Errorf("pending npm file %d = %v, %v; another stream's completion must not clear it", i, got, err)
+		}
+	}
+}
+
+func TestExportedPendingMetadataClosedStore(t *testing.T) {
+	store, err := OpenExportedStore(filepath.Join(t.TempDir(), "exported.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	files := []ManifestFile{{Path: "a", SHA256: strings.Repeat("a", 64)}}
+	if _, err := store.HasPendingMetadata(streamNuget, files); err == nil {
+		t.Error("pending lookup on closed store succeeded")
+	}
+	if err := store.MarkPendingMetadata(streamNuget, files); err == nil {
+		t.Error("pending insertion on closed store succeeded")
+	}
+	if err := store.ClearPendingMetadata(streamNuget, files); err == nil {
+		t.Error("pending clear on closed store succeeded")
+	}
+	if got, err := store.HasPendingMetadata(streamNuget, nil); got || err != nil {
+		t.Errorf("empty lookup = %v, %v", got, err)
+	}
+	if err := store.MarkPendingMetadata(streamNuget, nil); err != nil {
+		t.Errorf("empty insertion = %v", err)
+	}
+	if err := store.ClearPendingMetadata(streamNuget, nil); err != nil {
+		t.Errorf("empty clear = %v", err)
+	}
+}
+
+func TestExportedPendingMetadataUpgradeRunsOnce(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "exported.db")
+	store, err := OpenExportedStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	files := []ManifestFile{mf("packages/a", "a"), mf("packages/b", "b")}
+	if err := store.Record(streamNuget, files); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("DROP TABLE pending_metadata_files"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenExportedStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if pending, err := store.HasPendingMetadata(streamNuget, []ManifestFile{file}); err != nil || !pending {
+			t.Fatalf("upgrade omitted pending metadata for %s: %v, %v", file.Path, pending, err)
+		}
+	}
+	if err := store.ClearPendingMetadata(streamNuget, files[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenExportedStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, file := range files {
+		if pending, err := store.HasPendingMetadata(streamNuget, []ManifestFile{file}); err != nil || pending != (i == 1) {
+			t.Fatalf("reopen pending %s: %v, %v; want %v", file.Path, pending, err, i == 1)
+		}
+	}
+}

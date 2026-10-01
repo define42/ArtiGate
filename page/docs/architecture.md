@@ -186,9 +186,9 @@ keygen ──▶ low.ed25519       (private, base64, mode 0600)  ─── stays
 
 `writeBundleArtifacts` is the shared writer for every ecosystem (its `baseDir` is the Go module cache for Go, a staging dir for the others):
 
-1. `createTarGzAtomic` — write to `.tmp` with `O_CREATE|O_EXCL`, fsync, then atomic `os.Rename`.
-2. Atomically write the manifest (`0644`) and the base64 signature (`0644`).
-3. `archiveBundle` — copy all three files into the persistent archive `<root>/bundles`.
+1. `createTarGzAtomic` — write to `.tmp` with `O_CREATE|O_EXCL`, fsync, then atomic `os.Rename` and sync the destination directory and its ancestors.
+2. Atomically write the manifest (`0644`) and the base64 signature (`0644`), including directory syncs.
+3. `archiveBundle` — retain all three files in `<root>/bundles` using hard links when possible and copies otherwise. Sync their destination paths before permitting sequence commit or transfer cleanup.
 
 So a bundle lives in **two** places:
 
@@ -206,7 +206,8 @@ So a bundle lives in **two** places:
 ```text
 if not force:
         markPriorFiles(stream, files)     # flag every already-forwarded file as prior
-if countDelivered(files) == 0:            # nothing new at all
+metadataNeeded := changedMetadata(stream) or pendingMetadata(stream, files)
+if countDelivered(files) == 0 and not metadataNeeded:
         return {Skipped: true, "no new content since the last export"}   # NO sequence consumed
 seq := allocateSequence(stream) # skips complete durable bundles; rejects partial same-ID crash residue
 res := write(seq)               # build + sign + write bundle (archive carries non-prior files only)
@@ -214,6 +215,7 @@ commitSequence(stream, seq)     # sets Sequences[stream] = seq+1, persists state
 res.PriorFiles = <prior count>  # reported back to the dashboard / schedule
 recordForwarded(stream, files)  # record hashes AFTER the commit succeeds
 uploadBundleIfConfigured()      # HTTP diode, if ARTIGATE_DIODE_URL is set — failure is reported, never fatal
+clearPendingMetadata(files)     # only after the final ecosystem bundle is committed
 ```
 
 !!! note "Ordering is a correctness invariant"
@@ -221,7 +223,9 @@ uploadBundleIfConfigured()      # HTTP diode, if ARTIGATE_DIODE_URL is set — f
 
     A completed bundle is durable before its next-sequence counter is saved. After a crash, allocation scans the outbound spool and bundle archive and skips any complete sequence already present. Writers refuse to replace any existing same-ID artifact; partial crash residue must be recovered or removed explicitly, because overwriting it could fork an already-observed sequence while skipping it would create a permanent gap.
 
-Collectors also refuse to burn a sequence on an empty bundle — "the high side would then wait on it forever." The Go collector, for example, fetches *before* allocating a sequence, skips individually-unfetchable modules into `SkippedModules` rather than aborting the batch, and never writes an empty bundle.
+When content exceeds the transport limit, it is sent in content-part bundles followed by the ecosystem metadata bundle. Before each part is written, its file paths and hashes are durably recorded as needing metadata. An interrupted collect can therefore be retried with only a subset of the original packages, including after restart: the pending entries force a metadata bundle even when all bytes were already sent. Only the files named in a successfully committed final bundle have their pending entries cleared.
+
+Collectors refuse to burn a sequence on a bundle with no useful content or metadata. The Go collector, for example, fetches *before* allocating a sequence and reports individually unfetchable modules in `SkippedModules`.
 
 ## Export deduplication and delta bundles
 
@@ -236,20 +240,22 @@ CREATE TABLE IF NOT EXISTS forwarded_files (
 ) WITHOUT ROWID
 ```
 
-- **What it records**: for every file ever written into a bundle (i.e. forwarded across the diode), its `(stream, sha256, path)`. Writes use `INSERT OR IGNORE` in one transaction (idempotent via the primary key). Rows from the pre-delta schema carry an empty path and still match by hash alone; they are path-qualified the first time they are touched.
-- **Nothing new**: when *every* file is already forwarded, `exportIfNew` returns `Skipped: true`, **consumes no sequence number**, and writes no bundle.
+- **What it records**: for every file ever written into a bundle (i.e. forwarded across the diode), its `(stream, sha256, path)`. Writes use `INSERT OR IGNORE` in one transaction (idempotent via the primary key). Separate tables track current mutable content, ecosystem metadata, and files from content parts that still need a final metadata bundle.
+- **Nothing new**: when *every* file is already forwarded and there is no changed or pending metadata, `exportIfNew` returns `Skipped: true`, **consumes no sequence number**, and writes no bundle.
 - **Delta bundles**: when only *some* files are new, the bundle is still written — but already-forwarded files are marked `prior` in the manifest and left out of the archive. The `ExportResult.prior_files` count reports how many rode along as references.
 - **Pre-download skip**: collectors whose upstream declares a file's SHA-256 *before* the bytes are fetched — APT `Packages` indexes, RPM `primary.xml`, container image digests, Hugging Face LFS metadata — consult the index first and skip the download entirely. The pip/mvn/npm/go-driven collectors have no usable pre-download hash, so they still download (Go's module cache already avoids re-downloads) and dedup after hashing.
-- **Force**: every collect request accepts `"force": true`, which bypasses the index for that collect and produces a full, self-contained bundle — the disaster-recovery path when a high side is rebuilt from scratch.
-- **Fail-safe**: an empty file set is never "all forwarded"; any store error is logged ("exporting without dedup") and treated as *not forwarded*. The index is an *optimization, not correctness state* — it never suppresses content when unsure.
+- **Force**: every collect request accepts `"force": true`, which bypasses content dedup for that collect and exports every file at the next sequence. It does not reset sequencing or repair a missing earlier bundle. Exports above the transport limit still use consecutive content parts and a final metadata bundle.
+- **Fail-safe**: failed lookups cause content or metadata to be exported again. If pending metadata cannot be recorded durably, the collect stops before writing the affected content part. Failed pending-entry cleanup leaves metadata eligible for replay.
+
+On upgrade from an index without pending-metadata tracking, existing path-qualified files are marked for one metadata refresh. This recovers incomplete exports created by older versions. Legacy hash-only entries are removed because they cannot establish which paths received metadata; those files are exported again once encountered, then resume normal deduplication.
 
 !!! warning "Deliberately independent of the bundle archive"
-    The dedup index is kept separate from `<root>/bundles` on purpose. Rebuilding it from archived manifests would let archive pruning "forget" already-shipped content and re-ship it. The DB uses `SetMaxOpenConns(1)` + `PRAGMA busy_timeout=5000` (single-writer, serialized), so a SQLite failure can never wedge the JSON-based sequence pipeline.
+    The dedup index is kept separate from `<root>/bundles` on purpose. Rebuilding it from archived manifests would let archive pruning "forget" already-shipped content and re-ship it. Database writes are serialized with `SetMaxOpenConns(1)` and `PRAGMA busy_timeout=5000`. Repair persistent database errors before retrying interrupted collects.
 
 Two more properties: dedup is **per-stream** — it does not dedup across streams. And **re-export bypasses it entirely** — `POST /admin/reexport?stream=go&sequences=42,45-47` replays the *exact archived bytes* via `replayArchivedBundle` (no re-signing), never consulting or updating the dedup index. This is how the same content can be re-shipped after a lost transfer without being wrongly skipped.
 
 !!! note "A delta bundle assumes its history"
-    A bundle whose manifest lists `prior` files imports only on a high side that has already imported this stream's earlier bundles. On a fresh or pruned high side the import fails with *"bundle references prior file … that is not in the repository: import this stream's earlier bundles first, or run a forced (full) re-collect on the low side"* — which is also the fix.
+    A bundle whose manifest lists `prior` files requires that content to exist in the high-side repository. To recover lost content, restore a matching repository and `import-state.json` backup, then replay every subsequent sequence. Alternatively, initialize a fresh high-side repository and import state and replay the complete stream from sequence 1. A forced collect uses the next sequence and cannot bypass a gap.
 
 ## The diode transfer
 
@@ -296,7 +302,7 @@ The chain link is enforced: a manifest's `PreviousSequence` must equal the high 
 2. **`loadVerifiedManifest`** — read the manifest bytes + signature, base64-decode the sig, and `ed25519.Verify(s.publicKey, manifestBytes, sig)` on the **raw on-disk bytes**. Failure ⇒ "signature verification failed".
 3. **`checkManifestFields`** — `Type == "go-module-bundle"`; `Stream` matches (empty ⇒ `go`); `Sequence == expectedSeq`; `PreviousSequence == Imported[stream]`; `BundleID` matches; then `validateManifestCompleteness` requires valid `Files` (64-hex SHA-256, safe relative paths) and at least one populated ecosystem section, each cross-checked so every declared artifact references a path present in `Files`.
 4. **Extract + hash-verify the archive** into `<root>/tmp/<bundleID>`: each tar entry must be a regular file, must be listed in the manifest (an `unexpected file` is rejected), its **size must match**, its path must `safeJoin` under staging (blocking traversal), and its **streaming SHA-256 must equal the manifest hash**. Any non-prior manifest file missing from the archive is an error.
-5. **Check prior files** — a file marked `prior` is not in the archive at all: it must already sit in the accumulated repository. Immutable package files were hash-verified when they first arrived, so the importer checks **existence and size**. For mutable snapshots, including npm attestation documents, it also checks SHA-256 against the current stored bytes. A missing prior file fails the import with *"bundle references prior file `<path>` (sha256 `<hash>`) that is not in the repository: import this stream's earlier bundles first, or run a forced (full) re-collect on the low side"*.
+5. **Check prior files** — a file marked `prior` is not in the archive at all: it must already sit in the accumulated repository. Immutable package files were hash-verified when they first arrived, so the importer checks **existence and size**. For mutable snapshots, including npm attestation documents, it also checks SHA-256 against the current stored bytes. A missing prior file fails the import with *"bundle references prior file `<path>` (sha256 `<hash>`) that is not in the repository"* and recovery guidance to restore matching repository/state backups or replay the complete stream into a fresh high side.
 6. **Install** the verified files, then **regenerate metadata** (below).
 7. On success: set `Imported[stream] = manifest.Sequence` and `ImportedAt`, save state, and move the three landing files into `<landing>/imported`.
 

@@ -40,7 +40,7 @@ ArtiGate mirrors **conda channels** across a data diode. The low side fetches a 
 |---|---|---|
 | `channel` | string | **Required.** A bare channel name (`conda-forge`), resolved under the channel base (`https://conda.anaconda.org` by default; `--conda-channel-base` overrides), or a full `http(s)` channel URL |
 | `name` | string | Optional mirror name — the URL segment under `/conda/<name>`. Defaults to the bare channel name, or a slug of the channel URL |
-| `subdirs` | `[]string` | Platform subdirs to search (`linux-64`, `osx-arm64`, …). **`noarch` is always searched too**; an empty list means just `noarch` |
+| `subdirs` | `[]string` | Platforms to resolve independently (`linux-64`, `osx-arm64`, …). Each resolution also includes **`noarch`**; an empty list means just `noarch` |
 | `packages` | `[]string` | **Required.** Package specs (see below) |
 | `no_deps` | bool | Mirror only the listed packages, skipping the `depends` closure |
 | `auth` | object | One-shot HTTP Basic login for a private channel (`{"username": "…", "password": "…"}`, optional `host`) — used for this collect only, never stored |
@@ -52,9 +52,11 @@ Scheduled [watches](../scheduling.md) re-run a stored collect; a watch spec may 
 
 ### Resolution and download
 
-Per subdir, the repodata is fetched preferring `repodata.json.zst` (decompressed with the host's `zstd` tool), then `repodata.json.bz2`, then plain `repodata.json`. Resolution is **greedy and breadth-first**: for each name the best candidate wins — highest version, then highest `build_number`, preferring a platform subdir over `noarch` and the `.conda` format over `.tar.bz2` — and the first selection of a name is final (no SAT solving or backtracking). Virtual `__`-prefixed packages (`__glibc`, …) are skipped. The closure is capped at 4000 packages.
+Per subdir, the repodata is fetched preferring `repodata.json.zst` (decompressed with the host's `zstd` tool), then `repodata.json.bz2`, then plain `repodata.json`. Resolution is **greedy and breadth-first**: for each name the best candidate wins — highest version, then highest `build_number`, preferring a platform subdir over `noarch` and the `.conda` format over `.tar.bz2` — and the first selection of a name is final (no SAT solving or backtracking). Virtual `__`-prefixed packages (`__glibc`, …) are skipped. Each platform's closure is capped at 4000 packages.
 
 Each selected file is downloaded from `<channel>/<subdir>/<filename>` and stream-verified against the repodata entry's SHA-256. When the same `(name, version, build)` exists in both formats, only the `.conda` form is kept.
+
+When several platforms are requested, each gets its own dependency resolution using only that platform and `noarch`. The results are combined, with shared `noarch` artifacts downloaded once. A dependency available only for another platform cannot satisfy the request; unresolved packages report the affected platform.
 
 ## High side: repodata regeneration
 

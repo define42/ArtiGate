@@ -879,9 +879,9 @@ type GoCollectRequest struct {
 	// ARTIGATE_GO_AUTH (watch specs must never carry logins — they are
 	// persisted and echoed in plaintext).
 	Auth *HostCollectAuth `json:"auth,omitempty"`
-	// Force disables export dedup for this collect: everything is downloaded
-	// and packed even when already forwarded, producing a full self-contained
-	// bundle (for disaster recovery or rebuilding a high side from scratch).
+	// Force bypasses content dedup and exports every selected file at the
+	// next sequence, splitting when needed. It does not reset sequencing
+	// or replace a missing earlier bundle.
 	Force bool `json:"force,omitempty"`
 }
 
@@ -1253,7 +1253,7 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream, baseDir string, fil
 	if !force {
 		s.markPriorFiles(stream, files)
 	}
-	metadataChanged := (force && len(metadata) > 0) || s.hasNewMetadata(stream, metadata)
+	metadataChanged := s.needsMetadataExport(stream, files, force, metadata)
 	if isDryRunCollect(ctx) {
 		return s.dryRunExportResult(ctx, stream, files, metadataChanged)
 	}
@@ -1282,9 +1282,18 @@ func (s *LowServer) exportIfNew(ctx context.Context, stream, baseDir string, fil
 		}
 		return ExportResult{}, err
 	}
+	if err := s.exported.ClearPendingMetadata(stream, files); err != nil {
+		log.Printf("export metadata index %s: clear pending files failed: %v", stream, err)
+	}
 	res.PriorFiles = len(files) - delivered
 	parts.finish(&res)
 	return res, nil
+}
+
+// Metadata can change independently of bytes or remain unpublished after a
+// content part. Either requires the ecosystem bundle even with all-prior files.
+func (s *LowServer) needsMetadataExport(stream string, files []ManifestFile, force bool, metadata []ExportMetadata) bool {
+	return (force && len(metadata) > 0) || s.hasNewMetadata(stream, metadata) || s.hasPendingMetadata(stream, files)
 }
 
 // hasNewMetadata fails safe on lookup errors: an unknown metadata state must
@@ -1296,6 +1305,17 @@ func (s *LowServer) hasNewMetadata(stream string, metadata []ExportMetadata) boo
 		return true
 	}
 	return changed
+}
+
+// hasPendingMetadata also fails safe: uncertain delivery requires replaying
+// the ecosystem metadata, even if all file bytes have already been forwarded.
+func (s *LowServer) hasPendingMetadata(stream string, files []ManifestFile) bool {
+	pending, err := s.exported.HasPendingMetadata(stream, files)
+	if err != nil {
+		log.Printf("export metadata index %s: pending lookup failed: %v", stream, err)
+		return true
+	}
+	return pending
 }
 
 // exportSequencedBundle allocates the stream's next sequence, writes one
@@ -1472,6 +1492,9 @@ func (s *LowServer) exportContentParts(ctx context.Context, stream, baseDir stri
 		part := make([]ManifestFile, 0, len(chunk))
 		for _, fi := range chunk {
 			part = append(part, files[fi])
+		}
+		if err := s.exported.MarkPendingMetadata(stream, part); err != nil {
+			return parts, fmt.Errorf("record pending metadata for %s content part: %w", stream, err)
 		}
 		emitProgress(ctx, "→ bundle %d/%d (%d file(s))", i+1, count, len(part))
 		res, err := s.exportSequencedBundle(ctx, stream, part, func(seq int64) (ExportResult, error) {
@@ -1741,6 +1764,10 @@ func (s *LowServer) bundleArchiveDir() string {
 
 // archiveBundle records a freshly written bundle's three files in the archive.
 func (s *LowServer) archiveBundle(bundleID string) error {
+	return s.archiveBundleWithSync(bundleID, fsyncDir)
+}
+
+func (s *LowServer) archiveBundleWithSync(bundleID string, syncDir func(string) error) error {
 	dir := s.bundleArchiveDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -1748,7 +1775,7 @@ func (s *LowServer) archiveBundle(bundleID string) error {
 	for _, suffix := range bundleSuffixes() {
 		src := filepath.Join(s.cfg.ExportDir, bundleID+suffix)
 		dst := filepath.Join(dir, bundleID+suffix)
-		if err := linkOrCopyFile(src, dst); err != nil {
+		if err := linkOrCopyFileWithSync(src, dst, syncDir); err != nil {
 			return err
 		}
 	}
@@ -1764,16 +1791,21 @@ func (s *LowServer) archiveBundle(bundleID string) error {
 // is replaced so replay stays idempotent, matching the copy path's rename-over
 // behavior.
 func linkOrCopyFile(src, dst string) error {
+	return linkOrCopyFileWithSync(src, dst, fsyncDir)
+}
+
+func linkOrCopyFileWithSync(src, dst string, syncDir func(string) error) error {
 	tmp := dst + ".tmp"
 	_ = os.Remove(tmp)
 	if err := os.Link(src, tmp); err != nil {
-		return copyFileAtomic(src, dst, 0o644)
+		return copyFileAtomicWithSync(src, dst, 0o644, syncDir)
 	}
+	// Renaming two links to the same inode may leave tmp in place on retry.
+	defer os.Remove(tmp)
 	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Remove(tmp)
 		return err
 	}
-	return nil
+	return syncDirectories(syncDir, filepath.Dir(dst))
 }
 
 // replayArchivedBundle copies a previously archived bundle back into the export

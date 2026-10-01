@@ -281,30 +281,34 @@ If only *some* files were already sent, the collect still succeeds but writes a
 **delta bundle** — the response's `prior_files` counts the manifest entries that
 reference earlier content instead of carrying it. That is also intended.
 
-If you genuinely need to re-send bytes the high side already has (for example
-because the high side lost a bundle), use **re-export** from the Status page — it
-replays the archived bundle and bypasses dedup entirely — or add `"force": true`
-to the collect body for a fresh, full, self-contained bundle. Dedup is a
-per-stream optimisation only; it fails safe (never suppresses content when a
-lookup errors) and never affects correctness.
+If an exported bundle was lost in transit, use **re-export** from the Status
+page to replay that exact sequence from the archive. To send all requested
+content at the next sequence, add `"force": true` to the collect body; this
+does not fill earlier sequence gaps. Dedup is per stream, and lookup errors
+cause another export. Pending metadata is recovery state and must be recorded
+before content-part bundles are written.
 
 ### "bundle references prior file … that is not in the repository"
 
 A [delta bundle](architecture.md#export-deduplication-and-delta-bundles) lists
 already-forwarded files as `prior` references and assumes the high side imported
-this stream's earlier bundles. This error means it hasn't — typically a rebuilt
-or brand-new high side, or a stream whose earlier bundles were never carried
-across. The error names the exact file and both remedies:
+this stream's earlier bundles. This error means content is missing from the
+repository despite the recorded import position, for example after storage loss
+or restoring repository data without matching import state. The error names the
+exact file and recovery options:
 
 ```text
 bundle references prior file <path> (sha256 <hash>) that is not in the repository:
-import this stream's earlier bundles first, or run a forced (full) re-collect on the low side
+restore a matching repository and import-state backup, then replay subsequent bundles;
+or replay the complete stream from sequence 1 into a fresh high side
 ```
 
-Either **re-export the stream's earlier sequences** from the low side's archive
-(Status page → Re-transmit), or run the collect again with `"force": true` so it
-produces a full bundle with no prior references. Pointing a long-running low side
-at a fresh high side always needs one of these two.
+Restore a matching high-side repository and `import-state.json` backup, then
+**re-export every subsequent sequence** from the low-side archive (Status page →
+Re-transmit). Alternatively, initialize a fresh high-side repository and import
+state and replay the complete stream from sequence 1. Recover required missing
+archive copies from backup. `"force": true` bypasses content dedup but creates a
+new sequence; it cannot fill an earlier gap or unblock an earlier import.
 
 ## Other gotchas
 

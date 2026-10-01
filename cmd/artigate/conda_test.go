@@ -1139,3 +1139,62 @@ func TestCondaMirrorNameDefaults(t *testing.T) {
 		t.Errorf("URL channel mirror = %q, want a path-safe slug", got)
 	}
 }
+
+func TestCondaCollectIndependentPlatforms(t *testing.T) {
+	pkgs := []condaTestPkg{
+		{subdir: "linux-64", name: "app", version: "2.0.0", build: "0", ext: ".conda", depends: []string{"shared >=1.0.0"}},
+		{subdir: "osx-arm64", name: "app", version: "1.0.0", build: "0", ext: ".conda", depends: []string{"shared >=1.0.0"}},
+		{subdir: "noarch", name: "shared", version: "1.0.0", build: "0", ext: ".conda", depends: []string{"helper >=1.0.0"}},
+		{subdir: "linux-64", name: "helper", version: "1.0.0", build: "0", ext: ".conda"},
+		{subdir: "osx-arm64", name: "helper", version: "2.0.0", build: "0", ext: ".conda"},
+	}
+	up := newFakeCondaChannel(t, pkgs)
+	ls, priv := newCondaLowServer(t)
+	req := CondaCollectRequest{Channel: up.srv.URL, Name: "chan", Subdirs: []string{"linux-64", "osx-arm64"}, Packages: []string{"app"}}
+	res, err := ls.CollectConda(t.Context(), req)
+	if err != nil || len(res.SkippedModules) != 0 {
+		t.Fatalf("collect = %+v, %v", res, err)
+	}
+	m := readBundleManifest(t, ls, res.BundleID)
+	if len(m.Conda.Channels[0].Packages) != len(pkgs) {
+		t.Fatalf("selected = %+v; want every platform's closure", m.Conda.Channels[0].Packages)
+	}
+	hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+	transferAptBundle(t, ls, hs, res.BundleID)
+	mustImportNext(t, hs)
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	for _, pkg := range pkgs {
+		repodata := condaReadServedRepodata(t, srv.URL, "chan", pkg.subdir)
+		if _, ok := repodata.PackagesConda[pkg.filename()]; !ok {
+			t.Errorf("%s repodata omits %s", pkg.subdir, pkg.filename())
+		}
+		if got := up.count("/" + pkg.subdir + "/" + pkg.filename()); got != 1 {
+			t.Errorf("%s/%s fetched %d times; want once", pkg.subdir, pkg.filename(), got)
+		}
+	}
+	res, err = ls.CollectConda(t.Context(), req)
+	if err != nil || !res.Skipped {
+		t.Fatalf("repeat collect = %+v, %v; want dedup skip", res, err)
+	}
+}
+
+func TestCondaCollectReportsMissingPlatformDependency(t *testing.T) {
+	pkgs := []condaTestPkg{
+		{subdir: "linux-64", name: "app", version: "1.0.0", build: "0", ext: ".conda", depends: []string{"helper >=1.0.0"}},
+		{subdir: "osx-arm64", name: "app", version: "1.0.0", build: "0", ext: ".conda", depends: []string{"helper >=1.0.0"}},
+		{subdir: "osx-arm64", name: "helper", version: "1.0.0", build: "0", ext: ".conda"},
+	}
+	up := newFakeCondaChannel(t, pkgs)
+	ls, _ := newCondaLowServer(t)
+	res, err := ls.CollectConda(t.Context(), CondaCollectRequest{
+		Channel: up.srv.URL, Name: "chan", Subdirs: []string{"linux-64", "osx-arm64"}, Packages: []string{"app"},
+	})
+	if err != nil || len(res.SkippedModules) != 1 {
+		t.Fatalf("collect = %+v, %v; want the missing Linux dependency reported", res, err)
+	}
+	failure := res.SkippedModules[0]
+	if failure.Module != "helper" || !strings.Contains(failure.Error, "linux-64") {
+		t.Fatalf("wrong platform failure: %+v", failure)
+	}
+}

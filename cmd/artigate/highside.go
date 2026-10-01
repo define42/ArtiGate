@@ -999,6 +999,10 @@ func importWaitMessage(status ImportStatus) string {
 }
 
 func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID string, expectedSeq int64) (BundleManifest, error) {
+	return s.importBundleFromDirLockedWithSync(bundleDir, stream, bundleID, expectedSeq, fsyncDir)
+}
+
+func (s *HighServer) importBundleFromDirLockedWithSync(bundleDir, stream, bundleID string, expectedSeq int64, syncDir func(string) error) (BundleManifest, error) {
 	manifestPath := filepath.Join(bundleDir, bundleID+".manifest.json")
 	sigPath := filepath.Join(bundleDir, bundleID+".manifest.json.sig")
 	archivePath := filepath.Join(bundleDir, bundleID+".tar.gz")
@@ -1025,7 +1029,7 @@ func (s *HighServer) importBundleFromDirLocked(bundleDir, stream, bundleID strin
 	if err := extractAndVerifyTarGz(archivePath, staging, manifest.Files); err != nil {
 		return BundleManifest{}, classifyExtractError(err)
 	}
-	if err := s.installVerifiedBundle(staging, manifest); err != nil {
+	if err := s.installVerifiedBundleWithSync(staging, manifest, syncDir); err != nil {
 		return BundleManifest{}, err
 	}
 
@@ -1792,8 +1796,12 @@ func validateManifestModules(mods []ManifestMod, seen map[string]bool) error {
 }
 
 func (s *HighServer) installVerifiedBundle(staging string, manifest BundleManifest) error {
+	return s.installVerifiedBundleWithSync(staging, manifest, fsyncDir)
+}
+
+func (s *HighServer) installVerifiedBundleWithSync(staging string, manifest BundleManifest, syncDir func(string) error) error {
 	goFiles := goBundleFilePaths(manifest)
-	if err := s.installVerifiedFiles(staging, manifest.Files, goFiles); err != nil {
+	if err := s.installVerifiedFilesWithSync(staging, manifest.Files, goFiles, syncDir); err != nil {
 		return err
 	}
 	// Each ecosystem regenerates its served repository metadata from the
@@ -1855,6 +1863,10 @@ func goFilePaths(mods []ManifestMod) map[string]bool {
 // under the go/ subtree; every other ecosystem's paths already carry their own
 // prefix and install at the download root.
 func (s *HighServer) installVerifiedFiles(staging string, files []ManifestFile, goFiles map[string]bool) error {
+	return s.installVerifiedFilesWithSync(staging, files, goFiles, fsyncDir)
+}
+
+func (s *HighServer) installVerifiedFilesWithSync(staging string, files []ManifestFile, goFiles map[string]bool, syncDir func(string) error) error {
 	pythonFiles := pythonPackageFiles(files, goFiles)
 	if len(pythonFiles) > 0 {
 		s.pyIndex.mu.Lock()
@@ -1863,14 +1875,25 @@ func (s *HighServer) installVerifiedFiles(staging string, files []ManifestFile, 
 			return err
 		}
 	}
+	dirs := make([]string, 0, len(files))
 	for _, f := range files {
 		base := s.downloadDir
 		if goFiles[f.Path] {
 			base = s.goModuleDir()
 		}
-		if err := installVerifiedFile(staging, base, f); err != nil {
+		if err := installVerifiedFileContent(staging, base, f); err != nil {
 			return err
 		}
+		if !f.Prior {
+			dirs = append(dirs, filepath.Dir(filepath.Join(base, filepath.FromSlash(f.Path))))
+		}
+	}
+	// This includes matching files left by an earlier interrupted install.
+	// Persist every delivered destination and its ancestors before publishing
+	// metadata, complete markers, or the import sequence. Prior references were
+	// already persisted by an earlier committed bundle.
+	if err := syncDirectories(syncDir, dirs...); err != nil {
+		return err
 	}
 	if len(pythonFiles) > 0 {
 		return s.publishPythonIndexLocked(pythonFiles)
@@ -1880,10 +1903,20 @@ func (s *HighServer) installVerifiedFiles(staging string, files []ManifestFile, 
 
 // installVerifiedFile copies one verified file from staging into base, refusing
 // to overwrite an existing immutable file with different content. An existing
-// file whose content already matches is a no-op, so re-imports are idempotent.
+// file whose content already matches still has its directory synced, so a
+// retry completes an earlier failed install without rewriting the bytes.
 // A prior file (delta bundles) is not in staging at all: it must already sit in
 // the accumulated repository from an earlier bundle.
 func installVerifiedFile(staging, base string, f ManifestFile) error {
+	if err := installVerifiedFileContent(staging, base, f); err != nil {
+		return err
+	}
+	return syncDirectories(fsyncDir, filepath.Dir(filepath.Join(base, filepath.FromSlash(f.Path))))
+}
+
+// installVerifiedFileContent leaves directory syncing to its caller, which
+// batches shared destination directories across all files in a bundle.
+func installVerifiedFileContent(staging, base string, f ManifestFile) error {
 	src := filepath.Join(staging, filepath.FromSlash(f.Path))
 	dst := filepath.Join(base, filepath.FromSlash(f.Path))
 	if !safeJoin(base, dst) {
@@ -1916,12 +1949,13 @@ func installVerifiedFile(staging, base string, f ManifestFile) error {
 // copy would rewrite (and re-fsync) every byte of every import a second time.
 // A staging directory mounted on its own filesystem (EXDEV) falls back to the
 // copying path, as does any other rename failure whose cause a copy attempt
-// will report more precisely.
+// will report more precisely. The caller syncs destination directories before
+// treating the installed files as durable.
 func moveVerifiedFile(src, dst string) error {
 	if err := os.Rename(src, dst); err == nil {
 		return nil
 	}
-	return copyFileAtomic(src, dst, 0o644)
+	return copyFileAtomicContent(src, dst, 0o644)
 }
 
 // mutableRepoPath reports whether a verified bundle may replace an existing
@@ -1948,7 +1982,7 @@ func mutableRepoPath(p string) bool {
 func requirePriorFile(dst string, f ManifestFile) error {
 	st, err := os.Stat(dst)
 	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("bundle references prior file %s (sha256 %s) that is not in the repository: import this stream's earlier bundles first, or run a forced (full) re-collect on the low side", f.Path, f.SHA256)
+		return fmt.Errorf("bundle references prior file %s (sha256 %s) that is not in the repository: restore a matching repository and import-state backup, then replay subsequent bundles; or replay the complete stream from sequence 1 into a fresh high side", f.Path, f.SHA256)
 	}
 	if err != nil {
 		return err

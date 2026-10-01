@@ -71,14 +71,15 @@ Every imported bundle is verified before it counts: new `ed25519ph:` signatures 
 
 ### Delta bundles and prior files
 
-A [delta bundle](architecture.md#export-deduplication-and-delta-bundles)'s manifest lists files marked `prior` — content the low side already shipped in an earlier bundle on the same stream, deliberately left out of the archive. The importer verifies each prior file against the **accumulated repository**: it must exist at the manifest path with the manifest size (installs are immutable and were hash-verified when they first arrived, so existence + size is sufficient and keeps large delta imports cheap). If a prior file is absent — a fresh high side, or one whose earlier bundles never arrived — the import fails with:
+A [delta bundle](architecture.md#export-deduplication-and-delta-bundles)'s manifest lists files marked `prior` — content the low side already shipped in an earlier bundle on the same stream, deliberately left out of the archive. The importer verifies each prior file against the **accumulated repository**: it must exist at the manifest path with the manifest size (installs are immutable and were hash-verified when they first arrived, so existence + size is sufficient and keeps large delta imports cheap). If repository content has been lost or restored without matching import state, a prior file may be absent and the import fails with:
 
 ```text
 bundle references prior file <path> (sha256 <hash>) that is not in the repository:
-import this stream's earlier bundles first, or run a forced (full) re-collect on the low side
+restore a matching repository and import-state backup, then replay subsequent bundles;
+or replay the complete stream from sequence 1 into a fresh high side
 ```
 
-Both remedies are low-side actions: re-export the stream's earlier bundles from the archive, or run the collect again with `"force": true` to produce a full, self-contained bundle.
+Restore the high-side repository and `import-state.json` from the same backup, then re-export every subsequent sequence from the low-side archive. Alternatively, initialize a fresh high-side repository and import state and replay the complete stream from sequence 1. `"force": true` produces a new sequence; it cannot fill a missing earlier sequence or repair an import blocked before that new bundle.
 
 ## The dashboard
 

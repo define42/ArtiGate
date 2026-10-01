@@ -1019,6 +1019,10 @@ func (a *diodeAssembler) finishTransfer(t *diodeTransfer, now time.Time) {
 // atomically renames the temp file to its final landing name, so the importer
 // only ever sees whole, transport-clean files.
 func (a *diodeAssembler) landFile(t *diodeTransfer) error {
+	return a.landFileWithSync(t, fsyncDir)
+}
+
+func (a *diodeAssembler) landFileWithSync(t *diodeTransfer, syncDir func(string) error) error {
 	// The blocks must tile the file exactly. This is also the cheap gate that
 	// stops a forged huge fileSize before the hash pass would grind through it.
 	if t.written != t.fileSize {
@@ -1049,7 +1053,7 @@ func (a *diodeAssembler) landFile(t *diodeTransfer) error {
 		_ = os.Remove(tmpPath)
 		return err
 	}
-	return nil
+	return syncDirectories(syncDir, a.dir)
 }
 
 // failTransfer drops a transfer whose temp file can no longer be written

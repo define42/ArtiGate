@@ -1265,7 +1265,7 @@ async function runCollect(o){
   openCollectModal(o.dry?o.title+' (dry run)':o.title);
   try{
     const d=await streamCollect(o.dry?o.url+'?dry_run=1':o.url, o.body, cmAbort.signal);
-    // A forced "full bundle" is a one-shot recovery action: clear the checkbox
+    // A forced export includes all content at the next sequence: clear the checkbox
     // once the collect worked, so the next collect returns to delta exports
     // instead of silently re-sending everything each time. (A dry run is not
     // a collect — the checkbox stays put for the real one.)

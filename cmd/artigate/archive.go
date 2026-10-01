@@ -19,6 +19,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -96,6 +97,10 @@ func sha256File(p string) (string, error) {
 // — a stopped collect aborts here and the temp file is removed, so a bundle
 // is either fully produced or not at all.
 func createTarGzAtomic(ctx context.Context, dst string, baseDir string, files []ManifestFile) error {
+	return createTarGzAtomicWithSync(ctx, dst, baseDir, files, fsyncDir)
+}
+
+func createTarGzAtomicWithSync(ctx context.Context, dst string, baseDir string, files []ManifestFile, syncDir func(string) error) error {
 	tmp := dst + ".tmp"
 	_ = os.Remove(tmp)
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
@@ -149,7 +154,7 @@ func createTarGzAtomic(ctx context.Context, dst string, baseDir string, files []
 		return err
 	}
 	ok = true
-	return nil
+	return syncDirectories(syncDir, filepath.Dir(dst))
 }
 
 // addFileToTar writes a single repository file into the tar stream with a
@@ -334,6 +339,20 @@ func extractTarEntry(tr *tar.Reader, hdr *tar.Header, staging string, expected m
 }
 
 func copyFileAtomic(src, dst string, mode os.FileMode) error {
+	return copyFileAtomicWithSync(src, dst, mode, fsyncDir)
+}
+
+func copyFileAtomicWithSync(src, dst string, mode os.FileMode, syncDir func(string) error) error {
+	if err := copyFileAtomicContent(src, dst, mode); err != nil {
+		return err
+	}
+	return syncDirectories(syncDir, filepath.Dir(dst))
+}
+
+// copyFileAtomicContent persists the bytes and publishes their final name. Its
+// caller must sync the destination directory, either immediately or as part of
+// a bundle-wide batch, before acknowledging the copy.
+func copyFileAtomicContent(src, dst string, mode os.FileMode) error {
 	tmp := dst + ".tmp"
 	_ = os.Remove(tmp)
 	in, err := os.Open(src)
@@ -378,6 +397,10 @@ func writeJSONAtomic(p string, v any, mode os.FileMode) error {
 }
 
 func writeBytesAtomic(p string, b []byte, mode os.FileMode) error {
+	return writeBytesAtomicWithSync(p, b, mode, fsyncDir)
+}
+
+func writeBytesAtomicWithSync(p string, b []byte, mode os.FileMode, syncDir func(string) error) error {
 	dir := filepath.Dir(p)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -411,18 +434,48 @@ func writeBytesAtomic(p string, b []byte, mode os.FileMode) error {
 		return err
 	}
 	ok = true
-	fsyncDir(dir)
+	return syncDirectories(syncDir, dir)
+}
+
+// syncDirectories persists directory entries from the leaves to the filesystem
+// root. Existing ancestors also need syncing: they may have been created by an
+// earlier failed attempt. Each directory is synced once per call, so importing
+// many artifacts sharing a path does not repeat the same filesystem barriers.
+// The sync function is supplied per operation to make I/O failures testable
+// without process-wide hooks.
+func syncDirectories(syncDir func(string) error, dirs ...string) error {
+	seen := make(map[string]bool)
+	for _, dir := range dirs {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return err
+		}
+		for !seen[abs] {
+			seen[abs] = true
+			abs = filepath.Dir(abs)
+		}
+	}
+	paths := make([]string, 0, len(seen))
+	for dir := range seen {
+		paths = append(paths, dir)
+	}
+	slices.Sort(paths)
+	for _, dir := range slices.Backward(paths) {
+		if err := syncDir(dir); err != nil {
+			return fmt.Errorf("sync directory %s: %w", dir, err)
+		}
+	}
 	return nil
 }
 
-// fsyncDir flushes a directory so a rename into it survives a crash. It is
-// best-effort: some filesystems do not support directory fsync, and a failure
-// to open or sync the directory must not fail an otherwise-completed write.
-func fsyncDir(dir string) {
+// fsyncDir flushes a directory so a rename into it survives a crash. A failure
+// must reach the caller before it acknowledges the write or advances state.
+func fsyncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
-		return
+		return err
 	}
-	defer d.Close()
-	_ = d.Sync()
+	syncErr := d.Sync()
+	closeErr := d.Close()
+	return firstErr(syncErr, closeErr)
 }

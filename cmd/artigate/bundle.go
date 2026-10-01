@@ -306,6 +306,10 @@ func filterCompleteSequences(dir, stream string, seqs []int64) []int64 {
 }
 
 func moveBundleFiles(srcDir, dstDir, bundleID string) error {
+	return moveBundleFilesWithSync(srcDir, dstDir, bundleID, fsyncDir)
+}
+
+func moveBundleFilesWithSync(srcDir, dstDir, bundleID string, syncDir func(string) error) error {
 	if err := os.MkdirAll(dstDir, 0o755); err != nil {
 		return err
 	}
@@ -314,11 +318,13 @@ func moveBundleFiles(srcDir, dstDir, bundleID string) error {
 		if !fileExists(src) {
 			continue
 		}
-		if err := moveFile(src, filepath.Join(dstDir, bundleID+suffix), 0o644); err != nil {
+		if err := moveFileWithSync(src, filepath.Join(dstDir, bundleID+suffix), 0o644, syncDir); err != nil {
 			return err
 		}
 	}
-	return nil
+	// Retry the directory barrier even when all sources were already renamed
+	// by an earlier attempt that failed while syncing the destination.
+	return syncDirectories(syncDir, dstDir)
 }
 
 // resumeBundleMove finishes an interrupted move only when the two directories
@@ -328,7 +334,7 @@ func moveBundleFiles(srcDir, dstDir, bundleID string) error {
 // manifest, signature, sequence and archive before publishing any content.
 func resumeBundleMove(srcDir, dstDir, bundleID string) error {
 	if bundleCompleteInDir(dstDir, bundleID) {
-		return nil
+		return syncDirectories(fsyncDir, dstDir)
 	}
 	for _, suffix := range bundleSuffixes() {
 		name := bundleID + suffix
@@ -346,7 +352,7 @@ func resumeBundleMove(srcDir, dstDir, bundleID string) error {
 			return err
 		}
 	}
-	return nil
+	return syncDirectories(fsyncDir, dstDir)
 }
 
 // moveFile moves src to dst. It uses rename when possible, and falls back to
@@ -355,15 +361,19 @@ func resumeBundleMove(srcDir, dstDir, bundleID string) error {
 // are separate mounts/volumes, in which case rename returns EXDEV
 // ("invalid cross-device link").
 func moveFile(src, dst string, mode os.FileMode) error {
+	return moveFileWithSync(src, dst, mode, fsyncDir)
+}
+
+func moveFileWithSync(src, dst string, mode os.FileMode, syncDir func(string) error) error {
 	_ = os.Remove(dst)
 	err := os.Rename(src, dst)
 	if err == nil {
-		return nil
+		return syncDirectories(syncDir, filepath.Dir(dst))
 	}
 	if !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
-	if err := copyFileAtomic(src, dst, mode); err != nil {
+	if err := copyFileAtomicWithSync(src, dst, mode, syncDir); err != nil {
 		return err
 	}
 	return os.Remove(src)

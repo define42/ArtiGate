@@ -36,6 +36,7 @@
     {"name": "Dashboards and low-side authentication", "tests": ["TestLowDashboardUI", "TestHighDashboardUI", "TestLowSideAuth"]},
     {"name": "Receiver network and environment isolation", "tests": ["TestReceiverIsolation"]},
     {"name": "UDP multicast diode with real receiver client", "tests": ["TestUDPDiode"]},
+    {"name": "Child server race detection", "tests": ["TestHarnessRaceCoverage"]},
     {"name": "Strict missing-prerequisite policy", "tests": ["TestRequiredUnavailablePolicy"]}
   ]
 }

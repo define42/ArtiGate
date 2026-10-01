@@ -805,3 +805,136 @@ func assertManifestExportRejected(t *testing.T, ls *LowServer, id string, err er
 		t.Fatalf("oversized manifest consumed sequence: next = %d", seq)
 	}
 }
+
+// Content-part imports install package bytes without publishing package
+// metadata. A subset retry must complete its own metadata after interruption,
+// including when the low side restarts between the two collects.
+func TestExportSplitSubsetMetadataRecovery(t *testing.T) {
+	for _, mode := range []string{"same-process", "restart", "upgrade"} {
+		t.Run(mode, func(t *testing.T) {
+			up := fakeNugetService(t)
+			var maxSize int
+			for _, id := range []string{"A.Pkg", "B.Pkg", "C.Pkg"} {
+				payload := nugetTestNupkg(t, id, "1.0.0")
+				up.add(id, "1.0.0", payload)
+				maxSize = max(maxSize, len(payload))
+			}
+			ls, priv := nugetTestLowServer(t, up.url())
+			ls.splitBudget = bundlePackBaseOverheadBytes + estimatedPackedBytes(int64(maxSize))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx = withProgress(ctx, func(line string) {
+				if strings.Contains(line, "final, with the nuget metadata") {
+					cancel()
+				}
+			})
+			_, err := ls.CollectNuget(ctx, NugetCollectRequest{Packages: []string{"A.Pkg", "B.Pkg", "C.Pkg"}})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("interrupted collect = %v; want cancellation after content parts", err)
+			}
+			hs := newTestHighServer(t, priv.Public().(ed25519.PublicKey))
+			for _, id := range []string{"nuget-bundle-000001", "nuget-bundle-000002"} {
+				transferAptBundle(t, ls, hs, id)
+				mustImportNext(t, hs)
+			}
+			if mode == "upgrade" {
+				// A pre-fix store recorded forwarded bytes with no pending table.
+				if _, err := ls.exported.db.Exec("DROP TABLE pending_metadata_files"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode != "same-process" {
+				cfg := ls.cfg
+				if err := ls.Close(); err != nil {
+					t.Fatal(err)
+				}
+				ls, err = NewLowServer(cfg, priv)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = ls.Close() })
+			}
+			srv := httptest.NewServer(hs)
+			defer srv.Close()
+			for _, id := range []string{"A.Pkg", "B.Pkg"} {
+				assertSplitSubsetMetadataRecovery(t, ls, hs, srv.URL, id)
+			}
+		})
+	}
+}
+
+func assertSplitSubsetMetadataRecovery(t *testing.T, ls *LowServer, hs *HighServer, base, id string) {
+	t.Helper()
+	index := base + "/nuget/v3-flatcontainer/" + strings.ToLower(id) + "/index.json"
+	if status, _ := httpGet(t, index); status != http.StatusNotFound {
+		t.Fatalf("%s before metadata retry: HTTP %d; want 404", id, status)
+	}
+	req := NugetCollectRequest{Packages: []string{id}}
+	res, err := ls.CollectNuget(t.Context(), req)
+	if err != nil || res.Skipped || res.PriorFiles != 1 {
+		t.Fatalf("%s subset retry = %+v, %v; want metadata export with prior bytes", id, res, err)
+	}
+	if entries := listArchiveEntries(t, ls.cfg.ExportDir, res.BundleID); len(entries) != 0 {
+		t.Fatalf("subset retry needlessly retransmitted files: %v", entries)
+	}
+	transferAptBundle(t, ls, hs, res.BundleID)
+	mustImportNext(t, hs)
+	if status, body := httpGet(t, index); status != http.StatusOK || !strings.Contains(body, "1.0.0") {
+		t.Fatalf("%s after metadata retry: HTTP %d %s", id, status, body)
+	}
+	res, err = ls.CollectNuget(t.Context(), req)
+	if err != nil || !res.Skipped {
+		t.Fatalf("%s completed subset repeat = %+v, %v; want dedup skip", id, res, err)
+	}
+}
+
+func TestExportSplitPendingMetadataWriteFailure(t *testing.T) {
+	ls := newBareLowServer(t)
+	ls.splitBudget = splitTestBudget
+	stage := t.TempDir()
+	files := stageSplitFiles(t, stage)
+	_, err := ls.exported.db.Exec(`CREATE TRIGGER fail_pending_insert BEFORE INSERT ON pending_metadata_files
+		BEGIN SELECT RAISE(FAIL, 'injected pending metadata failure'); END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = splitExport(t, ls, stage, files)
+	if err == nil || !strings.Contains(err.Error(), "record pending metadata") {
+		t.Fatalf("split export = %v; want pending write failure", err)
+	}
+	if got := ls.peekSequence(streamNpm); got != 1 {
+		t.Fatalf("next sequence = %d; must not write a part before pending state is durable", got)
+	}
+	if bundleCompleteInDir(ls.cfg.ExportDir, "npm-bundle-000001") {
+		t.Fatal("content part was produced despite failure to record pending metadata")
+	}
+}
+
+func TestExportSplitPendingMetadataClearFailure(t *testing.T) {
+	ls := newBareLowServer(t)
+	ls.splitBudget = splitTestBudget
+	stage := t.TempDir()
+	files := stageSplitFiles(t, stage)
+	_, err := ls.exported.db.Exec(`CREATE TRIGGER fail_pending_delete BEFORE DELETE ON pending_metadata_files
+		BEGIN SELECT RAISE(FAIL, 'injected pending metadata clear failure'); END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := splitExport(t, ls, stage, files); err != nil {
+		t.Fatalf("committed split must remain successful: %v", err)
+	}
+	if _, err := ls.exported.db.Exec("DROP TRIGGER fail_pending_delete"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := splitExport(t, ls, stage, files[:1])
+	if err != nil || res.Skipped || res.PriorFiles != 1 {
+		t.Fatalf("retry after failed clear = %+v, %v; want conservative metadata replay", res, err)
+	}
+	if pending, err := ls.exported.HasPendingMetadata(streamNpm, files[1:2]); err != nil || !pending {
+		t.Fatalf("replaying one file cleared another's pending state: %v, %v", pending, err)
+	}
+	res, err = splitExport(t, ls, stage, files[:1])
+	if err != nil || !res.Skipped {
+		t.Fatalf("repeat after successful clear = %+v, %v; want dedup skip", res, err)
+	}
+}

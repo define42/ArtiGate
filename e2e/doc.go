@@ -84,15 +84,22 @@
 // Setup and low-side collection need network access and client toolchains on
 // PATH. Missing tools or transient upstream failures after the retry skip
 // locally; ARTIGATE_E2E_REQUIRE_ALL=1 makes both fail. CI runs with -json -race
-// and uses check_report.py to reject every skipped test/subtest, missing required
-// flow, and incomplete result stream. required_flows.json records the explicit
+// for both the test harness and every child ArtiGate server. Child race reports
+// and unsuccessful server shutdowns fail the run. Race-enabled runs allow ten
+// minutes for imports because full OSV archives require extracting and parsing
+// hundreds of thousands of advisories; normal runs retain a three-minute limit.
+// The workflow uses check_report.py to reject every skipped test/subtest,
+// missing required flow, and incomplete result stream. required_flows.json records the explicit
 // required matrix; its regression test requires every top-level E2E test to be
 // listed. CI uploads the raw JSON events and coverage report and adds the flow
 // results to its job summary. make e2e-strict writes those reports to /tmp by
 // default (override E2E_RESULTS and E2E_REPORT make variables).
+// The Go workflow calls this same E2E workflow and requires it to pass before
+// building and smoke-testing the stamped release image. Only that verified image
+// is published; its Git tag and GitHub release are created after publication.
 // Knobs (all environment variables):
 //
-//	ARTIGATE_E2E_BIN         use this artigate binary instead of building one
+//	ARTIGATE_E2E_BIN         use this binary (must have -race for race-enabled runs)
 //	ARTIGATE_E2E_WORKDIR     server roots/logs here instead of a temp dir
 //	ARTIGATE_E2E_KEEP        "1" keeps the temp workdir after a green run
 //	ARTIGATE_E2E_REQUIRE_ALL "1" fails on missing tools or unavailable upstreams

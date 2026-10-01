@@ -133,9 +133,23 @@ func sftpReadyBundles(files map[string]os.FileInfo) []string {
 
 // sftpBundlePresentLocked is called with importMu held, since the importer can move
 // files between the landing and quarantine directories while serving requests.
-func (s *HighServer) sftpBundlePresentLocked(id string) bool {
+func (s *HighServer) sftpBundlePresentLocked(id string) (bool, error) {
+	return s.sftpBundlePresentLockedWithSync(id, fsyncDir)
+}
+
+func (s *HighServer) sftpBundlePresentLockedWithSync(id string, syncDir func(string) error) (bool, error) {
 	stream, seq, _ := parseBundleName(id + ".manifest.json")
-	return seq <= s.importedSequence(stream) || bundleCompleteInDir(s.cfg.Landing, id) || bundleCompleteInDir(s.cfg.Quarantine, id)
+	if seq <= s.importedSequence(stream) {
+		return true, nil
+	}
+	for _, dir := range []string{s.cfg.Landing, s.cfg.Quarantine} {
+		if bundleCompleteInDir(dir, id) {
+			// A previous publish may have renamed all files before its final
+			// sync failed. Presence alone must not turn that failure into success.
+			return true, syncDirectories(syncDir, dir)
+		}
+	}
+	return false, nil
 }
 
 func (s *HighServer) receiveSFTPBundle(client *sftp.Client, id string, files map[string]os.FileInfo) (bool, error) {
@@ -144,10 +158,10 @@ func (s *HighServer) receiveSFTPBundle(client *sftp.Client, id string, files map
 	s.ingestMu.Lock()
 	defer s.ingestMu.Unlock()
 	s.importMu.Lock()
-	present := s.sftpBundlePresentLocked(id)
+	present, err := s.sftpBundlePresentLocked(id)
 	s.importMu.Unlock()
-	if present {
-		return false, nil
+	if err != nil || present {
+		return false, err
 	}
 	defer s.removeSFTPBundleTemps(id)
 	for _, suffix := range bundleSuffixes() {
@@ -159,10 +173,10 @@ func (s *HighServer) receiveSFTPBundle(client *sftp.Client, id string, files map
 	}
 	s.importMu.Lock()
 	defer s.importMu.Unlock()
-	if s.sftpBundlePresentLocked(id) {
-		return false, nil
+	if present, err := s.sftpBundlePresentLocked(id); err != nil || present {
+		return false, err
 	}
-	err := s.publishSFTPBundle(id)
+	err = s.publishSFTPBundle(id)
 	return err == nil, err
 }
 
@@ -173,6 +187,10 @@ func (s *HighServer) removeSFTPBundleTemps(id string) {
 }
 
 func (s *HighServer) publishSFTPBundle(id string) error {
+	return s.publishSFTPBundleWithSync(id, fsyncDir)
+}
+
+func (s *HighServer) publishSFTPBundleWithSync(id string, syncDir func(string) error) error {
 	// Signature is the last completeness marker. Remove an orphaned old one
 	// before publishing so even a failed rename leaves an incomplete set.
 	sig := filepath.Join(s.cfg.Landing, id+".manifest.json.sig")
@@ -185,8 +203,7 @@ func (s *HighServer) publishSFTPBundle(id string) error {
 			return fmt.Errorf("publish %s: %w", name, err)
 		}
 	}
-	fsyncDir(s.cfg.Landing)
-	return nil
+	return syncDirectories(syncDir, s.cfg.Landing)
 }
 
 func (s *HighServer) receiveSFTPHeartbeat(client *sftp.Client, info os.FileInfo) error {
@@ -202,7 +219,9 @@ func (s *HighServer) receiveSFTPHeartbeat(client *sftp.Client, info os.FileInfo)
 	if err := os.Rename(tmp, filepath.Join(s.cfg.Landing, diodeHeartbeatFileName)); err != nil {
 		return err
 	}
-	fsyncDir(s.cfg.Landing)
+	if err := syncDirectories(fsyncDir, s.cfg.Landing); err != nil {
+		return err
+	}
 	s.consumeLandingHeartbeat(time.Now().UTC())
 	return nil
 }

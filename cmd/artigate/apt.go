@@ -202,9 +202,9 @@ type AptCollectRequest struct {
 	// when the field is absent); set it false to mirror every version in the
 	// index.
 	NewestOnly *bool `json:"newest_only,omitempty"`
-	// Force disables export dedup for this collect: every .deb is downloaded
-	// and packed even when already forwarded, producing a full self-contained
-	// bundle (for disaster recovery or rebuilding a high side from scratch).
+	// Force bypasses content dedup and exports every selected file at the
+	// next sequence, splitting when needed. It does not reset sequencing
+	// or replace a missing earlier bundle.
 	Force bool `json:"force,omitempty"`
 }
 

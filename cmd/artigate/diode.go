@@ -304,6 +304,10 @@ func diodeStoreError(name string, err error, limit, fileLimit int64) error {
 // its final name (the importer's completeness check must only ever see whole
 // files).
 func writeStreamAtomicLimit(dst string, r io.Reader, limit int64) (int64, error) {
+	return writeStreamAtomicLimitWithSync(dst, r, limit, fsyncDir)
+}
+
+func writeStreamAtomicLimitWithSync(dst string, r io.Reader, limit int64, syncDir func(string) error) (int64, error) {
 	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return 0, err
@@ -334,8 +338,7 @@ func writeStreamAtomicLimit(dst string, r io.Reader, limit int64) (int64, error)
 		_ = os.Remove(tmp)
 		return 0, err
 	}
-	fsyncDir(dir)
-	return n, nil
+	return n, syncDirectories(syncDir, dir)
 }
 
 // directoryRegularFileBytesExcept totals only direct regular-file children,

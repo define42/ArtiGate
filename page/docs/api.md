@@ -40,7 +40,7 @@ Every collect request additionally accepts one shared field:
 
 | Field | Type | Notes |
 |---|---|---|
-| `force` | bool | omitempty; `true` bypasses the [export-dedup index](architecture.md#export-deduplication-and-delta-bundles) for this collect — everything is downloaded and packed even when already forwarded, producing a full self-contained bundle (disaster recovery / rebuilding a high side from scratch) |
+| `force` | bool | omitempty; `true` bypasses [content dedup](architecture.md#export-deduplication-and-delta-bundles) for this collect and exports every requested file at the next sequence, splitting when needed. It does not reset sequencing or fill an earlier gap. |
 
 #### Shared response — `ExportResult`
 

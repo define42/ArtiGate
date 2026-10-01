@@ -51,7 +51,7 @@ There is no `force` field — uploads always behave as if forced (full bundle, d
 
 | Route | Method | Response |
 |---|---|---|
-| `/uploads/<folder>/<name>` | GET/HEAD | The file bytes (range and conditional requests supported; `Content-Type` by extension) |
+| `/uploads/<folder>/<name>` | GET/HEAD | The file bytes as an attachment with `application/octet-stream` and `X-Content-Type-Options: nosniff`; range and conditional requests supported |
 | `/admin/uploads` | GET | JSON listing: folders with their files' names, sizes, and modification times |
 | `/admin/uploads/delete` | POST | Delete one file: JSON body `{"folder": "tools", "name": "installer.run"}` → `{"status": "ok"}` (404 if absent) |
 
@@ -63,7 +63,7 @@ Deleting a folder's last file removes the folder from the listing — folders li
 curl -fsS -o installer.run https://artigate-high.local/uploads/tools/installer.run
 ```
 
-The high-side dashboard's **Uploads** tree shows every folder and file with size, modification time, SHA-256, and a download link.
+The high-side dashboard's **Uploads** tree shows every folder and file with size, modification time, SHA-256, and a download link. Direct URLs also download the file as an attachment, including HTML and SVG, so uploaded documents cannot run scripts on the dashboard origin. Open downloaded files only when you trust their contents.
 
 ## Limitations
 

@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -375,8 +376,37 @@ func (s *HighServer) serveUploads(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "unsafe path", http.StatusBadRequest)
 		return true
 	}
-	serveFile(w, r, abs)
+	serveUploadFile(w, r, abs)
 	return true
+}
+
+// serveUploadFile keeps operator-supplied documents from executing on the
+// dashboard origin. ServeContent also preserves the name index.html instead
+// of redirecting it to a directory as ServeFile would.
+func serveUploadFile(w http.ResponseWriter, r *http.Request, abs string) {
+	f, err := os.Open(abs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.NotFound(w, r)
+		} else {
+			http.Error(w, "cannot open uploaded file", http.StatusInternalServerError)
+		}
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		http.Error(w, "cannot read uploaded file", http.StatusInternalServerError)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
 }
 
 // UploadedFile is one file in a folder listing.

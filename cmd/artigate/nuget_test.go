@@ -1102,6 +1102,29 @@ func TestNugetCollectPinnedPrerelease(t *testing.T) {
 	}
 }
 
+// A flat-container index lowercases versions even when the embedded nuspec
+// preserves prerelease casing. Both collection and publication accept it.
+func TestNugetCollectLowercasePrereleaseIndex(t *testing.T) {
+	up := fakeNugetService(t)
+	pre := nugetTestNupkg(t, "Pre.Pkg", "1.0.0-Beta.1")
+	up.add("Pre.Pkg", "1.0.0-beta.1", pre)
+	hs, res := nugetTestCollectImport(t, up, NugetCollectRequest{Packages: []string{"Pre.Pkg@1.0.0-BETA.1"}})
+	if res.ExportedModules != 1 || len(res.SkippedModules) != 0 {
+		t.Fatalf("unexpected collect result: %+v", res)
+	}
+	srv := httptest.NewServer(hs)
+	defer srv.Close()
+	nugetTestAssertVersions(t, srv.URL, "pre.pkg", []string{"1.0.0-beta.1"})
+	code, body := httpGet(t, srv.URL+"/nuget/v3/registration/pre.pkg/index.json")
+	if code != http.StatusOK || !strings.Contains(body, `"1.0.0-Beta.1"`) {
+		t.Fatalf("canonical nuspec version missing: status %d body %s", code, body)
+	}
+	code, body = httpGet(t, srv.URL+"/nuget/v3-flatcontainer/pre.pkg/1.0.0-beta.1/pre.pkg.1.0.0-beta.1.nupkg")
+	if code != http.StatusOK || body != string(pre) {
+		t.Fatalf("package download: status %d, matching bytes %v", code, body == string(pre))
+	}
+}
+
 // TestNugetCollectNuspecIdentityMismatch proves a package whose embedded
 // nuspec names a different identity than requested is never bundled: alone it
 // fails the collect, in a batch it is skipped and reported.

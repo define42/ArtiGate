@@ -135,13 +135,13 @@ With an [HTTP diode endpoint](deployment.md) configured, each successful collect
 
 ArtiGate keeps a per-stream index of every file it has ever exported — `(stream, sha256, path)` rows in SQLite at `<root>/exported.db`. It buys three things:
 
-- **Whole-collect skip.** When every resolved file is already in the index, the collect is skipped: no sequence consumed, no bundle written, no diode traffic. This is what makes a scheduled re-pull of an unchanged upstream free.
+- **Whole-collect skip.** When every resolved file is already in the index and there is no changed or pending metadata, the collect is skipped: no sequence consumed, no bundle written, no diode traffic. This is what makes a scheduled re-pull of an unchanged upstream free.
 - **Delta bundles.** When only some files are new, the bundle's archive carries just those; the rest are listed in the manifest as `prior` references that the high side verifies against its accumulated repository. A daily schedule over a slowly-changing mirror sends only the churn.
 - **Download skip.** Collectors whose upstream declares each file's SHA-256 before the bytes are fetched — APT `Packages` indexes, RPM `primary.xml`, container image digests, Hugging Face LFS files — consult the index first and skip the download entirely. The pip/mvn/npm/go-driven fetches have no usable pre-download hash, so they download as before and dedup after hashing.
 
-`"force": true` on any collect bypasses the index for that run and produces a full, self-contained bundle — use it when a high side is rebuilt from scratch or its earlier bundles were pruned, because **a delta bundle imports only on a high side that already holds this stream's earlier content** (the import error names the missing prior file and this exact remedy).
+`"force": true` on any collect bypasses content dedup and exports every requested file at the next sequence, splitting the export when needed. It does not reset sequencing or fill an earlier gap. A rebuilt high side needs either matching repository/state backups followed by replay of every subsequent sequence, or a fresh repository and import state with the complete stream replayed from sequence 1.
 
-The index is an optimization, never correctness state: an empty file set or any store error fails safe (it exports rather than wrongly skips), and it records hashes only *after* the sequence commit succeeds. Re-export bypasses the index entirely. The full rationale is in the [architecture](architecture.md) page.
+Failed lookups cause content or metadata to be exported again. Pending metadata is recorded durably before content-part bundles are written, so a subset retry can finish an interrupted export; a failure to record this state stops the affected part. File hashes are recorded only *after* sequence commit. Re-export bypasses the index entirely. The full rationale is in the [architecture](architecture.md) page.
 
 ## Status page &amp; re-transmitting bundles
 
@@ -179,7 +179,7 @@ Re-export takes the same per-stream lock as a fresh export (so it cannot collide
 ```
 
 !!! warning
-    Re-export only works while the archive copy exists. A bundle showing `✗ not kept` on the Status page has been pruned and can no longer be replayed. And because a *re-collect* after pruning would produce delta bundles referencing content the rebuilt high side lacks, recovery from a from-scratch high side is a **forced** collect (`"force": true`), not a normal one.
+    Re-export requires the archived bundle. A bundle showing `✗ not kept` on the Status page must be recovered from backup if its sequence is needed. A fresh high side needs the complete stream from sequence 1; restoring a matching repository/state backup reduces replay to the subsequent sequences. A new collect, including `"force": true`, keeps advancing the sequence and cannot replace a missing archived sequence.
 
 ## Scheduling
 

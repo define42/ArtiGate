@@ -135,8 +135,17 @@ func snapVMCloudConfig(packages []string) string {
 		fmt.Fprintf(&script, "snap install '/mnt/mirrored/%s.snap'\n", name)
 	}
 	script.WriteString("snap list\nsnap run hello\n")
+	// serial-getty hangs up /dev/ttyS0 during boot, invalidating descriptors
+	// inherited by the receiver script. Capture command output in a regular
+	// file, then reopen the console to report it after the commands finish.
+	const runCommand = "/usr/local/bin/artigate-snap-receiver > /var/log/artigate-snap-receiver.log 2>&1; " +
+		"code=$?; cat /var/log/artigate-snap-receiver.log > /dev/ttyS0; " +
+		"if [ \"$code\" -ne 0 ]; then " +
+		"journalctl -b -u snapd --no-pager -n 120 > /dev/ttyS0; " +
+		"dmesg | tail -80 > /dev/ttyS0; fi; " +
+		"echo ARTIGATE_SNAP_RESULT:$code > /dev/ttyS0; poweroff -f"
 	return "#cloud-config\npackage_update: false\npackage_upgrade: false\nwrite_files:\n" +
 		"  - path: /usr/local/bin/artigate-snap-receiver\n    permissions: '0755'\n    content: |\n      " +
 		strings.ReplaceAll(strings.TrimSuffix(script.String(), "\n"), "\n", "\n      ") + "\n" +
-		"runcmd:\n  - [bash, -c, '/usr/local/bin/artigate-snap-receiver > /dev/ttyS0 2>&1; code=$?; echo ARTIGATE_SNAP_RESULT:$code > /dev/ttyS0; poweroff -f']\n"
+		"runcmd:\n  - [bash, -c, '" + runCommand + "']\n"
 }

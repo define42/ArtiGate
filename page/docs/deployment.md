@@ -296,12 +296,14 @@ curl -fT go-bundle-000042.tar.gz -H "Authorization: Bearer $TOKEN" \
 
 Each side keeps durable state under its `--root`. Plan capacity and backups for these directories.
 
+Use storage that supports file and directory `fsync` and atomic renames. ArtiGate syncs installed artifact directories and their ancestors before acknowledging an import, and syncs archived bundle paths before clearing transferred spool files. Directory-sync failures are returned as storage errors; repair the storage and retry instead of treating those errors as successful writes. A retry also syncs matching files left by an earlier failed attempt.
+
 **Low side** (`--root`, default `/var/lib/artigate-low`):
 
 | Path | Contents |
 |---|---|
 | `<root>/low-state.json` | Per-stream next-sequence counters (mode `0600`) |
-| `<root>/exported.db` | SQLite export-dedup index — which files (path + hash) have already been shipped per stream; what enables skips and delta bundles |
+| `<root>/exported.db` | SQLite export index — shipped paths and hashes, ecosystem metadata, and content parts still awaiting final metadata; enables safe skips and delta bundles |
 | `<root>/watches.db` | SQLite scheduled-watch definitions and history |
 | `<root>/bundles` | Persistent archive of every generated bundle, retained for re-export |
 | `<root>/gopath/...` | Go module download cache |
@@ -324,7 +326,7 @@ Each side keeps durable state under its `--root`. Plan capacity and backups for 
 !!! note "Backups"
     Back up each side's `<root>` to preserve state across host loss. On the low side the critical items are `low-state.json`, `exported.db`, `watches.db`, and the `bundles` archive; the Go cache is reconstructible. On the high side, `import-state.json` plus `cache/download` are the mirror itself. The Ed25519 private key (low) and public key (high) live outside `<root>` (for example `/etc/artigate/`, or the separate Compose `keys` and `high-keys` volumes) — back these up separately and keep the private key on the low side only.
 
-    Losing `exported.db` alone is safe but wasteful (the next collects re-download and re-send content the high side already has). Losing it *while keeping* `low-state.json` and re-pointing at a **fresh** high side is the one combination to avoid — recover a rebuilt high side with a **forced** collect (`"force": true`) or by re-exporting the archived bundles, since normal collects emit delta bundles that assume the stream's earlier content is present.
+    Losing `exported.db` alone causes later collects to re-download and re-send content at the next sequence. It does not reset `low-state.json`. To rebuild the high side, restore a matching `cache/download` and `import-state.json` backup, then replay each subsequent sequence from the low-side archive. Alternatively, use a fresh high-side repository and import state and replay each complete stream from sequence 1. Recover any missing archived sequence from backup before continuing. `"force": true` only bypasses content dedup; its new sequence cannot fill an earlier gap.
 
 ## Related pages
 

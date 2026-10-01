@@ -178,7 +178,7 @@ func TestForwardedIndexMutablePriorDoesNotReplaceContents(t *testing.T) {
 }
 
 // Historical rows have no export order. Upgrades must re-deliver a mutable
-// snapshot once, while retaining the old membership semantics for artifacts.
+// snapshot once, while retaining known paths for immutable artifacts.
 func TestForwardedIndexMutableMigration(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "exported.db")
 	legacy, err := sql.Open("sqlite", dbPath)
@@ -216,17 +216,17 @@ func TestForwardedIndexMutableMigration(t *testing.T) {
 	immutableWildcard := mf("npm/packages/legacy.tgz", "c")
 	assertForwardedState(t, store, streamOsv,
 		[]ManifestFile{a, b, wildcard, immutable, immutableWildcard},
-		[]bool{false, false, false, true, true})
+		[]bool{false, false, false, true, false})
 	if err := store.Record(streamOsv, []ManifestFile{a}); err != nil {
 		t.Fatal(err)
 	}
 	assertForwardedState(t, store, streamOsv, []ManifestFile{a, b, wildcard}, []bool{true, false, false})
 }
 
-// TestLegacyExportedMigration proves an index written by the hash-only schema
-// still suppresses re-sending: its rows migrate with an empty path (matching
-// any path with that hash), the legacy table is dropped, and the next record
-// adds path-qualified rows.
+// TestLegacyExportedMigration proves unknown paths from the hash-only schema
+// are exported once after upgrade. A hash alone cannot establish that the
+// receiver has a path or its ecosystem metadata. Subsequent exports dedup by
+// their actual paths as usual.
 func TestLegacyExportedMigration(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "exported.db")
@@ -253,12 +253,12 @@ func TestLegacyExportedMigration(t *testing.T) {
 	}
 	defer store.Close()
 
-	// A legacy row matches the hash under any path.
-	if ok, err := store.IsForwarded(streamNpm, "npm/packages/whatever.tgz", sha); err != nil || !ok {
-		t.Errorf("legacy row should match any path, got %v, %v", ok, err)
+	// A legacy hash must not suppress an arbitrary path's metadata repair.
+	if ok, err := store.IsForwarded(streamNpm, "npm/packages/whatever.tgz", sha); err != nil || ok {
+		t.Errorf("unknown legacy path should be exported, got %v, %v", ok, err)
 	}
-	if n, err := store.Count(streamNpm); err != nil || n != 1 {
-		t.Errorf("Count = %d, %v; want 1", n, err)
+	if n, err := store.Count(streamNpm); err != nil || n != 0 {
+		t.Errorf("Count = %d, %v; want 0 until paths are recorded", n, err)
 	}
 
 	// The legacy table is gone and re-recording path-qualifies the content.
@@ -273,6 +273,9 @@ func TestLegacyExportedMigration(t *testing.T) {
 	if n, err := store.Count(streamNpm); err != nil || n != 1 {
 		t.Errorf("Count after re-record = %d, %v; want 1 (same content)", n, err)
 	}
+	assertForwardedState(t, store, streamNpm,
+		[]ManifestFile{mf("npm/packages/a.tgz", "a"), mf("npm/packages/b.tgz", "a")},
+		[]bool{true, false})
 }
 
 // TestExportedIndexFailsSafe proves a store error never suppresses content:

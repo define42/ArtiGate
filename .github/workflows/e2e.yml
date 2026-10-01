@@ -14,16 +14,19 @@ name: E2E
 
 on:
   push:
-    branches: [ "main", "claude/**" ]
-  pull_request:
-    branches: [ "main" ]
+    branches: [ "claude/**" ]
+  workflow_call:
+    secrets:
+      ARTIGATE_HF_TOKEN:
+        required: false
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: e2e-${{ github.ref }}
+  # Called Go runs and manual E2E runs must never cancel each other.
+  group: e2e-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -41,6 +44,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.16.4
 
       - name: Install client tools and receiver isolation dependencies
         run: |
@@ -186,7 +194,7 @@ jobs:
           # with -f it surfaces as curl exit 22, which is never retried.
           ck() {
             local rc i
-            for i in 1 2 3 4 5; do
+            for ((i=1; i<=5; i++)); do
               if curl -fsS --retry 5 --retry-delay 3 --retry-max-time 180 --connect-timeout 15 "$@"; then
                 return 0
               else

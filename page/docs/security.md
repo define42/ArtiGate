@@ -204,15 +204,20 @@ Controls the `Secure` attribute of the session cookie. Only meaningful when auth
 
 ## The high side is never authenticated
 
-There is no `ARTIGATE_HIGH_AUTH` and no auth middleware on the high side. Its admin endpoints are open by design:
+There is no `ARTIGATE_HIGH_AUTH` and no client login on the high side. Artifact downloads and read-only status endpoints are accessible to anyone who can reach the listener:
 
 - `GET /healthz`, `GET /readyz`, and `GET /metrics`
-- `POST /admin/import`
 - `GET /admin/status` and `GET /admin/missing`
 
-The high side's integrity comes from **signature + hash verification at import**, not from request authentication. It is a read-only repository intended to sit on the trusted/high network; anyone who can reach it can *read* what has already been verified, but nothing they send can inject content — writes only ever happen through the verified import path. Place it on a trusted segment accordingly.
+State-changing administration, including `POST /admin/import` and `POST /admin/uploads/delete`, accepts loopback callers only by default. `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN=on` allows remote administration; restrict access through network placement or an authenticating proxy when enabling it.
 
-### The one optional write surface: diode ingest
+New artifact content reaches the repository through **signature + hash verification at import**. Uploaded files can also be deleted through the administration endpoint. Place the high side on a trusted segment and restrict who can read mirrored private content.
+
+### Uploaded documents
+
+File downloads from `/uploads/<folder>/<name>` use `Content-Disposition: attachment`, `Content-Type: application/octet-stream`, and `X-Content-Type-Options: nosniff`. HTML, SVG, and other uploaded documents download as files instead of rendering on the dashboard origin. The suggested filename is encoded safely, and HEAD, range, and conditional requests remain supported.
+
+### Optional diode ingest
 
 With `ARTIGATE_DIODE_INGEST=on` (off by default), the high side accepts bundle uploads at `PUT/POST /diode/<file>` — the receiving end of the [HTTP diode transport](deployment.md). This does **not** weaken the trust model: only supported stream names and positive bundle sequences are accepted, and nothing is served until signature, sequencing, and hash checks pass. Enabling ingest requires a whitespace-free bearer token of at least 32 bytes, compared in constant time. Before verification, archives are capped at 64 GiB, manifests at 64 MiB, signatures at 4 KiB, and direct unverified files across landing, quarantine, and rejected storage at 128 GiB. Completed uploads feed one bounded, coalescing import worker. Leave ingest off entirely when you use the folder flow.
 

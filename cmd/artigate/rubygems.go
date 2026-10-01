@@ -954,9 +954,9 @@ type RubyGemsCollectRequest struct {
 	Platforms []string `json:"platforms,omitempty"`
 	// NoDeps mirrors only the listed gems, skipping the dependency closure.
 	NoDeps bool `json:"no_deps,omitempty"`
-	// Force disables export dedup for this collect: every gem is packed even
-	// when already forwarded, producing a full self-contained bundle (for
-	// disaster recovery or rebuilding a high side from scratch).
+	// Force bypasses content dedup and exports every selected file at the
+	// next sequence, splitting when needed. It does not reset sequencing
+	// or replace a missing earlier bundle.
 	Force bool `json:"force,omitempty"`
 }
 
@@ -1148,12 +1148,13 @@ func (d *gemDownloader) resolveOne(ctx context.Context, want gemWant) []gemWant 
 	if !d.fetchGem(ctx, want.name, *line) {
 		return nil
 	}
-	d.fetchPlatformVariants(ctx, want.name, line.Version, lines)
+	deps := append([]gemDep(nil), line.Deps...)
+	deps = append(deps, d.fetchPlatformVariants(ctx, want.name, line.Version, lines)...)
 	if d.noDeps {
 		return nil
 	}
-	wants := make([]gemWant, 0, len(line.Deps))
-	for _, dep := range line.Deps {
+	wants := make([]gemWant, 0, len(deps))
+	for _, dep := range deps {
 		if !d.selected[dep.Name] {
 			wants = append(wants, gemWant{name: dep.Name, reqs: dep.Reqs})
 		}
@@ -1247,16 +1248,20 @@ func (d *gemDownloader) fetchGem(ctx context.Context, name string, line gemInfoL
 // variants of an already-selected version when the upstream publishes them;
 // a platform with no line for this version is skipped silently (the
 // pure-ruby gem is always mirrored).
-func (d *gemDownloader) fetchPlatformVariants(ctx context.Context, name, version string, lines []gemInfoLine) {
+func (d *gemDownloader) fetchPlatformVariants(ctx context.Context, name, version string, lines []gemInfoLine) []gemDep {
+	var deps []gemDep
 	for _, platform := range d.platforms {
 		for i := range lines {
 			if lines[i].Version == version && lines[i].Platform == platform {
 				emitProgress(ctx, "→ %s@%s", name, gemVersionFull(version, platform))
-				d.fetchGem(ctx, name, lines[i])
+				if d.fetchGem(ctx, name, lines[i]) {
+					deps = append(deps, lines[i].Deps...)
+				}
 				break
 			}
 		}
 	}
+	return deps
 }
 
 // -----------------------------------------------------------------------------

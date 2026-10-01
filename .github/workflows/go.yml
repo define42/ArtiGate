@@ -29,6 +29,7 @@ jobs:
             echo "docker compose config unexpectedly accepted missing credentials" >&2
             exit 1
           fi
+          # shellcheck disable=SC2016 # The password hash contains literal dollar signs.
           export ARTIGATE_LOW_AUTH='ci:$argon2id$v=19$m=8,t=1,p=1$c2FsdA$aGFzaA'
           export ARTIGATE_DIODE_TOKEN='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
           docker compose config --format json > compose-rendered.json
@@ -54,7 +55,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          # No third-party dependencies, hence no go.sum to cache on.
           cache: false
 
       - name: Set up Node.js
@@ -130,13 +130,26 @@ jobs:
           install-mode: goinstall
 
   # ---------------------------------------------------------------------------
+  # Required end-to-end gate (same commit as the calling workflow)
+  # ---------------------------------------------------------------------------
+  e2e:
+    uses: ./.github/workflows/e2e.yml
+    secrets:
+      ARTIGATE_HF_TOKEN: ${{ secrets.ARTIGATE_HF_TOKEN }}
+
+  # ---------------------------------------------------------------------------
   # Versioning, release & container publish (push to main only)
   # ---------------------------------------------------------------------------
   release:
-    needs: [test, lint]
-    if: github.event_name == 'push'
+    needs: [test, lint, e2e]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Hold this lock from version calculation through publication. A newer
+    # successful run must never calculate the same version concurrently.
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
     permissions:
       contents: write   # required for tags + GitHub releases
       packages: write   # required for GHCR push
@@ -144,59 +157,92 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # REQUIRED for tag calculation
+          fetch-depth: 0
 
-      - name: Bump version and create tag
+      - name: Check release is still current
+        id: current
+        run: |
+          # A slower older run can reach this serialized job after a newer
+          # commit. It must not replace latest with an older image.
+          current="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test -n "$current"
+          echo "publish=$([ "$current" = "$GITHUB_SHA" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Calculate next version without creating a tag
+        if: steps.current.outputs.publish == 'true'
         id: tag
         uses: mathieudutour/github-tag-action@v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           release_branches: main
+          dry_run: true
 
-      - name: Create GitHub release
-        if: steps.tag.outputs.new_tag != ''
-        uses: ncipollo/release-action@v1
-        with:
-          tag: ${{ steps.tag.outputs.new_tag }}
-          name: Release ${{ steps.tag.outputs.new_tag }}
-          body: ${{ steps.tag.outputs.changelog }}
+      - name: Compute image identity
+        if: steps.current.outputs.publish == 'true'
+        id: image
+        env:
+          NEW_TAG: ${{ steps.tag.outputs.new_tag }}
+        run: |
+          echo "repository=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          version="$NEW_TAG"
+          if [ -z "$version" ]; then
+            version="$(git describe --tags --always)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
+        if: steps.current.outputs.publish == 'true'
         uses: docker/setup-buildx-action@v3
 
+      - name: Build release image locally
+        if: steps.current.outputs.publish == 'true'
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: artigate-release-test:${{ github.sha }}
+          build-args: |
+            VERSION=${{ steps.image.outputs.version }}
+
+      - name: Verify stamped image and both server roles
+        if: steps.current.outputs.publish == 'true'
+        env:
+          IMAGE_ID: ${{ steps.build.outputs.imageid }}
+          EXPECTED_VERSION: ${{ steps.image.outputs.version }}
+        run: bash .github/scripts/check-release-image.sh "$IMAGE_ID" "$EXPECTED_VERSION"
+
       - name: Login to GHCR
+        if: steps.current.outputs.publish == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image tags
-        id: imgtags
+      - name: Publish the verified image without rebuilding
+        if: steps.current.outputs.publish == 'true'
+        env:
+          IMAGE_ID: ${{ steps.build.outputs.imageid }}
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
+          NEW_TAG: ${{ steps.tag.outputs.new_tag }}
         run: |
-          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
-          tags="${repo}:latest,${repo}:${GITHUB_SHA}"
-          if [ -n "${{ steps.tag.outputs.new_tag }}" ]; then
-            tags="${tags},${repo}:${{ steps.tag.outputs.new_tag }}"
+          tags=("$GITHUB_SHA")
+          if [ -n "$NEW_TAG" ]; then
+            tags+=("$NEW_TAG")
           fi
-          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
-          # The binary's own identity (artigate version, startup logs, the
-          # dashboards, /metrics) is stamped from the tag this run just cut.
-          # The Docker build context excludes .git, so without this build-arg
-          # the released image would report itself as "dev". If no new tag was
-          # created, describe the checkout from the existing tags instead
-          # (fetch-depth: 0 above fetched them).
-          version="${{ steps.tag.outputs.new_tag }}"
-          if [ -z "$version" ]; then
-            version="$(git describe --tags --always)"
-          fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          tags+=(latest)
+          for tag in "${tags[@]}"; do
+            docker tag "$IMAGE_ID" "$IMAGE_REPOSITORY:$tag"
+            docker push "$IMAGE_REPOSITORY:$tag"
+          done
 
-      - name: Build and push container
-        uses: docker/build-push-action@v6
+      - name: Create tag and GitHub release after image verification and publication
+        if: steps.current.outputs.publish == 'true' && steps.tag.outputs.new_tag != ''
+        uses: ncipollo/release-action@v1
         with:
-          context: .
-          push: true
-          tags: ${{ steps.imgtags.outputs.tags }}
-          build-args: |
-            VERSION=${{ steps.imgtags.outputs.version }}
+          tag: ${{ steps.tag.outputs.new_tag }}
+          commit: ${{ github.sha }}
+          name: Release ${{ steps.tag.outputs.new_tag }}
+          body: ${{ steps.tag.outputs.changelog }}

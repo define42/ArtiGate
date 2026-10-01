@@ -142,7 +142,11 @@ func registerPairCleanup(t *testing.T, srv *server) {
 			logTail(t, srv.logPath)
 		}
 	})
-	t.Cleanup(srv.stop)
+	t.Cleanup(func() {
+		if err := srv.stop(); err != nil {
+			t.Errorf("server cleanup: %v", err)
+		}
+	})
 }
 
 func orDefault(v, def string) string {

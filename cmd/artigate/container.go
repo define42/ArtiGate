@@ -1116,9 +1116,9 @@ type ContainerCollectRequest struct {
 	// belong in ARTIGATE_CONTAINER_AUTH (watch specs must never carry logins —
 	// they are persisted and echoed in plaintext).
 	Auth *ContainerCollectAuth `json:"auth,omitempty"`
-	// Force disables export dedup for this collect: every blob is downloaded
-	// and packed even when already forwarded, producing a full self-contained
-	// bundle (for disaster recovery or rebuilding a high side from scratch).
+	// Force bypasses content dedup and exports every selected file at the
+	// next sequence, splitting when needed. It does not reset sequencing
+	// or replace a missing earlier bundle.
 	Force bool `json:"force,omitempty"`
 }
 
