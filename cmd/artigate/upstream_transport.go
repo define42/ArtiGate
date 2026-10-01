@@ -72,7 +72,16 @@ func upstreamOriginPort(u *url.URL) int {
 // enforcing an origin-aware redirect policy. The boolean reports whether
 // the whole chain stayed at the original origin and can issue a login challenge.
 func doUpstreamRequest(req *http.Request) (*http.Response, bool, error) {
-	client := *http.DefaultClient
+	return doUpstreamRequestWithClient(req, nil)
+}
+
+// doUpstreamRequestWithClient applies the shared redirect policy to an optional
+// dedicated upstream client. A nil client uses the default client.
+func doUpstreamRequestWithClient(req *http.Request, upstream *http.Client) (*http.Response, bool, error) {
+	if upstream == nil {
+		upstream = http.DefaultClient
+	}
+	client := *upstream
 	policy := upstreamRedirectPolicy{origin: req.URL, previousCheck: client.CheckRedirect}
 	client.CheckRedirect = policy.check
 	// Upstream authentication is explicit; a cookie jar could add credentials

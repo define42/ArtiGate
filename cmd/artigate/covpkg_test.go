@@ -163,7 +163,7 @@ func TestCovPkg_FetchRepomdUnsigned(t *testing.T) {
 	defer up.Close()
 
 	ls, _ := newRpmLowServer(t)
-	got, err := ls.fetchRepomd(context.Background(), up.URL, "", nil)
+	got, err := ls.fetchRepomd(context.Background(), up.URL, "", nil, nil)
 	if err != nil {
 		t.Fatalf("fetchRepomd: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestCovPkg_FetchRepomdUnsigned(t *testing.T) {
 	}
 	empty := httptest.NewServer(http.NewServeMux())
 	defer empty.Close()
-	if _, err := ls.fetchRepomd(context.Background(), empty.URL, "", nil); err == nil || !strings.Contains(err.Error(), "fetch repomd.xml") {
+	if _, err := ls.fetchRepomd(context.Background(), empty.URL, "", nil, nil); err == nil || !strings.Contains(err.Error(), "fetch repomd.xml") {
 		t.Errorf("fetchRepomd with no repomd = %v, want fetch error", err)
 	}
 }
@@ -373,7 +373,7 @@ func TestCovPkg_GPGVerifyAndSign(t *testing.T) {
 	up3 := httptest.NewServer(mux3)
 	defer up3.Close()
 	rls, _ := newRpmLowServer(t)
-	if _, err := rls.fetchRepomd(ctx, up3.URL, keyring, nil); err != nil {
+	if _, err := rls.fetchRepomd(ctx, up3.URL, keyring, nil, nil); err != nil {
 		t.Fatalf("fetchRepomd (signed): %v", err)
 	}
 

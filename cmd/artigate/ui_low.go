@@ -435,6 +435,10 @@ const lowUIHTML = `<!DOCTYPE html>
       <label class="filelabel">&hellip;or load a .repo file
         <input id="rpmfile" type="file" accept=".repo,text/plain" onchange="loadRpmFile()">
       </label>
+      <label class="filelabel" for="rpmTLSProfile">Client certificate profile <span class="opt">&mdash; optional</span>
+        <input id="rpmTLSProfile" type="text" placeholder="redhat" autocomplete="off" aria-describedby="rpmTLSProfileHint">
+      </label>
+      <p id="rpmTLSProfileHint" class="hint">Use a profile configured on the low side, such as <code>redhat</code>, for repositories that require a client certificate. The same profile applies to every repo above and is saved with schedules. Certificate files stay on the low side.</p>
       <details class="pytarget">
         <summary>Private repository login (optional)</summary>
         <div class="pytarget-grid">
@@ -1657,11 +1661,18 @@ function showRpmResult(cls, html){
   el.innerHTML=html;
 }
 
+function rpmSpec(repo){
+  const spec={repo_file:repo, newest_only:document.getElementById('rpmnewest').checked};
+  const profile=document.getElementById('rpmTLSProfile').value.trim();
+  if(profile) spec.tls_profile=profile;
+  return spec;
+}
+
 async function collectRpm(ev, dry){
   ev.preventDefault();
   const repo=document.getElementById('rpmrepo').value.trim();
   if(!repo){ showRpmResult('err','Paste a yum/dnf .repo stanza.'); return; }
-  const body=applyForce({repo_file:repo, newest_only:document.getElementById('rpmnewest').checked},'rpmForce');
+  const body=applyForce(rpmSpec(repo),'rpmForce');
   if(!attachHostAuth(body,'rpm',showRpmResult)) return;
   runCollect({dry:dry, btnId:'rpmBtn', busyLabel:'Mirroring…', showFn:showRpmResult, title:'Mirroring RPM repository',
     url:'/admin/rpm/collect', forceId:'rpmForce', body:body,
@@ -2594,7 +2605,7 @@ async function scheduleRpm(){
   const repo=document.getElementById('rpmrepo').value.trim();
   if(!repo){ showRpmResult('err','Paste a .repo stanza to schedule.'); return; }
   const m=repo.match(/^\s*\[([^\]]+)\]/m);
-  createWatch('rpm','RPM: '+(m?m[1]:'repo'), {repo_file:repo, newest_only:document.getElementById('rpmnewest').checked}, 'rpmEvery','rpmUnit', showRpmResult);
+  createWatch('rpm','RPM: '+(m?m[1]:'repo'), rpmSpec(repo), 'rpmEvery','rpmUnit', showRpmResult);
 }
 
 function fmtEvery(sec){

@@ -623,6 +623,9 @@ type RpmCollectRequest struct {
 	// credentials belong in ARTIGATE_UPSTREAM_AUTH (watch specs must never
 	// carry logins — they are persisted and echoed in plaintext).
 	Auth *HostCollectAuth `json:"auth,omitempty"`
+	// TLSProfile selects a named low-side upstream TLS profile. Only the name
+	// is stored in watches; certificate and key files remain on the low side.
+	TLSProfile string `json:"tls_profile,omitempty"`
 	// NewestOnly keeps only the highest EVR of each package (default true when
 	// absent); set it false to mirror every version in the index.
 	NewestOnly *bool `json:"newest_only,omitempty"`
@@ -645,6 +648,8 @@ type rpmMirrorConfig struct {
 	// cred is the login for the mirror's host (nil means anonymous), pinned
 	// by rpmMirrorCredentials before the mirror loop runs.
 	cred *registryCredential
+	// client is shared by this collect's mirrors and closed when it finishes.
+	client *http.Client
 }
 
 // rpmMirrorCredentials resolves the collect's per-host logins (request auth
@@ -690,13 +695,20 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	if err != nil {
 		return ExportResult{}, err
 	}
-	newest := defaultTrue(req.NewestOnly)
 	arches := defaultRpmArches(req.Architectures)
 	// Hold only the rpm stream's lock across the whole mirror->write->commit, so
 	// a long RPM fetch does not block Python/Go/Maven/APT collects.
 	mu := s.streamLock(streamRpm)
 	mu.Lock()
 	defer mu.Unlock()
+
+	client, err := rpmMirrorTLSClient(configs, req.TLSProfile)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	if client != nil {
+		defer client.CloseIdleConnections()
+	}
 
 	stagingBase := filepath.Join(s.cfg.Root, "rpm", "staging")
 	if err := os.MkdirAll(stagingBase, 0o755); err != nil {
@@ -714,9 +726,9 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	prior := s.priorFileCheck(streamRpm, req.Force)
 	emitProgress(ctx, "Mirroring %d RPM repo(s)…", len(configs))
 	for _, cfg := range configs {
-		mirror, mf, err := s.mirrorRpmRepo(ctx, cfg, stageRoot, arches, newest, prior)
+		mirror, mf, err := s.mirrorRpmRepo(ctx, cfg, stageRoot, arches, defaultTrue(req.NewestOnly), prior)
 		if err != nil {
-			return ExportResult{}, decorateUpstreamAuthError(err, creds)
+			return ExportResult{}, decorateRpmAuthError(err, creds, req.TLSProfile)
 		}
 		for _, f := range mf {
 			if !seenFile[f.Path] {
@@ -734,6 +746,37 @@ func (s *LowServer) CollectRpm(ctx context.Context, req RpmCollectRequest) (Expo
 	return s.exportIfNew(ctx, streamRpm, stageRoot, files, req.Force, func(seq int64) (ExportResult, error) {
 		return s.writeRpmBundle(ctx, seq, stageRoot, files, mirrors)
 	})
+}
+
+// rpmMirrorTLSClient loads after acquiring the stream lock so queued collects
+// use the current certificate files. Each collect has its own connection pool.
+func rpmMirrorTLSClient(configs []rpmMirrorConfig, profile string) (*http.Client, error) {
+	if profile == "" {
+		return nil, nil
+	}
+	urls := make([]string, 0, len(configs))
+	for _, cfg := range configs {
+		urls = append(urls, cfg.BaseURL)
+	}
+	client, err := loadUpstreamTLSClient(profile, urls)
+	if err != nil {
+		return nil, err
+	}
+	for i := range configs {
+		configs[i].client = client
+	}
+	return client, nil
+}
+
+func decorateRpmAuthError(err error, creds map[string]registryCredential, profile string) error {
+	if profile == "" {
+		return decorateUpstreamAuthError(err, creds)
+	}
+	var httpErr *upstreamHTTPError
+	if errors.As(err, &httpErr) && (httpErr.Status == http.StatusUnauthorized || httpErr.Status == http.StatusForbidden) {
+		return fmt.Errorf("%w — access denied using TLS profile %q; check certificate renewal and repository access", err, profile)
+	}
+	return fmt.Errorf("TLS profile %q: %w", profile, err)
 }
 
 // mirrorRpmRepo downloads and verifies repomd, every metadata file it lists, and
@@ -765,7 +808,7 @@ func (s *LowServer) mirrorRpmRepo(ctx context.Context, cfg rpmMirrorConfig, stag
 	cfg.BaseURL = base // normalized for every fetch below (cfg is a local copy)
 
 	emitProgress(ctx, "→ %s: fetching repomd.xml and primary index…", cfg.Name)
-	repomdRaw, err := s.fetchRepomd(ctx, base, cfg.GPGKey, cfg.cred)
+	repomdRaw, err := s.fetchRepomd(ctx, base, cfg.GPGKey, cfg.cred, cfg.client)
 	if err != nil {
 		return RpmMirror{}, nil, err
 	}
@@ -841,13 +884,13 @@ func (s *LowServer) rpmPackageFile(ctx context.Context, cfg rpmMirrorConfig, pkg
 
 // fetchRepomd downloads repodata/repomd.xml and verifies repomd.xml.asc against
 // the caller's keyring when one is supplied.
-func (s *LowServer) fetchRepomd(ctx context.Context, base, gpgKey string, cred *registryCredential) ([]byte, error) {
-	repomd, err := httpGetBytesAuth(ctx, base+"/repodata/repomd.xml", maxSignedMetaBytes, cred)
+func (s *LowServer) fetchRepomd(ctx context.Context, base, gpgKey string, cred *registryCredential, client *http.Client) ([]byte, error) {
+	repomd, err := httpGetBytesWithClient(ctx, base+"/repodata/repomd.xml", maxSignedMetaBytes, cred, client)
 	if err != nil {
 		return nil, fmt.Errorf("fetch repomd.xml: %w", err)
 	}
 	if gpgKey != "" {
-		sig, err := httpGetBytesAuth(ctx, base+"/repodata/repomd.xml.asc", maxSignedMetaBytes, cred)
+		sig, err := httpGetBytesWithClient(ctx, base+"/repodata/repomd.xml.asc", maxSignedMetaBytes, cred, client)
 		if err != nil {
 			return nil, fmt.Errorf("fetch repomd.xml.asc: %w", err)
 		}
@@ -871,7 +914,7 @@ func (s *LowServer) downloadRpmFile(ctx context.Context, cfg rpmMirrorConfig, re
 		return ManifestFile{}, fmt.Errorf("unsafe staging path %q: %w", rel, err)
 	}
 	abs := filepath.Join(stageRoot, filepath.FromSlash(rel))
-	sum, size, err := downloadVerifiedFileAuth(ctx, cfg.BaseURL+"/"+relHref, abs, wantSize, checksumType, checksum, cfg.cred)
+	sum, size, err := downloadVerifiedFileWithClient(ctx, cfg.BaseURL+"/"+relHref, abs, wantSize, checksumType, checksum, cfg.cred, cfg.client)
 	if err != nil {
 		return ManifestFile{}, fmt.Errorf("%s: %w", relHref, err)
 	}

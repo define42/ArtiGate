@@ -34,6 +34,7 @@ Drive a collect with `POST /admin/rpm/collect`. Provide **either** a full yum/dn
   "base_url": "https://packages.microsoft.com/rhel/9.0/prod/",
   "gpg_key": "",
   "repo_file": "",
+  "tls_profile": "",
   "newest_only": true,
   "architectures": ["x86_64", "noarch"]
 }
@@ -45,6 +46,7 @@ Drive a collect with `POST /admin/rpm/collect`. Provide **either** a full yum/dn
 | `base_url` | string | Concrete `baseurl` (see the variable rule below). Required if no `repo_file`. |
 | `gpg_key` | string | **Local** keyring path for `gpgv`, used to verify `repomd.xml.asc`. Optional. |
 | `repo_file` | string | A full `.repo` (INI) file, one or more `[section]`s. Wins when non-blank. |
+| `tls_profile` | string | Optional named [upstream TLS client-certificate profile](../configuration.md#upstream-tls-client-certificates-rpm), such as `redhat`. Applies to every mirror in this request; every origin must be allowlisted. Scheduled watches may store the profile name. |
 | `newest_only` | *bool | Keep only the newest version of each package. **Defaults to `true`** when omitted. |
 | `architectures` | []string | Package architectures to mirror. **Defaults to `["x86_64", "noarch"]`** when omitted — `noarch` stays in because hardware-arch packages routinely depend on noarch ones. List explicitly to override (e.g. add `i686`, or `["x86_64"]` to drop noarch). Applies to every repo in the collect. |
 | `force` | bool | Bypass the export-dedup index — download and pack every `.rpm` even if already forwarded (full, self-contained bundle). |
@@ -56,7 +58,7 @@ When `repo_file` is present and non-blank it wins: each `[section]` becomes one 
 
 ### `.repo` (INI) parsing
 
-Only two keys are read from each `[section]`; everything else (`enabled`, `gpgcheck`, `name`, `metalink`, `mirrorlist`, …) is **silently ignored**:
+Only two keys are read from each `[section]`; everything else (`enabled`, `gpgcheck`, `name`, `metalink`, `mirrorlist`, `sslclientcert`, `sslclientkey`, `sslcacert`, …) is **silently ignored**:
 
 ```ini
 [my-repo]
@@ -92,9 +94,71 @@ The scheme must be `http` or `https`.
 Repos that demand a login are fetched with HTTP Basic from one of two sources, resolved per host as *request `auth` → `ARTIGATE_UPSTREAM_AUTH` → anonymous*:
 
 - **Per-collect login** — an optional `auth` object on the collect request, also exposed as the *Private repository login* fields on the low-side RPM page: `{"host": "rpm.example.com", "username": "bot", "password": "secret"}`. Used for that one collect and never stored. `host` may be omitted when every `.repo` section lives on one host; a multi-host `.repo` file must name the host the login is for.
-- **Standing credentials** — comma-separated `host=user:password` entries in `ARTIGATE_UPSTREAM_AUTH` on the low side (the key is the baseurl's exact host, `host:port` included). Re-read on every collect, and the **only** credential source [scheduled watches](../scheduling.md) can use — specs carrying an `auth` key are rejected.
+- **Standing credentials** — comma-separated `host=user:password` entries in `ARTIGATE_UPSTREAM_AUTH` on the low side (the key is the baseurl's exact host, `host:port` included). Re-read on every collect, and the source of Basic credentials for [scheduled watches](../scheduling.md) — specs carrying an `auth` key are rejected. Watches can also select a client-certificate profile as described below.
 
 A `baseurl` embedding `user:pass@` is rejected outright: the URL is recorded in the signed manifest and echoed in progress and error text, so a login there would leak — including across the diode.
+
+### Red Hat entitlement certificates
+
+Use a named TLS profile to fetch RHEL content that requires a client certificate:
+
+1. Register the low-side host and manage its entitlement certificates with `subscription-manager`.
+2. Configure a profile using the current certificate/key pair in `/etc/pki/entitlement`, the CA bundle in `/etc/rhsm/ca/redhat-uep.pem`, and `https://cdn.redhat.com` in `allowed_origins`. Set `ARTIGATE_UPSTREAM_TLS_CONFIG` to the JSON configuration path. The [configuration reference](../configuration.md#upstream-tls-client-certificates-rpm) contains the complete file format and access requirements.
+3. Select `"tls_profile":"redhat"` in the collect body or enter `redhat` in the dashboard's **Client certificate profile** field.
+
+These concrete URLs mirror RHEL 9 BaseOS and AppStream for x86_64; choose release and architecture paths appropriate for the repositories available to your registered host. Red Hat documents these paths in its [repository setup guide](https://docs.redhat.com/en/documentation/red_hat_directory_server/12/html/installing_red_hat_directory_server/enabling-ds-repositories_installing-rhds).
+
+```bash
+curl -X POST http://localhost:8080/admin/rpm/collect \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "rhel9-baseos",
+    "base_url": "https://cdn.redhat.com/content/dist/rhel9/9/x86_64/baseos/os",
+    "tls_profile": "redhat"
+  }'
+
+curl -X POST http://localhost:8080/admin/rpm/collect \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "rhel9-appstream",
+    "base_url": "https://cdn.redhat.com/content/dist/rhel9/9/x86_64/appstream/os",
+    "tls_profile": "redhat"
+  }'
+```
+
+The default architecture filter includes `noarch`; `newest_only` defaults to `true`. For both repositories in a single dashboard collect, paste this minimal definition and select the profile:
+
+```ini
+[rhel9-baseos]
+baseurl=https://cdn.redhat.com/content/dist/rhel9/9/x86_64/baseos/os
+
+[rhel9-appstream]
+baseurl=https://cdn.redhat.com/content/dist/rhel9/9/x86_64/appstream/os
+```
+
+**Add schedule** retains the profile name. Every scheduled run reloads the current config and certificate files, just like a manual collect or size estimate. The API accepts the same field inside a watch's `spec`:
+
+```json
+{
+  "stream": "rpm",
+  "label": "RHEL 9 BaseOS",
+  "interval_seconds": 86400,
+  "spec": {
+    "name": "rhel9-baseos",
+    "base_url": "https://cdn.redhat.com/content/dist/rhel9/9/x86_64/baseos/os",
+    "tls_profile": "redhat"
+  }
+}
+```
+
+Certificate authentication applies to repository metadata and packages. HTTPS origins, including redirect destinations, must be listed in the profile. A different hostname or port requires a separate entry; HTTP is rejected. Client-certificate files remain on the low side and are excluded from bundles and manifests. The high side uses the existing RPM import and serving flow.
+
+**Renewal:** keep `subscription-manager` responsible for registration and renewal. ArtiGate checks the certificate/key pair and validity dates when loading it. Replacing the files takes effect on the next collect without a restart. If the certificate's serial filename changes, update the profile paths or stable symlinks to the new pair. An HTTP 401/403 after a successful TLS handshake can indicate missing content access or a revoked entitlement; check the registered host's access and current certificates.
+
+Red Hat describes entitlement-certificate use outside its supported integrations as unsupported. For third-party tools, it recommends using `/etc/pki/entitlement` on a registered system so renewal can update the certificates; copied certificates can lose access after rotation. See [Red Hat's subscription-service transition guidance](https://access.redhat.com/articles/transition_of_subscription_services_to_the_hybrid_cloud_console).
+
+!!! note "Import selected repositories with concrete URLs"
+    Full `redhat.repo` import is not supported. Select the repositories to mirror and expand `$releasever`/`$basearch` yourself. The parser ignores `enabled=0` and the `sslclientcert`, `sslclientkey`, and `sslcacert` fields; configure TLS through the named profile. A local `gpgkey` is used to verify `repomd.xml.asc`, so do not assume a package-signing key enables repository-metadata verification.
 
 ## Architecture filter (default `x86_64` + `noarch`)
 

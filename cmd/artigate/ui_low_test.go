@@ -121,6 +121,8 @@ func TestLowServerUIPage(t *testing.T) {
 		`id="aptnewest" type="checkbox" checked`, "newest_only",
 		"Mirror an RPM (yum/dnf) repository", `id="rpmrepo"`, `id="rpmfile"`, "loadRpmFile", "collectRpm", "/admin/rpm/collect",
 		`id="rpmnewest" type="checkbox" checked`,
+		`for="rpmTLSProfile"`, `id="rpmTLSProfile" type="text"`,
+		`aria-describedby="rpmTLSProfileHint"`, `id="rpmTLSProfileHint"`,
 		// APT, RPM and Alpine offer built-in source lists (shipped in buildin/)
 		// that a picker pastes into the collect input, ready for a run or a
 		// schedule.

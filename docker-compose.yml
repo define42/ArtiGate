@@ -74,6 +74,9 @@ services:
       # Optional standing logins for private git/APT/RPM/Alpine upstreams
       # (host=user:password, comma-separated); scheduled collects rely on this.
       ARTIGATE_UPSTREAM_AUTH: "${ARTIGATE_UPSTREAM_AUTH:-}"
+      # Optional RPM client-certificate profiles. Mount the configuration and
+      # its certificate directories read-only using a Compose override.
+      ARTIGATE_UPSTREAM_TLS_CONFIG: "${ARTIGATE_UPSTREAM_TLS_CONFIG:-}"
       # Optional standing logins for private Go module hosts (host=user:password,
       # comma-separated); each host is also treated as GOPRIVATE for its
       # collect, hence the Go-specific variable.

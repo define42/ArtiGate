@@ -153,6 +153,16 @@ Docker and Podman refuse to talk to a remote registry over plain HTTP. To serve 
 
 See [Container images (OCI)](ecosystems/containers.md) for the client-side registry configuration, including the insecure-registry escape hatch and the required `systemctl restart docker`.
 
+## Upstream client certificates on the low side
+
+RPM collects can authenticate to upstream HTTPS repositories, including the Red Hat CDN, using a named TLS client-certificate profile. Set `ARTIGATE_UPSTREAM_TLS_CONFIG` to a JSON file on the low side, then select the profile with `"tls_profile":"redhat"` in the collect request or the dashboard's **Client certificate profile** field. Scheduled watches retain that name and load the current credentials on every run.
+
+Each profile defines certificate/key paths, an optional CA bundle, and an allowlist of HTTPS origins. The allowlist covers metadata, packages, and redirects and matches the host and port; a client certificate is only available to permitted origins. HTTPS proxies also need their own origin listed because they can request a client certificate during their TLS handshake. Ordinary server-certificate verification remains enabled.
+
+The config and PEM files reload at the start of each collect, with certificate/key and validity checks. Keep them on the low side, readable only by the necessary service account and administrators. Use `subscription-manager` for Red Hat registration and renewal; update paths or stable symlinks when serial-based filenames change.
+
+`ARTIGATE_TLS_*` and `ARTIGATE_ACME_*` continue to configure the HTTPS listener independently. See [Upstream TLS configuration](configuration.md#upstream-tls-client-certificates-rpm) for the file format and container mounts, and [Red Hat entitlement certificates](ecosystems/rpm.md#red-hat-entitlement-certificates) for concrete BaseOS/AppStream requests and the Red Hat support boundary.
+
 ## Related pages
 
 - [Configuration reference](configuration.md) — every flag and environment variable.

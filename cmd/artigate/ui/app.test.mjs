@@ -6,6 +6,54 @@ import vm from "node:vm";
 const script = readFileSync(new URL("app.js", import.meta.url), "utf8");
 const lowSource = readFileSync(new URL("../ui_low.go", import.meta.url), "utf8");
 
+test("RPM collect, estimate, and schedule keep the TLS profile while only collects use one-shot credentials", async () => {
+  const elements = new Map([
+    ["rpmrepo", { value: "[baseos]\nbaseurl=https://cdn.redhat.com/content/dist/rhel9/9/x86_64/baseos/os" }],
+    ["rpmnewest", { checked: true }],
+    ["rpmTLSProfile", { value: " redhat " }],
+    ["rpmResult", { className: "", innerHTML: "" }],
+  ]);
+  const collects = [], watches = [];
+  const context = vm.createContext({
+    document: { getElementById: id => elements.get(id) },
+    applyForce: body => ({ ...body, force: true }),
+    attachHostAuth: body => {
+      body.auth = { username: "bot", password: "one-shot secret" };
+      return true;
+    },
+    runCollect: options => collects.push(options),
+    createWatch: (stream, label, spec) => watches.push({ stream, label, spec }),
+  });
+  vm.runInContext(
+    lowSource.slice(lowSource.indexOf("function showRpmResult("), lowSource.indexOf("function showCtrResult(")) +
+    lowSource.slice(lowSource.indexOf("async function scheduleRpm("), lowSource.indexOf("function fmtEvery(")),
+    context,
+  );
+  const event = { preventDefault() {} };
+  await context.collectRpm(event);
+  await context.collectRpm(event, true);
+  await context.scheduleRpm();
+  assert.equal(collects.length, 2);
+  assert.equal(collects[1].dry, true);
+  for (const collect of collects) {
+    assert.equal(collect.body.tls_profile, "redhat");
+    assert.equal(collect.body.auth.password, "one-shot secret");
+    assert.equal(collect.body.force, true);
+  }
+  assert.equal(watches[0].stream, "rpm");
+  assert.equal(watches[0].spec.tls_profile, "redhat");
+  assert.equal(watches[0].spec.repo_file, elements.get("rpmrepo").value);
+  assert.equal(watches[0].spec.newest_only, true);
+  assert.equal(Object.hasOwn(watches[0].spec, "auth"), false);
+  assert.equal(Object.hasOwn(watches[0].spec, "force"), false);
+
+  elements.get("rpmTLSProfile").value = " ";
+  await context.collectRpm(event);
+  await context.scheduleRpm();
+  assert.equal(Object.hasOwn(collects.at(-1).body, "tls_profile"), false);
+  assert.equal(Object.hasOwn(watches.at(-1).spec, "tls_profile"), false);
+});
+
 function containerStatusUI() {
   const defaults = { Lifecycle: "active", State: "all", Freshness: "all", StaleAfter: "24h" };
   const fields = ["Summary", "Records", "Refresh", "Previous", "Next", "Repository", ...Object.keys(defaults)];

@@ -718,6 +718,12 @@ func httpGetBytes(ctx context.Context, rawURL string, limit int64) ([]byte, erro
 // anonymous), attached as HTTP Basic and restricted to the original origin
 // by doUpstreamRequest.
 func httpGetBytesAuth(ctx context.Context, rawURL string, limit int64, cred *registryCredential) ([]byte, error) {
+	return httpGetBytesWithClient(ctx, rawURL, limit, cred, nil)
+}
+
+// httpGetBytesWithClient uses a collect's scoped client when supplied. A nil
+// client retains the default transport and origin-aware redirect policy.
+func httpGetBytesWithClient(ctx context.Context, rawURL string, limit int64, cred *registryCredential, client *http.Client) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -725,7 +731,7 @@ func httpGetBytesAuth(ctx context.Context, rawURL string, limit int64, cred *reg
 		return nil, err
 	}
 	setBasicAuth(req, cred)
-	resp, _, err := doUpstreamRequest(req)
+	resp, _, err := doUpstreamRequestWithClient(req, client)
 	if err != nil {
 		return nil, err
 	}
@@ -760,6 +766,12 @@ func downloadVerifiedFile(ctx context.Context, rawURL, abs string, wantSize int6
 // login (nil means anonymous), attached as HTTP Basic and restricted to the
 // original origin by doUpstreamRequest.
 func downloadVerifiedFileAuth(ctx context.Context, rawURL, abs string, wantSize int64, checksumType, checksum string, cred *registryCredential) (string, int64, error) {
+	return downloadVerifiedFileWithClient(ctx, rawURL, abs, wantSize, checksumType, checksum, cred, nil)
+}
+
+// downloadVerifiedFileWithClient uses the same scoped client for streamed
+// metadata and package downloads as for their repository entry point.
+func downloadVerifiedFileWithClient(ctx context.Context, rawURL, abs string, wantSize int64, checksumType, checksum string, cred *registryCredential, client *http.Client) (string, int64, error) {
 	verifier, manifestSHA, writers, err := newDownloadHashers(checksumType)
 	if err != nil {
 		return "", 0, err
@@ -772,7 +784,7 @@ func downloadVerifiedFileAuth(ctx context.Context, rawURL, abs string, wantSize 
 		return "", 0, err
 	}
 	setBasicAuth(req, cred)
-	resp, _, err := doUpstreamRequest(req)
+	resp, _, err := doUpstreamRequestWithClient(req, client)
 	if err != nil {
 		return "", 0, err
 	}

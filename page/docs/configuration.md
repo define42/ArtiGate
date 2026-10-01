@@ -172,7 +172,7 @@ artigate high \
 
 ## Environment variables
 
-There are **no** environment variables for `keygen` or `hashpw`. The TLS variables and the failure-webhook variables apply to **both** `low` and `high` (both call the same `tlsConfigFromEnv` / webhook setup). The auth and cookie variables apply to the **low side only** — the high side has no auth. The diode-transport variables split by side (`ARTIGATE_DIODE_URL` low, `ARTIGATE_DIODE_INGEST` high, the token both; `ARTIGATE_PITCHER_*` low, `ARTIGATE_CATCHER_*` high). `ARTIGATE_SFTP_*` configures uploads on the low side or downloads on the high side. `ARTIGATE_HF_TOKEN` is low-side only, and `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN` is high-side only.
+There are **no** environment variables for `keygen` or `hashpw`. The listener TLS variables (`ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`) and the failure-webhook variables apply to **both** `low` and `high` (both call the same `tlsConfigFromEnv` / webhook setup). The auth, cookie, and upstream client-certificate variables apply to the **low side only** — the high side has no auth. The diode-transport variables split by side (`ARTIGATE_DIODE_URL` low, `ARTIGATE_DIODE_INGEST` high, the token both; `ARTIGATE_PITCHER_*` low, `ARTIGATE_CATCHER_*` high). `ARTIGATE_SFTP_*` configures uploads on the low side or downloads on the high side. `ARTIGATE_HF_TOKEN` is low-side only, and `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN` is high-side only.
 
 ### Low-side authentication
 
@@ -301,8 +301,52 @@ The direct one-way-fiber transport — see [Built-in UDP diode](data-diode.md) f
 
 | Variable | Side | Default | Meaning |
 |---|---|---|---|
-| `ARTIGATE_UPSTREAM_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private git, APT, RPM, Alpine, and Conda upstreams; the key is the upstream's exact host, `host:port` included (e.g. `git.example.com=bot:token,apt.example.com=bot:secret`). Sent as HTTP Basic to the mirror host it is keyed to. Read at collect time, so it rotates without a restart, and the only credential source scheduled watches use |
+| `ARTIGATE_UPSTREAM_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private git, APT, RPM, Alpine, and Conda upstreams; the key is the upstream's exact host, `host:port` included (e.g. `git.example.com=bot:token,apt.example.com=bot:secret`). Sent as HTTP Basic to the mirror host it is keyed to. Read at collect time, so it rotates without a restart, and the source of Basic credentials for scheduled watches |
 | `ARTIGATE_GO_AUTH` | low | unset (anonymous) | Comma-separated `host=user:password` logins for private Go module hosts (the key is the VCS host, e.g. `gitlab.example.com=bot:token`); injected into the `go`/`git` subprocesses via a per-collect netrc + git credential helper, and each host is treated as private (`GOPRIVATE`/`GONOSUMDB`/`GONOPROXY`) for that collect — which is why Go has its own variable instead of sharing `ARTIGATE_UPSTREAM_AUTH`. Same rotation and scheduled-watch role |
+
+### Upstream TLS client certificates (RPM)
+
+| Variable | Side | Default | Meaning |
+|---|---|---|---|
+| `ARTIGATE_UPSTREAM_TLS_CONFIG` | low | unset (no profiles) | Absolute path to a JSON map of named upstream TLS profiles. An RPM collect or watch selects one with `"tls_profile":"redhat"`. The config and selected profile's PEM files are loaded for every collect, including estimates and scheduled runs |
+
+Create the configuration on the low-side host, for example `/etc/artigate/upstream-tls.json`:
+
+```json
+{
+  "redhat": {
+    "cert_file": "/etc/pki/entitlement/123456789.pem",
+    "key_file": "/etc/pki/entitlement/123456789-key.pem",
+    "ca_file": "/etc/rhsm/ca/redhat-uep.pem",
+    "allowed_origins": ["https://cdn.redhat.com"]
+  }
+}
+```
+
+Replace `123456789` with the current entitlement certificate's serial filename, then set the environment of the low-side process:
+
+```bash
+export ARTIGATE_UPSTREAM_TLS_CONFIG=/etc/artigate/upstream-tls.json
+```
+
+| Profile field | Meaning |
+|---|---|
+| `cert_file` | Required absolute path to a PEM client certificate, optionally followed by its certificate chain |
+| `key_file` | Required absolute path to its matching unencrypted PEM private key |
+| `ca_file` | Optional absolute path to a PEM CA bundle for upstream server verification. When set, this bundle replaces system roots for the profile; omit to use system trust |
+| `allowed_origins` | Required nonempty list of permitted HTTPS origins, such as `https://cdn.redhat.com` or `https://mirror.example.com:8443` |
+
+Profile names contain 1–64 ASCII letters, digits, underscores, or hyphens. Unknown JSON fields and duplicate keys are rejected.
+
+An origin identifies an HTTPS host and port; the omitted port is `443`. An allowlist entry cannot contain a repository path, query, fragment, user information, or wildcard; a trailing `/` is accepted. Hostnames are case-insensitive and an explicit `:443` is equivalent to omitting the port. Allowlisting `https://cdn.redhat.com` permits all paths on that origin; another host, a subdomain, or a different port must be listed separately. HTTP destinations are rejected. Every repository, metadata/package request, and redirect using a profile must stay within its allowlist, so an unrelated redirect cannot receive the client certificate.
+
+HTTP and SOCKS proxy configuration still works. An **HTTPS proxy must also have its own HTTPS origin in `allowed_origins`**, because the TLS connection to that proxy can request the profile's client certificate. Only add a proxy origin if it is trusted to receive that certificate.
+
+Keep the config and PEM files outside the repository root and export spool, owned by a trusted administrator. Grant the ArtiGate service account read access to the key without making it world-readable, and keep the config unwritable by that account where practical. For containers, set the environment variable inside the container and mount the config and required certificate directories read-only. Mounting directories lets the next collect see files replaced during renewal. The supplied `docker-compose.yml` passes through `ARTIGATE_UPSTREAM_TLS_CONFIG` from `.env`; add the mounts in your Compose override and use absolute **container** paths in the environment and JSON file.
+
+Each collect validates the certificate/key pair and certificate validity dates. An unknown profile, unreadable file, malformed pair, expired certificate, or certificate whose validity has not started fails that collect. Rotation takes effect on the next collect; a running collect retains its loaded credentials. If renewal changes serial-based filenames, update the config or maintain stable symlinks to the current pair. ArtiGate does not discover entitlement files, register hosts, or renew certificates.
+
+Requests and watches carry only the profile name. Certificate/key bytes and their local configuration stay on the low side and are excluded from exported bundles. See [Red Hat entitlement certificates](ecosystems/rpm.md#red-hat-entitlement-certificates) for BaseOS/AppStream examples and renewal guidance.
 
 ### Failure webhooks
 
@@ -372,6 +416,6 @@ TLS, low-side auth, and transport connections are **env-only**. SFTP credentials
 and the remote directory are configured through environment variables.
 
 - **Flags only:** `--listen`, `--root`, `--export-dir`, `--landing`, `--quarantine`, `--private-key`, `--public-key`, all `--go*`/toolchain/ecosystem-binary flags (including `--git`), the upstream overrides (`--pypi-json`, `--hf-endpoint`, `--crates-index`, `--terraform-registry`, `--nuget-source`, `--osv-upstream`, `--conda-channel-base`, `--rubygems-url`, `--composer-repo`, `--vsx-registry`, `--galaxy-server`, `--cran-mirror`, `--snap-store`, `--npm-registry`, `--container-registry`), `--watch-interval`, `--import-interval`, `--apt-gpg-key`, `--rpm-gpg-key`, `--apk-rsa-key`, `--apk-key-name`.
-- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_LOW_ALLOW_UNAUTHENTICATED`, `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_SFTP_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`, `ARTIGATE_CONTAINER_AUTH`, `ARTIGATE_GO_AUTH`, `ARTIGATE_UPSTREAM_AUTH`, `ARTIGATE_WEBHOOK_URL`, `ARTIGATE_WEBHOOK_TOKEN`.
+- **Env only:** `ARTIGATE_LOW_AUTH`, `ARTIGATE_LOW_COOKIE_SECURE`, `ARTIGATE_LOW_ALLOW_UNAUTHENTICATED`, `ARTIGATE_HIGH_ALLOW_REMOTE_ADMIN`, `ARTIGATE_TLS_*`, `ARTIGATE_ACME_*`, `ARTIGATE_DIODE_*`, `ARTIGATE_SFTP_*`, `ARTIGATE_PITCHER_*`, `ARTIGATE_CATCHER_*`, `ARTIGATE_HF_TOKEN`, `ARTIGATE_CONTAINER_AUTH`, `ARTIGATE_GO_AUTH`, `ARTIGATE_UPSTREAM_AUTH`, `ARTIGATE_UPSTREAM_TLS_CONFIG`, `ARTIGATE_WEBHOOK_URL`, `ARTIGATE_WEBHOOK_TOKEN`.
 
 See also: [Deployment](deployment.md) for production topologies, [Security & trust](security.md) for the trust model, and [TLS / HTTPS](tls.md) for the full TLS matrix.
