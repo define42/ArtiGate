@@ -860,6 +860,7 @@ func (s *HighServer) publishNugetPackage(p NugetPackage) error {
 // -----------------------------------------------------------------------------
 
 type nuspecXML struct {
+	XMLName  xml.Name `xml:"package"`
 	Metadata struct {
 		ID           string `xml:"id"`
 		Version      string `xml:"version"`

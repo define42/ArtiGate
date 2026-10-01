@@ -1706,13 +1706,17 @@ func bundleSuffixes() []string {
 	return []string{".tar.gz", ".manifest.json", ".manifest.json.sig"}
 }
 
-// writeBundleArtifacts writes the archive, manifest, and signature for a bundle
-// into the export directory, then retains a copy in the persistent bundle
-// archive so the exact signed bytes can be replayed on re-export. baseDir is the
-// root the manifest file paths are relative to (the Go module cache for Go
-// bundles, a staging dir for Python). Files marked prior are listed in the
-// manifest only — the archive carries just the new content.
+// writeBundleArtifacts persists the archive, manifest, and signature before
+// publishing them in the export directory, where a folder carrier may remove
+// them immediately. baseDir is the root the manifest file paths are relative
+// to (the Go module cache for Go bundles, a staging dir for Python). Files
+// marked prior are listed in the manifest only — the archive carries just the
+// new content.
 func (s *LowServer) writeBundleArtifacts(ctx context.Context, bundleID, baseDir string, manifestBytes []byte, files []ManifestFile) error {
+	return s.writeBundleArtifactsWithSync(ctx, bundleID, baseDir, manifestBytes, files, fsyncDir)
+}
+
+func (s *LowServer) writeBundleArtifactsWithSync(ctx context.Context, bundleID, baseDir string, manifestBytes []byte, files []ManifestFile, syncDir func(string) error) error {
 	// Reject before writing any artifacts: a complete but oversized bundle
 	// would consume a sequence the receiver can never import.
 	if int64(len(manifestBytes)) > diodeMaxManifestBytes {
@@ -1730,14 +1734,18 @@ func (s *LowServer) writeBundleArtifacts(ctx context.Context, bundleID, baseDir 
 	if err := os.MkdirAll(s.cfg.ExportDir, 0o755); err != nil {
 		return err
 	}
-	archivePath := filepath.Join(s.cfg.ExportDir, bundleID+".tar.gz")
-	manifestPath := filepath.Join(s.cfg.ExportDir, bundleID+".manifest.json")
-	sigPath := filepath.Join(s.cfg.ExportDir, bundleID+".manifest.json.sig")
-
-	if err := createTarGzAtomic(ctx, archivePath, baseDir, deliveredFiles(files)); err != nil {
+	archive := s.bundleArchiveDir()
+	if err := os.MkdirAll(archive, 0o755); err != nil {
 		return err
 	}
-	if err := writeBytesAtomic(manifestPath, manifestBytes, 0o644); err != nil {
+	archivePath := filepath.Join(archive, bundleID+".tar.gz")
+	manifestPath := filepath.Join(archive, bundleID+".manifest.json")
+	sigPath := filepath.Join(archive, bundleID+".manifest.json.sig")
+
+	if err := createTarGzAtomicWithSync(ctx, archivePath, baseDir, deliveredFiles(files), syncDir); err != nil {
+		return err
+	}
+	if err := writeBytesAtomicWithSync(manifestPath, manifestBytes, 0o644, syncDir); err != nil {
 		return err
 	}
 	sig, err := signManifestPH(s.privateKey, manifestBytes)
@@ -1745,10 +1753,10 @@ func (s *LowServer) writeBundleArtifacts(ctx context.Context, bundleID, baseDir 
 		return err
 	}
 	encodedSig := manifestSignaturePHPrefix + base64.StdEncoding.EncodeToString(sig) + "\n"
-	if err := writeBytesAtomic(sigPath, []byte(encodedSig), 0o644); err != nil {
+	if err := writeBytesAtomicWithSync(sigPath, []byte(encodedSig), 0o644, syncDir); err != nil {
 		return err
 	}
-	return s.archiveBundle(bundleID)
+	return s.publishArchivedBundle(bundleID, syncDir)
 }
 
 func signManifestPH(privateKey ed25519.PrivateKey, manifestBytes []byte) ([]byte, error) {
@@ -1762,7 +1770,7 @@ func (s *LowServer) bundleArchiveDir() string {
 	return filepath.Join(s.cfg.Root, "bundles")
 }
 
-// archiveBundle records a freshly written bundle's three files in the archive.
+// archiveBundle recovers a retained spool bundle into the persistent archive.
 func (s *LowServer) archiveBundle(bundleID string) error {
 	return s.archiveBundleWithSync(bundleID, fsyncDir)
 }
@@ -1782,7 +1790,7 @@ func (s *LowServer) archiveBundleWithSync(bundleID string, syncDir func(string) 
 	return nil
 }
 
-// linkOrCopyFile makes dst another name for src's already-fsynced bytes. The
+// linkOrCopyFileWithSync makes dst another name for src's already-fsynced bytes. The
 // bundle files this backs are immutable signed artifacts, and the export spool
 // and archive share a filesystem in the default layout, so a hardlink replaces
 // what used to be a full read+write copy of a potentially multi-gigabyte
@@ -1790,10 +1798,6 @@ func (s *LowServer) archiveBundleWithSync(bundleID string, syncDir func(string) 
 // or a filesystem without hardlinks — fall back to the copy. An existing dst
 // is replaced so replay stays idempotent, matching the copy path's rename-over
 // behavior.
-func linkOrCopyFile(src, dst string) error {
-	return linkOrCopyFileWithSync(src, dst, fsyncDir)
-}
-
 func linkOrCopyFileWithSync(src, dst string, syncDir func(string) error) error {
 	tmp := dst + ".tmp"
 	_ = os.Remove(tmp)
@@ -1808,25 +1812,47 @@ func linkOrCopyFileWithSync(src, dst string, syncDir func(string) error) error {
 	return syncDirectories(syncDir, filepath.Dir(dst))
 }
 
-// replayArchivedBundle copies a previously archived bundle back into the export
-// directory so it can be transferred again. It works for any ecosystem because
-// it replays the exact signed bytes. The bool reports whether an archived bundle
-// was found.
-func (s *LowServer) replayArchivedBundle(stream string, seq int64) (ExportResult, bool, error) {
-	bundleID := bundleIDFor(stream, seq)
+// publishArchivedBundle makes the durable archive available to the carrier,
+// with the signature last. A folder carrier may remove each published file
+// immediately; no later step may depend on those outbound copies.
+func (s *LowServer) publishArchivedBundle(bundleID string, syncDir func(string) error) error {
 	archive := s.bundleArchiveDir()
-	if !bundleCompleteInDir(archive, bundleID) {
-		return ExportResult{}, false, nil
+	// A failed sync can leave all three archive names present. Retry that
+	// barrier even when there are no missing files to recover.
+	if err := syncDirectories(syncDir, archive); err != nil {
+		return fmt.Errorf("persist archive for %s: %w", bundleID, err)
 	}
 	if err := os.MkdirAll(s.cfg.ExportDir, 0o755); err != nil {
-		return ExportResult{}, false, err
+		return err
 	}
 	for _, suffix := range bundleSuffixes() {
 		src := filepath.Join(archive, bundleID+suffix)
 		dst := filepath.Join(s.cfg.ExportDir, bundleID+suffix)
-		if err := linkOrCopyFile(src, dst); err != nil {
-			return ExportResult{}, false, err
+		if err := linkOrCopyFileWithSync(src, dst, syncDir); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// replayArchivedBundle copies a previously archived bundle back into the export
+// directory so it can be transferred again. An interrupted archive is recovered
+// from a complete retained spool bundle. The archive must be durable before a
+// successful transfer can remove that spool copy. The bool reports whether the
+// exact signed bundle was found in either location.
+func (s *LowServer) replayArchivedBundle(stream string, seq int64, syncDir func(string) error) (ExportResult, bool, error) {
+	bundleID := bundleIDFor(stream, seq)
+	archive := s.bundleArchiveDir()
+	if !bundleCompleteInDir(archive, bundleID) {
+		if !bundleCompleteInDir(s.cfg.ExportDir, bundleID) {
+			return ExportResult{}, false, nil
+		}
+		if err := s.archiveBundleWithSync(bundleID, syncDir); err != nil {
+			return ExportResult{}, false, fmt.Errorf("recover archive for %s: %w", bundleID, err)
+		}
+	}
+	if err := s.publishArchivedBundle(bundleID, syncDir); err != nil {
+		return ExportResult{}, false, err
 	}
 	res := ExportResult{
 		Stream:          stream,
@@ -1940,6 +1966,10 @@ func (s *LowServer) ReexportSequences(stream string, ranges []SequenceRange) Ree
 }
 
 func (s *LowServer) ExportSequence(stream string, seq int64) (ExportResult, error) {
+	return s.exportSequenceWithSync(stream, seq, fsyncDir)
+}
+
+func (s *LowServer) exportSequenceWithSync(stream string, seq int64, syncDir func(string) error) (ExportResult, error) {
 	// Serialize against the same stream's sequence-allocating export path so a
 	// re-export can never write a bundle file concurrently with a fresh export
 	// of the same sequence. A re-export of one stream does not block others.
@@ -1947,9 +1977,9 @@ func (s *LowServer) ExportSequence(stream string, seq int64) (ExportResult, erro
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Replay the exact archived bundle bytes. Every produced bundle is retained
-	// in the archive, so this covers every ecosystem and needs no re-signing.
-	res, ok, err := s.replayArchivedBundle(stream, seq)
+	// Preserve the exact signed bytes, including bundles whose original
+	// archive step failed and left the only complete copy in the spool.
+	res, ok, err := s.replayArchivedBundle(stream, seq, syncDir)
 	if err != nil {
 		return ExportResult{}, err
 	}

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/xml"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -710,6 +713,70 @@ func TestLowToHighRpmPipeline(t *testing.T) {
 	}
 	if !strings.Contains(string(plain), "<name>code</name>") {
 		t.Errorf("served primary missing package: %s", plain)
+	}
+}
+
+// RPM repositories can carry arbitrary XML in additional metadata files. The
+// signed transfer must preserve those bytes without making them browser documents.
+func TestRpmMetadataDownloadsAsAttachment(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg">` +
+		`<text x="5" y="25">Synthetic metadata</text>` +
+		`<script>document.documentElement.setAttribute("data-test", "executed")</script></svg>`)
+	mux := http.NewServeMux()
+	registerRpmRepo(t, mux, "/repo", "fixture", "1.0.0", "1", false)
+	extra := fmt.Sprintf(`<data type="group"><checksum type="sha256">%s</checksum>`+
+		`<location href="repodata/groups.xml"/><size>%d</size></data>`, aptSHA256(raw), len(raw))
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repo/repodata/groups.xml":
+			_, _ = w.Write(raw)
+		case "/repo/repodata/repomd.xml":
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, r)
+			_, _ = io.WriteString(w, strings.Replace(rec.Body.String(), "</repomd>", extra+"</repomd>", 1))
+		default:
+			mux.ServeHTTP(w, r)
+		}
+	}))
+	t.Cleanup(up.Close)
+	low, priv := newRpmLowServer(t)
+	exported, err := low.CollectRpm(t.Context(), RpmCollectRequest{Name: "fixture", BaseURL: up.URL + "/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+	assertBundleSigned(t, low.cfg.ExportDir, exported.BundleID, pub)
+	high := newTestHighServer(t, pub)
+	transferAptBundle(t, low, high, exported.BundleID)
+	imported, err := high.ImportNext()
+	if err != nil || !imported.Imported {
+		t.Fatalf("signed import = %+v, err = %v", imported, err)
+	}
+	srv := httptest.NewServer(high)
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/rpm/fixture/repodata/groups.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || !bytes.Equal(body, raw) {
+		t.Fatalf("metadata response: status = %d, body = %s", resp.StatusCode, body)
+	}
+	contentType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || (contentType != "text/xml" && contentType != "application/xml") {
+		t.Errorf("XML content type = %q, err = %v", resp.Header.Get("Content-Type"), err)
+	}
+	disposition, params, err := mime.ParseMediaType(resp.Header.Get("Content-Disposition"))
+	if err != nil || disposition != "attachment" || params["filename"] != "groups.xml" {
+		t.Errorf("content disposition = %q, err = %v", resp.Header.Get("Content-Disposition"), err)
+	}
+	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
 	}
 }
 

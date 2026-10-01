@@ -21,6 +21,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -200,6 +201,8 @@ func readBase64File(p string) ([]byte, error) {
 // Misc helpers
 // -----------------------------------------------------------------------------
 
+// serveFile serves repository bytes as downloads. Upstream files can contain
+// active HTML, SVG, or XML, so they must not render on the dashboard origin.
 func serveFile(w http.ResponseWriter, r *http.Request, abs string) {
 	if !fileExists(abs) {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -218,6 +221,8 @@ func serveFile(w http.ResponseWriter, r *http.Request, abs string) {
 			w.Header().Set("Content-Type", ct)
 		}
 	}
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(r.URL.Path)}))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeFile(w, r, abs)
 }
 

@@ -223,6 +223,8 @@ clearPendingMetadata(files)     # only after the final ecosystem bundle is commi
 
     A completed bundle is durable before its next-sequence counter is saved. After a crash, allocation scans the outbound spool and bundle archive and skips any complete sequence already present. Writers refuse to replace any existing same-ID artifact; partial crash residue must be recovered or removed explicitly, because overwriting it could fork an already-observed sequence while skipping it would create a permanent gap.
 
+    Fresh bundles are written and synced in `<root>/bundles` before their files appear in the export directory. A folder-based diode can therefore move outbound files immediately without removing the only retained copy. Re-export first recovers an incomplete archive from a complete retained outbound bundle, if available, and syncs the archive and its parent directories before staging or sending any files. A sync failure stops re-export and preserves the outbound copy for retry after storage repair.
+
 When content exceeds the transport limit, it is sent in content-part bundles followed by the ecosystem metadata bundle. Before each part is written, its file paths and hashes are durably recorded as needing metadata. An interrupted collect can therefore be retried with only a subset of the original packages, including after restart: the pending entries force a metadata bundle even when all bytes were already sent. Only the files named in a successfully committed final bundle have their pending entries cleared.
 
 Collectors refuse to burn a sequence on a bundle with no useful content or metadata. The Go collector, for example, fetches *before* allocating a sequence and reports individually unfetchable modules in `SkippedModules`.

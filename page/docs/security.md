@@ -217,6 +217,8 @@ New artifact content reaches the repository through **signature + hash verificat
 
 File downloads from `/uploads/<folder>/<name>` use `Content-Disposition: attachment`, `Content-Type: application/octet-stream`, and `X-Content-Type-Options: nosniff`. HTML, SVG, and other uploaded documents download as files instead of rendering on the dashboard origin. The suggested filename is encoded safely, and HEAD, range, and conditional requests remain supported.
 
+Mirrored repository files also use attachment and `nosniff` headers, including NuGet nuspecs, Maven files, and RPM XML metadata. They retain the content types and exact bytes expected by package clients. This protection applies to files already stored before an upgrade. NuGet also requires a `<package>` root when parsing a nuspec; a valid bundle signature does not make embedded documents safe to render in a browser.
+
 ### Optional diode ingest
 
 With `ARTIGATE_DIODE_INGEST=on` (off by default), the high side accepts bundle uploads at `PUT/POST /diode/<file>` — the receiving end of the [HTTP diode transport](deployment.md). This does **not** weaken the trust model: only supported stream names and positive bundle sequences are accepted, and nothing is served until signature, sequencing, and hash checks pass. Enabling ingest requires a whitespace-free bearer token of at least 32 bytes, compared in constant time. Before verification, archives are capped at 64 GiB, manifests at 64 MiB, signatures at 4 KiB, and direct unverified files across landing, quarantine, and rejected storage at 128 GiB. Completed uploads feed one bounded, coalescing import worker. Leave ingest off entirely when you use the folder flow.
