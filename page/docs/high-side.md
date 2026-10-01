@@ -79,7 +79,7 @@ restore a matching repository and import-state backup, then replay subsequent bu
 or replay the complete stream from sequence 1 into a fresh high side
 ```
 
-Restore the high-side repository and `import-state.json` from the same backup, then re-export every subsequent sequence from the low-side archive. Alternatively, initialize a fresh high-side repository and import state and replay the complete stream from sequence 1. `"force": true` produces a new sequence; it cannot fill a missing earlier sequence or repair an import blocked before that new bundle.
+Use [backup restore](recovery.md) to restore the high-side repository and import state together, then re-export every subsequent sequence from the low-side archive. A signed checkpoint can also initialize a new high-side root at a recorded recovery point; replay its retained tail afterward. Complete replay from sequence 1 remains available when the entire history is retained. `"force": true` produces a new sequence; it cannot fill a missing earlier sequence or repair an import blocked before that new bundle.
 
 ## The dashboard
 

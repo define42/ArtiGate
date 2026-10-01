@@ -32,6 +32,7 @@
     {"name": "Scheduled collection", "tests": ["TestWatchScheduler"]},
     {"name": "Tamper rejection and sequence recovery", "tests": ["TestTamperRejectionServesPriorContent", "TestQuarantineSequenceGapResume"]},
     {"name": "Reimport idempotency", "tests": ["TestReexportReimportIdempotency"]},
+    {"name": "Checkpoint restore and archive retention", "tests": ["TestRecoveryCheckpointAndRetention"]},
     {"name": "Multiple preserved package versions", "tests": ["TestNpmMultiVersionAccumulation", "TestRubyGemsMultiVersionAccumulation"]},
     {"name": "Dashboards and low-side authentication", "tests": ["TestLowDashboardUI", "TestHighDashboardUI", "TestLowSideAuth"]},
     {"name": "Receiver network and environment isolation", "tests": ["TestReceiverIsolation"]},

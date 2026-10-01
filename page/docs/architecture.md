@@ -195,9 +195,15 @@ So a bundle lives in **two** places:
 | Location | Purpose | After the diode transfer |
 |---|---|---|
 | `--export-dir` (`/var/spool/diode-out`) | staged for the diode; the transfer — or a successful HTTP/UDP diode upload — moves these out | gone (forwarded) |
-| `<root>/bundles` | retained for [re-export](low-side.md) | kept |
+| `<root>/bundles` | retained for [re-export](low-side.md) | kept until explicit verified retention |
 
 `GET /admin/bundles` surfaces `InArchive` / `InOutbound` booleans and `SizeBytes` per sequence: a forwarded bundle is archive-only; a not-yet-sent one is in both.
+
+[Offline retention](recovery.md) verifies checkpoint replay paths before removing
+archived bundles. It persists a separate `recovery-ledger.json` sequence floor
+and a resumable journal before deletion. Allocation consults that ledger so a
+stale `low-state.json` cannot reuse a pruned sequence. The export deduplication
+database remains independent and is preserved.
 
 ### The mark-prior → allocate → write → commit → record path
 
@@ -257,7 +263,7 @@ On upgrade from an index without pending-metadata tracking, existing path-qualif
 Two more properties: dedup is **per-stream** — it does not dedup across streams. And **re-export bypasses it entirely** — `POST /admin/reexport?stream=go&sequences=42,45-47` replays the *exact archived bytes* via `replayArchivedBundle` (no re-signing), never consulting or updating the dedup index. This is how the same content can be re-shipped after a lost transfer without being wrongly skipped.
 
 !!! note "A delta bundle assumes its history"
-    A bundle whose manifest lists `prior` files requires that content to exist in the high-side repository. To recover lost content, restore a matching repository and `import-state.json` backup, then replay every subsequent sequence. Alternatively, initialize a fresh high-side repository and import state and replay the complete stream from sequence 1. A forced collect uses the next sequence and cannot bypass a gap.
+    A bundle whose manifest lists `prior` files requires that content to exist in the high-side repository. To recover lost content, restore a matching backup or signed checkpoint, then replay every subsequent sequence. Complete replay from sequence 1 is also possible when the full history remains available. A forced collect uses the next sequence and cannot bypass a gap. See [recovery commands](recovery.md).
 
 ## The diode transfer
 

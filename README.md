@@ -488,8 +488,12 @@ To recover a missing bundle:
 3. Let the high side import the missing predecessors and drain quarantine.
 
 The low side retains bundles in `<root>/bundles` without automatic expiry.
+Offline `backup`, `checkpoint`, and `retention` commands provide consistent
+backups, signed receiver bootstrap, and explicit archive pruning after recovery
+verification. See [backup, checkpoints, and retention](page/docs/recovery.md).
 Back up that archive, stream sequence state, export index, and signing keys;
-a fresh high side needs its stream history replayed in order. A forced collect
+a fresh high side needs a verified checkpoint plus its subsequent bundles, or
+its complete stream history replayed in order. A forced collect
 does not bridge missing sequence history. High-side imported, duplicate, and
 rejected files are reaped after seven days; quarantine waits for its gap to
 fill. Plan disk capacity and retention on both sides.

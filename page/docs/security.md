@@ -51,7 +51,12 @@ There is no in-place key-rotation protocol. The high side trusts exactly one pub
 3. Deliver the new public key to the high side and restart the high process with the new `--public-key`.
 
 !!! warning "Rotation is a hard cutover"
-    Bundles are verified against a single public key, so at the moment you swap the key on the high side, **every bundle still signed with the old key will fail verification** and will not import. Drain the diode — let the high side import all outstanding old-key bundles — before cutting over, or re-export the affected sequences after signing them with the new key. There is no dual-key/grace-period mode. Because the sequence chain is strict (each bundle's `previous_sequence` must equal the high side's last imported sequence), you cannot simply skip the un-importable bundles; the stream would block.
+    Bundles are verified against a single public key, so after changing the high-side key, **bundles signed with the old key will fail verification**. Let every supported receiver import all outstanding old-key bundles before cutting over. Re-export preserves the original signatures; it cannot re-sign an archive. There is no dual-key/grace-period mode. Because the sequence chain is strict, an un-importable predecessor blocks its stream.
+
+Retain the old verification key and a tested recovery path for the old history.
+Checkpoint creation and retention drills currently accept one key, so they cannot
+replay a history spanning a key change in one operation. Plan and test recovery
+across that cutover before pruning either history.
 
 ## The verification chain
 
@@ -91,9 +96,9 @@ Import is strictly gated. `importBundleFromDirLocked` runs the following before 
 5. **Prior-file check.** A manifest entry marked `prior` (a [delta bundle](architecture.md#export-deduplication-and-delta-bundles)) is deliberately absent from the archive: it must already exist in the accumulated repository at the manifest path and size, or the import fails naming the missing file. Immutable package files passed the full signature and hash checks when first imported. Mutable snapshot paths also require a SHA-256 match against the current stored file, so a prior reference cannot resolve to a newer or older snapshot.
 6. **Immutable install.** `installVerifiedFile` treats mirrored content as write-once: an existing file whose SHA-256 differs is a hard error (`immutable file conflict for X`); identical content is an idempotent no-op. Mutable snapshots are exempt: operator `uploads/`, `osv/` advisory databases, moving Go checksum database records, and `npm/attestations/` documents. These updates still require the full signature and hash checks of a correctly sequenced bundle. npm tarballs remain write-once.
 
-### High side regenerates metadata — never trusts transferred indexes
+### Bundle import regenerates metadata
 
-After the verified files are installed, the high side rebuilds all served repository metadata from the artifacts themselves, deliberately ignoring any index that crossed the diode:
+After a normal bundle's verified files are installed, the high side rebuilds all served repository metadata from the artifacts themselves, deliberately ignoring transferred indexes:
 
 - **APT** — regenerates `Release`/`Packages` from the stanzas of the `.deb` files now present (never trusting a transferred `Release`/`Packages`). The regenerated `InRelease` is optionally signed with `--apt-gpg-key`.
 - **RPM** — regenerates `repodata`; optionally signs `repomd.xml.asc` with `--rpm-gpg-key`.
@@ -107,6 +112,23 @@ After the verified files are installed, the high side rebuilds all served reposi
 - **NuGet** — regenerates the served v3 feed metadata from each package's own embedded `.nuspec`.
 - **Alpine** — regenerates `APKINDEX.tar.gz` from the manifest-carried stanzas of the `.apk` files now present; optionally signed with `--apk-rsa-key`.
 - **Snap** — recomputes each archive's SHA3-384 and serves a revision only when the store-signed `.assert`'s snap-revision assertion vouches for exactly those bytes (digest, size, revision, snap-id) and its snap-declaration binds that snap-id to the snap's name; the assertions pass through verbatim for snapd to signature-check at `snap ack` time.
+
+### Administrative recovery
+
+[Backup and checkpoint restoration](recovery.md) is an explicit offline operation
+into a nonexistent root. It authenticates and restores repository bytes, metadata,
+and stream positions together. Checkpoint creation regenerates metadata by
+replaying signed bundles through the importer; restore preserves that snapshot
+without rerunning each ecosystem's publisher. Treat checkpoint creation as part
+of the trusted recovery process. Optional local APT/RPM/Alpine signing runs in
+the staged root before activation; the signing keys stay on the receiver.
+Checkpoint restore requires the configured
+public key and an independently selected manifest digest; unsigned local backups
+require their trusted digest. Incoming bundles cannot trigger this restore path.
+
+Use distinct signing keys for independent low-side histories. Recovery formats
+do not establish history identity beyond the signing key and stream positions,
+and signatures alone do not establish the freshness of a selected restore point.
 
 ### No upstream fetch on the high side
 

@@ -45,7 +45,7 @@ func runContainersCheck(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	report, err := checkContainerIntegrity(ctx, options)
+	report, err := checkContainerIntegrityWithLock(ctx, options)
 	if err != nil {
 		fmt.Fprintln(stderr, "containers check:", err)
 		return 1
@@ -58,6 +58,18 @@ func runContainersCheck(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func checkContainerIntegrityWithLock(ctx context.Context, options containerIntegrityOptions) (containerIntegrityReport, error) {
+	if !options.Repair {
+		return checkContainerIntegrity(ctx, options)
+	}
+	release, err := lockExistingRecoveryRoot(options.Root)
+	if err != nil {
+		return containerIntegrityReport{}, err
+	}
+	defer func() { _ = release() }()
+	return checkContainerIntegrity(ctx, options)
 }
 
 func writeContainerIntegrityReport(output io.Writer, report containerIntegrityReport, asJSON bool) error {

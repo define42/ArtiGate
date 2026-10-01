@@ -58,6 +58,9 @@
 //     still installs after the newer bundle imported on top of it.
 //   - the scheduled-collect subsystem (watch_test.go), the low-side session
 //     login (auth_test.go), and the low/high dashboards (ui_test.go).
+//   - checkpoint recovery after archive retention (recovery_test.go): restore a
+//     signed checkpoint, replay retained deltas, compare with complete-history
+//     import, and install Go and npm packages with fresh isolated clients.
 //
 // TestUDPDiode additionally uses real low/high processes and the built-in UDP
 // pitcher/catcher transport over an isolated IPv6 multicast link, then retrieves

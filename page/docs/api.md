@@ -704,8 +704,8 @@ Response — `ReexportResult`:
 | `reexported` | `[]ExportResult` | Successful replays (`message:"re-exported from archive"`) |
 | `failed` | `[]string` | omitempty; `"<seq>: <error>"` — a sequence with no archived bundle fails with `"no archived bundle for <bundleID>"` |
 
-!!! warning "Retention pruning is not yet built"
-    Every produced bundle is currently retained under `<root>/bundles`, so re-export always works. A bundle whose archive copy is gone cannot be re-exported.
+!!! note "Explicit archive retention"
+    Produced bundles remain under `<root>/bundles` until an operator applies an offline retention plan. The [recovery commands](recovery.md) verify retained checkpoints and replay paths before pruning. A bundle whose archive copy was pruned cannot be re-exported; receivers behind the retained history need checkpoint recovery.
 
 ---
 

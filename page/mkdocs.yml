@@ -84,6 +84,7 @@ nav:
       - OSV advisories: ecosystems/osv.md
       - Uploads (arbitrary files): ecosystems/uploads.md
   - Security & trust: security.md
+  - Backup & recovery: recovery.md
   - TLS / HTTPS: tls.md
   - Configuration reference: configuration.md
   - HTTP API reference: api.md

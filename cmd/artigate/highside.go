@@ -195,10 +195,9 @@ func runHigh(args []string) {
 		log.Fatal("--public-key is required")
 	}
 	applyHighEnvConfig(&cfg)
-	pub, err := readPublicKey(cfg.PublicKeyPath)
+	hs, releaseRoot, err := openHighServerRoot(cfg)
 	must(err)
-	hs, err := NewHighServer(cfg, pub)
-	must(err)
+	defer func() { _ = releaseRoot() }()
 	hs.notifier = mustWebhookNotifier("high")
 	startCatcherIfConfigured(hs)
 

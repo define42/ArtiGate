@@ -239,11 +239,9 @@ func runLow(args []string) {
 	if cfg.PrivateKeyPath == "" {
 		log.Fatal("--private-key is required")
 	}
-	priv, err := readPrivateKey(cfg.PrivateKeyPath)
+	ls, releaseRoot, err := openLowServerRoot(cfg)
 	must(err)
-
-	ls, err := NewLowServer(cfg, priv)
-	must(err)
+	defer func() { _ = releaseRoot() }()
 	defer func() { _ = ls.Close() }()
 
 	attachPitcher(ls, pitcherCfg)
@@ -783,8 +781,21 @@ func (s *LowServer) fetchVersion(ctx context.Context, modulePath, version string
 }
 
 func (s *LowServer) loadState() error {
+	if err := checkRecoveryRetentionIdle(s.cfg.Root); err != nil {
+		return err
+	}
+	ledger, err := loadRecoveryLedger(s.cfg.Root)
+	if err != nil {
+		return err
+	}
 	b, err := os.ReadFile(s.statePath)
 	if errors.Is(err, os.ErrNotExist) {
+		if s.state.Sequences == nil {
+			s.state.Sequences = map[string]int64{}
+		}
+		for stream, next := range ledger.NextSequences {
+			s.state.Sequences[stream] = max(s.state.Sequences[stream], next)
+		}
 		return s.saveStateLocked()
 	}
 	if err != nil {
@@ -803,6 +814,9 @@ func (s *LowServer) loadState() error {
 			st.Sequences[streamGo] = st.NextSequence
 		}
 		st.NextSequence = 0
+	}
+	for stream, next := range ledger.NextSequences {
+		st.Sequences[stream] = max(st.Sequences[stream], next)
 	}
 	s.state = st
 	return nil
@@ -1155,6 +1169,14 @@ func (s *LowServer) peekSequence(stream string) int64 {
 	s.mu.Lock()
 	seq := s.state.Sequences[stream]
 	s.mu.Unlock()
+	// Corrupt retention evidence must never look like an empty history. The
+	// allocating path reports the underlying error; other callers see the
+	// exhausted sentinel rather than a reusable sequence.
+	ledger, err := readRecoveryLedger(s.cfg.Root)
+	if err != nil {
+		return math.MaxInt64
+	}
+	seq = max(seq, ledger.NextSequences[stream])
 	if seq < 1 {
 		seq = 1
 	}
@@ -1176,6 +1198,9 @@ func (s *LowServer) peekSequence(stream string) int64 {
 // requiring operator attention: overwriting it could replace bytes that were
 // already observed, while skipping it would create an unfillable sequence gap.
 func (s *LowServer) allocateSequence(stream string) (int64, error) {
+	if _, err := readRecoveryLedger(s.cfg.Root); err != nil {
+		return 0, err
+	}
 	seq := s.peekSequence(stream)
 	if seq == math.MaxInt64 {
 		return 0, fmt.Errorf("stream %s exhausted its sequence space", stream)

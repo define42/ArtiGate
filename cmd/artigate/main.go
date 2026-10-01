@@ -43,6 +43,8 @@ func main() {
 		runHigh(os.Args[2:])
 	case "containers":
 		runContainers(os.Args[2:])
+	case "backup", "checkpoint", "retention":
+		os.Exit(runRecovery(os.Args[1], os.Args[2:], os.Stdout, os.Stderr))
 	case "hashpw":
 		runHashpw(os.Args[2:])
 	case "version", "--version", "-version":
@@ -66,6 +68,10 @@ const usageText = `Usage:
 
   artigate containers check --root /var/lib/artigate-high [--repository registry/repo] [--repair] [--json]
                                       # offline integrity check; stop the high side first
+
+  artigate backup --help              # consistent offline high/low backup and restore
+  artigate checkpoint --help          # signed receiver bootstrap from retained history
+  artigate retention --help           # preview and apply verified archive retention
 
   artigate low \
     --listen :8080 \
